@@ -1,0 +1,489 @@
+"""
+database/schema.py
+==================
+
+DDL for all 18 tables of `OptionsAdvisorDB`.
+
+Design rules:
+    * Every table prefixed `options_`.
+    * Idempotent: each `CREATE TABLE` is wrapped in an `IF OBJECT_ID(...) IS NULL`
+      guard so `--init-db` is safe to re-run.
+    * No foreign key cascades — deletions handled by the retention/cleanup job.
+    * All timestamps stored as `DATETIME2(0)` in IST (we store naive datetimes
+      consistently — see `utils.now_ist`).
+    * String identifiers (suggestion_id, trade_id, trade_name) are NVARCHAR.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import List
+
+import pyodbc
+
+from config import DATABASE_CONFIG
+from database.connection import SQLServerConnection
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# CREATE TABLE statements (each guarded by OBJECT_ID check)
+# ---------------------------------------------------------------------------
+
+_TABLE_DDL: List[str] = [
+    # ---------------- Raw data ----------------
+    """
+    IF OBJECT_ID('options_fo_eod', 'U') IS NULL
+    CREATE TABLE options_fo_eod (
+        id            BIGINT IDENTITY(1,1) PRIMARY KEY,
+        trade_date    DATE          NOT NULL,
+        symbol        NVARCHAR(50)  NOT NULL,
+        instrument    NVARCHAR(10)  NOT NULL,
+        expiry_date   DATE          NOT NULL,
+        strike        DECIMAL(18,4) NOT NULL,
+        option_type   NVARCHAR(2)   NOT NULL,
+        open_price    DECIMAL(18,4) NULL,
+        high_price    DECIMAL(18,4) NULL,
+        low_price     DECIMAL(18,4) NULL,
+        close_price   DECIMAL(18,4) NULL,
+        settle_price  DECIMAL(18,4) NULL,
+        contracts     BIGINT        NULL,
+        open_interest BIGINT        NULL,
+        change_in_oi  BIGINT        NULL,
+        created_at    DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        CONSTRAINT UX_options_fo_eod UNIQUE
+            (trade_date, symbol, expiry_date, strike, option_type)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_fo_eod_sym_dt ON options_fo_eod (symbol, trade_date)",
+    "CREATE INDEX IF NOT EXISTS IX_options_fo_eod_expiry ON options_fo_eod (symbol, expiry_date, trade_date)",
+
+    """
+    IF OBJECT_ID('options_spot_eod', 'U') IS NULL
+    CREATE TABLE options_spot_eod (
+        id            BIGINT IDENTITY(1,1) PRIMARY KEY,
+        trade_date    DATE          NOT NULL,
+        symbol        NVARCHAR(50)  NOT NULL,
+        open_price    DECIMAL(18,4) NULL,
+        high_price    DECIMAL(18,4) NULL,
+        low_price     DECIMAL(18,4) NULL,
+        close_price   DECIMAL(18,4) NULL,
+        volume        BIGINT        NULL,
+        created_at    DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        CONSTRAINT UX_options_spot_eod UNIQUE (trade_date, symbol)
+    )
+    """,
+
+    """
+    IF OBJECT_ID('options_vix_history', 'U') IS NULL
+    CREATE TABLE options_vix_history (
+        trade_date    DATE          NOT NULL PRIMARY KEY,
+        open_price    DECIMAL(10,4) NULL,
+        high_price    DECIMAL(10,4) NULL,
+        low_price     DECIMAL(10,4) NULL,
+        close_price   DECIMAL(10,4) NOT NULL,
+        percentile_1y DECIMAL(6,2)  NULL,
+        created_at    DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME()
+    )
+    """,
+
+    """
+    IF OBJECT_ID('options_fii_data', 'U') IS NULL
+    CREATE TABLE options_fii_data (
+        id                BIGINT IDENTITY(1,1) PRIMARY KEY,
+        trade_date        DATE         NOT NULL,
+        client_type       NVARCHAR(20) NOT NULL,
+        future_long       BIGINT       NULL,
+        future_short      BIGINT       NULL,
+        option_call_long  BIGINT       NULL,
+        option_call_short BIGINT       NULL,
+        option_put_long   BIGINT       NULL,
+        option_put_short  BIGINT       NULL,
+        created_at        DATETIME2(0) NOT NULL DEFAULT SYSDATETIME(),
+        CONSTRAINT UX_options_fii_data UNIQUE (trade_date, client_type)
+    )
+    """,
+
+    """
+    IF OBJECT_ID('options_iv_history', 'U') IS NULL
+    CREATE TABLE options_iv_history (
+        id            BIGINT IDENTITY(1,1) PRIMARY KEY,
+        trade_date    DATE          NOT NULL,
+        symbol        NVARCHAR(50)  NOT NULL,
+        expiry_date   DATE          NOT NULL,
+        strike        DECIMAL(18,4) NOT NULL,
+        option_type   NVARCHAR(2)   NOT NULL,
+        spot          DECIMAL(18,4) NULL,
+        market_price  DECIMAL(18,4) NULL,
+        iv            DECIMAL(10,6) NULL,
+        converged     BIT           NOT NULL DEFAULT 0,
+        atm_iv        DECIMAL(10,6) NULL,
+        iv_rank       DECIMAL(6,2)  NULL,
+        iv_percentile DECIMAL(6,2)  NULL,
+        created_at    DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        CONSTRAINT UX_options_iv_history UNIQUE
+            (trade_date, symbol, expiry_date, strike, option_type)
+    )
+    """,
+
+    # ---------------- Reference data ----------------
+    """
+    IF OBJECT_ID('options_lot_sizes', 'U') IS NULL
+    CREATE TABLE options_lot_sizes (
+        symbol       NVARCHAR(50) NOT NULL,
+        effective_from DATE       NOT NULL,
+        lot_size     INT          NOT NULL,
+        CONSTRAINT PK_options_lot_sizes PRIMARY KEY (symbol, effective_from)
+    )
+    """,
+
+    """
+    IF OBJECT_ID('options_expiry_calendar', 'U') IS NULL
+    CREATE TABLE options_expiry_calendar (
+        symbol       NVARCHAR(50) NOT NULL,
+        expiry_date  DATE         NOT NULL,
+        is_monthly   BIT          NOT NULL DEFAULT 0,
+        CONSTRAINT PK_options_expiry_calendar PRIMARY KEY (symbol, expiry_date)
+    )
+    """,
+
+    """
+    IF OBJECT_ID('options_events_calendar', 'U') IS NULL
+    CREATE TABLE options_events_calendar (
+        id           BIGINT IDENTITY(1,1) PRIMARY KEY,
+        event_date   DATE         NOT NULL,
+        event_type   NVARCHAR(50) NOT NULL,
+        description  NVARCHAR(500) NULL,
+        impact       NVARCHAR(20) NOT NULL DEFAULT 'MEDIUM'
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_events_date ON options_events_calendar (event_date)",
+
+    # ---------------- Suggestions ----------------
+    """
+    IF OBJECT_ID('options_suggestions', 'U') IS NULL
+    CREATE TABLE options_suggestions (
+        suggestion_id          NVARCHAR(40) NOT NULL PRIMARY KEY,
+        trade_name             NVARCHAR(80) NULL,
+        generated_on           DATETIME2(0) NOT NULL,
+        strategy               NVARCHAR(40) NOT NULL,
+        strategy_type          NVARCHAR(20) NOT NULL,  -- WRITING / BUYING / NONE
+        underlying             NVARCHAR(50) NOT NULL,
+        expiry_date            DATE         NULL,
+        dte                    INT          NULL,
+        spot_at_generation     DECIMAL(18,4) NULL,
+        confidence_score       INT          NULL,
+        conditions_json        NVARCHAR(MAX) NULL,
+        status                 NVARCHAR(20) NOT NULL DEFAULT 'PENDING',
+        net_credit_suggested   DECIMAL(18,4) NULL,
+        max_profit             DECIMAL(18,4) NULL,
+        max_loss               DECIMAL(18,4) NULL,
+        upper_breakeven        DECIMAL(18,4) NULL,
+        lower_breakeven        DECIMAL(18,4) NULL,
+        stop_loss_level        DECIMAL(18,4) NULL,
+        probability_of_profit  DECIMAL(6,2)  NULL,
+        estimated_charges_total DECIMAL(18,4) NULL,
+        estimated_net_pnl      DECIMAL(18,4) NULL,
+        execution_window       NVARCHAR(80) NULL,
+        plain_english          NVARCHAR(MAX) NULL,
+        no_suggestion_reason   NVARCHAR(MAX) NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_suggestions_date ON options_suggestions (generated_on DESC)",
+    "CREATE INDEX IF NOT EXISTS IX_options_suggestions_status ON options_suggestions (status, generated_on DESC)",
+
+    """
+    IF OBJECT_ID('options_suggestion_legs', 'U') IS NULL
+    CREATE TABLE options_suggestion_legs (
+        id                   BIGINT IDENTITY(1,1) PRIMARY KEY,
+        suggestion_id        NVARCHAR(40) NOT NULL,
+        leg_order            INT          NOT NULL,
+        hedge_pair_leg       INT          NULL,
+        symbol               NVARCHAR(50) NOT NULL,
+        expiry_date          DATE         NOT NULL,
+        strike               DECIMAL(18,4) NOT NULL,
+        option_type          NVARCHAR(2)  NOT NULL,
+        action               NVARCHAR(4)  NOT NULL,  -- BUY / SELL
+        lots                 INT          NOT NULL,
+        lot_size             INT          NOT NULL,
+        suggested_price      DECIMAL(18,4) NOT NULL,
+        suggested_price_low  DECIMAL(18,4) NULL,
+        suggested_price_high DECIMAL(18,4) NULL,
+        leg_purpose_note     NVARCHAR(500) NULL,
+        CONSTRAINT UX_options_suggestion_legs UNIQUE (suggestion_id, leg_order)
+    )
+    """,
+
+    # ---------------- Trades ----------------
+    """
+    IF OBJECT_ID('options_trades', 'U') IS NULL
+    CREATE TABLE options_trades (
+        trade_id               NVARCHAR(40) NOT NULL PRIMARY KEY,
+        suggestion_id          NVARCHAR(40) NOT NULL,
+        trade_name             NVARCHAR(80) NULL,
+        executed_on            DATETIME2(0) NOT NULL,
+        position_type          NVARCHAR(30) NOT NULL,  -- FULL_AS_SUGGESTED / PAIRED_PARTIAL / NAKED / MIXED
+        net_credit_actual      DECIMAL(18,4) NULL,
+        actual_max_profit      DECIMAL(18,4) NULL,
+        actual_max_loss        DECIMAL(18,4) NULL,
+        actual_upper_breakeven DECIMAL(18,4) NULL,
+        actual_lower_breakeven DECIMAL(18,4) NULL,
+        actual_stop_loss_level DECIMAL(18,4) NULL,
+        spot_at_execution      DECIMAL(18,4) NULL,
+        status                 NVARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+        daily_status           NVARCHAR(20) NULL,
+        exit_instruction       NVARCHAR(500) NULL,
+        broken_state_json      NVARCHAR(MAX) NULL,
+        gross_pnl              DECIMAL(18,4) NULL,
+        total_charges          DECIMAL(18,4) NULL,
+        net_pnl                DECIMAL(18,4) NULL,
+        closed_on              DATETIME2(0) NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_trades_status ON options_trades (status, executed_on DESC)",
+    "CREATE INDEX IF NOT EXISTS IX_options_trades_sugg ON options_trades (suggestion_id)",
+
+    """
+    IF OBJECT_ID('options_trade_legs', 'U') IS NULL
+    CREATE TABLE options_trade_legs (
+        id                 BIGINT IDENTITY(1,1) PRIMARY KEY,
+        trade_id           NVARCHAR(40) NOT NULL,
+        suggestion_leg_id  BIGINT       NOT NULL,
+        leg_order          INT          NOT NULL,
+        executed           BIT          NOT NULL DEFAULT 0,
+        fill_price         DECIMAL(18,4) NULL,
+        fill_time          DATETIME2(0) NULL,
+        not_filled_reason  NVARCHAR(200) NULL,
+        exit_price         DECIMAL(18,4) NULL,
+        exit_time          DATETIME2(0) NULL,
+        leg_pnl            DECIMAL(18,4) NULL,
+        leg_charges        DECIMAL(18,4) NULL,
+        CONSTRAINT UX_options_trade_legs UNIQUE (trade_id, leg_order)
+    )
+    """,
+
+    # Add lots_actual column if it doesn't exist yet (migration-safe)
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME='options_trade_legs' AND COLUMN_NAME='lots_actual'
+    )
+    ALTER TABLE options_trade_legs ADD lots_actual INT NULL
+    """,
+
+    # Add spot_at_execution column if it doesn't exist yet (migration-safe)
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME='options_trades' AND COLUMN_NAME='spot_at_execution'
+    )
+    ALTER TABLE options_trades ADD spot_at_execution DECIMAL(18,4) NULL
+    """,
+
+    """
+    IF OBJECT_ID('options_resuggestions', 'U') IS NULL
+    CREATE TABLE options_resuggestions (
+        id                       BIGINT IDENTITY(1,1) PRIMARY KEY,
+        original_suggestion_id   NVARCHAR(40) NOT NULL,
+        generated_on             DATETIME2(0) NOT NULL,
+        revised_legs_json        NVARCHAR(MAX) NOT NULL,
+        status                   NVARCHAR(20) NOT NULL DEFAULT 'PENDING',
+        combined_economics_json  NVARCHAR(MAX) NULL,
+        CONSTRAINT UX_options_resuggestions UNIQUE (original_suggestion_id)  -- max 1 per orig
+    )
+    """,
+
+    # ---------------- Simulation ----------------
+    """
+    IF OBJECT_ID('options_simulations', 'U') IS NULL
+    CREATE TABLE options_simulations (
+        id                BIGINT IDENTITY(1,1) PRIMARY KEY,
+        suggestion_id     NVARCHAR(40) NOT NULL,
+        started_on        DATE         NOT NULL,
+        completed_on      DATE         NULL,
+        overall_quality   NVARCHAR(20) NOT NULL DEFAULT 'PENDING',  -- FULL_VALID / ADJUSTED / VOID / PENDING
+        sim_net_credit    DECIMAL(18,4) NULL,
+        sim_final_pnl     DECIMAL(18,4) NULL,
+        sim_charges       DECIMAL(18,4) NULL,
+        sim_net_pnl       DECIMAL(18,4) NULL,
+        notes             NVARCHAR(MAX) NULL,
+        CONSTRAINT UX_options_simulations UNIQUE (suggestion_id)
+    )
+    """,
+
+    """
+    IF OBJECT_ID('options_simulation_legs', 'U') IS NULL
+    CREATE TABLE options_simulation_legs (
+        id              BIGINT IDENTITY(1,1) PRIMARY KEY,
+        suggestion_id   NVARCHAR(40) NOT NULL,
+        leg_order       INT          NOT NULL,
+        leg_symbol      NVARCHAR(50) NOT NULL,
+        sim_date        DATE         NOT NULL,
+        suggested_price DECIMAL(18,4) NULL,
+        sim_entry_price DECIMAL(18,4) NULL,
+        open_price      DECIMAL(18,4) NULL,
+        high_price      DECIMAL(18,4) NULL,
+        low_price       DECIMAL(18,4) NULL,
+        settle_price    DECIMAL(18,4) NULL,
+        quality         NVARCHAR(20) NOT NULL,
+        adjustment_note NVARCHAR(500) NULL,
+        day_pnl         DECIMAL(18,4) NULL,
+        cumulative_pnl  DECIMAL(18,4) NULL,
+        is_expiry_day   BIT          NOT NULL DEFAULT 0,
+        final_settle    DECIMAL(18,4) NULL,
+        CONSTRAINT UX_options_simulation_legs UNIQUE (suggestion_id, leg_order, sim_date)
+    )
+    """,
+
+    # ---------------- Logging / jobs / config / notifications ----------------
+    """
+    IF OBJECT_ID('options_system_logs', 'U') IS NULL
+    CREATE TABLE options_system_logs (
+        id            BIGINT IDENTITY(1,1) PRIMARY KEY,
+        logged_at     DATETIME2(0) NOT NULL,
+        level         NVARCHAR(10) NOT NULL,
+        module        NVARCHAR(80) NULL,
+        job_id        NVARCHAR(80) NULL,
+        message       NVARCHAR(MAX) NOT NULL,
+        exception     NVARCHAR(MAX) NULL,
+        context_json  NVARCHAR(MAX) NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_system_logs_lvl ON options_system_logs (level, logged_at DESC)",
+    "CREATE INDEX IF NOT EXISTS IX_options_system_logs_job ON options_system_logs (job_id, logged_at DESC)",
+
+    """
+    IF OBJECT_ID('options_job_log', 'U') IS NULL
+    CREATE TABLE options_job_log (
+        id              BIGINT IDENTITY(1,1) PRIMARY KEY,
+        job_id          NVARCHAR(80) NOT NULL,
+        job_name        NVARCHAR(80) NOT NULL,
+        started_at      DATETIME2(0) NOT NULL,
+        finished_at     DATETIME2(0) NULL,
+        status          NVARCHAR(20) NOT NULL,
+        error_message   NVARCHAR(MAX) NULL,
+        rows_processed  INT NULL,
+        CONSTRAINT UX_options_job_log_jobid UNIQUE (job_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_job_log_started ON options_job_log (started_at DESC)",
+    "CREATE INDEX IF NOT EXISTS IX_options_job_log_name ON options_job_log (job_name, started_at DESC)",
+
+    """
+    IF OBJECT_ID('options_config', 'U') IS NULL
+    CREATE TABLE options_config (
+        config_key     NVARCHAR(100) NOT NULL PRIMARY KEY,
+        config_value   NVARCHAR(MAX) NULL,
+        default_value  NVARCHAR(MAX) NULL,
+        category       NVARCHAR(50)  NULL,
+        description    NVARCHAR(500) NULL,
+        is_locked      BIT           NOT NULL DEFAULT 0,
+        last_modified  DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        modified_by    NVARCHAR(50)  NULL
+    )
+    """,
+
+    """
+    IF OBJECT_ID('options_notifications', 'U') IS NULL
+    CREATE TABLE options_notifications (
+        id                     BIGINT IDENTITY(1,1) PRIMARY KEY,
+        created_at             DATETIME2(0) NOT NULL,
+        notif_type             NVARCHAR(40) NOT NULL,
+        severity               NVARCHAR(20) NOT NULL,
+        title                  NVARCHAR(200) NOT NULL,
+        body                   NVARCHAR(MAX) NULL,
+        related_suggestion_id  NVARCHAR(40) NULL,
+        related_trade_id       NVARCHAR(40) NULL,
+        read_at                DATETIME2(0) NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_notifications_unread ON options_notifications (read_at, created_at DESC)",
+]
+
+
+# ---------------------------------------------------------------------------
+# SQL Server doesn't support `CREATE INDEX IF NOT EXISTS`. We translate it
+# at execution time into a guarded `CREATE INDEX` block.
+# ---------------------------------------------------------------------------
+
+def _normalize_ddl(stmt: str) -> str:
+    s = stmt.strip()
+    if s.upper().startswith("CREATE INDEX IF NOT EXISTS"):
+        # CREATE INDEX IF NOT EXISTS <name> ON <table> (<cols>)
+        rest = s[len("CREATE INDEX IF NOT EXISTS"):].strip()
+        # rest = "<name> ON <table> (<cols>)"
+        idx_name, _, after = rest.partition(" ")
+        return (
+            f"IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '{idx_name}') "
+            f"CREATE INDEX {idx_name} {after}"
+        )
+    return s
+
+
+# ---------------------------------------------------------------------------
+# Public functions
+# ---------------------------------------------------------------------------
+
+def create_database_if_missing() -> None:
+    """Connect to `master` and create the target DB if it doesn't exist."""
+    if not DATABASE_CONFIG.get("create_if_missing", True):
+        return
+    db_name = DATABASE_CONFIG["database"]
+    master = SQLServerConnection(database="master")
+    try:
+        # autocommit needed for CREATE DATABASE
+        master.connect(override_database="master")
+        assert master.connection is not None
+        master.connection.autocommit = True
+        cur = master.connection.cursor()
+        try:
+            cur.execute("SELECT database_id FROM sys.databases WHERE name = ?", db_name)
+            row = cur.fetchone()
+            if row is None:
+                logger.info("Creating database [%s] ...", db_name)
+                cur.execute(f"CREATE DATABASE [{db_name}]")
+                logger.info("Database [%s] created.", db_name)
+            else:
+                logger.info("Database [%s] already exists.", db_name)
+        finally:
+            cur.close()
+    except pyodbc.Error as exc:
+        logger.error("Failed to ensure database exists: %s", exc)
+        raise
+    finally:
+        master.close()
+
+
+def create_all_tables(db: SQLServerConnection) -> None:
+    """Run every DDL statement in order. Caller commits."""
+    for raw in _TABLE_DDL:
+        sql = _normalize_ddl(raw)
+        cur = db.execute(sql)
+        cur.close()
+    logger.info("All tables ensured (%d DDL statements executed).", len(_TABLE_DDL))
+
+
+def list_tables() -> List[str]:
+    """Return the canonical list of options-prefixed tables (for tests)."""
+    return [
+        "options_fo_eod",
+        "options_spot_eod",
+        "options_vix_history",
+        "options_fii_data",
+        "options_iv_history",
+        "options_lot_sizes",
+        "options_expiry_calendar",
+        "options_events_calendar",
+        "options_suggestions",
+        "options_suggestion_legs",
+        "options_trades",
+        "options_trade_legs",
+        "options_resuggestions",
+        "options_simulations",
+        "options_simulation_legs",
+        "options_system_logs",
+        "options_job_log",
+        "options_config",
+        "options_notifications",
+    ]

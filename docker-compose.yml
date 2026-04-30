@@ -1,0 +1,27 @@
+services:
+  options_advisor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stock_options_advisor
+    image: stock_options_advisor:latest
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Kolkata
+    env_file:
+      - .env.docker
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./archive:/app/archive
+    extra_hosts:
+      # Allow container to reach Windows host (for SQL Server on TAMAJITLAPTOP\SQLEXPRESS)
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/health', timeout=5)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

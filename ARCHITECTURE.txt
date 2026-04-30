@@ -1,0 +1,43 @@
+================================================================================
+OPTIONS ADVISOR SYSTEM — ARCHITECTURE BOUNDARY
+================================================================================
+
+THIS REPOSITORY IS COMPLETELY SEPARATE FROM THE STOCK ANALYZER (EQUITY) SYSTEM.
+
+HARD RULES (NEVER VIOLATE):
+  1. ZERO imports from stock_analyzer_system. Not config, not models, not utils.
+     If equity-system code is needed, COPY it (with attribution comment).
+  2. Separate database: OptionsAdvisorDB (do not touch StockAnalyzerDB).
+  3. All tables prefixed with `options_`.
+  4. Separate Docker container, separate port (5001).
+  5. Separate Git history.
+
+SCOPE:
+  - F&O options trading advisor.
+  - EOD data only (NSE F&O bhav copy + spot bhav + VIX + FII).
+  - Manual execution via Zerodha (no broker API).
+  - Forward simulation of ignored suggestions (no historical backtesting).
+
+MODULE DEPENDENCY RULES (STRICT):
+  config.py     ← imported by ALL (values only, no logic)
+  contracts.py  ← imported by ALL (dataclasses only, no logic)
+
+  downloader/   → returns raw data shapes; NO DB writes; NO business logic
+  database/     → only reads/writes DB; NO calculations
+  engine/       → pure functions; NO imports from downloader/database/alerts/dashboard
+  scheduler/    → orchestrator; wires modules together
+  simulation/   → uses contracts + database
+  dashboard/    → reads database; NO engine imports
+  alerts/       → receives strings/dicts; NO business objects
+
+  If a file imports from > 3 other modules, SPLIT it.
+
+ENGINEERING STANDARDS:
+  1. Single config (config.py + options_config DB overrides). No hardcoded values.
+  2. Exception handling: 3-tier (Recoverable / JobFailure / Critical).
+  3. DB safety: explicit begin/commit/rollback/close everywhere.
+  4. DB-first logging (options_system_logs); file log is backup only.
+  5. Every job notifies user (success, failure, "no suggestion + reason").
+  6. Job dependency chain: upstream FAILED → downstream SKIP with notification.
+
+================================================================================

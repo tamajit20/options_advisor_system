@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="{{ theme.primary }}">
+<title>Options Advisor</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ cache_bust }}">
+<link rel="icon" href="data:,">
+<style>
+  /* Inject theme tokens from server */
+  :root {
+    --primary:     {{ theme.primary }};
+    --primary-dim: {{ theme.primary_dim }};
+    --accent:      {{ theme.accent }};
+    --surface:     {{ theme.surface }};
+    --surface-alt: {{ theme.surface_alt }};
+    --text:        {{ theme.text }};
+    --text-dim:    {{ theme.text_dim }};
+    --ok:          {{ theme.ok }};
+    --warn:        {{ theme.warn }};
+    --err:         {{ theme.err }};
+    --info:        {{ theme.info }};
+  }
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="brand">
+    <span class="brand-dot"></span>
+    <span class="brand-name">Options Advisor</span>
+  </div>
+  <div class="header-actions">
+    <button id="notif-btn" class="icon-btn" title="Notifications" aria-label="Notifications">
+      <span class="bell">🔔</span>
+      <span id="notif-count" class="notif-count" hidden>0</span>
+    </button>
+  </div>
+</header>
+
+<main class="app-main">
+  <!-- Side nav (desktop) -->
+  <nav class="side-nav" aria-label="Primary">
+    <button class="nav-item active" data-tab="suggestion">
+      <span class="nav-icon">💡</span><span class="nav-label">Suggestion</span>
+    </button>
+    <button class="nav-item" data-tab="trades">
+      <span class="nav-icon">📊</span><span class="nav-label">My Trades</span>
+    </button>
+    <button class="nav-item" data-tab="history">
+      <span class="nav-icon">📜</span><span class="nav-label">History</span>
+    </button>
+    <button class="nav-item" data-tab="logs">
+      <span class="nav-icon">🪵</span><span class="nav-label">Logs</span>
+    </button>
+    <button class="nav-item" data-tab="jobs">
+      <span class="nav-icon">🔧</span><span class="nav-label">Jobs</span>
+    </button>
+    <button class="nav-item" data-tab="config">
+      <span class="nav-icon">⚙️</span><span class="nav-label">Config</span>
+    </button>
+  </nav>
+
+  <section class="tab-panels">
+    <article class="panel active" id="panel-suggestion" aria-hidden="false">
+      <h2 class="panel-title">Today's Suggestion</h2>
+      <div id="suggestion-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-trades" aria-hidden="true">
+      <h2 class="panel-title">My Trades</h2>
+      <div id="trades-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-history" aria-hidden="true">
+      <h2 class="panel-title">History</h2>
+      <div class="filter-row hist-filter-bar">
+        <label class="hist-filter-label">From
+          <input type="date" id="hist-from" class="hist-date-input">
+        </label>
+        <label class="hist-filter-label">To
+          <input type="date" id="hist-to" class="hist-date-input">
+        </label>
+        <select id="hist-instrument">
+          <option value="">All instruments</option>
+        </select>
+        <button class="btn" id="hist-refresh">Refresh</button>
+      </div>
+      <div id="history-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-logs" aria-hidden="true">
+      <h2 class="panel-title">Logs</h2>
+      <div class="filter-row">
+        <select id="log-level">
+          <option value="">All levels</option>
+          <option>DEBUG</option><option>INFO</option><option>WARNING</option>
+          <option>ERROR</option><option>CRITICAL</option>
+        </select>
+        <input id="log-search" type="search" placeholder="Search…" />
+        <button id="log-refresh" class="btn">Refresh</button>
+      </div>
+      <div id="jobs-strip" class="jobs-strip"></div>
+      <div id="logs-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-jobs" aria-hidden="true">
+      <div class="jobs-header">
+        <h2 class="panel-title" style="margin:0;">Scheduler Jobs</h2>
+        <div class="jobs-header-actions">
+          <span id="jobs-updated" class="muted" style="font-size:.78rem"></span>
+          <label class="jobs-auto-label" title="Auto-refresh every 5s">
+            <input type="checkbox" id="jobs-auto" checked> auto
+          </label>
+          <button class="btn btn-ghost" id="jobs-refresh">Refresh</button>
+        </div>
+      </div>
+      <div id="jobs-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-config" aria-hidden="true">
+      <h2 class="panel-title">Configuration</h2>
+      <p class="muted">Runtime overrides — these take precedence over <code>config.py</code> defaults.</p>
+      <div id="config-container" class="loading">Loading…</div>
+    </article>
+  </section>
+</main>
+
+<!-- Bottom nav (mobile) -->
+<nav class="bottom-nav" aria-label="Primary mobile">
+  <button class="bnav-item active" data-tab="suggestion"><span>💡</span><span>Sug</span></button>
+  <button class="bnav-item" data-tab="trades"><span>📊</span><span>Trades</span></button>
+  <button class="bnav-item" data-tab="history"><span>📜</span><span>Hist</span></button>
+  <button class="bnav-item" data-tab="logs"><span>🪵</span><span>Logs</span></button>
+  <button class="bnav-item" data-tab="jobs"><span>🔧</span><span>Jobs</span></button>
+  <button class="bnav-item" data-tab="config"><span>⚙️</span><span>Cfg</span></button>
+</nav>
+
+<div id="notif-drawer" class="drawer" hidden>
+  <div class="drawer-head">
+    <h3>Notifications</h3>
+    <button id="notif-mark-all" class="btn btn-ghost">Mark all read</button>
+    <button id="notif-close" class="icon-btn" aria-label="Close">✕</button>
+  </div>
+  <div id="notif-list"></div>
+</div>
+
+<div id="toast-container" aria-live="polite"></div>
+
+<script src="{{ url_for('static', filename='dashboard.js') }}?v={{ cache_bust }}"></script>
+</body>
+</html>

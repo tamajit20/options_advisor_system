@@ -1,0 +1,303 @@
+"""
+engine/strategy_selector.py
+===========================
+
+The 7-layer decision tree that picks ONE strategy given the market context.
+
+Pure function: takes contracts in, returns a Suggestion (or raises StrategyVeto).
+
+Layers (in order):
+    1. IV Rank zone        → WRITING vs BUYING
+    2. Trend               → directional vs neutral
+    3. PCR confirmation    → biases call vs put side
+    4. VIX regime          → veto on SPIKING
+    5. Event risk          → veto on this-week HIGH-impact event
+    6. DTE band            → veto if outside 7..21
+    7. Liquidity / chain   → veto if chain too thin
+
+If any veto fires we raise `StrategyVeto`; the orchestrator converts that to
+a `NoSuggestion`.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Iterable, List, Mapping, Sequence
+
+from config import STRATEGY_CONFIG
+from contracts import (
+    ConfidenceResult,
+    MarketIndicators,
+    Suggestion,
+    SuggestionEconomics,
+    SuggestionLeg,
+)
+from exceptions import StrategyVeto
+from engine import leg_builder
+from engine.charges import estimate_charges
+from engine.name_generator import make_trade_name
+
+
+def select_strategy(
+    *,
+    iv_rank: float,
+    trend: str,
+    indicators: MarketIndicators,
+) -> str:
+    """Pick a strategy code from an 11-strategy matrix or raise StrategyVeto.
+
+    Selection axes:
+        IV regime  : VERY_HIGH (>butterfly_min) | HIGH (>writing_min) | MID | LOW | VERY_LOW
+        Trend      : BULLISH | BEARISH | SIDEWAYS
+        Conviction : STRONG | MILD   (from PCR thresholds)
+    """
+    iv_writing_min   = STRATEGY_CONFIG["iv_rank_writing_min"]
+    iv_buying_max    = STRATEGY_CONFIG["iv_rank_buying_max"]
+    iv_butterfly_min = STRATEGY_CONFIG.get("iv_rank_butterfly_min",   70.0)
+    iv_naked_long_max = STRATEGY_CONFIG.get("iv_rank_naked_long_max", 20.0)
+    pcr_bull = STRATEGY_CONFIG.get("pcr_strong_bullish_below", 0.55)
+    pcr_bear = STRATEGY_CONFIG.get("pcr_strong_bearish_above", 1.55)
+
+    pcr = getattr(indicators, "pcr", 1.0)
+    strong_bullish = pcr < pcr_bull
+    strong_bearish = pcr > pcr_bear
+
+    # ---------- WRITING regime (high IV) ----------
+    if iv_rank > iv_writing_min:
+        if trend == "SIDEWAYS":
+            # Very-high IV + tight expected move → butterfly captures more premium
+            if iv_rank > iv_butterfly_min:
+                return "IRON_BUTTERFLY"
+            return "IRON_CONDOR"
+        if trend == "BULLISH":
+            # Strong bullish conviction at high IV → jade lizard (no upside risk)
+            if strong_bullish:
+                return "JADE_LIZARD"
+            return "BULL_PUT_SPREAD"
+        if trend == "BEARISH":
+            return "BEAR_CALL_SPREAD"
+        raise StrategyVeto(f"Unrecognised trend in writing regime: {trend}")
+
+    # ---------- BUYING regime (low IV) ----------
+    if iv_rank < iv_buying_max:
+        if trend == "SIDEWAYS":
+            return "LONG_STRADDLE"
+        if trend == "BULLISH":
+            # Very-low IV + strong conviction → naked long call (cheapest, highest leverage)
+            if iv_rank < iv_naked_long_max and strong_bullish:
+                return "LONG_CALL"
+            return "LONG_STRANGLE"
+        if trend == "BEARISH":
+            if iv_rank < iv_naked_long_max and strong_bearish:
+                return "LONG_PUT"
+            return "LONG_STRANGLE"
+        raise StrategyVeto(f"Unrecognised trend in buying regime: {trend}")
+
+    # ---------- MID-IV zone (30..50) — previously dead-zoned ----------
+    # Debit spreads work here: not enough IV to write profitably,
+    # but premiums are too rich for naked longs.
+    if trend == "BULLISH":
+        return "BULL_CALL_SPREAD"
+    if trend == "BEARISH":
+        return "BEAR_PUT_SPREAD"
+    # Sideways in mid-IV remains unactionable — no decent edge for either path
+    raise StrategyVeto(
+        f"IV Rank {iv_rank:.1f} in mid-zone with sideways trend — no actionable edge"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Strategy registry — single source of truth for builder dispatch & metadata.
+# ---------------------------------------------------------------------------
+def _builder_for(strategy: str):
+    """Return a callable(underlying, expiry, chain, spot, expected_move, lots, lot_size) → legs."""
+    em_builders = {
+        "IRON_CONDOR":      leg_builder.build_iron_condor,
+        "BULL_PUT_SPREAD":  leg_builder.build_bull_put_spread,
+        "BEAR_CALL_SPREAD": leg_builder.build_bear_call_spread,
+        "LONG_STRANGLE":    leg_builder.build_long_strangle,
+        "BULL_CALL_SPREAD": leg_builder.build_bull_call_spread,
+        "BEAR_PUT_SPREAD":  leg_builder.build_bear_put_spread,
+        "IRON_BUTTERFLY":   leg_builder.build_iron_butterfly,
+        "JADE_LIZARD":      leg_builder.build_jade_lizard,
+    }
+    no_em_builders = {
+        "LONG_STRADDLE": leg_builder.build_long_straddle,
+        "LONG_CALL":     leg_builder.build_long_call,
+        "LONG_PUT":      leg_builder.build_long_put,
+    }
+    return em_builders.get(strategy), no_em_builders.get(strategy)
+
+
+# Strategies that produce net credit (max_profit = credit, max_loss = width − credit, SL = 1.5× credit)
+_CREDIT_STRATEGIES = frozenset({
+    "IRON_CONDOR", "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD",
+    "IRON_BUTTERFLY", "JADE_LIZARD",
+})
+# Strategies that produce net debit (max_loss = debit, SL = 50% of debit)
+_DEBIT_STRATEGIES = frozenset({
+    "LONG_STRADDLE", "LONG_STRANGLE", "LONG_CALL", "LONG_PUT",
+    "BULL_CALL_SPREAD", "BEAR_PUT_SPREAD",
+})
+
+
+def assemble_suggestion(
+    *,
+    suggestion_id: str,
+    underlying: str,
+    expiry: date,
+    dte: int,
+    spot: float,
+    chain: Sequence[Mapping],
+    indicators: MarketIndicators,
+    confidence: ConfidenceResult,
+    iv_rank: float,
+    atm_iv: float,
+    lots: int,
+    lot_size: int,
+    existing_trade_names: Iterable[str] = (),
+    generated_on: datetime | None = None,
+) -> Suggestion:
+    """Top-level: select strategy, build legs, compute economics, return Suggestion."""
+    if not confidence.all_passed:
+        raise StrategyVeto(
+            "Confidence gate not all-pass: " + "; ".join(confidence.failed_reasons)
+        )
+    if not chain:
+        raise StrategyVeto("Empty option chain")
+
+    strategy = select_strategy(
+        iv_rank=iv_rank,
+        trend=indicators.trend,
+        indicators=indicators,
+    )
+
+    # Build legs by strategy (registry-driven dispatch)
+    em_builder, no_em_builder = _builder_for(strategy)
+    if em_builder is not None:
+        legs = em_builder(
+            underlying=underlying, expiry=expiry, chain=chain,
+            spot=spot, expected_move=indicators.expected_move,
+            lots=lots, lot_size=lot_size,
+        )
+    elif no_em_builder is not None:
+        legs = no_em_builder(
+            underlying=underlying, expiry=expiry, chain=chain,
+            spot=spot, lots=lots, lot_size=lot_size,
+        )
+    else:
+        raise StrategyVeto(f"Unsupported strategy: {strategy}")
+
+    # Liquidity / pricing veto: any leg with zero suggested price → bail
+    if any(l.suggested_price <= 0 for l in legs):
+        raise StrategyVeto("Chain too thin — at least one leg has zero/missing price")
+
+    np_per_share = leg_builder.net_premium(legs)
+    max_profit_ps, max_loss_ps = leg_builder.max_profit_loss(legs, strategy)
+    upper_be, lower_be = leg_builder.breakevens(legs, strategy)
+    pop = leg_builder.estimate_pop(legs, spot, dte, atm_iv)
+
+    # Charges (per-share priced — we want totals → multiply by qty)
+    charges = estimate_charges([
+        {
+            "action":   l.action,
+            "price":    l.suggested_price,
+            "lots":     l.lots,
+            "lot_size": l.lot_size,
+        }
+        for l in legs
+    ])
+
+    qty_total = sum(l.lots * l.lot_size for l in legs)
+    # Net credit/debit in rupees: per-share * lots * lot_size for each leg, summed
+    net_credit_rs = sum(
+        (1.0 if l.action == "SELL" else -1.0) * l.suggested_price * l.lots * l.lot_size
+        for l in legs
+    )
+    # Max profit/loss in rupees (defined-risk strategies)
+    if max_profit_ps == float("inf"):
+        max_profit_rs = float("inf")
+    else:
+        # For credit strategies max profit is net credit per single contract
+        max_profit_rs = max_profit_ps * (legs[0].lot_size if legs else 1) * (legs[0].lots if legs else 1)
+    max_loss_rs = max_loss_ps * (legs[0].lot_size if legs else 1) * (legs[0].lots if legs else 1)
+
+    estimated_net_pnl = (max_profit_rs if max_profit_rs != float("inf") else 0.0) - charges.total
+
+    economics = SuggestionEconomics(
+        net_credit=round(net_credit_rs, 2),
+        max_profit=round(max_profit_rs, 2) if max_profit_rs != float("inf") else float("inf"),
+        max_loss=round(max_loss_rs, 2),
+        upper_breakeven=upper_be,
+        lower_breakeven=lower_be,
+        stop_loss_level=_compute_stop_loss(legs, strategy, max_loss_rs),
+        probability_of_profit=round(pop, 1),
+        estimated_charges=charges,
+        estimated_net_pnl=round(estimated_net_pnl, 2),
+    )
+
+    trade_name = make_trade_name(
+        underlying=underlying,
+        strategy=strategy,
+        expiry=expiry,
+        existing_names=existing_trade_names,
+    )
+
+    plain_english = _explain(strategy, underlying, indicators, iv_rank, dte, economics)
+
+    return Suggestion(
+        suggestion_id=suggestion_id,
+        trade_name=trade_name,
+        generated_on=generated_on or datetime.utcnow(),
+        strategy=strategy,
+        strategy_type=("WRITING" if strategy in _CREDIT_STRATEGIES else "BUYING"),
+        underlying=underlying,
+        expiry_date=expiry,
+        dte=dte,
+        spot_at_generation=spot,
+        confidence=confidence,
+        legs=legs,
+        economics=economics,
+        execution_window="09:20–09:45 IST tomorrow",
+        plain_english=plain_english,
+    )
+
+
+def _compute_stop_loss(
+    legs: Sequence[SuggestionLeg], strategy: str, max_loss_rs: float
+) -> float | None:
+    """Conservative SL: 1.5× net credit for credit strategies, 50% of debit for buying."""
+    np_ps = leg_builder.net_premium(legs)
+    if strategy in _CREDIT_STRATEGIES:
+        if np_ps <= 0:
+            return None
+        return round(np_ps * 1.5, 2)
+    if strategy in _DEBIT_STRATEGIES:
+        debit = -np_ps
+        if debit <= 0:
+            return None
+        return round(debit * 0.5, 2)
+    return None
+
+
+def _explain(
+    strategy: str,
+    underlying: str,
+    indicators: MarketIndicators,
+    iv_rank: float,
+    dte: int,
+    econ: SuggestionEconomics,
+) -> str:
+    parts: List[str] = []
+    parts.append(f"{strategy.replace('_', ' ').title()} on {underlying}.")
+    parts.append(f"IV Rank {iv_rank:.0f}, trend {indicators.trend.lower()}, "
+                 f"VIX {indicators.vix_close:.1f} ({indicators.vix_regime.lower()}).")
+    parts.append(f"DTE {dte}, expected move ±{indicators.expected_move:.0f} pts.")
+    if econ.upper_breakeven is not None and econ.lower_breakeven is not None:
+        parts.append(f"Profit zone: {econ.lower_breakeven:.0f} – {econ.upper_breakeven:.0f}.")
+    elif econ.upper_breakeven is not None:
+        parts.append(f"Breakeven up to {econ.upper_breakeven:.0f}.")
+    elif econ.lower_breakeven is not None:
+        parts.append(f"Breakeven down to {econ.lower_breakeven:.0f}.")
+    parts.append(f"PoP ≈ {econ.probability_of_profit:.0f}%.")
+    return " ".join(parts)
