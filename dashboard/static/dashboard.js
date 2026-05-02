@@ -1691,39 +1691,42 @@ function renderTrade(t) {
                      ? t.suggestion.probability_of_profit : null;
         const estDte = t.suggestion && t.suggestion.dte != null ? t.suggestion.dte : null;
 
-        // 2-column grid — pair items to mirror suggestion page row layout:
-        //  Row 1: Type             | Net credit (actual)
-        //  Row 2: Est. max profit  | Est. max loss
-        //  Row 3: Est. PoP         | DTE at entry
-        //  Row 4: Upper BE (fills) | Lower BE (fills)
-        //  Row 5: P&L              | Status
-        //  Row 6: Entry date       | Options expiry
-        //  Row 7: Exit date (if present)
-        return `
-      <div><span class="k">Type</span><br><span class="v">${escapeHtml(t.position_type)}</span></div>
-      <div><span class="k">Net credit (actual)</span><br><span class="v">₹${fmt(t.net_credit_actual)}</span></div>
-      ${estMp != null ? `<div><span class="k">Est. max profit</span><br><span class="v pnl-profit">₹${fmt(estMp)}</span></div>` : '<div></div>'}
-      ${estMl != null ? `<div><span class="k">Est. max loss</span><br><span class="v pnl-loss">₹${fmt(estMl)}<span class="econ-ml-hint">${pctHint(estMl, t.net_credit_actual, 'credit')}</span></span></div>` : '<div></div>'}
-      ${estPop != null ? `<div><span class="k">Est. PoP</span><br><span class="v">${fmtPct(estPop)}</span></div>` : '<div></div>'}
-      ${estDte != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${estDte}</span></div>` : '<div></div>'}
-      ${(() => {
-        // Charges: compute from actual fills; fall back to suggestion estimate
+        // Grid positions mirror suggestion tab exactly (3-col on wide screen):
+        // Pos  1: Entry date       ≈ Suggested on        (col 1)
+        // Pos  2: Options expiry   = Options expiry       (col 2) ✓
+        // Pos  3: Net credit       ≈ Net credit/unit      (col 3) ✓
+        // Pos  4: Type             ≈ Total credit         (col 1, row 2)
+        // Pos  5: Est. max profit  = Max profit           (col 2) ✓
+        // Pos  6: Est. max loss    = Max loss             (col 3) ✓
+        // Pos  7: Est. PoP         = PoP                  (col 1) ✓
+        // Pos  8: Upper BE (fills) ≈ Upper BE             (col 2) ✓
+        // Pos  9: Lower BE (fills) ≈ Stop loss / Lower BE (col 3) ✓
+        // Pos 10: P&L              ≈ Premium SL           (col 1, row 4)
+        // Pos 11: Est. charges     = Est. charges         (col 2) ✓
+        // Pos 12: Est. net P&L     = Est. net P&L         (col 3) ✓
+        // Pos 13: DTE at entry     = DTE                  (col 1) ✓
+        // Pos 14: Status           (col 2)
+        // Pos 15: Exit date (if closed, col 3)
         const execWithFills = legs.filter(l => l.executed && l.fill_price != null);
         const estChg = execWithFills.length > 0
           ? estChargesFromLegs(execWithFills)
           : (t.suggestion && t.suggestion.estimated_charges_total != null ? t.suggestion.estimated_charges_total : null);
         const estNetPnl = (estMp != null && estChg != null) ? (estMp - estChg) : null;
-        return [
-          estChg    != null ? `<div><span class="k">Est. charges <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(estChg)}</span></div>` : '<div></div>',
-          estNetPnl != null ? `<div><span class="k">Est. net P&amp;L</span><br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">₹${fmt(estNetPnl)}</span></div>` : '<div></div>',
-        ].join('');
-      })()}
+        return `
+      <div><span class="k">Entry date</span><br><span class="v">${fmtDt(t.executed_on)}</span></div>
+      ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : '<div></div>'}
+      <div><span class="k">Net credit (actual)</span><br><span class="v">₹${fmt(t.net_credit_actual)}</span></div>
+      <div><span class="k">Type</span><br><span class="v">${escapeHtml(t.position_type)}</span></div>
+      ${estMp != null ? `<div><span class="k">Est. max profit</span><br><span class="v pnl-profit">₹${fmt(estMp)}</span></div>` : '<div></div>'}
+      ${estMl != null ? `<div><span class="k">Est. max loss</span><br><span class="v pnl-loss">₹${fmt(estMl)}<span class="econ-ml-hint">${pctHint(estMl, t.net_credit_actual, 'credit')}</span></span></div>` : '<div></div>'}
+      ${estPop != null ? `<div><span class="k">Est. PoP</span><br><span class="v">${fmtPct(estPop)}</span></div>` : '<div></div>'}
       ${realUBE != null ? `<div><span class="k">Upper BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(realUBE)}</span></div>` : '<div></div>'}
       ${realLBE != null ? `<div><span class="k">Lower BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(realLBE)}</span></div>` : '<div></div>'}
       <div><span class="k">P&amp;L</span><br><span class="v">₹${fmt(t.net_pnl)}${pctHint(t.net_pnl, t.net_credit_actual, 'credit')}</span></div>
+      ${estChg    != null ? `<div><span class="k">Est. charges <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(estChg)}</span></div>` : '<div></div>'}
+      ${estNetPnl != null ? `<div><span class="k">Est. net P&amp;L</span><br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">₹${fmt(estNetPnl)}</span></div>` : '<div></div>'}
+      ${estDte != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${estDte}</span></div>` : '<div></div>'}
       <div><span class="k">Status</span><br><span class="v">${escapeHtml(t.status)}</span></div>
-      <div><span class="k">Entry date</span><br><span class="v">${fmtDt(t.executed_on)}</span></div>
-      ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : '<div></div>'}
       ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}`;
       })()}
     </div>
