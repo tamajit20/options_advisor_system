@@ -737,7 +737,7 @@ def create_app() -> Flask:
         return jsonify({
             "jobs": out,
             "scheduler_running": sch_running,
-            "generated_at": _ist_iso(datetime.now(IST)),
+            "generated_at": _ist_iso(datetime.now()),
         })
 
     @app.route("/api/jobs/<job_name>/trigger", methods=["POST"])
