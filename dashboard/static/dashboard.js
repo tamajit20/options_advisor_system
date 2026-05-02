@@ -1470,12 +1470,9 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
         chargesEl.textContent = `₹${fmt(charges)}`;
         chargesEl.className   = 'live-pnl-charges';
       }
-      // % of total credit received
-      let _totalQty = 0;
-      panel.querySelectorAll('.leg-exit-row').forEach(row => {
-        if (row.dataset.action === 'SELL') _totalQty += (parseInt(row.dataset.lots)||1) * (parseInt(row.dataset.lotSize)||1);
-      });
-      const totalCredit = netCreditActual * (_totalQty || 1);
+      // net_credit_actual is already total ₹ (price × lots × lot_size from DB)
+      // — do NOT multiply by qty again
+      const totalCredit = netCreditActual;
       const pctStr = totalCredit > 0
         ? ` (${netPnl >= 0 ? '+' : ''}${(netPnl / totalCredit * 100).toFixed(0)}% of credit)`
         : '';
