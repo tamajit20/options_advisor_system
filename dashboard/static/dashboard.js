@@ -355,7 +355,7 @@ function renderPlainEnglishStructured(s) {
       ? ` \u26a1 ${_errorCount} error${_errorCount > 1 ? 's' : ''}`
       : _softFailCount > 0 ? ` \u26a0 ${_softFailCount} soft fail${_softFailCount > 1 ? 's' : ''}`
       : _warnCount > 0 ? ` \u26a0 ${_warnCount} warned` : '';
-    chips.push(`<span class="${chipClass}" data-sug-id="${escapeHtml(s.suggestion_id||'')}" style="cursor:pointer" title="Click to see all checks">${displayScore}/${_total} checks \u2713${warnSuffix} <span style="font-size:.7rem;opacity:.7">\u25bc</span></span><span class="conf-logic-info" tabindex="0" aria-label="Confidence gate logic">\u24d8<span class="conf-logic-popup"><strong>How gating works</strong><br><br><span style="color:#f87171">\u2717 Hard gate</span> &mdash; always blocks:<br>&nbsp;&bull; DTE within target band<br><br><span style="color:#fbbf24">\u2717 Soft gates</span> &mdash; need \u22654 of 5:<br>&nbsp;&bull; IV Rank in actionable zone<br>&nbsp;&bull; VIX stable or falling<br>&nbsp;&bull; PCR in neutral band<br>&nbsp;&bull; OI walls visible<br>&nbsp;&bull; Trend identifiable<br><br><span style="color:#fbbf24">\u26a0 Warning (never blocks):</span><br>&nbsp;&bull; High-impact event this week<br><br><span style="opacity:.6;font-size:.72rem">1 soft gate miss = trade proceeds with caution<br>2+ soft gate misses = blocked</span><br><br><span style="opacity:.5;font-size:.72rem">\u26a0 = data unavailable &nbsp;\u26a1 = gate error</span></span></span>`);
+    chips.push(`<span class="${chipClass}" data-sug-id="${escapeHtml(s.suggestion_id||'')}" style="cursor:pointer" title="Click to see all checks">${displayScore}/${_total} checks \u2713${warnSuffix} <span style="font-size:.7rem;opacity:.7">\u25bc</span></span><span class="conf-logic-info" tabindex="0" aria-label="Confidence gate logic">\u24d8<span class="conf-logic-popup"><strong>How gating works</strong><br><br><span style="color:#f87171">\u2717 Hard gate</span> &mdash; always blocks:<br>&nbsp;&bull; DTE within target band<br><br><span style="color:#fbbf24">\u2717 Soft gates</span> &mdash; need \u22655 of 7:<br>&nbsp;&bull; IV Rank in actionable zone<br>&nbsp;&bull; VIX stable or falling<br>&nbsp;&bull; PCR in neutral band<br>&nbsp;&bull; OI walls visible<br>&nbsp;&bull; Trend identifiable<br>&nbsp;&bull; IV premium vs realised vol (HV-20)<br>&nbsp;&bull; FII positioning aligned with trend<br><br><span style="color:#fbbf24">\u26a0 Warning (never blocks):</span><br>&nbsp;&bull; High-impact event this week<br><br><span style="opacity:.6;font-size:.72rem">1\u20132 soft gate misses = trade proceeds with caution<br>3+ soft gate misses = blocked</span><br><br><span style="opacity:.5;font-size:.72rem">\u26a0 = data unavailable &nbsp;\u26a1 = gate error</span></span></span>`);
   }
   // Reference date for "day N" → actual date conversion.
   // Use generated_on if present, else today.
@@ -1609,12 +1609,16 @@ function renderTrade(t) {
         if (realLBE != null) beRows.push(`<div><span class="k">Lower BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realLBE)}</span></div>`);
         return `
       <div><span class="k">Type</span><br><span class="v">${escapeHtml(t.position_type)}</span></div>
-      <div><span class="k">Net credit</span><br><span class="v">\u20b9${fmt(t.net_credit_actual)}</span></div>
-      <div><span class="k">P&amp;L</span><br><span class="v">\u20b9${fmt(t.net_pnl)}${pctHint(t.net_pnl, t.net_credit_actual, 'credit')}</span></div>
+      <div><span class="k">Net credit (actual)</span><br><span class="v">₹${fmt(t.net_credit_actual)}</span></div>
+      ${t.actual_max_profit != null ? `<div><span class="k">Est. max profit</span><br><span class="v pnl-profit">₹${fmt(t.actual_max_profit)}</span></div>` : ''}
+      ${t.actual_max_loss   != null ? `<div><span class="k">Est. max loss</span><br><span class="v pnl-loss">₹${fmt(t.actual_max_loss)}<span class="econ-ml-hint">${pctHint(t.actual_max_loss, t.net_credit_actual, 'credit')}</span></span></div>` : ''}
+      ${t.suggestion && t.suggestion.probability_of_profit != null ? `<div><span class="k">Est. PoP</span><br><span class="v">${fmtPct(t.suggestion.probability_of_profit)}</span></div>` : ''}
+      <div><span class="k">P&amp;L</span><br><span class="v">₹${fmt(t.net_pnl)}${pctHint(t.net_pnl, t.net_credit_actual, 'credit')}</span></div>
       <div><span class="k">Status</span><br><span class="v">${escapeHtml(t.status)}</span></div>
       <div><span class="k">Entry date</span><br><span class="v">${fmtDt(t.executed_on)}</span></div>
       ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}
       ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : ''}
+      ${t.suggestion && t.suggestion.dte != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${t.suggestion.dte}</span></div>` : ''}
       ${beRows.join('')}`;
       })()}
     </div>
