@@ -227,6 +227,10 @@ class VixRepo:
     def latest(self) -> Optional[dict]:
         return self.db.fetch_one("SELECT TOP 1 * FROM options_vix_history ORDER BY trade_date DESC")
 
+    def count(self) -> int:
+        row = self.db.fetch_one("SELECT COUNT(*) AS n FROM options_vix_history")
+        return int(row["n"]) if row else 0
+
     def history(self, since: date) -> List[dict]:
         return self.db.fetch_all(
             "SELECT * FROM options_vix_history WHERE trade_date >= ? ORDER BY trade_date",
@@ -335,10 +339,12 @@ class IvHistoryRepo:
         return len(items)
 
     def atm_iv_history(self, symbol: str, since: date) -> List[dict]:
+        # AVG collapses multiple expiries on the same trade_date into a single
+        # representative value, preventing duplicate-date bias in IV Rank calc.
         return self.db.fetch_all(
-            "SELECT trade_date, atm_iv FROM options_iv_history "
+            "SELECT trade_date, AVG(atm_iv) AS atm_iv FROM options_iv_history "
             "WHERE symbol = ? AND atm_iv IS NOT NULL AND trade_date >= ? "
-            "GROUP BY trade_date, atm_iv ORDER BY trade_date",
+            "GROUP BY trade_date ORDER BY trade_date",
             [symbol, since],
         )
 

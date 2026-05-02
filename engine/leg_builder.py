@@ -372,6 +372,12 @@ def _make_leg(
     row = get_chain_row(chain, strike, option_type)
     if row is None:
         raise ValueError(f"Strike {strike} {option_type} missing from chain")
+    # Liquidity guard: short legs on illiquid strikes produce unreliable prices
+    if action == "SELL":
+        if (row.get("contracts") or 0) == 0 and (row.get("open_interest") or 0) == 0:
+            raise ValueError(
+                f"Illiquid leg: {strike} {option_type} has zero contracts and zero OI"
+            )
     p = mid_price(row)
     lo, hi = price_band(row)
     return SuggestionLeg(
@@ -423,17 +429,47 @@ def spread_width(legs: Sequence[SuggestionLeg]) -> float:
     return max(widths) if widths else 0.0
 
 
-def estimate_pop(legs: Sequence[SuggestionLeg], spot: float, dte: int, atm_iv: float) -> float:
-    """Probability of profit ≈ 1 − |Δ_short_leg| (averaged across short legs)."""
+def estimate_pop(
+    legs: Sequence[SuggestionLeg],
+    spot: float,
+    dte: int,
+    atm_iv: float,
+    chain: Optional[Sequence[Mapping]] = None,
+) -> float:
+    """Probability of profit ≈ 1 − |Δ_short_leg| (averaged across short legs).
+
+    When *chain* is supplied, uses the per-strike implied volatility (skew-
+    adjusted) rather than ATM IV for delta computation.  This corrects the
+    systematic overstatement of PoP for OTM put shorts, which trade at a
+    persistent volatility premium (put skew) on Indian index options.
+    Falls back to *atm_iv* for any leg whose market price cannot be solved.
+    """
+    from engine.iv_calculator import implied_vol as _implied_vol  # avoid circular at module level
+
+    def _iv_for_leg(leg: SuggestionLeg) -> float:
+        """Return per-strike IV when chain is available; else atm_iv."""
+        if chain is None:
+            return atm_iv
+        row = get_chain_row(chain, leg.strike, leg.option_type)
+        if row is None:
+            return atm_iv
+        mkt = mid_price(row)
+        if mkt <= 0:
+            return atm_iv
+        iv, converged = _implied_vol(mkt, spot, leg.strike, dte, leg.option_type)
+        return iv if converged and iv > 0 else atm_iv
+
     short_legs = [l for l in legs if l.action == "SELL"]
     if not short_legs:
         # Long-premium strategy — use long-leg delta as a rough estimate
         long_legs = [l for l in legs if l.action == "BUY"]
         if not long_legs:
             return 50.0
-        deltas = [abs(black_scholes_delta(spot, l.strike, dte, atm_iv, l.option_type)) for l in long_legs]
+        deltas = [abs(black_scholes_delta(spot, l.strike, dte, _iv_for_leg(l), l.option_type))
+                  for l in long_legs]
         return 100.0 * sum(deltas) / len(deltas)
-    deltas = [abs(black_scholes_delta(spot, l.strike, dte, atm_iv, l.option_type)) for l in short_legs]
+    deltas = [abs(black_scholes_delta(spot, l.strike, dte, _iv_for_leg(l), l.option_type))
+              for l in short_legs]
     avg = sum(deltas) / len(deltas)
     return max(0.0, min(100.0, (1 - avg) * 100.0))
 

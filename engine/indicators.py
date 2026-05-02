@@ -146,6 +146,30 @@ def expected_move(spot: float, atm_iv: float, dte: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Historical Volatility (HV-20)
+# ---------------------------------------------------------------------------
+
+def hv_20(spot_history: Sequence[dict]) -> Optional[float]:
+    """Annualised 20-day realised volatility (close-to-close log returns).
+
+    Requires at least 22 rows (21 closes → 20 log returns).
+    Returns None when insufficient history.
+    """
+    closes = [float(r["close_price"]) for r in spot_history if r.get("close_price")]
+    if len(closes) < 22:
+        return None
+    recent = closes[-22:]          # last 22 closes → 21 log returns
+    log_returns = [
+        math.log(recent[i] / recent[i - 1])
+        for i in range(1, len(recent))
+    ]
+    n = len(log_returns)
+    mean = sum(log_returns) / n
+    variance = sum((r - mean) ** 2 for r in log_returns) / (n - 1)
+    return math.sqrt(variance) * math.sqrt(252)   # annualise
+
+
+# ---------------------------------------------------------------------------
 # Aggregator
 # ---------------------------------------------------------------------------
 
@@ -159,19 +183,25 @@ def build_indicators(
     vix_history: Sequence[dict],
     atm_iv: float,
     dte: int,
+    fii_net_futures: Optional[float] = None,
 ) -> MarketIndicators:
     cw, pw = oi_walls(chain_rows)
+    hv = hv_20(spot_history)
+    iv_prem = (atm_iv / hv) if (hv is not None and hv > 0) else None
     return MarketIndicators(
-        symbol        = symbol,
-        as_of         = as_of,
-        spot          = spot,
-        pcr           = pcr(chain_rows),
-        max_pain      = max_pain(chain_rows),
-        atr_14        = atr(spot_history, 14),
-        trend         = trend(spot_history),
-        vix_close     = float(vix_history[-1]["close_price"]) if vix_history else None,
-        vix_regime    = vix_regime(vix_history),
-        oi_walls_call = cw,
-        oi_walls_put  = pw,
-        expected_move = expected_move(spot, atm_iv, dte),
+        symbol           = symbol,
+        as_of            = as_of,
+        spot             = spot,
+        pcr              = pcr(chain_rows),
+        max_pain         = max_pain(chain_rows),
+        atr_14           = atr(spot_history, 14),
+        trend            = trend(spot_history),
+        vix_close        = float(vix_history[-1]["close_price"]) if vix_history else None,
+        vix_regime       = vix_regime(vix_history),
+        oi_walls_call    = cw,
+        oi_walls_put     = pw,
+        expected_move    = expected_move(spot, atm_iv, dte),
+        hv_20            = hv,
+        iv_premium       = iv_prem,
+        fii_net_futures  = fii_net_futures,
     )

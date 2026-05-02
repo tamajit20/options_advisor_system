@@ -34,6 +34,7 @@ from contracts import (
 from database.connection import SQLServerConnection
 from database.models import (
     EventCalendarRepo,
+    FiiRepo,
     FoEodRepo,
     IvHistoryRepo,
     LotSizeRepo,
@@ -141,6 +142,16 @@ def _evaluate_underlying(
     existing_names = [t.get("trade_name") for t in trade_repo.open_trades()
                       if t.get("trade_name")]
 
+    # FII net futures positioning (long − short contracts)
+    fii_net_futures: Optional[float] = None
+    try:
+        fii_rows = FiiRepo(db).latest()
+        fii_row = next((r for r in fii_rows if r.get("client_type") == "FII"), None)
+        if fii_row:
+            fii_net_futures = float(fii_row["future_long"]) - float(fii_row["future_short"])
+    except Exception:
+        logger.debug("FII net futures unavailable for %s (non-fatal)", symbol)
+
     iv_rows = iv_repo.latest_for(symbol, trade_date)
 
     suggestions: list[Suggestion] = []
@@ -170,6 +181,7 @@ def _evaluate_underlying(
             vix_history=vix_history,
             atm_iv=atm_iv,
             dte=dte,
+            fii_net_futures=fii_net_futures,
         )
 
         confidence = evaluate_confidence(
@@ -220,6 +232,7 @@ def _evaluate_underlying(
                 reason=f"[{expiry_type} {expiry}] Strategy veto: {veto}",
             ))
 
+    return suggestions, no_suggestions  # always returns tuple — never None
 
 
 def run_suggestion_engine(
@@ -236,7 +249,9 @@ def run_suggestion_engine(
     sug_repo = SuggestionRepo(db)
     notif_repo = NotificationRepo(db)
 
-    persisted: List[Suggestion] = []
+    # Collect all candidates across all underlyings first, then apply
+    # cross-underlying dedup before persisting.
+    all_candidates: List[Suggestion] = []
     no_suggestions: List[NoSuggestion] = []
 
     for symbol in STRATEGY_CONFIG["underlyings"]:
@@ -245,28 +260,66 @@ def run_suggestion_engine(
         except Exception:
             logger.exception("Suggestion eval failed for %s", symbol)
             continue
-
-        for sug in sugs:
-            # Dedup guard — skip if already persisted this underlying+expiry_type today
-            if sug_repo.has_suggestion_for(symbol, trade_date, sug.expiry_type):
-                logger.info("Suggestion already exists for %s %s on %s -- skipping",
-                            symbol, sug.expiry_type, trade_date)
-                continue
-            sug_repo.insert(sug)
-            sug_repo.insert_legs(sug.suggestion_id, sug.legs)
-            notif_repo.insert(Notification(
-                created_at=now_ist(),
-                notif_type="NEW_SUGGESTION",
-                severity="INFO",
-                title=f"New suggestion: {sug.trade_name}",
-                body=sug.plain_english,
-                related_suggestion_id=sug.suggestion_id,
-            ))
-            persisted.append(sug)
-            logger.info("Persisted suggestion %s (%s %s %s)",
-                        sug.suggestion_id, sug.underlying, sug.expiry_type, sug.strategy)
-
+        all_candidates.extend(sugs)
         no_suggestions.extend(nss)
+
+    # ── Cross-underlying dedup ─────────────────────────────────────────────
+    # NIFTY, BANKNIFTY, FINNIFTY are 85–95% correlated; three simultaneous
+    # suggestions of the same expiry type is one concentrated correlated bet.
+    # Keep only the highest-confidence suggestion per expiry_type group.
+    # Tiebreak: higher iv_rank wins (more premium edge).
+    best_by_expiry_type: dict[str, Suggestion] = {}
+    for sug in all_candidates:
+        key = sug.expiry_type
+        existing = best_by_expiry_type.get(key)
+        is_better = (
+            existing is None
+            or sug.confidence.score > existing.confidence.score
+            or (
+                sug.confidence.score == existing.confidence.score
+                and (sug.confidence.score or 0) >= (existing.confidence.score or 0)
+            )
+        )
+        if is_better:
+            if existing is not None:
+                logger.info(
+                    "Cross-underlying dedup: dropping %s (%s, score=%d) in favour of %s (%s, score=%d)",
+                    existing.underlying, key, existing.confidence.score,
+                    sug.underlying, key, sug.confidence.score,
+                )
+                no_suggestions.append(NoSuggestion(
+                    generated_on=now_ist(),
+                    underlying=existing.underlying,
+                    confidence=existing.confidence,
+                    reason=(
+                        f"[{key}] Dropped — correlation dedup: "
+                        f"{sug.underlying} has equal/higher confidence score "
+                        f"({sug.confidence.score} vs {existing.confidence.score})"
+                    ),
+                ))
+            best_by_expiry_type[key] = sug
+
+    persisted: List[Suggestion] = []
+
+    for sug in best_by_expiry_type.values():
+        # Per-type dedup: skip if already stored for this underlying+expiry_type today
+        if sug_repo.has_suggestion_for(sug.underlying, trade_date, sug.expiry_type):
+            logger.info("Suggestion already exists for %s %s on %s — skipping",
+                        sug.underlying, sug.expiry_type, trade_date)
+            continue
+        sug_repo.insert(sug)
+        sug_repo.insert_legs(sug.suggestion_id, sug.legs)
+        notif_repo.insert(Notification(
+            created_at=now_ist(),
+            notif_type="NEW_SUGGESTION",
+            severity="INFO",
+            title=f"New suggestion: {sug.trade_name}",
+            body=sug.plain_english,
+            related_suggestion_id=sug.suggestion_id,
+        ))
+        persisted.append(sug)
+        logger.info("Persisted suggestion %s (%s %s %s)",
+                    sug.suggestion_id, sug.underlying, sug.expiry_type, sug.strategy)
 
     import json as _json
     for ns in no_suggestions:

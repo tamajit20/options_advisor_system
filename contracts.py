@@ -119,6 +119,9 @@ class MarketIndicators:
     oi_walls_call: List[float]       # top call walls (strikes); empty when OI absent
     oi_walls_put:  List[float]
     expected_move: float             # spot × IV × √(DTE/365), in spot points
+    hv_20:         Optional[float]   # 20-day historical/realised volatility (annualised)
+    iv_premium:    Optional[float]   # atm_iv / hv_20 — how expensive options are vs realised vol
+    fii_net_futures: Optional[float] # FII net futures position (long − short contracts)
 
 
 @dataclass

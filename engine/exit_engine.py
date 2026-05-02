@@ -79,15 +79,18 @@ def evaluate_exit(
             as_of=as_of,
         )
 
-    # SL hit (per-share level applied via average lot qty)
-    if sl_level_per_share is not None and qty_total > 0:
-        sl_rs = -sl_level_per_share * (qty_total // max(len(legs), 1))
-        if current_pnl <= sl_rs:
-            return ExitDecision(
-                trade_id=trade_id, decision="SL_HIT",
-                reason=f"Loss ≥ SL: ₹{current_pnl:.0f} ≤ ₹{sl_rs:.0f}",
-                as_of=as_of,
-            )
+    # SL hit — exit when loss reaches stop_loss_fraction × max_loss
+    # sl_level_per_share is kept as a dashboard display reference only;
+    # we use the premium-based fraction here which is dimensionally correct.
+    sl_fraction = STRATEGY_CONFIG["stop_loss_fraction"]
+    if max_loss_rs > 0 and current_pnl <= -(sl_fraction * max_loss_rs):
+        sl_rs = -(sl_fraction * max_loss_rs)
+        return ExitDecision(
+            trade_id=trade_id, decision="SL_HIT",
+            reason=f"Loss ≥ {sl_fraction*100:.0f}% of max loss: "
+                   f"₹{current_pnl:.0f} ≤ ₹{sl_rs:.0f}",
+            as_of=as_of,
+        )
 
     if days_to_expiry <= 1:
         return ExitDecision(

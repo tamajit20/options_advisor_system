@@ -144,11 +144,69 @@ def evaluate(
 
     checks.append(_gate("Trend identifiable", _trend_gate))
 
+    # 6. IV premium vs realised volatility (HV-20)
+    # Writing is only edge-positive when IV > realised vol; buying only when IV < realised vol.
+    iv_writing_min = STRATEGY_CONFIG["iv_rank_writing_min"]
+    iv_buying_max  = STRATEGY_CONFIG["iv_rank_buying_max"]
+    iv_premium_sell_min = STRATEGY_CONFIG.get("iv_premium_sell_min", 0.90)
+    iv_premium_buy_max  = STRATEGY_CONFIG.get("iv_premium_buy_max",  1.50)
+
+    def _iv_premium_gate():
+        if indicators.hv_20 is None or indicators.iv_premium is None:
+            return _PASS_WARN, "HV-20 unavailable (< 22 days spot history) — IV premium unverifiable"
+        prem = indicators.iv_premium
+        if iv_rank is not None and iv_rank > iv_writing_min:
+            # WRITING regime: IV must be above realised vol to justify selling premium
+            ok = prem >= iv_premium_sell_min
+            return (
+                _PASS if ok else _SOFT_FAIL,
+                f"IV/HV ratio {prem:.2f} (IV {indicators.hv_20*prem*100:.0f}% vs "
+                f"HV-20 {indicators.hv_20*100:.0f}%) — "
+                + ("premium adequate for writing" if ok
+                   else f"IV below realised vol, need \u2265{iv_premium_sell_min:.2f}×"),
+            )
+        if iv_rank is not None and iv_rank < iv_buying_max:
+            # BUYING regime: IV must be reasonably priced vs realised vol
+            ok = prem <= iv_premium_buy_max
+            return (
+                _PASS if ok else _SOFT_FAIL,
+                f"IV/HV ratio {prem:.2f} — "
+                + ("options fairly priced for buying" if ok
+                   else f"IV expensive vs realised vol, need \u2264{iv_premium_buy_max:.2f}×"),
+            )
+        # Mid-IV zone — no strong opinion, pass with info
+        return _PASS, f"IV/HV ratio {prem:.2f} (mid-IV zone, no premium constraint)"
+
+    checks.append(_gate("IV premium vs realised vol (HV-20)", _iv_premium_gate))
+
+    # 7. FII net futures positioning
+    # FII strongly positioned against the market trend is a warning sign.
+    fii_threshold = STRATEGY_CONFIG.get("fii_net_futures_threshold", 50_000)
+
+    def _fii_gate():
+        net = indicators.fii_net_futures
+        if net is None:
+            return _PASS_WARN, "FII participant data not available — institutional positioning unknown"
+        trend_dir = indicators.trend
+        if net < -fii_threshold and trend_dir == "BULLISH":
+            return (
+                _SOFT_FAIL,
+                f"FII net futures: {net:+,.0f} contracts (aggressively short vs bullish trend)",
+            )
+        if net > fii_threshold and trend_dir == "BEARISH":
+            return (
+                _SOFT_FAIL,
+                f"FII net futures: {net:+,.0f} contracts (aggressively long vs bearish trend)",
+            )
+        return _PASS, f"FII net futures: {net:+,.0f} contracts (aligned or neutral)"
+
+    checks.append(_gate("FII positioning aligned with trend", _fii_gate))
+
     # ══════════════════════════════════════════════════════════════
     # HARD GATES — failure → FAIL (always blocks)
     # ══════════════════════════════════════════════════════════════
 
-    # 6. High-impact event this week — WARNING only, never blocks suggestion
+    # 8. High-impact event this week — WARNING only, never blocks suggestion
     def _event_gate():
         if events_calendar_row_count == 0:
             return (
@@ -170,7 +228,7 @@ def evaluate(
 
     checks.append(_gate("No high-impact event this week", _event_gate))
 
-    # 7. DTE in band — always computable, hard block
+    # 9. DTE in band — always computable, hard block
     dte_min = STRATEGY_CONFIG["dte_min"]
     dte_max = STRATEGY_CONFIG["dte_max"]
 
@@ -186,11 +244,14 @@ def evaluate(
     # ══════════════════════════════════════════════════════════════
     # Score + all_passed
     # ══════════════════════════════════════════════════════════════
-    soft_min   = STRATEGY_CONFIG["soft_gate_min_pass"]   # default 4
-    soft_total = 5  # gates 1–5
+    # Soft gates: checks[0..6] = 7 gates (original 5 + IV premium + FII)
+    # Event warning: checks[7] — SOFT_FAIL but excluded from hard_failed count
+    # Hard gate: checks[8] — DTE
+    soft_min   = STRATEGY_CONFIG["soft_gate_min_pass"]   # default 5 (of 7)
+    soft_total = 7  # gates 1–7
 
-    hard_failed = sum(1 for c in checks[5:] if c.status == _FAIL)
-    soft_failed = sum(1 for c in checks[:5] if c.status == _SOFT_FAIL)
+    hard_failed = sum(1 for c in checks[8:] if c.status == _FAIL)
+    soft_failed = sum(1 for c in checks[:7] if c.status == _SOFT_FAIL)
 
     all_passed = hard_failed == 0 and soft_failed <= (soft_total - soft_min)
 

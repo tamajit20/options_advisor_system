@@ -156,11 +156,20 @@ STRATEGY_CONFIG = {
     "dte_max": 21,
 
     # Confidence — tiered gating
-    # Hard gates (Event + DTE): any FAIL = no suggestion regardless of score
-    # Soft gates (IV Rank, VIX, PCR, OI Walls, Trend): SOFT_FAIL if condition
-    #   not met; trade proceeds if at least soft_gate_min_pass of 5 pass.
+    # Hard gate (DTE): any FAIL = no suggestion regardless of score
+    # Soft gates (IV Rank, VIX, PCR, OI Walls, Trend, IV premium, FII): SOFT_FAIL
+    #   if condition not met; trade proceeds if at least soft_gate_min_pass of 7 pass.
+    # Event gate: SOFT_FAIL warning only — not counted in the soft-gate tally.
     "confidence_min_pass_count": 7,     # legacy — no longer used by engine
-    "soft_gate_min_pass": 4,            # need ≥4 of 5 soft gates to pass
+    "soft_gate_min_pass": 5,            # need ≥5 of 7 soft gates to pass
+
+    # IV premium vs realised volatility (HV-20) thresholds
+    "iv_premium_sell_min": 0.90,        # IV/HV must be ≥0.90 to justify writing premium
+    "iv_premium_buy_max":  1.50,        # IV/HV must be ≤1.50 to justify buying premium
+
+    # FII net futures positioning (long − short contracts) threshold
+    # FII position beyond this magnitude against the trend triggers a soft-fail.
+    "fii_net_futures_threshold": 50_000,
 
     # IV calc bisection params
     "iv_bisection_low":  0.001,
@@ -179,10 +188,14 @@ STRATEGY_CONFIG = {
     },
 
     # Net credit must be at least this fraction of spread width to be viable
-    "min_credit_to_width_ratio": 0.005,   # 0.5%
+    "min_credit_to_width_ratio": 0.20,   # 20% — e.g. ₹40 credit on ₹200-wide condor
 
     # Take-profit threshold for exit engine (fraction of max profit)
     "take_profit_fraction": 0.80,
+
+    # Stop-loss threshold for exit engine (fraction of max loss)
+    # Exit when current loss reaches this fraction of the defined max loss.
+    "stop_loss_fraction": 0.50,   # 50% of max loss — standard for defined-risk options
 
     # VIX regime thresholds (% change vs prior close)
     "vix_rising_threshold":  5.0,

@@ -194,9 +194,23 @@ def assemble_suggestion(
         raise StrategyVeto("Chain too thin — at least one leg has zero/missing price")
 
     np_per_share = leg_builder.net_premium(legs)
+
+    # Credit-to-width ratio veto: for defined-risk credit strategies the net credit
+    # must be at least min_credit_to_width_ratio × spread width.  A condor collecting
+    # 3 pts on a 200-pt width (1.5%) doesn't compensate for the risk.
+    min_cw_ratio = STRATEGY_CONFIG.get("min_credit_to_width_ratio", 0.20)
+    if strategy in _CREDIT_STRATEGIES:
+        sw = leg_builder.spread_width(legs)
+        if sw > 0 and np_per_share < min_cw_ratio * sw:
+            raise StrategyVeto(
+                f"Credit-to-width ratio too low: {np_per_share:.1f}/{sw:.0f} = "
+                f"{np_per_share/sw*100:.1f}% < {min_cw_ratio*100:.0f}% minimum"
+            )
+
     max_profit_ps, max_loss_ps = leg_builder.max_profit_loss(legs, strategy)
     upper_be, lower_be = leg_builder.breakevens(legs, strategy)
-    pop = leg_builder.estimate_pop(legs, spot, dte, atm_iv)
+    # Pass chain so estimate_pop uses per-strike IV (skew-adjusted) for short legs
+    pop = leg_builder.estimate_pop(legs, spot, dte, atm_iv, chain=chain)
 
     # Charges (per-share priced — we want totals → multiply by qty)
     charges = estimate_charges([
