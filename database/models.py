@@ -557,13 +557,22 @@ class SuggestionRepo:
         n = (row["n"] if row else 0) + 1
         return f"{prefix}{n:03d}"
 
-    def has_suggestion_for(self, underlying: str, day: date, expiry_type: str = "") -> bool:
+    def has_suggestion_for(self, underlying: str, day: date, expiry_type: str = "", strategy: str = "") -> bool:
         """Return True if a real (non-NO_SUGGESTION) suggestion already exists
-        for this underlying + expiry_type on `day`. Used to prevent double-insertion on re-runs.
-        When expiry_type is provided, scoped to that type so weekly and monthly can coexist."""
+        for this underlying + expiry_type + strategy on `day`. Used to prevent double-insertion on re-runs.
+        When expiry_type is provided, scoped to that type so weekly and monthly can coexist.
+        When strategy is also provided, scoped further so IC + BPS + BCS can coexist."""
         start = datetime.combine(day, datetime.min.time())
         end   = start + timedelta(days=1)
-        if expiry_type:
+        if expiry_type and strategy:
+            v = self.db.scalar(
+                "SELECT COUNT(*) FROM options_suggestions "
+                "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "
+                "AND strategy <> 'NONE' AND status <> 'NO_SUGGESTION' "
+                "AND expiry_type = ? AND strategy = ?",
+                [underlying, start, end, expiry_type, strategy],
+            )
+        elif expiry_type:
             v = self.db.scalar(
                 "SELECT COUNT(*) FROM options_suggestions "
                 "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "

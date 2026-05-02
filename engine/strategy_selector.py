@@ -158,8 +158,14 @@ def assemble_suggestion(
     lot_size: int,
     existing_trade_names: Iterable[str] = (),
     generated_on: datetime | None = None,
+    strategy_override: str | None = None,
 ) -> Suggestion:
-    """Top-level: select strategy, build legs, compute economics, return Suggestion."""
+    """Top-level: select strategy, build legs, compute economics, return Suggestion.
+
+    If ``strategy_override`` is provided it bypasses ``select_strategy()`` and
+    builds legs for that strategy directly.  Used to generate companion
+    spread suggestions (BPS / BCS) alongside the primary IC / IB.
+    """
     if not confidence.all_passed:
         raise StrategyVeto(
             "Confidence gate not all-pass: " + "; ".join(confidence.failed_reasons)
@@ -167,7 +173,7 @@ def assemble_suggestion(
     if not chain:
         raise StrategyVeto("Empty option chain")
 
-    strategy = select_strategy(
+    strategy = strategy_override if strategy_override is not None else select_strategy(
         iv_rank=iv_rank,
         trend=indicators.trend,
         indicators=indicators,

@@ -204,8 +204,9 @@ def _evaluate_underlying(
             continue
 
         suggestion_id = sug_repo.next_suggestion_id(trade_date)
+        primary_suggestion: Optional[Suggestion] = None
         try:
-            suggestion = assemble_suggestion(
+            primary_suggestion = assemble_suggestion(
                 suggestion_id=suggestion_id,
                 underlying=symbol,
                 expiry=expiry,
@@ -222,8 +223,8 @@ def _evaluate_underlying(
                 existing_trade_names=existing_names,
                 generated_on=now_ist(),
             )
-            suggestions.append(suggestion)
-            existing_names.append(suggestion.trade_name)  # prevent name collision between types
+            suggestions.append(primary_suggestion)
+            existing_names.append(primary_suggestion.trade_name)
         except StrategyVeto as veto:
             no_suggestions.append(NoSuggestion(
                 generated_on=now_ist(),
@@ -231,6 +232,41 @@ def _evaluate_underlying(
                 confidence=confidence,
                 reason=f"[{expiry_type} {expiry}] Strategy veto: {veto}",
             ))
+
+        # When the primary is a 4-leg neutral strategy, also generate the
+        # individual spread legs as cheaper companion suggestions.
+        # BPS (put side) and BCS (call side) require ~half the margin of IC/IB.
+        if primary_suggestion is not None and primary_suggestion.strategy in (
+            "IRON_CONDOR", "IRON_BUTTERFLY"
+        ):
+            for companion_strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
+                try:
+                    comp_id = sug_repo.next_suggestion_id(trade_date)
+                    comp = assemble_suggestion(
+                        suggestion_id=comp_id,
+                        underlying=symbol,
+                        expiry=expiry,
+                        expiry_type=expiry_type,
+                        dte=dte,
+                        spot=spot,
+                        chain=chain,
+                        indicators=indicators,
+                        confidence=confidence,
+                        iv_rank=iv_rank,
+                        atm_iv=atm_iv,
+                        lots=1,
+                        lot_size=lot_size,
+                        existing_trade_names=existing_names,
+                        generated_on=now_ist(),
+                        strategy_override=companion_strategy,
+                    )
+                    suggestions.append(comp)
+                    existing_names.append(comp.trade_name)
+                    logger.info("Companion suggestion %s (%s) generated alongside %s",
+                                comp.trade_name, companion_strategy, primary_suggestion.trade_name)
+                except StrategyVeto as veto:
+                    logger.debug("Companion %s veto for %s %s: %s",
+                                 companion_strategy, symbol, expiry, veto)
 
     return suggestions, no_suggestions  # always returns tuple — never None
 
@@ -265,12 +301,12 @@ def run_suggestion_engine(
 
     # ── Cross-underlying dedup ─────────────────────────────────────────────
     # NIFTY, BANKNIFTY, FINNIFTY are 85–95% correlated; three simultaneous
-    # suggestions of the same expiry type is one concentrated correlated bet.
-    # Keep only the highest-confidence suggestion per expiry_type group.
-    # Tiebreak: higher iv_rank wins (more premium edge).
+    # suggestions of the same expiry type + strategy is one concentrated bet.
+    # Keep only the highest-confidence suggestion per (expiry_type, strategy) group.
+    # Companion spreads (BPS, BCS) are keyed separately so IC + BPS can coexist.
     best_by_expiry_type: dict[str, Suggestion] = {}
     for sug in all_candidates:
-        key = sug.expiry_type
+        key = f"{sug.expiry_type}:{sug.strategy}"
         existing = best_by_expiry_type.get(key)
         is_better = (
             existing is None
@@ -302,8 +338,8 @@ def run_suggestion_engine(
     persisted: List[Suggestion] = []
 
     for sug in best_by_expiry_type.values():
-        # Per-type dedup: skip if already stored for this underlying+expiry_type today
-        if sug_repo.has_suggestion_for(sug.underlying, trade_date, sug.expiry_type):
+        # Per-type dedup: skip if already stored for this underlying+expiry_type+strategy today
+        if sug_repo.has_suggestion_for(sug.underlying, trade_date, sug.expiry_type, sug.strategy):
             logger.info("Suggestion already exists for %s %s on %s — skipping",
                         sug.underlying, sug.expiry_type, trade_date)
             continue
