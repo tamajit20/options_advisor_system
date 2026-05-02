@@ -530,28 +530,6 @@ input:focus, select:focus, textarea:focus {
   margin: 8px 0 4px;
 }
 
-/* Companion suggestion warning — shown on BPS/BCS cards when IC/IB also present */
-.companion-warning {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  background: rgba(239,68,68,.08);
-  border: 1px solid rgba(239,68,68,.35);
-  border-radius: 7px;
-  padding: 10px 14px;
-  margin: 0 0 10px;
-  font-size: .85rem;
-  color: #f87171;
-  line-height: 1.5;
-}
-.companion-warn-icon {
-  font-size: 1.2rem;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-.companion-warning strong { color: #fca5a5; }
-.companion-warning em { font-style: italic; color: #fca5a5; }
-
 .close-trade-panel { margin-top: 2px; }
 
 /* ---------- Two-sided SL triggers (Iron Condor / Iron Butterfly) ---------- */

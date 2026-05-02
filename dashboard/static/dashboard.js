@@ -871,39 +871,6 @@ function legRoleNote(strategy, leg) {
 // readOnly=true: static view used inside trade cards (no inputs, no action buttons)
 function renderSuggestion(s, readOnly = false, allSuggestions = []) {
   const isNoSug = s.strategy === 'NONE' || s.status === 'NO_SUGGESTION';
-
-  // Companion warning: BPS or BCS generated alongside an IC/IB for the same underlying.
-  // User must pick ONE — executing all three = 2× leveraged IC exposure.
-  const COMPANION_STRATEGIES = ['BULL_PUT_SPREAD', 'BEAR_CALL_SPREAD'];
-  const PRIMARY_4LEG = ['IRON_CONDOR', 'IRON_BUTTERFLY'];
-  let companionWarningHtml = '';
-  if (!isNoSug && COMPANION_STRATEGIES.includes(s.strategy) && allSuggestions.length > 1) {
-    const primary = allSuggestions.find(
-      p => PRIMARY_4LEG.includes(p.strategy) && p.underlying === s.underlying
-    );
-    if (primary) {
-      const otherCompanion = allSuggestions.find(
-        p => COMPANION_STRATEGIES.includes(p.strategy)
-          && p.strategy !== s.strategy
-          && p.underlying === s.underlying
-      );
-      const otherName = otherCompanion
-        ? escapeHtml(otherCompanion.trade_name || otherCompanion.strategy.replace('_', ' '))
-        : null;
-      companionWarningHtml = `
-        <div class="companion-warning">
-          <span class="companion-warn-icon">⚠</span>
-          <div>
-            <strong>Companion to ${escapeHtml(primary.trade_name || primary.strategy.replace('_',' '))} — pick ONE, not all.</strong><br>
-            <span class="muted" style="font-size:.85rem">
-              This is the <em>${s.strategy === 'BULL_PUT_SPREAD' ? 'put side' : 'call side'}</em> of the ${escapeHtml(primary.strategy.replace('_',' ').toLowerCase())} above — half the margin, half the exposure.
-              ${otherName ? `Executing this <em>and</em> <strong>${otherName}</strong> <em>and</em> the ${escapeHtml(primary.strategy.replace('_',' ').toLowerCase())} together doubles your risk.` : ''}
-              Choose based on your available margin: full strategy (₹${fmt((primary.economics && primary.economics.max_loss) || primary.max_loss)}) or this spread only.
-            </span>
-          </div>
-        </div>`;
-    }
-  }
   if (isNoSug) {
     return `<div class="card">
       <div class="card-head">
@@ -1001,7 +968,6 @@ function renderSuggestion(s, readOnly = false, allSuggestions = []) {
       <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
       <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
     </div>
-    ${companionWarningHtml}
     ${renderStrategyRationale(s)}
     ${renderPlainEnglishStructured(s)}
     <div class="kv-grid">
