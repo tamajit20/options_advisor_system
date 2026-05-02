@@ -1604,22 +1604,37 @@ function renderTrade(t) {
         });
         const realUBE = scLeg ? parseFloat(scLeg.strike) + fillNetCredit : null;
         const realLBE = spLeg ? parseFloat(spLeg.strike) - fillNetCredit : null;
-        const beRows = [];
-        if (realUBE != null) beRows.push(`<div><span class="k">Upper BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realUBE)}</span></div>`);
-        if (realLBE != null) beRows.push(`<div><span class="k">Lower BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realLBE)}</span></div>`);
+        // Resolve max profit/loss — prefer trade-stored actuals, fall back to suggestion
+        const estMp = t.actual_max_profit != null ? t.actual_max_profit
+                    : (t.suggestion && t.suggestion.max_profit != null ? t.suggestion.max_profit : null);
+        const estMl = t.actual_max_loss   != null ? t.actual_max_loss
+                    : (t.suggestion && t.suggestion.max_loss   != null ? t.suggestion.max_loss   : null);
+        const estPop = t.suggestion && t.suggestion.probability_of_profit != null
+                     ? t.suggestion.probability_of_profit : null;
+        const estDte = t.suggestion && t.suggestion.dte != null ? t.suggestion.dte : null;
+
+        // 2-column grid — pair items to mirror suggestion page row layout:
+        //  Row 1: Type             | Net credit (actual)
+        //  Row 2: Est. max profit  | Est. max loss
+        //  Row 3: Est. PoP         | DTE at entry
+        //  Row 4: Upper BE (fills) | Lower BE (fills)
+        //  Row 5: P&L              | Status
+        //  Row 6: Entry date       | Options expiry
+        //  Row 7: Exit date (if present)
         return `
       <div><span class="k">Type</span><br><span class="v">${escapeHtml(t.position_type)}</span></div>
       <div><span class="k">Net credit (actual)</span><br><span class="v">₹${fmt(t.net_credit_actual)}</span></div>
-      ${t.actual_max_profit != null ? `<div><span class="k">Est. max profit</span><br><span class="v pnl-profit">₹${fmt(t.actual_max_profit)}</span></div>` : ''}
-      ${t.actual_max_loss   != null ? `<div><span class="k">Est. max loss</span><br><span class="v pnl-loss">₹${fmt(t.actual_max_loss)}<span class="econ-ml-hint">${pctHint(t.actual_max_loss, t.net_credit_actual, 'credit')}</span></span></div>` : ''}
-      ${t.suggestion && t.suggestion.probability_of_profit != null ? `<div><span class="k">Est. PoP</span><br><span class="v">${fmtPct(t.suggestion.probability_of_profit)}</span></div>` : ''}
-      ${beRows.join('')}
-      ${t.suggestion && t.suggestion.dte != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${t.suggestion.dte}</span></div>` : ''}
+      ${estMp != null ? `<div><span class="k">Est. max profit</span><br><span class="v pnl-profit">₹${fmt(estMp)}</span></div>` : '<div></div>'}
+      ${estMl != null ? `<div><span class="k">Est. max loss</span><br><span class="v pnl-loss">₹${fmt(estMl)}<span class="econ-ml-hint">${pctHint(estMl, t.net_credit_actual, 'credit')}</span></span></div>` : '<div></div>'}
+      ${estPop != null ? `<div><span class="k">Est. PoP</span><br><span class="v">${fmtPct(estPop)}</span></div>` : '<div></div>'}
+      ${estDte != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${estDte}</span></div>` : '<div></div>'}
+      ${realUBE != null ? `<div><span class="k">Upper BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(realUBE)}</span></div>` : '<div></div>'}
+      ${realLBE != null ? `<div><span class="k">Lower BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(realLBE)}</span></div>` : '<div></div>'}
       <div><span class="k">P&amp;L</span><br><span class="v">₹${fmt(t.net_pnl)}${pctHint(t.net_pnl, t.net_credit_actual, 'credit')}</span></div>
       <div><span class="k">Status</span><br><span class="v">${escapeHtml(t.status)}</span></div>
       <div><span class="k">Entry date</span><br><span class="v">${fmtDt(t.executed_on)}</span></div>
-      ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}
-      ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : ''}`;
+      ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : '<div></div>'}
+      ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}`;
       })()}
     </div>
     ${(() => {
