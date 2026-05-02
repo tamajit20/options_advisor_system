@@ -207,6 +207,7 @@ class Suggestion:
     strategy_type:    str             # WRITING / BUYING
     underlying:       str
     expiry_date:      date
+    expiry_type:      str             # "Monthly" | "Weekly"
     dte:              int
     spot_at_generation: float
     confidence:       ConfidenceResult

@@ -190,6 +190,14 @@ _TABLE_DDL: List[str] = [
         no_suggestion_reason   NVARCHAR(MAX) NULL
     )
     """,
+    # Migration: add expiry_type column if not present (safe on existing DBs)
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'expiry_type'
+    )
+    ALTER TABLE options_suggestions ADD expiry_type NVARCHAR(10) NULL
+    """,
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_date ON options_suggestions (generated_on DESC)",
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_status ON options_suggestions (status, generated_on DESC)",
 

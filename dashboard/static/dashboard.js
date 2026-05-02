@@ -323,6 +323,10 @@ function renderPlainEnglishStructured(s) {
   const ivRank = ivMatch   ? ivMatch[1]   : null;
   const chips = [];
   if (s.underlying)       chips.push(`<span class="ctx-chip">${escapeHtml(s.underlying)}</span>`);
+  if (s.expiry_type) {
+    const badgeClass = s.expiry_type === 'Monthly' ? 'ctx-chip ctx-expiry-monthly' : 'ctx-chip ctx-expiry-weekly';
+    chips.push(`<span class="${badgeClass}">${escapeHtml(s.expiry_type)}</span>`);
+  }
   if (spot)               chips.push(`<span class="ctx-chip">Spot ₹${escapeHtml(spot)}</span>`);
   if (ivRank)             chips.push(`<span class="ctx-chip ctx-iv">IV Rank ${escapeHtml(ivRank)}%</span>`);
   if (s.confidence_score != null) {

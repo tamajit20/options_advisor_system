@@ -814,6 +814,8 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .conf-soft-fail .conf-detail-text { color: #f59e0b; opacity: .85; }
 .ctx-chip.ctx-warn  { color: var(--warn); border-color: rgba(245,158,11,.35); }
 .ctx-chip.ctx-error { color: #f97316;     border-color: rgba(249,115,22,.35); }
+.ctx-chip.ctx-expiry-monthly { color: #a78bfa; border-color: rgba(167,139,250,.35); font-weight: 600; }
+.ctx-chip.ctx-expiry-weekly  { color: #22d3ee; border-color: rgba(34,211,238,.35);  font-weight: 600; }
 .conf-label { font-weight: 500; white-space: nowrap; padding-right: 10px; }
 .conf-detail { opacity: .85; }
 .conf-detail-text { font-style: italic; opacity: .8; }

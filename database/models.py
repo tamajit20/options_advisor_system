@@ -485,18 +485,18 @@ class SuggestionRepo:
             """
             INSERT INTO options_suggestions
               (suggestion_id, trade_name, generated_on, strategy, strategy_type,
-               underlying, expiry_date, dte, spot_at_generation, confidence_score,
+               underlying, expiry_date, expiry_type, dte, spot_at_generation, confidence_score,
                conditions_json, status,
                net_credit_suggested, max_profit, max_loss,
                upper_breakeven, lower_breakeven, stop_loss_level,
                probability_of_profit, estimated_charges_total, estimated_net_pnl,
                execution_window, plain_english)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING',
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING',
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 s.suggestion_id, s.trade_name, s.generated_on, s.strategy, s.strategy_type,
-                s.underlying, s.expiry_date, s.dte, s.spot_at_generation, s.confidence.score,
+                s.underlying, s.expiry_date, s.expiry_type, s.dte, s.spot_at_generation, s.confidence.score,
                 json.dumps([c.__dict__ for c in s.confidence.checks]),
                 s.economics.net_credit, s.economics.max_profit, s.economics.max_loss,
                 s.economics.upper_breakeven, s.economics.lower_breakeven, s.economics.stop_loss_level,
@@ -551,17 +551,27 @@ class SuggestionRepo:
         n = (row["n"] if row else 0) + 1
         return f"{prefix}{n:03d}"
 
-    def has_suggestion_for(self, underlying: str, day: date) -> bool:
+    def has_suggestion_for(self, underlying: str, day: date, expiry_type: str = "") -> bool:
         """Return True if a real (non-NO_SUGGESTION) suggestion already exists
-        for this underlying on `day`. Used to prevent double-insertion on re-runs."""
+        for this underlying + expiry_type on `day`. Used to prevent double-insertion on re-runs.
+        When expiry_type is provided, scoped to that type so weekly and monthly can coexist."""
         start = datetime.combine(day, datetime.min.time())
         end   = start + timedelta(days=1)
-        v = self.db.scalar(
-            "SELECT COUNT(*) FROM options_suggestions "
-            "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "
-            "AND strategy <> 'NONE' AND status <> 'NO_SUGGESTION'",
-            [underlying, start, end],
-        )
+        if expiry_type:
+            v = self.db.scalar(
+                "SELECT COUNT(*) FROM options_suggestions "
+                "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "
+                "AND strategy <> 'NONE' AND status <> 'NO_SUGGESTION' "
+                "AND expiry_type = ?",
+                [underlying, start, end, expiry_type],
+            )
+        else:
+            v = self.db.scalar(
+                "SELECT COUNT(*) FROM options_suggestions "
+                "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "
+                "AND strategy <> 'NONE' AND status <> 'NO_SUGGESTION'",
+                [underlying, start, end],
+            )
         return bool(v and v > 0)
 
     def get(self, suggestion_id: str) -> Optional[dict]:
