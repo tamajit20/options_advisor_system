@@ -458,6 +458,19 @@ class EventCalendarRepo:
         )
         return bool(v and v > 0)
 
+    def first_high_impact_event(self, start: date, end: date) -> Optional[dict]:
+        """Return the first HIGH-impact event in the range, or None."""
+        return self.db.fetch_one(
+            "SELECT TOP 1 event_date, event_type, description FROM options_events_calendar "
+            "WHERE event_date BETWEEN ? AND ? AND impact = 'HIGH' ORDER BY event_date",
+            [start, end],
+        )
+
+    def count_all(self) -> int:
+        """Total rows in the calendar table — 0 means it has never been seeded."""
+        n = self.db.scalar("SELECT COUNT(*) FROM options_events_calendar")
+        return int(n) if n is not None else 0
+
 
 # ---------------------------------------------------------------------------
 # Suggestions

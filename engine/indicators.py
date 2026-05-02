@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from datetime import date
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from config import STRATEGY_CONFIG
 from contracts import MarketIndicators
@@ -24,12 +24,13 @@ from contracts import MarketIndicators
 # PCR / Max Pain / OI walls
 # ---------------------------------------------------------------------------
 
-def pcr(chain_rows: Sequence[dict]) -> float:
-    """Put/Call Ratio = ΣPut OI / ΣCall OI for a single expiry."""
+def pcr(chain_rows: Sequence[dict]) -> Optional[float]:
+    """Put/Call Ratio = ΣPut OI / ΣCall OI for a single expiry.
+    Returns None when call OI is absent/zero (OI data not yet published)."""
     call_oi = sum((r.get("open_interest") or 0) for r in chain_rows if r.get("option_type") == "CE")
     put_oi  = sum((r.get("open_interest") or 0) for r in chain_rows if r.get("option_type") == "PE")
     if call_oi <= 0:
-        return 0.0
+        return None
     return put_oi / call_oi
 
 
@@ -76,11 +77,12 @@ def oi_walls(chain_rows: Sequence[dict], top_n: int = 3) -> Tuple[List[float], L
 # Spot-based indicators
 # ---------------------------------------------------------------------------
 
-def atr(spot_history: Sequence[dict], period: int = 14) -> float:
+def atr(spot_history: Sequence[dict], period: int = 14) -> Optional[float]:
     """ATR(period) using Wilder's smoothing on True Range. spot_history
-    must be ordered by trade_date asc and contain high_price/low_price/close_price."""
+    must be ordered by trade_date asc and contain high_price/low_price/close_price.
+    Returns None when fewer than period+1 rows are available."""
     if len(spot_history) < period + 1:
-        return 0.0
+        return None
     trs: List[float] = []
     prev_close = float(spot_history[0]["close_price"])
     for r in spot_history[1:]:
@@ -91,7 +93,7 @@ def atr(spot_history: Sequence[dict], period: int = 14) -> float:
         trs.append(tr)
         prev_close = c
     if len(trs) < period:
-        return 0.0
+        return None
     atr_val = sum(trs[:period]) / period
     for tr in trs[period:]:
         atr_val = (atr_val * (period - 1) + tr) / period
@@ -167,7 +169,7 @@ def build_indicators(
         max_pain      = max_pain(chain_rows),
         atr_14        = atr(spot_history, 14),
         trend         = trend(spot_history),
-        vix_close     = float(vix_history[-1]["close_price"]) if vix_history else 0.0,
+        vix_close     = float(vix_history[-1]["close_price"]) if vix_history else None,
         vix_regime    = vix_regime(vix_history),
         oi_walls_call = cw,
         oi_walls_put  = pw,

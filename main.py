@@ -114,6 +114,24 @@ def _run_scheduler(stop_event: threading.Event) -> None:
         logger.info("Scheduler stopped.")
 
 
+def _seed_events_on_startup() -> None:
+    """Seed EVENTS_CONFIG into options_events_calendar on every startup.
+    Non-fatal: a failure here does not prevent the app from running."""
+    try:
+        from database.connection import SQLServerConnection
+        from lifecycle.events_seeder import run_events_seed
+        db = SQLServerConnection()
+        db.connect()
+        try:
+            n = run_events_seed(db)
+            if n:
+                logger.info("Startup events seed: inserted %d new events", n)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Startup events seed failed (non-fatal)")
+
+
 def _run_full() -> int:
     stop_event = threading.Event()
 
@@ -123,6 +141,8 @@ def _run_full() -> int:
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
+
+    _seed_events_on_startup()
 
     sched_thread = threading.Thread(
         target=_run_scheduler, args=(stop_event,), name="scheduler", daemon=True

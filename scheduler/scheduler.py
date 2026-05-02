@@ -35,6 +35,7 @@ from database.models import NotificationRepo
 from lifecycle.download_orchestrator import (
     run_fii, run_fo_bhav, run_spot_bhav, run_vix,
 )
+from lifecycle.events_seeder import run_events_seed
 from lifecycle.exit_orchestrator import run_exit_engine
 from lifecycle.iv_orchestrator import run_iv_calculation
 from lifecycle.suggestion_engine import run_suggestion_engine
@@ -147,6 +148,7 @@ def job_suggestion(): _run_job("suggestion_engine",  run_suggestion_engine,
 def job_simulation(): _run_job("simulation_update",  run_simulation_update)
 def job_exit():       _run_job("exit_engine",        run_exit_engine,
                                requires=["fo_bhav_download"])
+def job_events_seed(): _run_job("events_seed",       run_events_seed)
 
 
 def job_weekly_cleanup():
@@ -186,6 +188,7 @@ JOB_FUNCS = {
     "suggestion_engine":  job_suggestion,
     "simulation_update":  job_simulation,
     "exit_engine":        job_exit,
+    "events_seed":        job_events_seed,
     "weekly_cleanup":     job_weekly_cleanup,
 }
 

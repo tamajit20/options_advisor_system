@@ -99,7 +99,8 @@ def _evaluate_underlying(
         logger.warning("Suggestion: no IV rows for %s exp=%s", symbol, expiry)
         return None, None
     atm_iv = float(iv_for_expiry[0].get("atm_iv") or 0.0)
-    iv_rank = float(iv_for_expiry[0].get("iv_rank") or 0.0)
+    _raw_iv_rank = iv_for_expiry[0].get("iv_rank")
+    iv_rank: Optional[float] = float(_raw_iv_rank) if _raw_iv_rank is not None else None
 
     # Market indicators
     spot_history_since = trade_date - timedelta(days=120)
@@ -120,12 +121,21 @@ def _evaluate_underlying(
     # Events this week
     week_end = trade_date + timedelta(days=7)
     has_event = event_repo.has_high_impact(trade_date, week_end)
+    event_row = event_repo.first_high_impact_event(trade_date, week_end)
+    events_total = event_repo.count_all()
+    event_desc = ""
+    if event_row:
+        ed = event_row.get("event_date", "")
+        et = event_row.get("description") or event_row.get("event_type", "")
+        event_desc = f"{et} on {ed}" if ed else et
 
     confidence = evaluate_confidence(
         iv_rank=iv_rank,
         indicators=indicators,
         dte=dte,
         has_high_impact_event_this_week=has_event,
+        high_impact_event_description=event_desc,
+        events_calendar_row_count=events_total,
     )
 
     if not confidence.all_passed:
@@ -224,13 +234,10 @@ def run_suggestion_engine(
     for ns in no_suggestions:
         try:
             ns_id = sug_repo.next_suggestion_id(trade_date)
-            conditions = {
-                "score":          ns.confidence.score,
-                "total":          ns.confidence.total,
-                "passed":         ns.confidence.conditions_met,
-                "failed":         ns.confidence.conditions_failed,
-                "failed_reasons": ns.confidence.failed_reasons,
-            }
+            conditions = [
+                {"label": c.label, "status": c.status, "detail": c.detail}
+                for c in ns.confidence.checks
+            ]
             sug_repo.insert_no_suggestion(
                 suggestion_id=ns_id,
                 underlying=ns.underlying,

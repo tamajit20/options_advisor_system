@@ -110,22 +110,28 @@ class MarketIndicators:
     symbol:        str
     as_of:         date
     spot:          float
-    pcr:           float
+    pcr:           Optional[float]   # None = OI data absent (call OI was zero or chain empty)
     max_pain:      float
-    atr_14:        float
-    trend:         str       # BULLISH / BEARISH / SIDEWAYS
-    vix_close:     float
-    vix_regime:    str       # STABLE / RISING / SPIKING
-    oi_walls_call: List[float]  # top call walls (strikes)
+    atr_14:        Optional[float]   # None = insufficient spot history (< period+1 rows)
+    trend:         str               # BULLISH / BEARISH / SIDEWAYS / UNKNOWN
+    vix_close:     Optional[float]   # None = VIX row not available today
+    vix_regime:    str               # STABLE / RISING / SPIKING / UNKNOWN
+    oi_walls_call: List[float]       # top call walls (strikes); empty when OI absent
     oi_walls_put:  List[float]
-    expected_move: float     # spot × IV × √(DTE/365), in spot points
+    expected_move: float             # spot × IV × √(DTE/365), in spot points
 
 
 @dataclass
 class ConfidenceCheck:
-    label:   str
-    passed:  bool
-    detail:  str
+    label:  str
+    status: str    # "PASS" | "FAIL" | "SOFT_FAIL" | "PASS_WARN" | "PASS_ERROR"
+    detail: str
+
+    @property
+    def passed(self) -> bool:
+        """True only for PASS / PASS_WARN / PASS_ERROR.
+        FAIL and SOFT_FAIL both count as not-passed for scoring/display."""
+        return self.status not in ("FAIL", "SOFT_FAIL")
 
 
 @dataclass

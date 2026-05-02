@@ -80,7 +80,9 @@ SCHEDULER_CONFIG = {
         "simulation_update":  {"hour": 19, "minute": 45, "enabled": True},
         "exit_engine":        {"hour": 19, "minute": 50, "enabled": True},
         # Maintenance (Sunday 02:00)
-        "weekly_cleanup":     {"day_of_week": "sun", "hour": 2, "minute": 0, "enabled": True},
+        "weekly_cleanup":     {"day_of_week": "sun", "hour": 2,  "minute":  0, "enabled": True},
+        # Events calendar sync — Monday 07:00 before market open
+        "events_seed":        {"day_of_week": "mon", "hour": 7,  "minute":  0, "enabled": True},
     },
     # Each job also gets a max wallclock budget (seconds) — enforced by orchestrator
     "job_timeout_seconds": {
@@ -153,8 +155,12 @@ STRATEGY_CONFIG = {
     "dte_min": 7,
     "dte_max": 21,
 
-    # Confidence — ALL 7 must pass; even 6/7 = no suggestion
-    "confidence_min_pass_count": 7,
+    # Confidence — tiered gating
+    # Hard gates (Event + DTE): any FAIL = no suggestion regardless of score
+    # Soft gates (IV Rank, VIX, PCR, OI Walls, Trend): SOFT_FAIL if condition
+    #   not met; trade proceeds if at least soft_gate_min_pass of 5 pass.
+    "confidence_min_pass_count": 7,     # legacy — no longer used by engine
+    "soft_gate_min_pass": 4,            # need ≥4 of 5 soft gates to pass
 
     # IV calc bisection params
     "iv_bisection_low":  0.001,
@@ -296,6 +302,49 @@ PATHS = {
     "archive_dir":  _env("OPT_ARCHIVE_DIR", "archive"),
 }
 
+
+# ---------------------------------------------------------------------------
+# High-impact events calendar
+# ---------------------------------------------------------------------------
+# Manually maintained list of HIGH-impact market events.
+# The events_seeder job syncs this list to options_events_calendar on startup
+# and weekly — so adding an event here is enough to get it into the gate.
+#
+# Sources to verify against each year:
+#   RBI MPC schedule : https://www.rbi.org.in/scripts/BS_PressReleaseDisplay.aspx
+#   Union Budget     : Ministry of Finance press releases
+#   F&O Expiry       : already in options_expiry_calendar via fo_bhav_download
+#
+# impact must be 'HIGH' for the confidence gate to block suggestions.
+# event_type codes: RBI_MPC, UNION_BUDGET, US_FOMC, GDP_RELEASE, CPI_RELEASE
+EVENTS_CONFIG: list[dict] = [
+    # ── 2026 RBI MPC Policy Decisions ──────────────────────────────────────
+    {"date": "2026-02-07", "event_type": "RBI_MPC",       "description": "RBI MPC Policy Decision (Feb 2026)",      "impact": "HIGH"},
+    {"date": "2026-04-09", "event_type": "RBI_MPC",       "description": "RBI MPC Policy Decision (Apr 2026)",      "impact": "HIGH"},
+    {"date": "2026-06-06", "event_type": "RBI_MPC",       "description": "RBI MPC Policy Decision (Jun 2026)",      "impact": "HIGH"},
+    {"date": "2026-08-07", "event_type": "RBI_MPC",       "description": "RBI MPC Policy Decision (Aug 2026)",      "impact": "HIGH"},
+    {"date": "2026-10-09", "event_type": "RBI_MPC",       "description": "RBI MPC Policy Decision (Oct 2026)",      "impact": "HIGH"},
+    {"date": "2026-12-04", "event_type": "RBI_MPC",       "description": "RBI MPC Policy Decision (Dec 2026)",      "impact": "HIGH"},
+
+    # ── 2026 Union Budget ───────────────────────────────────────────────────
+    {"date": "2026-02-01", "event_type": "UNION_BUDGET",  "description": "Union Budget 2026-27 presentation",       "impact": "HIGH"},
+
+    # ── 2026 US Fed FOMC Decisions (affect Indian VIX / FII flows) ─────────
+    {"date": "2026-01-29", "event_type": "US_FOMC",       "description": "US Fed FOMC Rate Decision (Jan 2026)",    "impact": "HIGH"},
+    {"date": "2026-03-19", "event_type": "US_FOMC",       "description": "US Fed FOMC Rate Decision (Mar 2026)",    "impact": "HIGH"},
+    {"date": "2026-05-07", "event_type": "US_FOMC",       "description": "US Fed FOMC Rate Decision (May 2026)",    "impact": "HIGH"},
+    {"date": "2026-06-18", "event_type": "US_FOMC",       "description": "US Fed FOMC Rate Decision (Jun 2026)",    "impact": "HIGH"},
+    {"date": "2026-07-30", "event_type": "US_FOMC",       "description": "US Fed FOMC Rate Decision (Jul 2026)",    "impact": "HIGH"},
+    {"date": "2026-09-17", "event_type": "US_FOMC",       "description": "US Fed FOMC Rate Decision (Sep 2026)",    "impact": "HIGH"},
+    {"date": "2026-11-05", "event_type": "US_FOMC",       "description": "US Fed FOMC Rate Decision (Nov 2026)",    "impact": "HIGH"},
+    {"date": "2026-12-17", "event_type": "US_FOMC",       "description": "US Fed FOMC Rate Decision (Dec 2026)",    "impact": "HIGH"},
+
+    # ── 2026 India GDP (quarterly, released ~2 months after quarter end) ───
+    {"date": "2026-02-28", "event_type": "GDP_RELEASE",   "description": "India GDP Q3 FY26 (Oct-Dec 2025)",        "impact": "HIGH"},
+    {"date": "2026-05-29", "event_type": "GDP_RELEASE",   "description": "India GDP Q4 FY26 (Jan-Mar 2026)",        "impact": "HIGH"},
+    {"date": "2026-08-28", "event_type": "GDP_RELEASE",   "description": "India GDP Q1 FY27 (Apr-Jun 2026)",        "impact": "HIGH"},
+    {"date": "2026-11-27", "event_type": "GDP_RELEASE",   "description": "India GDP Q2 FY27 (Jul-Sep 2026)",        "impact": "HIGH"},
+]
 
 # ---------------------------------------------------------------------------
 # Sanity check on import (cheap, fail-fast)

@@ -228,6 +228,66 @@ function renderExitPlan(s) {
   </div>`;
 }
 
+// ── Confidence checks breakdown ──────────────────────────────────────────────
+// conditions_json is now always [{label, passed, detail}, ...] (array format).
+// Legacy {conditions:[...strings...]} kept as safety fallback.
+function renderConfidenceChecks(s) {
+  let raw = s.conditions_json;
+  if (!raw) return '';
+  if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { return ''; } }
+
+  let checks = [];
+  if (Array.isArray(raw)) {
+    checks = raw.map(c => ({
+      label:  c.label  || '',
+      status: c.status || (c.passed === true ? 'PASS' : c.passed === false ? 'FAIL' : 'PASS'),
+      detail: c.detail || '',
+    }));
+  } else if (raw.conditions && Array.isArray(raw.conditions)) {
+    // Legacy fallback — DB row not yet migrated
+    checks = raw.conditions.map(lbl => ({ label: lbl, status: 'PASS', detail: '(legacy format — no detail stored)' }));
+  }
+  if (!checks.length) return '';
+
+  const STATUS_CLASS = { PASS: 'conf-pass', FAIL: 'conf-fail', SOFT_FAIL: 'conf-soft-fail', PASS_WARN: 'conf-warn', PASS_ERROR: 'conf-error' };
+  const STATUS_ICON  = { PASS: '\u2713', FAIL: '\u2717', SOFT_FAIL: '\u2717', PASS_WARN: '\u26a0', PASS_ERROR: '\u26a1' };
+
+  const nFail     = checks.filter(c => c.status === 'FAIL').length;
+  const nSoftFail = checks.filter(c => c.status === 'SOFT_FAIL').length;
+  const nWarn     = checks.filter(c => c.status === 'PASS_WARN').length;
+  const nError    = checks.filter(c => c.status === 'PASS_ERROR').length;
+  const total     = checks.length;
+  const passed    = total - nFail - nSoftFail;
+  const allPass   = nFail === 0 && nSoftFail === 0;
+  const sid       = escapeHtml(s.suggestion_id || Math.random().toString(36).slice(2));
+
+  let titleSuffix = '';
+  if (nSoftFail > 0) titleSuffix += ` \u00b7 \u26a0 ${nSoftFail} soft gate${nSoftFail > 1 ? 's' : ''} not met — trade proceeds with caution`;
+  if (nWarn  > 0) titleSuffix += ` \u00b7 \u26a0 ${nWarn} with missing data`;
+  if (nError > 0) titleSuffix += ` \u00b7 \u26a1 ${nError} gate error${nError > 1 ? 's' : ''}`;
+
+  const rows = checks.map(c => {
+    const rowClass   = STATUS_CLASS[c.status] || 'conf-pass';
+    const icon       = STATUS_ICON[c.status]  || '\u2713';
+    const detailHtml = c.detail
+      ? `<span class="conf-detail-text">${escapeHtml(c.detail)}</span>`
+      : '<span class="conf-detail-na">\u2014</span>';
+    return `<tr class="conf-check-row ${rowClass}">
+      <td class="conf-icon">${icon}</td>
+      <td class="conf-label">${escapeHtml(c.label)}</td>
+      <td class="conf-detail">${detailHtml}</td>
+    </tr>`;
+  }).join('');
+
+  return `<div class="conf-checks-panel" id="conf-${sid}" hidden>
+    <div class="conf-checks-title">${allPass ? 'All' : passed + ' of'} ${total} confidence checks ${allPass ? 'passed \u2713' : 'passed'}${titleSuffix}</div>
+    <table class="conf-checks-table">
+      <thead><tr><th></th><th>Check</th><th>What was verified</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
 // Helper: parse plain_english text into structured display
 function renderPlainEnglishStructured(s) {
   const text = (s.plain_english || '').trim();
@@ -265,7 +325,34 @@ function renderPlainEnglishStructured(s) {
   if (s.underlying)       chips.push(`<span class="ctx-chip">${escapeHtml(s.underlying)}</span>`);
   if (spot)               chips.push(`<span class="ctx-chip">Spot ₹${escapeHtml(spot)}</span>`);
   if (ivRank)             chips.push(`<span class="ctx-chip ctx-iv">IV Rank ${escapeHtml(ivRank)}%</span>`);
-  if (s.confidence_score) chips.push(`<span class="ctx-chip ctx-pass">${s.confidence_score}/7 checks ✓</span>`);
+  if (s.confidence_score != null) {
+    let _warnCount = 0, _errorCount = 0, _failCount = 0, _softFailCount = 0, _total = 7, _passCount = null;
+    if (s.conditions_json) {
+      let _raw = s.conditions_json;
+      if (typeof _raw === 'string') { try { _raw = JSON.parse(_raw); } catch { _raw = null; } }
+      if (Array.isArray(_raw)) {
+        _warnCount     = _raw.filter(c => c.status === 'PASS_WARN').length;
+        _errorCount    = _raw.filter(c => c.status === 'PASS_ERROR').length;
+        _failCount     = _raw.filter(c => c.status === 'FAIL').length;
+        _softFailCount = _raw.filter(c => c.status === 'SOFT_FAIL').length;
+        _total         = _raw.length;
+        // Derive pass count from conditions_json so chip and panel are always consistent
+        _passCount     = _total - _failCount - _softFailCount;
+      }
+    }
+    // Fall back to DB column only if conditions_json is absent/unparseable
+    const displayScore = _passCount !== null ? _passCount : s.confidence_score;
+    const hasIssues  = _warnCount > 0 || _errorCount > 0 || _softFailCount > 0;
+    const chipClass  = _failCount > 0      ? 'ctx-chip ctx-fail conf-chip'
+                     : _softFailCount > 0  ? 'ctx-chip ctx-warn conf-chip'
+                     : hasIssues           ? 'ctx-chip ctx-warn conf-chip'
+                     :                       'ctx-chip ctx-pass conf-chip';
+    const warnSuffix = _errorCount > 0
+      ? ` \u26a1 ${_errorCount} error${_errorCount > 1 ? 's' : ''}`
+      : _softFailCount > 0 ? ` \u26a0 ${_softFailCount} soft fail${_softFailCount > 1 ? 's' : ''}`
+      : _warnCount > 0 ? ` \u26a0 ${_warnCount} warned` : '';
+    chips.push(`<span class="${chipClass}" data-sug-id="${escapeHtml(s.suggestion_id||'')}" style="cursor:pointer" title="Click to see all checks">${displayScore}/${_total} checks \u2713${warnSuffix} <span style="font-size:.7rem;opacity:.7">\u25bc</span></span><span class="conf-logic-info" tabindex="0" aria-label="Confidence gate logic">\u24d8<span class="conf-logic-popup"><strong>How gating works</strong><br><br><span style="color:#f87171">\u2717 Hard gate</span> &mdash; always blocks:<br>&nbsp;&bull; DTE within target band<br><br><span style="color:#fbbf24">\u2717 Soft gates</span> &mdash; need \u22654 of 5:<br>&nbsp;&bull; IV Rank in actionable zone<br>&nbsp;&bull; VIX stable or falling<br>&nbsp;&bull; PCR in neutral band<br>&nbsp;&bull; OI walls visible<br>&nbsp;&bull; Trend identifiable<br><br><span style="color:#fbbf24">\u26a0 Warning (never blocks):</span><br>&nbsp;&bull; High-impact event this week<br><br><span style="opacity:.6;font-size:.72rem">1 soft gate miss = trade proceeds with caution<br>2+ soft gate misses = blocked</span><br><br><span style="opacity:.5;font-size:.72rem">\u26a0 = data unavailable &nbsp;\u26a1 = gate error</span></span></span>`);
+  }
   // Reference date for "day N" → actual date conversion.
   // Use generated_on if present, else today.
   const refDateStr = s.generated_on || s.executed_on || null;
@@ -372,6 +459,38 @@ function renderPlainEnglishStructured(s) {
       ? `<div class="tl-row tl-key"><span class="tl-label">Acceptable credit</span>` +
         `<span class="tl-val"><strong>\u20b9${fmt(crLo)}\u2013\u20b9${fmt(crHi)}</strong><span class="muted" style="font-size:.75rem"> /unit \u00b7 from leg price bands</span></span></div>`
       : '';
+    // If we have date + execute window + credit range, collapse into one summary row
+    const execItem = entryItems.find(i => /^execute/i.test(i));
+    const execTimeVal = execItem ? (() => {
+      const split = splitLabelVal(execItem);
+      // strip any "between ₹... credit" trailing text — shown separately as authoritative range
+      const raw = split ? split.val : execItem.replace(/^execute\s*:?\s*/i, '');
+      return raw.replace(/\s*between\s+[\u20b9₹][\d,.]+[–\-].*$/i, '').trim();
+    })() : null;
+    const canCollapse = dateStr && execTimeVal && hasLegs && crHi > crLo + 0.5;
+    if (canCollapse) {
+      const singleRow =
+        `<div class="tl-row tl-key">` +
+        `<span class="tl-label" style="color:var(--text)">${escapeHtml(dateStr)}</span>` +
+        `<span class="tl-val">` +
+          `<span style="color:var(--text-dim)">Execute </span>` +
+          `<span style="color:var(--text)">${escapeHtml(execTimeVal)}</span>` +
+          `<span style="color:var(--text-dim)"> &nbsp;\u00b7&nbsp; Acceptable Credit </span>` +
+          `<strong style="color:var(--ok)">\u20b9${fmt(crLo)}\u2013\u20b9${fmt(crHi)}</strong>` +
+          `<span style="color:var(--text-dim);font-size:.75rem"> /unit</span>` +
+        `</span>` +
+        `</div>`;
+      const otherRows = entryItems
+        .filter(i => !/^execute/i.test(i))
+        .map(item => {
+          const clean = stripRupeeAmounts(item);
+          const split = splitLabelVal(clean);
+          if (!split) return `<div class="tl-row tl-key"><span class="tl-val" style="grid-column:span 2">${escapeHtml(clean)}</span></div>`;
+          return `<div class="tl-row tl-key"><span class="tl-label">${escapeHtml(split.label)}</span><span class="tl-val">${escapeHtml(split.val)}</span></div>`;
+        }).join('');
+      return `<div class="sug-section sug-entry-section"><div class="sug-section-title">Entry</div>` +
+        `<div class="sug-timeline">${singleRow}${otherRows}</div></div>`;
+    }
     if (entryItems.length) {
       return `<div class="sug-section sug-entry-section"><div class="sug-section-title">Entry</div>` +
         `<div class="sug-timeline">${dateRow}${itemRows}${creditRow}</div></div>`;
@@ -383,10 +502,8 @@ function renderPlainEnglishStructured(s) {
   const timelineHtml = tlRows
     ? `<div class="sug-section"><div class="sug-section-title">Timeline</div><div class="sug-timeline">${tlRows}</div></div>`
     : '';
-  const confHtml = confLine
-    ? `<div class="sug-conf">${escapeHtml(confLine)}</div>`
-    : '';
-  return contextHtml + introHtml + entryHtml + timelineHtml + renderExitPlan(s) + confHtml;
+  const confHtml = renderConfidenceChecks(s);
+  return contextHtml + confHtml + introHtml + entryHtml + timelineHtml + renderExitPlan(s);
 }
 
 // Credit breakdown box — shows per-leg contribution and the net combined credit.
@@ -1056,6 +1173,27 @@ function bindSuggestionActions() {
       loadSuggestion();
     } catch (err) { toast(err.message, 'err'); }
   }));
+
+  // Confidence chip click → toggle breakdown panel
+  bindConfChips();
+}
+
+function bindConfChips() {
+  $$('.conf-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const sid = chip.dataset.sugId;
+      // Scope lookup to nearest card/details container to avoid duplicate-id
+      // collisions when both the Suggestion tab and Trades tab are in the DOM.
+      const container = chip.closest('.card, .orig-sug-details') || document;
+      const panel = container.querySelector(`[id="conf-${CSS.escape(sid)}"]`)
+                 || document.getElementById(`conf-${sid}`);
+      if (!panel) return;
+      const hidden = panel.hidden;
+      panel.hidden = !hidden;
+      const arrow = chip.querySelector('span');
+      if (arrow) arrow.textContent = hidden ? '\u25b2' : '\u25bc';
+    });
+  });
 }
 
 // ---------------- Tab 2: My Trades ----------------
@@ -1069,6 +1207,7 @@ async function loadTrades() {
       return;
     }
     c.className=''; c.innerHTML = data.trades.map(renderTrade).join('');
+    bindConfChips();
     $$('.btn-resuggest').forEach(b => b.addEventListener('click', async e => {
       const id = e.target.dataset.tradeId;
       try {

@@ -742,6 +742,7 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 }
 .ctx-chip.ctx-iv   { color: var(--warn); border-color: rgba(234,179,8,.35); }
 .ctx-chip.ctx-pass { color: var(--ok);   border-color: rgba(34,197,94,.35); }
+.ctx-chip.ctx-fail { color: var(--err);  border-color: rgba(239,68,68,.35); }
 .ctx-sep { color: var(--text-dim); font-size: .8rem; opacity: .4; }
 .sug-section { margin: 0 0 12px; }
 .sug-section-title {
@@ -764,6 +765,108 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .tl-row.tl-key .tl-label { color: var(--accent); font-weight: 700; }
 .tl-row.tl-key .tl-val   { color: var(--accent); font-weight: 700; }
 .sug-conf { font-size: .77rem; color: var(--ok); margin-top: 4px; }
+
+/* ── Confidence checks breakdown panel ─────────────────────────── */
+.conf-checks-panel {
+  margin-top: 10px;
+  border-top: 1px solid rgba(255,255,255,.08);
+  padding-top: 8px;
+}
+.conf-checks-title {
+  font-size: .75rem;
+  font-weight: 600;
+  color: var(--ok);
+  margin-bottom: 6px;
+  letter-spacing: .02em;
+}
+.conf-checks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .76rem;
+  line-height: 1.4;
+}
+.conf-checks-table th {
+  text-align: left;
+  padding: 2px 6px;
+  font-size: .7rem;
+  opacity: .55;
+  font-weight: 500;
+  border-bottom: 1px solid rgba(255,255,255,.07);
+}
+.conf-check-row td {
+  padding: 4px 6px;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+}
+.conf-check-row:last-child td { border-bottom: none; }
+.conf-icon { width: 18px; font-weight: 700; }
+.conf-pass .conf-icon { color: var(--ok); }
+.conf-fail .conf-icon { color: var(--err); }
+.conf-fail .conf-label { opacity: .65; }
+.conf-warn  .conf-icon      { color: var(--warn); }
+.conf-warn  .conf-label     { opacity: .9; }
+.conf-warn  .conf-detail-text { color: var(--warn); opacity: .85; }
+.conf-error .conf-icon      { color: #f97316; }
+.conf-error .conf-label     { opacity: .9; }
+.conf-error .conf-detail-text { color: #f97316; opacity: .85; }
+.conf-soft-fail .conf-icon      { color: #f59e0b; }
+.conf-soft-fail .conf-label     { opacity: .85; }
+.conf-soft-fail .conf-detail-text { color: #f59e0b; opacity: .85; }
+.ctx-chip.ctx-warn  { color: var(--warn); border-color: rgba(245,158,11,.35); }
+.ctx-chip.ctx-error { color: #f97316;     border-color: rgba(249,115,22,.35); }
+.conf-label { font-weight: 500; white-space: nowrap; padding-right: 10px; }
+.conf-detail { opacity: .85; }
+.conf-detail-text { font-style: italic; opacity: .8; }
+.conf-detail-na { opacity: .3; }
+
+/* ── Confidence gate logic info icon + popup ────────────────────── */
+.conf-logic-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  margin-left: 4px;
+  font-size: .78rem;
+  color: var(--text-dim);
+  cursor: default;
+  vertical-align: middle;
+  opacity: .7;
+  transition: opacity .15s;
+}
+.conf-logic-info:hover,
+.conf-logic-info:focus { opacity: 1; outline: none; }
+
+.conf-logic-popup {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 270px;
+  background: #0f1923;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: .74rem;
+  line-height: 1.65;
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(0,0,0,.55);
+  z-index: 999;
+  white-space: normal;
+  pointer-events: none;
+}
+/* arrow pointing up */
+.conf-logic-popup::after {
+  content: '';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-bottom-color: rgba(255,255,255,.12);
+}
+.conf-logic-info:hover .conf-logic-popup,
+.conf-logic-info:focus .conf-logic-popup { display: block; }
 /* --- Close trade simulation --- */
 .close-step-banner{font-size:.78rem;color:#8898aa;margin-bottom:10px;line-height:1.7}
 .step-badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:.7rem;font-weight:700;margin-right:3px}
