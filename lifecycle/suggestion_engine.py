@@ -233,23 +233,21 @@ def _evaluate_underlying(
                 reason=f"[{expiry_type} {expiry}] Strategy veto: {veto}",
             ))
 
-        # When the primary is a 4-leg neutral strategy, also generate the
-        # individual spread legs as cheaper companion suggestions.
-        # BPS (put side) and BCS (call side) require ~half the margin of IC/IB.
-        # Directional filter: only generate each companion when the trend supports it.
-        #   SIDEWAYS → both BPS and BCS are valid (market expected to stay rangebound)
-        #   BULLISH  → only BPS (selling puts below market is trend-aligned)
-        #   BEARISH  → only BCS (selling calls above market is trend-aligned)
+        # When the primary is IC or IB, also generate BPS and BCS as cheaper
+        # companion suggestions (half the margin — same put/call sides individually).
+        #
+        # INVARIANT: IC and IB are only ever selected when trend == "SIDEWAYS"
+        # (enforced by select_strategy). If that ever changes this assertion will
+        # catch it before a wrong suggestion is persisted.
         if primary_suggestion is not None and primary_suggestion.strategy in (
             "IRON_CONDOR", "IRON_BUTTERFLY"
         ):
-            trend = indicators.trend
-            companion_candidates = []
-            if trend in ("SIDEWAYS", "BULLISH"):
-                companion_candidates.append("BULL_PUT_SPREAD")
-            if trend in ("SIDEWAYS", "BEARISH"):
-                companion_candidates.append("BEAR_CALL_SPREAD")
-            for companion_strategy in companion_candidates:
+            assert indicators.trend == "SIDEWAYS", (
+                f"BUG: IC/IB generated for non-SIDEWAYS trend '{indicators.trend}' "
+                f"on {symbol} — check strategy_selector.select_strategy()"
+            )
+            # Both BPS (put side) and BCS (call side) are valid for a SIDEWAYS market.
+            for companion_strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
                 try:
                     comp_id = sug_repo.next_suggestion_id(trade_date)
                     comp = assemble_suggestion(
