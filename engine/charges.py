@@ -77,3 +77,54 @@ def estimate_charges(legs: List[Mapping]) -> ChargeBreakdown:
         gst=round(gst, 2),
         total=round(total, 2),
     )
+
+
+def estimate_charges_per_txn(legs: List[Mapping]) -> ChargeBreakdown:
+    """Single-transaction charge estimator — each leg counts as ONE order.
+
+    Use this when you have a flat list of actual buy/sell transactions already
+    split into entry and exit sides (e.g. entry_legs + closing_legs).
+    Unlike ``estimate_charges``, this does NOT double brokerage/exchange
+    for an assumed future exit — each item in ``legs`` is one real order.
+
+    leg keys: action, price, lots, lot_size
+    """
+    cfg = ZERODHA_CONFIG
+
+    brokerage = 0.0
+    stt = 0.0
+    exchange = 0.0
+    sebi = 0.0
+    stamp = 0.0
+
+    for leg in legs:
+        action = (leg.get("action") or "").upper()
+        price = float(leg.get("price") or 0.0)
+        lots = int(leg.get("lots") or 0)
+        lot_size = int(leg.get("lot_size") or 0)
+        qty = lots * lot_size
+        if qty <= 0 or price < 0:
+            continue
+        turnover = price * qty
+
+        brokerage += cfg["brokerage_per_order_inr"]
+        exchange  += cfg["exchange_txn_pct"] * turnover
+        sebi      += cfg["sebi_charges_pct"] * turnover
+
+        if action == "BUY":
+            stamp += cfg["stamp_duty_buy_pct"] * turnover
+        if action == "SELL":
+            stt += cfg["stt_sell_premium_pct"] * turnover
+
+    gst = cfg["gst_pct"] * (brokerage + exchange + sebi)
+    total = brokerage + stt + exchange + sebi + stamp + gst
+
+    return ChargeBreakdown(
+        brokerage=round(brokerage, 2),
+        stt=round(stt, 2),
+        exchange=round(exchange, 2),
+        sebi=round(sebi, 2),
+        stamp_duty=round(stamp, 2),
+        gst=round(gst, 2),
+        total=round(total, 2),
+    )

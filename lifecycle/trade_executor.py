@@ -34,6 +34,7 @@ from contracts import TradeLegFill
 from database.connection import SQLServerConnection
 from database.models import SuggestionRepo, TradeRepo
 from engine.broken_trade_advisor import advise, diagnose
+from engine.charges import estimate_charges_per_txn
 from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
@@ -253,6 +254,7 @@ def close_trade_with_fills(
 
     exits_by_order = {e["leg_order"]: e for e in exits}
     gross_pnl = 0.0
+    txn_legs: list = []  # all actual buy/sell transactions for charge calculation
 
     for leg in executed_legs:
         e = exits_by_order.get(leg["leg_order"])
@@ -268,7 +270,19 @@ def close_trade_with_fills(
                 e.get("exit_time") or now_ist(),
                 leg_pnl,
             )
+            # Entry transaction
+            txn_legs.append({"action": leg["action"],
+                              "price": float(leg["fill_price"] or 0),
+                              "lots": lots, "lot_size": lot_size})
+            # Exit transaction (reversed action)
+            close_action = "BUY" if leg["action"] == "SELL" else "SELL"
+            txn_legs.append({"action": close_action,
+                              "price": float(e["exit_price"]),
+                              "lots": lots, "lot_size": lot_size})
 
-    trd.close_trade(trade_id, gross_pnl, 0.0, gross_pnl)
+    total_charges = estimate_charges_per_txn(txn_legs).total if txn_legs else 0.0
+    net_pnl = gross_pnl - total_charges
+    trd.close_trade(trade_id, gross_pnl, total_charges, net_pnl)
     db.commit()
-    logger.info("Trade %s closed, net_pnl=%.2f", trade_id, gross_pnl)
+    logger.info("Trade %s closed, gross_pnl=%.2f, charges=%.2f, net_pnl=%.2f",
+                trade_id, gross_pnl, total_charges, net_pnl)

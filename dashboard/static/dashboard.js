@@ -510,6 +510,33 @@ function renderPlainEnglishStructured(s) {
   return contextHtml + confHtml + introHtml + entryHtml + timelineHtml + renderExitPlan(s);
 }
 
+// Per-transaction (one-sided) charge estimate — each leg = 1 order, no assumed exit.
+// Use when you already have a flat list of individual buy/sell transactions
+// (e.g. entry_legs + closing_legs combined).
+// legs items: { action, fill_price, lots, lot_size }
+function estChargesOneSide(legs) {
+  if (!legs || !legs.length) return 0;
+  const BROKERAGE = 20.0, STT_SELL = 0.0005, EXCHANGE = 0.000530;
+  const SEBI = 0.000001, STAMP_BUY = 0.00003, GST = 0.18;
+  let brokerage = 0, stt = 0, exchange = 0, sebi = 0, stamp = 0;
+  for (const leg of legs) {
+    const price   = parseFloat(leg.fill_price || 0);
+    const lots    = parseInt(leg.lots || 1);
+    const lotSize = parseInt(leg.lot_size || 1);
+    const qty     = lots * lotSize;
+    if (qty <= 0 || price <= 0) continue;
+    const turnover = price * qty;
+    brokerage += BROKERAGE;
+    exchange  += EXCHANGE * turnover;
+    sebi      += SEBI    * turnover;
+    if ((leg.action || '').toUpperCase() === 'BUY')  stamp += STAMP_BUY * turnover;
+    if ((leg.action || '').toUpperCase() === 'SELL') stt   += STT_SELL  * turnover;
+  }
+  const gst   = GST * (brokerage + exchange + sebi);
+  const total = brokerage + stt + exchange + sebi + stamp + gst;
+  return Math.round(total * 100) / 100;
+}
+
 // Estimate Zerodha charges from actual executed legs — mirrors engine/charges.py.
 // Uses fill_price × (lots_actual || lots) × lot_size for each executed leg.
 function estChargesFromLegs(execLegs) {
@@ -1394,16 +1421,18 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
         <div class="leg-exit-grid">${legsHtml}</div>
         
         <div class="live-pnl-preview" id="live-pnl-${escapeHtml(tradeId)}">
-          P&amp;L preview: <strong class="live-pnl-value">—</strong><span class="live-pnl-pct muted"></span>
+          <div>Gross P&amp;L: <strong class="live-pnl-gross">—</strong></div>
+          <div class="muted" style="font-size:.85rem">Est. charges (entry+exit): <strong class="live-pnl-charges">—</strong></div>
+          <div>Net P&amp;L: <strong class="live-pnl-value">—</strong><span class="live-pnl-pct muted"></span></div>
         </div>
         <div class="btn-row" style="margin-top:8px">
           <button class="btn btn-close-trade btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm close &amp; record fills</button>
           <button class="btn btn-ghost btn-close-cancel">Cancel</button>
         </div>
       </div>`;
-    // live P&L calc
     function recalcClosePnl() {
-      let total = 0; let allFilled = true;
+      let grossPnl = 0; let allFilled = true;
+      const entryTxns = [], exitTxns = [];
       panel.querySelectorAll('.leg-exit-row').forEach(row => {
         const action = row.dataset.action;
         const entryPrice = parseFloat(row.dataset.fillPrice) || 0;
@@ -1415,24 +1444,44 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
         const legPnl = action === 'SELL'
           ? (entryPrice - closePrice) * lots * lotSize
           : (closePrice - entryPrice) * lots * lotSize;
-        total += legPnl;
+        grossPnl += legPnl;
+        entryTxns.push({ action, fill_price: entryPrice, lots, lot_size: lotSize });
+        exitTxns.push({ action: action === 'SELL' ? 'BUY' : 'SELL', fill_price: closePrice, lots, lot_size: lotSize });
       });
-      const el = panel.querySelector('.live-pnl-value');
+      const grossEl   = panel.querySelector('.live-pnl-gross');
+      const chargesEl = panel.querySelector('.live-pnl-charges');
+      const el        = panel.querySelector('.live-pnl-value');
+      const pctEl     = panel.querySelector('.live-pnl-pct');
       if (!el) return;
-      if (!allFilled) { el.textContent = '—'; el.className = 'live-pnl-value'; return; }
-      // % of total credit received = pnl / (net_credit_actual × total_qty)
+      if (!allFilled) {
+        if (grossEl)   { grossEl.textContent = '—';   grossEl.className   = 'live-pnl-gross'; }
+        if (chargesEl) { chargesEl.textContent = '—'; chargesEl.className = 'live-pnl-charges'; }
+        el.textContent = '—'; el.className = 'live-pnl-value';
+        if (pctEl) { pctEl.textContent = ''; }
+        return;
+      }
+      const charges = estChargesOneSide([...entryTxns, ...exitTxns]);
+      const netPnl  = grossPnl - charges;
+      if (grossEl) {
+        grossEl.textContent = `₹${fmt(grossPnl)}`;
+        grossEl.className   = 'live-pnl-gross ' + (grossPnl >= 0 ? 'pnl-pos' : 'pnl-neg');
+      }
+      if (chargesEl) {
+        chargesEl.textContent = `₹${fmt(charges)}`;
+        chargesEl.className   = 'live-pnl-charges';
+      }
+      // % of total credit received
       let _totalQty = 0;
       panel.querySelectorAll('.leg-exit-row').forEach(row => {
         if (row.dataset.action === 'SELL') _totalQty += (parseInt(row.dataset.lots)||1) * (parseInt(row.dataset.lotSize)||1);
       });
       const totalCredit = netCreditActual * (_totalQty || 1);
       const pctStr = totalCredit > 0
-        ? ` (${total >= 0 ? '+' : ''}${(total / totalCredit * 100).toFixed(0)}% of credit)`
+        ? ` (${netPnl >= 0 ? '+' : ''}${(netPnl / totalCredit * 100).toFixed(0)}% of credit)`
         : '';
-      el.textContent = `₹${fmt(total)}`;
-      el.className = 'live-pnl-value ' + (total >= 0 ? 'pnl-pos' : 'pnl-neg');
-      const pctEl = panel.querySelector('.live-pnl-pct');
-      if (pctEl) { pctEl.textContent = pctStr; pctEl.className = 'live-pnl-pct ' + (total >= 0 ? 'pnl-pos' : 'pnl-neg'); }
+      el.textContent = `₹${fmt(netPnl)}`;
+      el.className = 'live-pnl-value ' + (netPnl >= 0 ? 'pnl-pos' : 'pnl-neg');
+      if (pctEl) { pctEl.textContent = pctStr; pctEl.className = 'live-pnl-pct ' + (netPnl >= 0 ? 'pnl-pos' : 'pnl-neg'); }
     }
     panel.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcClosePnl));
     recalcClosePnl(); // init with prefilled values
