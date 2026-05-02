@@ -6,19 +6,18 @@ Boundary: imported by everyone. Do NOT import from any project module here.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Optional
-
-_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def now_ist() -> datetime:
-    """Current IST time as a *naive* datetime (we store naive datetimes in DB)."""
-    return datetime.now(_IST).replace(tzinfo=None)
+    """Current naive datetime. Relies on TZ=Asia/Kolkata being set in the
+    runtime environment (Docker: TZ env var; local: system timezone)."""
+    return datetime.now()
 
 
 def today_ist() -> date:
-    return now_ist().date()
+    return date.today()
 
 
 def parse_ddmmyyyy(s: str) -> date:

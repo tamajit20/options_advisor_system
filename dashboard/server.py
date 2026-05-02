@@ -16,26 +16,21 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Any, Dict
 
 from flask import Flask, jsonify, render_template, request
 
-# All API timestamps are emitted in IST (Asia/Kolkata, UTC+05:30) so the
-# browser displays them unambiguously regardless of client locale.
-IST = timezone(timedelta(hours=5, minutes=30))
+# Datetimes stored in the DB are naive IST (the runtime TZ is Asia/Kolkata).
+# Format them as plain readable strings — no UTC offset needed.
 
 
 def _ist_iso(dt) -> str | None:
-    """Return an IST-tagged ISO string for any datetime (naive treated as IST)."""
+    """Format a datetime/date for API output as a plain IST string."""
     if dt is None:
         return None
     if isinstance(dt, datetime):
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=IST)
-        else:
-            dt = dt.astimezone(IST)
-        return dt.isoformat()
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
     if isinstance(dt, date):
         return dt.isoformat()
     return str(dt)
@@ -178,7 +173,14 @@ def create_app() -> Flask:
     @_with_db
     def api_suggestion_today(db: SQLServerConnection):
         sug = SuggestionRepo(db)
-        rows = sug.by_date(today_ist())
+        today = today_ist()
+        rows = sug.by_date(today)
+        # If no suggestion was generated today (e.g. holiday, multi-day
+        # weekend, or engine ran last evening for next-day execution),
+        # fall back to the most recent still-actionable (PENDING) suggestion
+        # regardless of how many days ago it was generated.
+        if not rows:
+            rows = sug.latest_pending(limit=1)
         out = []
         for r in rows:
             r_out = _row(r)
@@ -220,11 +222,25 @@ def create_app() -> Flask:
     @_with_db
     def api_trades_open(db: SQLServerConnection):
         trd = TradeRepo(db)
+        sug = SuggestionRepo(db)
         rows = trd.open_trades()
         out = []
         for r in rows:
             r_out = _row(r)
             r_out["legs"] = [_row(l) for l in trd.legs_with_suggestion_info(r["trade_id"])]
+            # Attach the original suggestion so the UI can show its rationale
+            if r.get("suggestion_id"):
+                sug_row = sug.get(r["suggestion_id"])
+                if sug_row:
+                    sug_out = _row(sug_row)
+                    if "net_credit_suggested" in sug_out:
+                        sug_out["net_credit"] = sug_out.pop("net_credit_suggested")
+                    sug_out["legs"] = [_row(l) for l in sug.legs(r["suggestion_id"])]
+                    r_out["suggestion"] = sug_out
+                else:
+                    r_out["suggestion"] = None
+            else:
+                r_out["suggestion"] = None
             out.append(r_out)
         return jsonify({"trades": out})
 

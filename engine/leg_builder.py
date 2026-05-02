@@ -104,13 +104,13 @@ def build_iron_condor(
 
     legs: List[SuggestionLeg] = []
     legs.append(_make_leg(1, 2, underlying, expiry, short_put,  "PE", "SELL", lots, lot_size, chain,
-                          "Short put — collects premium below expected move"))
+                          "Iron condor — short put, collects premium below expected move"))
     legs.append(_make_leg(2, 1, underlying, expiry, long_put,   "PE", "BUY",  lots, lot_size, chain,
-                          "Long put hedge — caps downside risk"))
+                          "Iron condor — long put hedge, caps downside risk"))
     legs.append(_make_leg(3, 4, underlying, expiry, short_call, "CE", "SELL", lots, lot_size, chain,
-                          "Short call — collects premium above expected move"))
+                          "Iron condor — short call, collects premium above expected move"))
     legs.append(_make_leg(4, 3, underlying, expiry, long_call,  "CE", "BUY",  lots, lot_size, chain,
-                          "Long call hedge — caps upside risk"))
+                          "Iron condor — long call hedge, caps upside risk"))
     return legs
 
 
@@ -130,9 +130,9 @@ def build_bull_put_spread(
     long_put  = closest_strike(strikes, short_put - max(step * 2, expected_move * 0.5))
     legs = [
         _make_leg(1, 2, underlying, expiry, short_put, "PE", "SELL", lots, lot_size, chain,
-                  "Short put — bullish premium"),
+                  "Bull put spread — short put, primary premium leg"),
         _make_leg(2, 1, underlying, expiry, long_put,  "PE", "BUY",  lots, lot_size, chain,
-                  "Long put — defines max loss"),
+                  "Bull put spread — long put hedge, defines max loss"),
     ]
     return legs
 
@@ -153,9 +153,9 @@ def build_bear_call_spread(
     long_call  = closest_strike(strikes, short_call + max(step * 2, expected_move * 0.5))
     legs = [
         _make_leg(1, 2, underlying, expiry, short_call, "CE", "SELL", lots, lot_size, chain,
-                  "Short call — bearish premium"),
+                  "Bear call spread — short call, primary premium leg"),
         _make_leg(2, 1, underlying, expiry, long_call,  "CE", "BUY",  lots, lot_size, chain,
-                  "Long call — defines max loss"),
+                  "Bear call spread — long call hedge, defines max loss"),
     ]
     return legs
 
@@ -173,9 +173,9 @@ def build_long_straddle(
     atm = closest_strike(strikes, spot)
     return [
         _make_leg(1, None, underlying, expiry, atm, "CE", "BUY", lots, lot_size, chain,
-                  "Long ATM call — directional / vol-buying"),
+                  "Long straddle — long ATM call, profits on upside breakout"),
         _make_leg(2, None, underlying, expiry, atm, "PE", "BUY", lots, lot_size, chain,
-                  "Long ATM put — directional / vol-buying"),
+                  "Long straddle — long ATM put, profits on downside breakdown"),
     ]
 
 
@@ -194,9 +194,9 @@ def build_long_strangle(
     long_put  = closest_strike(strikes, spot - expected_move * 0.5)
     return [
         _make_leg(1, None, underlying, expiry, long_call, "CE", "BUY", lots, lot_size, chain,
-                  "Long OTM call — vol-buying upside"),
+                  "Long strangle — long OTM call, profits on upside breakout"),
         _make_leg(2, None, underlying, expiry, long_put,  "PE", "BUY", lots, lot_size, chain,
-                  "Long OTM put — vol-buying downside"),
+                  "Long strangle — long OTM put, profits on downside breakdown"),
     ]
 
 
@@ -214,7 +214,7 @@ def build_long_call(
     atm = closest_strike(strikes, spot)
     return [
         _make_leg(1, None, underlying, expiry, atm, "CE", "BUY", lots, lot_size, chain,
-                  "Long ATM call — directional bullish, unlimited upside"),
+                  "Long call — directional bullish, unlimited upside"),
     ]
 
 
@@ -232,7 +232,7 @@ def build_long_put(
     atm = closest_strike(strikes, spot)
     return [
         _make_leg(1, None, underlying, expiry, atm, "PE", "BUY", lots, lot_size, chain,
-                  "Long ATM put — directional bearish, defined max loss = premium"),
+                  "Long put — directional bearish, defined max loss = premium"),
     ]
 
 
@@ -253,9 +253,9 @@ def build_bull_call_spread(
     short_call = closest_strike(strikes, long_call + max(step * 2, expected_move * 0.5))
     return [
         _make_leg(1, 2, underlying, expiry, long_call,  "CE", "BUY",  lots, lot_size, chain,
-                  "Long call — bullish debit"),
+                  "Bull call spread — long call, bullish debit leg"),
         _make_leg(2, 1, underlying, expiry, short_call, "CE", "SELL", lots, lot_size, chain,
-                  "Short call — caps upside, reduces cost"),
+                  "Bull call spread — short call, caps upside, reduces cost"),
     ]
 
 
@@ -276,9 +276,9 @@ def build_bear_put_spread(
     short_put = closest_strike(strikes, long_put - max(step * 2, expected_move * 0.5))
     return [
         _make_leg(1, 2, underlying, expiry, long_put,  "PE", "BUY",  lots, lot_size, chain,
-                  "Long put — bearish debit"),
+                  "Bear put spread — long put, bearish debit leg"),
         _make_leg(2, 1, underlying, expiry, short_put, "PE", "SELL", lots, lot_size, chain,
-                  "Short put — caps downside profit, reduces cost"),
+                  "Bear put spread — short put, caps downside profit, reduces cost"),
     ]
 
 
@@ -303,13 +303,13 @@ def build_iron_butterfly(
     long_put  = closest_strike(strikes, atm - wing_width)
     return [
         _make_leg(1, 2, underlying, expiry, atm,       "PE", "SELL", lots, lot_size, chain,
-                  "Short ATM put — body of butterfly"),
+                  "Iron butterfly — short ATM put (body), maximum premium zone"),
         _make_leg(2, 1, underlying, expiry, long_put,  "PE", "BUY",  lots, lot_size, chain,
-                  "Long OTM put — caps downside"),
+                  "Iron butterfly — long OTM put hedge, caps downside risk"),
         _make_leg(3, 4, underlying, expiry, atm,       "CE", "SELL", lots, lot_size, chain,
-                  "Short ATM call — body of butterfly"),
+                  "Iron butterfly — short ATM call (body), maximum premium zone"),
         _make_leg(4, 3, underlying, expiry, long_call, "CE", "BUY",  lots, lot_size, chain,
-                  "Long OTM call — caps upside"),
+                  "Iron butterfly — long OTM call hedge, caps upside risk"),
     ]
 
 
@@ -332,11 +332,11 @@ def build_jade_lizard(
     long_call  = closest_strike(strikes, short_call + max(step * 2, expected_move * 0.5))
     return [
         _make_leg(1, None, underlying, expiry, short_put,  "PE", "SELL", lots, lot_size, chain,
-                  "Short OTM put — bullish premium"),
+                  "Jade lizard — short OTM put, bullish premium"),
         _make_leg(2, 3,    underlying, expiry, short_call, "CE", "SELL", lots, lot_size, chain,
-                  "Short OTM call — premium leg of upside spread"),
+                  "Jade lizard — short OTM call, premium leg of upside spread"),
         _make_leg(3, 2,    underlying, expiry, long_call,  "CE", "BUY",  lots, lot_size, chain,
-                  "Long further-OTM call — caps upside risk"),
+                  "Jade lizard — long call hedge, caps upside risk"),
     ]
 
 

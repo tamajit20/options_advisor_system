@@ -66,8 +66,16 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
         expiry = sug_legs[0]["expiry_date"]
         dte = days_between(trade_date, expiry)
 
-        # Current chain
+        # Current chain — skip this trade if no EOD data for today (holiday/weekend).
+        # Without chain data, all mid_prices would be 0 which causes evaluate_exit
+        # to see full profit on every credit leg and fire spurious TAKE_PROFIT signals.
         chain_rows = fo.get_chain(underlying, trade_date, expiry)
+        if not chain_rows:
+            logger.info(
+                "Exit engine: no chain data for %s/%s on %s — skipping (holiday/weekend)",
+                underlying, expiry, trade_date,
+            )
+            continue
         current_chain = [
             {
                 "strike":     float(c["strike"]),

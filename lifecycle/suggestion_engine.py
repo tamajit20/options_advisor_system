@@ -181,57 +181,44 @@ def run_suggestion_engine(
     db: SQLServerConnection,
     trade_date: date | None = None,
 ) -> int:
-    """Run for all configured underlyings; persist exactly one Suggestion
-    (highest PoP Ã— max_profit / max_loss) and one NoSuggestion per skipped
-    underlying.
+    """Evaluate all configured underlyings and persist every one that passes
+    all confidence checks (one suggestion per underlying per day). Underlyings
+    that already have a suggestion for today are skipped so re-runs are safe.
 
-    Returns number of suggestions persisted (0 or 1).
+    Returns number of new suggestions persisted.
     """
     trade_date = trade_date or today_ist()
     sug_repo = SuggestionRepo(db)
     notif_repo = NotificationRepo(db)
 
-    candidates: List[Suggestion] = []
+    persisted: List[Suggestion] = []
     no_suggestions: List[NoSuggestion] = []
 
     for symbol in STRATEGY_CONFIG["underlyings"]:
+        # Dedup guard -- skip if already suggested this underlying today
+        if sug_repo.has_suggestion_for(symbol, trade_date):
+            logger.info("Suggestion already exists for %s on %s -- skipping", symbol, trade_date)
+            continue
         try:
             sug, ns = _evaluate_underlying(db, symbol, trade_date)
         except Exception:
             logger.exception("Suggestion eval failed for %s", symbol)
             continue
         if sug is not None:
-            candidates.append(sug)
+            sug_repo.insert(sug)
+            sug_repo.insert_legs(sug.suggestion_id, sug.legs)
+            notif_repo.insert(Notification(
+                created_at=now_ist(),
+                notif_type="NEW_SUGGESTION",
+                severity="INFO",
+                title=f"New suggestion: {sug.trade_name}",
+                body=sug.plain_english,
+                related_suggestion_id=sug.suggestion_id,
+            ))
+            persisted.append(sug)
+            logger.info("Persisted suggestion %s (%s %s)", sug.suggestion_id, sug.underlying, sug.strategy)
         elif ns is not None:
             no_suggestions.append(ns)
-
-    # Pick best candidate
-    chosen: Optional[Suggestion] = None
-    if candidates:
-        def score(s: Suggestion) -> float:
-            mp = s.economics.max_profit
-            ml = s.economics.max_loss
-            pop = s.economics.probability_of_profit
-            if mp == float("inf"):
-                return pop  # buying strategies â€” rank by PoP only
-            if ml <= 0:
-                return pop * mp
-            return pop * (mp / ml)
-        chosen = max(candidates, key=score)
-
-    # Persist
-    if chosen is not None:
-        sug_repo.insert(chosen)
-        sug_repo.insert_legs(chosen.suggestion_id, chosen.legs)
-        notif_repo.insert(Notification(
-            created_at=now_ist(),
-            notif_type="NEW_SUGGESTION",
-            severity="INFO",
-            title=f"New suggestion: {chosen.trade_name}",
-            body=chosen.plain_english,
-            related_suggestion_id=chosen.suggestion_id,
-        ))
-        logger.info("Persisted suggestion %s (%s)", chosen.suggestion_id, chosen.strategy)
 
     import json as _json
     for ns in no_suggestions:
@@ -255,7 +242,7 @@ def run_suggestion_engine(
         except Exception:
             logger.exception("Failed to persist NoSuggestion for %s", ns.underlying)
 
-    if chosen is None and no_suggestions:
+    if not persisted and no_suggestions:
         notif_repo.insert(Notification(
             created_at=now_ist(),
             notif_type="NO_SUGGESTION",
@@ -265,5 +252,8 @@ def run_suggestion_engine(
         ))
 
     db.commit()
-    return 1 if chosen is not None else 0
-
+    logger.info(
+        "Suggestion engine done: %d suggested, %d no-suggestion",
+        len(persisted), len(no_suggestions),
+    )
+    return len(persisted)

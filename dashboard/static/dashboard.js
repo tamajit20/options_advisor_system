@@ -13,7 +13,8 @@ const $ = sel => document.querySelector(sel);
 const $$ = (sel, ctx=document) => Array.from(ctx.querySelectorAll(sel));
 const fmt = n => (n == null ? '—' : Number(n).toLocaleString('en-IN', {maximumFractionDigits: 2}));
 const fmtPct = n => (n == null ? '—' : Number(n).toFixed(1) + '%');
-const fmtDt  = s => { if (!s) return '—'; try { const d = new Date(s); return d.toLocaleString('en-IN', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:false}); } catch(e) { return String(s); } };
+const fmtDt   = s => { if (!s) return '—'; try { const d = new Date(s); return d.toLocaleString('en-IN', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:false}); } catch(e) { return String(s); } };
+const fmtDate = s => { if (!s) return '—'; try { const d = new Date(s); return d.toLocaleDateString('en-IN', {day:'2-digit', month:'short', year:'numeric'}); } catch(e) { return String(s); } };
 
 // "₹500 (67% of credit ₹750)" — shows a derived value as % of its base
 const pctHint = (val, base, label = '') => {
@@ -119,11 +120,112 @@ async function loadSuggestion() {
       return;
     }
     c.className = '';
-    c.innerHTML = list.map(renderSuggestion).join('');
+    c.innerHTML = list.map(s => renderSuggestion(s)).join('');
     bindSuggestionActions();
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+// ── Computed Exit Plan ───────────────────────────────────────────────────────
+// Derives profit target and per-side stop loss entirely from suggestion data.
+// Works for every strategy, every suggestion (old or new) — no plain_english parsing.
+function renderExitPlan(s) {
+  const legs     = s.legs || [];
+  const strategy = s.strategy || '';
+  const np       = s.net_credit    != null ? parseFloat(s.net_credit)    : null;
+  const dte      = s.dte           != null ? parseInt(s.dte)             : null;
+  const slLevel  = s.stop_loss_level != null ? parseFloat(s.stop_loss_level) : null;
+  const und      = s.underlying || 'Index';
+  const isCredit = np != null && np > 0;
+  const isDebit  = np != null && np < 0;
+
+  const scLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE');
+  const spLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'PE');
+
+  const rows = [];
+
+  // ── 1. Profit target — strategy-specific capture % ───────────────────────
+  // Iron Butterfly: narrow wings → gamma risk rises fast → exit at 25%
+  // All other credit spreads: 50% (Tastyworks research, EV maximised at ~50%)
+  // Long Straddle/Strangle: need a big move → target 2× debit (100% return)
+  // Long Call/Put: directional → target 100% return on premium
+  // Debit spreads (Bull Call, Bear Put): limited profit → 50% of spread width
+  if (isCredit) {
+    const pct     = strategy === 'IRON_BUTTERFLY' ? 0.25 : 0.50;
+    const pctLabel = strategy === 'IRON_BUTTERFLY' ? '25%' : '50%';
+    const target  = Math.round(np * pct * 10) / 10;
+    const dteStr  = dte ? ` — around day ${Math.round(dte * 0.35)}–${Math.round(dte * 0.55)}` : '';
+    const reason  = strategy === 'IRON_BUTTERFLY' ? ' (narrow wings — exit earlier)' : '';
+    rows.push({ label: 'Profit target', val: `close when ${pctLabel} of credit is captured (₹${fmt(target)}/unit retained)${dteStr}${reason}`, key: true });
+  } else if (isDebit) {
+    const debit = Math.abs(np);
+    if (['LONG_STRADDLE', 'LONG_STRANGLE'].includes(strategy)) {
+      const target2x = Math.round(debit * 2 * 10) / 10;
+      rows.push({ label: 'Profit target', val: `exit when position doubles — gain ₹${fmt(target2x)}/unit (2× debit paid)`, key: true });
+    } else if (['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(strategy)) {
+      const target50 = Math.round(debit * 0.5 * 10) / 10;
+      rows.push({ label: 'Profit target', val: `close when spread gains ₹${fmt(target50)}/unit (50% of debit paid)`, key: true });
+    } else {
+      // LONG_CALL, LONG_PUT — directional, target full return
+      rows.push({ label: 'Profit target', val: `close when position gains ₹${fmt(Math.round(debit * 10) / 10)}/unit (100% return on premium)`, key: true });
+    }
+  }
+
+  // ── 2. Stop loss — strategy-specific, clearly labelled ───────────────────
+  const twoSided    = ['IRON_CONDOR', 'IRON_BUTTERFLY', 'JADE_LIZARD'].includes(strategy);
+  const callSideOnly = ['BEAR_CALL_SPREAD', 'BULL_CALL_SPREAD'].includes(strategy);
+  const putSideOnly  = ['BULL_PUT_SPREAD',  'BEAR_PUT_SPREAD' ].includes(strategy);
+
+  if (twoSided && scLeg && spLeg) {
+    // sl_level is the call-side SL (above short call). Derive put-side symmetrically.
+    if (slLevel != null) {
+      const buf = Math.round(slLevel - scLeg.strike);
+      rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above ${fmt(slLevel)} (${buf} pts above short call ${fmt(scLeg.strike)})` });
+      const putSl = Math.round(spLeg.strike - buf);
+      rows.push({ label: 'Put-side SL',  val: `exit put spread if ${und} falls below ${fmt(putSl)} (${buf} pts below short put ${fmt(spLeg.strike)})` });
+    } else {
+      rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above short call ${fmt(scLeg.strike)}` });
+      rows.push({ label: 'Put-side SL',  val: `exit put spread if ${und} falls below short put ${fmt(spLeg.strike)}` });
+    }
+  } else if (callSideOnly && scLeg) {
+    if (slLevel != null) {
+      const buf = Math.round(slLevel - scLeg.strike);
+      const bufStr = buf > 0 ? ` (${buf} pts above short call ${fmt(scLeg.strike)})` : '';
+      rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above ${fmt(slLevel)}${bufStr}` });
+    } else {
+      rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above short call ${fmt(scLeg.strike)}` });
+    }
+  } else if (putSideOnly && spLeg) {
+    if (slLevel != null) {
+      const buf = Math.round(spLeg.strike - slLevel);
+      const bufStr = buf > 0 ? ` (${buf} pts below short put ${fmt(spLeg.strike)})` : '';
+      rows.push({ label: 'Put-side SL', val: `exit put spread if ${und} falls below ${fmt(slLevel)}${bufStr}` });
+    } else {
+      rows.push({ label: 'Put-side SL', val: `exit put spread if ${und} falls below short put ${fmt(spLeg.strike)}` });
+    }
+  } else if (strategy === 'LONG_CALL') {
+    rows.push({ label: 'Stop loss', val: `exit if position loses 50% of premium paid${slLevel ? ` or ${und} falls below ${fmt(slLevel)}` : ''}` });
+  } else if (strategy === 'LONG_PUT') {
+    rows.push({ label: 'Stop loss', val: `exit if position loses 50% of premium paid${slLevel ? ` or ${und} rises above ${fmt(slLevel)}` : ''}` });
+  } else if (['LONG_STRADDLE', 'LONG_STRANGLE'].includes(strategy) && isDebit) {
+    const slVal = Math.round(Math.abs(np) * 0.5 * 10) / 10;
+    rows.push({ label: 'Stop loss', val: `exit if position value decays to 50% of debit paid (₹${fmt(slVal)}/unit lost)` });
+  }
+
+  if (!rows.length) return '';
+
+  const rowsHtml = rows.map(r =>
+    `<div class="tl-row${r.key ? ' tl-key' : ''}">
+      <span class="tl-label">${escapeHtml(r.label)}</span>
+      <span class="tl-val">${escapeHtml(r.val)}</span>
+    </div>`
+  ).join('');
+
+  return `<div class="sug-section sug-exit-section">
+    <div class="sug-section-title">Exit Plan</div>
+    <div class="sug-timeline">${rowsHtml}</div>
+  </div>`;
 }
 
 // Helper: parse plain_english text into structured display
@@ -135,16 +237,21 @@ function renderPlainEnglishStructured(s) {
       : '';
   }
   const rawLines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const introLines = [], timelineItems = [];
+  const introLines = [], timelineItems = [], entryItems = [];
   let confLine = '', mode = 'intro';
   for (const line of rawLines) {
-    if (/^ENTRY THRESHOLDS/i.test(line)) { mode = 'entry'; continue; }
+    if (/^ENTRY(\s+THRESHOLDS)?$/i.test(line)) { mode = 'entry'; continue; }
     if (/^TARGET CLOSE/i.test(line))     { mode = 'target'; continue; }
     if (/^TIMELINE/i.test(line))         { mode = 'timeline'; continue; }
     if (/All \d+ confidence/i.test(line)) { confLine = line; continue; }
     if (line.startsWith('\u2022') || line.startsWith('-')) {
-      if (mode === 'timeline') timelineItems.push(line.replace(/^[\u2022\-]\s*/, '').trim());
-      // entry/target bullets already shown on leg chips — skip
+      const bullet = line.replace(/^[\u2022\-]\s*/, '').trim();
+      if (mode === 'timeline') {
+        // Skip lines that will be shown in the computed Exit Plan section instead
+        if (/target\s+\d+%\s+profit|target\s+(exit|close)\b|\bsl:|\bstop[- ]?loss\b|hard\s+sl|close\s+(immediately\s+)?if\b|exit\s+(call|put|spread)\s+if\b|exit\s+if\s|exit.*immediately/i.test(bullet)) continue;
+        timelineItems.push(bullet);
+      } else if (mode === 'entry') entryItems.push(bullet);
+      // target bullets already shown on leg chips — skip
     } else if (mode === 'intro') {
       introLines.push(line);
     }
@@ -159,11 +266,49 @@ function renderPlainEnglishStructured(s) {
   if (spot)               chips.push(`<span class="ctx-chip">Spot ₹${escapeHtml(spot)}</span>`);
   if (ivRank)             chips.push(`<span class="ctx-chip ctx-iv">IV Rank ${escapeHtml(ivRank)}%</span>`);
   if (s.confidence_score) chips.push(`<span class="ctx-chip ctx-pass">${s.confidence_score}/7 checks ✓</span>`);
-  const tlRows = timelineItems.map(item => {
+  // Reference date for "day N" → actual date conversion.
+  // Use generated_on if present, else today.
+  const refDateStr = s.generated_on || s.executed_on || null;
+  const refDate = refDateStr ? new Date(refDateStr) : new Date();
+  function dayToDate(n) {
+    const d = new Date(refDate);
+    d.setDate(d.getDate() + n);
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+  }
+  function expandDays(text) {
+    // Replace "day N–M" or "day N-M" → "day N to M (DD Mon – DD Mon)"
+    return text
+      .replace(/\bday\s+(\d+)\s*[–\-]\s*(\d+)/gi, (_, a, b) =>
+        `day ${a} to ${b} (${dayToDate(+a)} – ${dayToDate(+b)})`)
+      // Only expand standalone "day N" — \b after digits prevents backtracking to partial matches
+      .replace(/\bday\s+(\d+)\b(?!\s*(?:to\b|[–\-]))/gi, (_, n) =>
+        `day ${n} (${dayToDate(+n)})`);
+  }
+  // Split "Label: value" but reject if the text before : ends with a digit
+  // (prevents time strings like "09:20" being treated as label "09" + val "20…")
+  function splitLabelVal(item) {
     const ci = item.indexOf(':');
-    if (ci < 0) return `<div class="tl-row"><span class="tl-val" style="grid-column:span 2">${escapeHtml(item)}</span></div>`;
+    if (ci < 0) return null;
     const label = item.slice(0, ci).trim();
-    const val   = item.slice(ci + 1).trim();
+    if (/\d$/.test(label) || !/[a-zA-Z]/.test(label)) return null;
+    return { label, val: item.slice(ci + 1).trim() };
+  }
+  // Strip hard-coded ₹ amounts from narrative bullets — computed rows show the
+  // authoritative values instead.
+  function stripRupeeAmounts(text) {
+    return text
+      // " between ₹112–₹124 combined credit" / " for ₹60–₹68 combined credit"
+      .replace(/\s+(?:between|for)\s+\u20b9[\d,.]+(?:[\u2013\-]\u20b9?[\d,.]+)?[^•\n]*/gi, '')
+      // parenthetical amounts like "(₹59 decay)" or "(₹38.4 target)"
+      .replace(/\s*\(\u20b9[^)]+\)/g, '')
+      .trim();
+  }
+  const tlRows = timelineItems.map(item => {
+    const clean = stripRupeeAmounts(item);
+    const split = splitLabelVal(clean);
+    if (!split) return `<div class="tl-row"><span class="tl-val" style="grid-column:span 2">${escapeHtml(expandDays(clean))}</span></div>`;
+    const { label } = split;
+    const val   = expandDays(split.val);
     const isKey = /execute by/i.test(label);
     return `<div class="tl-row${isKey ? ' tl-key' : ''}">
       <span class="tl-label">${escapeHtml(label)}</span>
@@ -190,17 +335,364 @@ function renderPlainEnglishStructured(s) {
   const introHtml = introSentences.length
     ? `<p class="sug-intro">${escapeHtml(introSentences.join(' '))}</p>`
     : '';
+  const entryHtml = (() => {
+    if (!entryItems.length && !s.execution_window) return '';
+    // Compute credit range from per-leg price bands — authoritative source
+    // (plain_english narrative may show a different number; this is computed from DB)
+    let _lo = 0, _hi = 0;
+    const hasLegs = !!(s.legs && s.legs.length);
+    (s.legs || []).forEach(l => {
+      const sign = l.action === 'SELL' ? 1 : -1;
+      const pLo = parseFloat(l.suggested_price_low  || l.suggested_price || 0);
+      const pHi = parseFloat(l.suggested_price_high || l.suggested_price || 0);
+      _lo += sign * (l.action === 'SELL' ? pLo : pHi);
+      _hi += sign * (l.action === 'SELL' ? pHi : pLo);
+    });
+    const crLo = Math.min(_lo, _hi), crHi = Math.max(_lo, _hi);
+    const dateStr = refDateStr ? fmtDate(refDateStr) : '';
+    let dateInjected = false;
+    const itemRows = entryItems.map(item => {
+      const clean = stripRupeeAmounts(item);
+      const split = splitLabelVal(clean);
+      if (!split) return `<div class="tl-row tl-key"><span class="tl-val" style="grid-column:span 2">${escapeHtml(clean)}</span></div>`;
+      const { label, val } = split;
+      // Append date inline on the Execute row (first occurrence only)
+      let valHtml = escapeHtml(val);
+      if (!dateInjected && /^execute/i.test(label) && dateStr) {
+        valHtml += ` <span class="muted" style="font-size:.8rem">\u00b7 ${escapeHtml(dateStr)}</span>`;
+        dateInjected = true;
+      }
+      return `<div class="tl-row tl-key"><span class="tl-label">${escapeHtml(label)}</span><span class="tl-val">${valHtml}</span></div>`;
+    }).join('');
+    // If no Execute bullet absorbed the date, show it as its own row
+    const dateRow = (dateStr && !dateInjected)
+      ? `<div class="tl-row tl-key"><span class="tl-label">Date</span><span class="tl-val"><strong>${escapeHtml(dateStr)}</strong></span></div>`
+      : '';
+    const creditRow = hasLegs && crHi > crLo + 0.5
+      ? `<div class="tl-row tl-key"><span class="tl-label">Acceptable credit</span>` +
+        `<span class="tl-val"><strong>\u20b9${fmt(crLo)}\u2013\u20b9${fmt(crHi)}</strong><span class="muted" style="font-size:.75rem"> /unit \u00b7 from leg price bands</span></span></div>`
+      : '';
+    if (entryItems.length) {
+      return `<div class="sug-section sug-entry-section"><div class="sug-section-title">Entry</div>` +
+        `<div class="sug-timeline">${dateRow}${itemRows}${creditRow}</div></div>`;
+    }
+    return s.execution_window
+      ? `<div class="exec-window-badge">\ud83d\udcc5 Execute: ${escapeHtml(s.execution_window)}</div>`
+      : '';
+  })();
   const timelineHtml = tlRows
     ? `<div class="sug-section"><div class="sug-section-title">Timeline</div><div class="sug-timeline">${tlRows}</div></div>`
-    : (s.execution_window ? `<div class="exec-window-badge">📅 Execute: ${escapeHtml(s.execution_window)}</div>` : '');
+    : '';
   const confHtml = confLine
     ? `<div class="sug-conf">${escapeHtml(confLine)}</div>`
     : '';
-  return contextHtml + introHtml + timelineHtml + confHtml;
+  return contextHtml + introHtml + entryHtml + timelineHtml + renderExitPlan(s) + confHtml;
+}
+
+// Credit breakdown box — shows per-leg contribution and the net combined credit.
+// mode='suggest': uses suggested_price / suggested_price_low / suggested_price_high
+// mode='trade':   uses fill_price (actual fills)
+function creditBreakdownHtml(legs, mode) {
+  if (!legs || !legs.length) return '';
+  let netMid = 0, netLow = 0, netHigh = 0;
+  let sugNetLow = 0, sugNetHigh = 0;
+  const rows = legs.map(l => {
+    const price  = mode === 'trade' ? (l.fill_price || 0) : (l.suggested_price || 0);
+    const pLow   = mode === 'trade' ? price : (l.suggested_price_low  || price);
+    const pHigh  = mode === 'trade' ? price : (l.suggested_price_high || price);
+    const sign   = l.action === 'SELL' ? 1 : -1;
+    netMid  += sign * price;
+    netLow  += sign * (l.action === 'SELL' ? pLow  : pHigh);
+    netHigh += sign * (l.action === 'SELL' ? pHigh : pLow);
+    // For trade mode: also compute suggested range from suggestion leg data
+    if (mode === 'trade') {
+      const sLow  = parseFloat(l.suggested_price_low  || l.suggested_price || 0);
+      const sHigh = parseFloat(l.suggested_price_high || l.suggested_price || 0);
+      sugNetLow  += sign * (l.action === 'SELL' ? sLow  : sHigh);
+      sugNetHigh += sign * (l.action === 'SELL' ? sHigh : sLow);
+    }
+    const color = l.action === 'SELL' ? 'var(--ok)' : 'var(--err)';
+    // data-cb-leg / data-cb-action let recalc() update this span live as
+    // the user edits leg price inputs — no separate LTP widget needed.
+    return `<span class="cb-leg">
+      <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'} tag-sm">${escapeHtml(l.action)}</span>
+      <span class="cb-leg-name">${escapeHtml(l.option_type||'')} ${l.strike||''}</span>
+      <span data-cb-leg="${l.leg_order}" data-cb-action="${escapeHtml(l.action)}" style="color:${color};font-weight:600">${l.action === 'SELL' ? '+' : '\u2212'}\u20b9${fmt(price)}</span>
+    </span>`;
+  }).join('<span class="cb-sep"> + </span>');
+  const rangeText = mode === 'suggest' && Math.abs(netHigh - netLow) > 0.5
+    ? ` <span class="cb-range">(acceptable range \u20b9${fmt(Math.min(netLow,netHigh))}\u2013\u20b9${fmt(Math.max(netLow,netHigh))})</span>`
+    : '';
+  const netColor = netMid >= 0 ? 'var(--ok)' : 'var(--err)';
+  const netLabel = netMid >= 0 ? 'Combined credit you receive' : 'Combined debit you pay';
+  // Trade mode: show suggested range + whether actual fill was within it
+  let tradeCompareHtml = '';
+  if (mode === 'trade') {
+    const sLo = Math.min(sugNetLow, sugNetHigh);
+    const sHi = Math.max(sugNetLow, sugNetHigh);
+    const withinRange = netMid >= sLo && netMid <= sHi;
+    const aboveRange  = netMid > sHi;
+    const rangeLabel  = Math.abs(sHi - sLo) > 0.5
+      ? `Suggested range: ₹${fmt(sLo)}–₹${fmt(sHi)}`
+      : `Suggested: ₹${fmt(sLo)}`;
+    const fillStatus = withinRange
+      ? `<span class="cb-fill-status cb-fill-ok">✓ within range</span>`
+      : aboveRange
+        ? `<span class="cb-fill-status cb-fill-above">↑ above range (favourable)</span>`
+        : `<span class="cb-fill-status cb-fill-below">↓ below suggested minimum</span>`;
+    tradeCompareHtml = `<div class="cb-trade-compare">${rangeLabel} &nbsp;·&nbsp; ${fillStatus}</div>`;
+  }
+  return `<div class="credit-breakdown">
+    <div class="cb-equation">${rows}
+      <span class="cb-sep"> = </span>
+      <span class="cb-net" data-cb-net style="color:${netColor}">\u20b9${fmt(Math.abs(netMid))}/unit</span>${rangeText}${mode === 'suggest' ? ' <span class="cb-live-status" data-cb-status></span>' : ''}
+    </div>
+    <div class="cb-label">${escapeHtml(netLabel)} per unit (1 lot each leg)</div>
+    ${tradeCompareHtml}
+  </div>`;
+}
+
+// Return a coloured spread-group badge when a strategy has both CE and PE legs
+// (Iron Condor, Iron Butterfly). Returns '' for one-sided strategies.
+function spreadBadge(allLegs, thisLeg) {
+  const hasCE = allLegs.some(l => l.option_type === 'CE');
+  const hasPE = allLegs.some(l => l.option_type === 'PE');
+  if (!hasCE || !hasPE) return '';         // one-sided — no label needed
+  if (thisLeg.option_type === 'CE') return '<span class="spread-badge spread-call">Call Spread</span>';
+  if (thisLeg.option_type === 'PE') return '<span class="spread-badge spread-put">Put Spread</span>';
+  return '';
+}
+
+// ── Strategy rationale ──────────────────────────────────────────────────────
+// Small "why this strategy today" + "what makes it better" block.
+// Uses actual strikes / BEs / spot from the suggestion object, and parses
+// conditions_json for real iv_rank, vix, pcr, trend values from that day.
+function parseConditions(s) {
+  let raw = s.conditions_json;
+  if (!raw) return {};
+  if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { return {}; } }
+  // conditions_json for a suggestion = array of {label, passed, detail}
+  if (!Array.isArray(raw)) return {};
+  const out = {};
+  raw.forEach(c => {
+    const d = c.detail || '';
+    const lbl = (c.label || '').toLowerCase();
+    // "IV Rank 72.3 (need >50 or <30)"
+    if (lbl.includes('iv rank')) {
+      const m = d.match(/IV Rank\s+([\d.]+)/i);
+      if (m) out.ivRank = parseFloat(m[1]);
+    }
+    // "VIX regime: STABLE (close 14.20)"
+    if (lbl.includes('vix')) {
+      const mR = d.match(/VIX regime:\s*(\w+)/i);
+      const mC = d.match(/close\s+([\d.]+)/i);
+      if (mR) out.vixRegime = mR[1].toUpperCase();
+      if (mC) out.vixClose  = parseFloat(mC[1]);
+    }
+    // "PCR 0.85 (need 0.5–1.5)"
+    if (lbl.includes('pcr')) {
+      const m = d.match(/PCR\s+([\d.]+)/i);
+      if (m) out.pcr = parseFloat(m[1]);
+    }
+    // "Trend: SIDEWAYS"
+    if (lbl.includes('trend')) {
+      const m = d.match(/Trend:\s*(\w+)/i);
+      if (m) out.trend = m[1].toUpperCase();
+    }
+    // "DTE 16 (need 7..21)"
+    if (lbl.includes('dte')) {
+      const m = d.match(/DTE\s+(\d+)/i);
+      if (m) out.dte = parseInt(m[1]);
+    }
+  });
+  return out;
+}
+
+function renderStrategyRationale(s) {
+  const legs  = s.legs || [];
+  const scLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE');
+  const spLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'PE');
+  const bcLeg = legs.find(l => l.action === 'BUY'  && l.option_type === 'CE');
+  const bpLeg = legs.find(l => l.action === 'BUY'  && l.option_type === 'PE');
+  const ub    = s.upper_breakeven  != null ? parseFloat(s.upper_breakeven)  : null;
+  const lb    = s.lower_breakeven  != null ? parseFloat(s.lower_breakeven)  : null;
+  const spot  = s.spot_at_generation != null ? parseFloat(s.spot_at_generation) : null;
+  const np    = s.net_credit != null ? parseFloat(s.net_credit) : null;
+  const isDebit = np != null && np < 0;
+  const debit = isDebit ? Math.abs(np) : 0;
+  const pop   = s.probability_of_profit != null ? Math.round(parseFloat(s.probability_of_profit)) : null;
+  const dUB   = (ub && spot) ? ((ub - spot) / spot * 100).toFixed(1) : null;
+  const dLB   = (lb && spot) ? ((spot - lb) / spot * 100).toFixed(1) : null;
+
+  // Real market context for this day's suggestion
+  const ctx = parseConditions(s);
+  const ivRank   = ctx.ivRank   ?? null;
+  const vixClose = ctx.vixClose ?? null;
+  const vixRegime = ctx.vixRegime ?? null;
+  const pcr      = ctx.pcr      ?? null;
+  const trend    = ctx.trend    ?? null;
+  const dte      = ctx.dte      ?? s.dte ?? null;
+
+  // Helpers for readable context phrases
+  const ivDesc = ivRank != null
+    ? (ivRank > 70 ? `very high (${ivRank.toFixed(0)})` :
+       ivRank > 50 ? `elevated (${ivRank.toFixed(0)})` :
+       ivRank < 20 ? `very low (${ivRank.toFixed(0)})` :
+                     `low (${ivRank.toFixed(0)})`)
+    : 'elevated';
+  const ivPremDesc = ivRank != null
+    ? (ivRank > 50 ? 'options premiums are rich — a good time to be a seller'
+                   : 'options are cheap relative to their recent norm')
+    : 'options premiums are in a favourable zone';
+  const vixDesc = vixClose != null
+    ? `VIX at ${vixClose.toFixed(1)} (${(vixRegime||'stable').toLowerCase()})`
+    : 'VIX stable';
+  const trendDesc = trend != null ? trend.toLowerCase() : 'sideways';
+  const pcrDesc = pcr != null
+    ? (pcr < 0.6  ? `PCR ${pcr.toFixed(2)} — strong bullish positioning` :
+       pcr > 1.4  ? `PCR ${pcr.toFixed(2)} — strong bearish positioning` :
+                    `PCR ${pcr.toFixed(2)} — neutral`)
+    : null;
+  const dteDesc = dte != null ? `with ${dte} DTE` : '';
+
+  const lookup = {
+    IRON_CONDOR: {
+      why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Nifty's trend is ${trendDesc} with no clear directional bias${pcrDesc ? `, and ${pcrDesc}` : ''}. A range-bound strategy collects premium from both sides without needing to pick a direction.`,
+      better: `Nifty stays inside the profit zone — above ₹${fmt(lb)}${dLB ? ` (${dLB}% below spot)` : ''} and below ₹${fmt(ub)}${dUB ? ` (${dUB}% above spot)` : ''}${pop ? ` — a ${pop}% probability` : ''}. Theta earns you money every day the index stays still. ${vixDesc} favours time decay.`,
+      ideal:  `Nifty drifts sideways ${dteDesc} and expires anywhere inside the zone.`,
+    },
+    IRON_BUTTERFLY: {
+      why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Nifty is ${trendDesc}, and a Butterfly concentrates both short strikes at the ATM level (₹${fmt(scLeg?.strike || spLeg?.strike)}) to collect maximum credit. Higher premium than an Iron Condor, but a narrower profit zone.`,
+      better: `Nifty pins close to ₹${fmt(scLeg?.strike || spLeg?.strike)} through expiry. IV crush after any event also accelerates profit. ${vixDesc}. Max credit is captured on expiry-at-the-strike.`,
+      ideal:  `Nifty closes exactly at the ATM strike ${dteDesc} on expiry.`,
+    },
+    BULL_PUT_SPREAD: {
+      why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Nifty's trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. Selling a put spread collects credit with downside risk capped at the spread width — you only lose if Nifty falls hard below ₹${fmt(spLeg?.strike)}.`,
+      better: `Nifty rises or stays flat above ₹${fmt(spLeg?.strike)} (the short put). Even a mild pullback is fine as long as it holds above ₹${fmt(lb)}. ${vixDesc}. A rally above spot earns full credit${pop ? ` (${pop}% PoP)` : ''}.`,
+      ideal:  `Nifty rises or stays comfortably above ₹${fmt(spLeg?.strike)} ${dteDesc}.`,
+    },
+    BEAR_CALL_SPREAD: {
+      why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Nifty's trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. Selling a call spread collects credit with upside risk capped — you only lose if Nifty rallies hard above ₹${fmt(scLeg?.strike)}.`,
+      better: `Nifty falls or stays flat below ₹${fmt(scLeg?.strike)} (the short call). Even a small bounce is fine as long as it stays under ₹${fmt(ub)}. ${vixDesc}. A continued decline earns full credit${pop ? ` (${pop}% PoP)` : ''}.`,
+      ideal:  `Nifty falls or remains flat, staying below ₹${fmt(scLeg?.strike)} ${dteDesc}.`,
+    },
+    JADE_LIZARD: {
+      why:    `IV Rank is ${ivDesc} — ${ivPremDesc}${pcrDesc ? `. ${pcrDesc.charAt(0).toUpperCase() + pcrDesc.slice(1)}` : ''}. A Jade Lizard (short OTM call spread + short OTM put) generates premium with zero upside risk — the call spread credit exactly offsets the short put's upside exposure.`,
+      better: `Nifty rises or stays sideways. No loss on the upside${pop ? ` (${pop}% PoP)` : ''}. Downside risk only appears below ₹${fmt(spLeg?.strike)} minus net credit. ${vixDesc}.`,
+      ideal:  `Nifty stays flat or rallies steadily through expiry.`,
+    },
+    LONG_STRADDLE: {
+      why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Buying both ATM CE and PE ${dteDesc} at low cost lets you profit from any large directional move, regardless of which way Nifty goes.`,
+      better: `A sharp breakout above ₹${fmt(ub)} or breakdown below ₹${fmt(lb)}. ${vixDesc}. Every day Nifty stays flat, the ₹${fmt(debit)}/unit debit decays — the move should come soon.`,
+      ideal:  `A surprise event triggers a large Nifty move in either direction before expiry.`,
+    },
+    LONG_STRANGLE: {
+      why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Buying OTM CE (₹${fmt(bcLeg?.strike)}) and OTM PE (₹${fmt(bpLeg?.strike)}) costs less than a Straddle but needs a bigger move to profit.`,
+      better: `Nifty breaks sharply above ₹${fmt(ub)} or below ₹${fmt(lb)}. ${vixDesc}. Every day without a move, time decay chips away at the ₹${fmt(debit)}/unit paid.`,
+      ideal:  `A large gap-and-go move in either direction shortly after entry.`,
+    },
+    LONG_CALL: {
+      why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. A Long Call gives unlimited upside for a defined ₹${fmt(debit)}/unit debit${dte ? ` with ${dte} DTE` : ''}. High leverage, low capital at risk.`,
+      better: `Nifty rallies strongly above ₹${fmt(bcLeg?.strike)}. Delta and gamma accelerate profits as Nifty moves higher. ${vixDesc}. Act early — time decay accelerates toward expiry.`,
+      ideal:  `Nifty surges upward quickly, well above the call strike.`,
+    },
+    LONG_PUT: {
+      why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. A Long Put profits from a decline while limiting max loss to ₹${fmt(debit)}/unit${dte ? ` with ${dte} DTE` : ''}.`,
+      better: `Nifty falls sharply below ₹${fmt(bpLeg?.strike)}. ${vixDesc}. Avoid holding too close to expiry if the move hasn't materialised — theta decay accelerates.`,
+      ideal:  `Nifty breaks down sharply before expiry.`,
+    },
+    BULL_CALL_SPREAD: {
+      why:    `IV Rank is ${ivDesc} — not cheap enough for naked long calls, yet not rich enough for pure credit writing. Trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. A Bull Call Spread caps the debit while allowing upside to ₹${fmt(scLeg?.strike)}.`,
+      better: `Nifty rises above ₹${fmt(scLeg?.strike)} by expiry — the full spread width is earned. ${vixDesc}. A flat or falling Nifty loses the debit paid.`,
+      ideal:  `Nifty climbs steadily to or above ₹${fmt(scLeg?.strike)} ${dteDesc}.`,
+    },
+    BEAR_PUT_SPREAD: {
+      why:    `IV Rank is ${ivDesc} — debit spreads work better than naked longs or pure credit writing here. Trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. A Bear Put Spread profits from a decline to ₹${fmt(spLeg?.strike)} while capping the debit.`,
+      better: `Nifty falls below ₹${fmt(spLeg?.strike)} by expiry — full spread width is earned. ${vixDesc}. A flat or rising Nifty loses the debit paid.`,
+      ideal:  `Nifty drifts or falls to or below ₹${fmt(spLeg?.strike)} ${dteDesc}.`,
+    },
+  };
+
+  const info = lookup[s.strategy];
+  if (!info) return '';
+
+  return `<div class="strategy-rationale">
+    <div class="sr-row">
+      <span class="sr-label">Why this strategy today</span>
+      <span class="sr-text">${info.why}</span>
+    </div>
+    <div class="sr-row">
+      <span class="sr-label">What makes it better</span>
+      <span class="sr-text">${info.better}</span>
+    </div>
+    <div class="sr-row sr-ideal">
+      <span class="sr-label">Ideal scenario</span>
+      <span class="sr-text">${info.ideal}</span>
+    </div>
+  </div>`;
+}
+
+// Derive a readable leg role description from strategy name + leg action/type.
+// This is computed at render time so it's always consistent regardless of what
+// text was stored in leg_purpose_note at suggestion creation.
+function legRoleNote(strategy, leg) {
+  const action = (leg.action || '').toUpperCase();
+  const ot     = (leg.option_type || '').toUpperCase();
+  const sell = action === 'SELL', buy = action === 'BUY';
+  const ce = ot === 'CE', pe = ot === 'PE';
+  switch (strategy) {
+    case 'IRON_CONDOR':
+      if (sell && pe) return 'Iron condor — short put, collects premium below expected move';
+      if (buy  && pe) return 'Iron condor — long put hedge, caps downside risk';
+      if (sell && ce) return 'Iron condor — short call, collects premium above expected move';
+      if (buy  && ce) return 'Iron condor — long call hedge, caps upside risk';
+      break;
+    case 'IRON_BUTTERFLY':
+      if (sell && pe) return 'Iron butterfly — short ATM put (body), maximum premium zone';
+      if (buy  && pe) return 'Iron butterfly — long OTM put hedge, caps downside risk';
+      if (sell && ce) return 'Iron butterfly — short ATM call (body), maximum premium zone';
+      if (buy  && ce) return 'Iron butterfly — long OTM call hedge, caps upside risk';
+      break;
+    case 'BULL_PUT_SPREAD':
+      if (sell && pe) return 'Bull put spread — short put, primary premium leg';
+      if (buy  && pe) return 'Bull put spread — long put hedge, defines max loss';
+      break;
+    case 'BEAR_CALL_SPREAD':
+      if (sell && ce) return 'Bear call spread — short call, primary premium leg';
+      if (buy  && ce) return 'Bear call spread — long call hedge, defines max loss';
+      break;
+    case 'BULL_CALL_SPREAD':
+      if (buy  && ce) return 'Bull call spread — long call, bullish debit leg';
+      if (sell && ce) return 'Bull call spread — short call, caps upside, reduces cost';
+      break;
+    case 'BEAR_PUT_SPREAD':
+      if (buy  && pe) return 'Bear put spread — long put, bearish debit leg';
+      if (sell && pe) return 'Bear put spread — short put, caps downside profit, reduces cost';
+      break;
+    case 'JADE_LIZARD':
+      if (sell && pe) return 'Jade lizard — short OTM put, bullish premium';
+      if (sell && ce) return 'Jade lizard — short OTM call, premium leg of upside spread';
+      if (buy  && ce) return 'Jade lizard — long call hedge, caps upside risk';
+      break;
+    case 'LONG_STRADDLE':
+      if (buy && ce) return 'Long straddle — long ATM call, profits on upside breakout';
+      if (buy && pe) return 'Long straddle — long ATM put, profits on downside breakdown';
+      break;
+    case 'LONG_STRANGLE':
+      if (buy && ce) return 'Long strangle — long OTM call, profits on upside breakout';
+      if (buy && pe) return 'Long strangle — long OTM put, profits on downside breakdown';
+      break;
+    case 'LONG_CALL':
+      return 'Long call — directional bullish, unlimited upside';
+    case 'LONG_PUT':
+      return 'Long put — directional bearish, defined max loss = premium';
+  }
+  return leg.leg_purpose_note || '';
 }
 
 // Build the per-card suggestion render output.
-function renderSuggestion(s) {
+// readOnly=true: static view used inside trade cards (no inputs, no action buttons)
+function renderSuggestion(s, readOnly = false) {
   const isNoSug = s.strategy === 'NONE' || s.status === 'NO_SUGGESTION';
   if (isNoSug) {
     return `<div class="card">
@@ -222,13 +714,35 @@ function renderSuggestion(s) {
   // Base quantity (from suggestion) used as denominator when user changes lots.
   // Per-unit numbers (np, breakevens, sl, pop) are independent of lot count;
   // absolute-rupee numbers (mp, ml, chg, npnl, total credit) scale linearly.
-  const baseQty = (s.legs || []).reduce(
-    (a, l) => a + (l.lots || 0) * (l.lot_size || 0), 0) || 1;
-  const baseTotalCredit = (econ.np || 0) * baseQty;
+  // Position size = one leg's lots × lot_size (all legs in a spread share the same qty).
+  // Do NOT sum across all legs — a 4-leg IC has 1 lot worth of exposure, not 4.
+  const baseQty = ((s.legs || [])[0]?.lots || 1) * ((s.legs || [])[0]?.lot_size || 1);
   // Spread width (in rupees, summed over baseQty). Stays constant when fill
   // prices move — only the credit/debit allocation between profit & loss
   // shifts. We use this to recompute max-loss live as user edits prices.
   const baseWidthTotal = (econ.mp || 0) + (econ.ml || 0);
+  // Suggested credit range used by the live credit monitor widget
+  let _sugLo = 0, _sugHi = 0;
+  (s.legs || []).forEach(l => {
+    const sign = l.action === 'SELL' ? 1 : -1;
+    const pLo  = parseFloat(l.suggested_price_low  || l.suggested_price || 0);
+    const pHi  = parseFloat(l.suggested_price_high || l.suggested_price || 0);
+    _sugLo += sign * (l.action === 'SELL' ? pLo : pHi);
+    _sugHi += sign * (l.action === 'SELL' ? pHi : pLo);
+  });
+  const sugRangeLo = Math.min(_sugLo, _sugHi);
+  const sugRangeHi = Math.max(_sugLo, _sugHi);
+  // Recompute net_credit from leg midpoints — overrides the stored value which may
+  // be stale (e.g. seed data). This keeps Net credit and Acceptable credit consistent.
+  if (s.legs && s.legs.length) {
+    let _npMid = 0;
+    s.legs.forEach(l => {
+      _npMid += (l.action === 'SELL' ? 1 : -1) * parseFloat(l.suggested_price || 0);
+    });
+    econ.np   = Math.round(_npMid * 100) / 100;
+    s.net_credit = econ.np;  // keep renderExitPlan in sync
+  }
+  const baseTotalCredit = (econ.np || 0) * baseQty;
   const legsHtml = (s.legs || []).map(l => {
     const legTotal = (l.lots || 0) * (l.lot_size || 0) * (l.suggested_price || 0);
     // Threshold hint: SELL needs price >= low (to retain credit), BUY needs
@@ -241,69 +755,94 @@ function renderSuggestion(s) {
     const closeHint = l.action === 'SELL'
       ? `<span class="leg-target-close">Target close: buy back @ ~₹<span class="target-close-val" data-leg-order="${l.leg_order}">${fmt(targetClose)}</span> (50% capture)</span>`
       : `<span class="leg-target-close">Target close: sell back @ ~₹<span class="target-close-val" data-leg-order="${l.leg_order}">${fmt(targetClose)}</span> (50% capture)</span>`;
-    return `
-    <div class="leg-row action-${l.action}" data-leg-action="${l.action}">
-      <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'}">${l.action}</span>
-      <div>
-        <div><strong>${escapeHtml(l.symbol)} ${escapeHtml(l.expiry_date || '')} ${l.strike} ${l.option_type}</strong></div>
-        <div class="leg-meta">
-          <input type="number" class="leg-lots" min="1" value="${l.lots || 1}"
+    const legMetaHtml = readOnly
+      ? `<span class="muted">${l.lots || 1} lot${(l.lots||1)!==1?'s':''} × ${l.lot_size} @ ₹${fmt(l.suggested_price)} = <strong>₹${fmt(legTotal)}</strong></span>
+         <span class="leg-price-range muted">(range ₹${fmt(l.suggested_price_low)}–₹${fmt(l.suggested_price_high)})</span>`
+      : `<input type="number" class="leg-lots" min="1" value="${l.lots || 1}"
                  data-lot-size="${l.lot_size}" data-leg-order="${l.leg_order}"
                  data-price="${l.suggested_price}"
                  data-orig-lots="${l.lots || 1}">×
           lot ${l.lot_size} @ ₹<span class="leg-price-shown" data-leg-order="${l.leg_order}">${fmt(l.suggested_price)}</span> =
           <strong><span class="leg-total" data-leg-order="${l.leg_order}">₹${fmt(legTotal)}</span></strong>
-          <span class="leg-price-range muted">(range ₹${fmt(l.suggested_price_low)}–₹${fmt(l.suggested_price_high)})</span>
-        </div>
-        <div class="leg-hints">${thresholdHint} · ${closeHint}</div>
-        <div class="muted" style="font-size:.8rem">${escapeHtml(l.leg_purpose_note || '')}</div>
-      </div>
+          <span class="leg-price-range muted">(range ₹${fmt(l.suggested_price_low)}–₹${fmt(l.suggested_price_high)})</span>`;
+    const fillColHtml = readOnly ? '' : `
       <label class="leg-fill">
         <input type="checkbox" data-leg="${l.leg_order}" class="leg-exec" checked>
         <input type="number" step="0.05" data-leg-price="${l.leg_order}"
                value="${l.suggested_price}" style="width:90px">
-      </label>
+      </label>`;
+    return `
+    <div class="leg-row action-${l.action}" data-leg-action="${l.action}">
+      <div class="leg-action-col">
+        <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'}">${l.action}</span>
+        ${spreadBadge(s.legs, l)}
+      </div>
+      <div>
+        <div><strong>${escapeHtml(l.symbol)} ${escapeHtml(l.expiry_date || '')} ${l.strike} ${l.option_type}</strong></div>
+        <div class="leg-meta">${legMetaHtml}</div>
+        <div class="leg-hints">${thresholdHint} · ${closeHint}</div>
+        <div class="muted" style="font-size:.8rem">${escapeHtml(legRoleNote(s.strategy, l))}</div>
+      </div>${fillColHtml}
     </div>`;
   }).join('');
-  // attach live lot-count recalc after DOM insert (delegate via event on card)
-  // we do it after the card is inserted — see bindSuggestionActions
-
-  return `<div class="card" data-sug-id="${escapeHtml(s.suggestion_id)}"
-              data-base-qty="${baseQty}"
-              data-base-np="${econ.np || 0}"
-              data-base-mp="${econ.mp || 0}"
-              data-base-ml="${econ.ml || 0}"
-              data-base-chg="${econ.chg || 0}"
-              data-base-npnl="${econ.npnl || 0}"
-              data-base-tot-credit="${baseTotalCredit}"
-              data-base-width-total="${baseWidthTotal}"
-              data-base-sl="${econ.sl || 0}"
-              data-spot-at-gen="${s.spot_at_generation || 0}">
+  // attach live lot-count recalc after DOM insert — see bindSuggestionActions
+  const innerHtml = `
     <div class="card-head">
       <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
       <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
     </div>
+    ${renderStrategyRationale(s)}
     ${renderPlainEnglishStructured(s)}
     <div class="kv-grid">
+      ${s.generated_on ? `<div><span class="k">Suggested on</span><br><span class="v">${fmtDate(s.generated_on)}</span></div>` : ''}
+      ${s.expiry_date  ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(s.expiry_date)}</span></div>` : ''}
       <div><span class="k">Net credit (per unit)</span><br><span class="v econ-np">₹${fmt(econ.np)}</span></div>
       <div><span class="k">Total credit <span class="econ-qty-hint muted" style="font-size:.75rem">(×${baseQty})</span></span><br><span class="v econ-tot-credit">₹${fmt(baseTotalCredit)}</span></div>
       <div><span class="k">Max profit</span><br><span class="v econ-mp">₹${fmt(econ.mp)}</span></div>
       <div><span class="k">Max loss</span><br><span class="v econ-ml">₹${fmt(econ.ml)}<span class="econ-ml-hint">${pctHint(econ.ml, econ.np, 'credit')}</span></span></div>
       <div><span class="k">PoP</span><br><span class="v">${fmtPct(econ.pop)}</span></div>
-      <div><span class="k">Upper BE</span><br><span class="v">₹${fmt(econ.ub)}${spotDist(econ.ub, s.spot_at_generation)}</span></div>
-      <div><span class="k">Lower BE</span><br><span class="v">₹${fmt(econ.lb)}${spotDist(econ.lb, s.spot_at_generation)}</span></div>
-      <div><span class="k">Stop loss</span><br><span class="v">₹${fmt(econ.sl)}${spotDist(econ.sl, s.spot_at_generation)}</span></div>
+      ${econ.ub != null ? `<div><span class="k">Upper BE</span><br><span class="v econ-ub">₹${fmt(econ.ub)}${spotDist(econ.ub, s.spot_at_generation)}</span></div>` : ''}
+      ${econ.lb != null ? `<div><span class="k">Lower BE</span><br><span class="v econ-lb">₹${fmt(econ.lb)}${spotDist(econ.lb, s.spot_at_generation)}</span></div>` : ''}
+      ${(() => {
+        const twoSided = ['IRON_CONDOR', 'IRON_BUTTERFLY'].includes(s.strategy);
+        if (!twoSided || econ.sl == null) {
+          return `<div><span class="k">Stop loss</span><br><span class="v">₹${fmt(econ.sl)}${spotDist(econ.sl, s.spot_at_generation)}</span></div>`;
+        }
+        const shortCallLeg = (s.legs || []).find(l => l.action === 'SELL' && l.option_type === 'CE');
+        const shortPutLeg  = (s.legs || []).find(l => l.action === 'SELL' && l.option_type === 'PE');
+        const upperSl = econ.sl;
+        const slBuffer = shortCallLeg ? upperSl - shortCallLeg.strike : 0;
+        const lowerSl  = shortPutLeg  ? shortPutLeg.strike - slBuffer : null;
+        return `
+          <div class="sl-two-sided">
+            <span class="k">Stop loss triggers <span class="muted" style="font-size:.7rem">(independent — close only breached spread)</span></span>
+            <div class="sl-two-rows">
+              <div class="sl-trigger-row">
+                <span class="sl-dir-badge sl-dir-up">▲ Nifty rises above</span>
+                <span class="v">₹${fmt(upperSl)}${spotDist(upperSl, s.spot_at_generation)}</span>
+                <span class="sl-action-hint">→ close call spread (legs ${shortCallLeg ? shortCallLeg.leg_order : '?'}+${shortCallLeg ? shortCallLeg.leg_order + 1 : '?'})</span>
+              </div>
+              <div class="sl-trigger-row">
+                <span class="sl-dir-badge sl-dir-dn">▼ Nifty falls below</span>
+                <span class="v">₹${fmt(lowerSl)}${spotDist(lowerSl, s.spot_at_generation)}</span>
+                <span class="sl-action-hint">→ close put spread (legs ${shortPutLeg ? shortPutLeg.leg_order : '?'}+${shortPutLeg ? shortPutLeg.leg_order + 1 : '?'})</span>
+              </div>
+            </div>
+          </div>`;
+      })()}
       <div><span class="k">Premium SL <span class="muted" style="font-size:.72rem">(1.5× credit)</span></span><br><span class="v econ-psl">₹${fmt((econ.np||0) * baseQty * 1.5)}</span></div>
       <div><span class="k">Est. charges</span><br><span class="v econ-chg">₹${fmt(econ.chg)}</span></div>
       <div><span class="k">Est. net P&amp;L</span><br><span class="v econ-npnl">₹${fmt(econ.npnl)}</span></div>
       <div><span class="k">DTE</span><br><span class="v">${s.dte ?? '—'}</span></div>
     </div>
     <div class="legs-grid">${legsHtml}</div>
+    ${creditBreakdownHtml(s.legs, 'suggest')}
+    ${readOnly ? '' : `
     <div class="exec-spot-bar">
       <div class="sl-monitor-label" style="margin-bottom:6px">Nifty spot at execution</div>
       <div class="exec-spot-row">
         <div class="sl-field">
-          <label class="sl-label">Your actual Nifty spot <span class="muted" style="font-size:.7rem">(AI used ₹${fmt(s.spot_at_generation)})</span></label>
+          <label class="sl-label">Your actual Nifty spot <span class="muted" style="font-size:.7rem">(used ₹${fmt(s.spot_at_generation)})</span></label>
           <input type="number" step="1" class="sl-input exec-spot-input"
                  placeholder="e.g. ${Math.round(s.spot_at_generation || 0)}">
         </div>
@@ -317,8 +856,31 @@ function renderSuggestion(s) {
     <div class="btn-row" style="margin-top:12px">
       <button class="btn btn-accent btn-mark-exec">Mark Executed</button>
       <button class="btn btn-ghost btn-ignore">Ignore</button>
-    </div>
-  </div>`;
+    </div>`}`;
+
+  if (readOnly) {
+    return `<details class="orig-sug-details" style="margin-top:10px">
+      <summary class="orig-sug-summary">📋 Original suggestion</summary>
+      <div class="orig-sug-body">${innerHtml}</div>
+    </details>`;
+  }
+  return `<div class="card"
+    data-sug-id="${escapeHtml(s.suggestion_id)}"
+    data-base-qty="${baseQty}"
+    data-base-np="${econ.np || 0}"
+    data-base-mp="${econ.mp || 0}"
+    data-base-ml="${econ.ml || 0}"
+    data-base-chg="${econ.chg || 0}"
+    data-base-npnl="${econ.npnl || 0}"
+    data-base-tot-credit="${baseTotalCredit}"
+    data-base-width-total="${baseWidthTotal}"
+    data-base-sl="${econ.sl || 0}"
+    data-spot-at-gen="${s.spot_at_generation || 0}"
+    data-sug-range-lo="${sugRangeLo}"
+    data-sug-range-hi="${sugRangeHi}"
+    data-short-call-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='CE')||{}).strike||''}"
+    data-short-put-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='PE')||{}).strike||''}"
+  >${innerHtml}</div>`;
 }
 
 function bindSuggestionActions() {
@@ -357,9 +919,10 @@ function bindSuggestionActions() {
         const tc = card.querySelector(`.target-close-val[data-leg-order="${lo}"]`);
         if (tc) tc.textContent = fmt(price * 0.5);
       });
-      // Note: the per-unit credit summed above is in fact per single unit
-      // (one quantity), not per baseQty. The base 'np' field is also per
-      // single unit, so they are directly comparable.
+      // curQty was summed across all N legs; divide by leg count to get
+      // the position quantity (1 lot × lot_size), not N × position quantity.
+      const numLegs = card.querySelectorAll('.leg-row').length || 1;
+      curQty = Math.round(curQty / numLegs);
       const ratioQty = curQty / baseQty;
       const liveTotalCredit = liveCreditPerUnit * curQty;
       // For credit spreads max profit ≈ total credit. For non-credit strats
@@ -384,9 +947,41 @@ function bindSuggestionActions() {
       if (isCreditStrat) setText('.econ-ml', `₹${fmt(liveMl)}`);
       setText('.econ-chg',        `₹${fmt(liveChg)}`);
       setText('.econ-npnl',       `₹${fmt(liveNpnl)}`);
-      setText('.econ-psl',        `₹${fmt(liveTotalCredit * 1.5)}`);
+      setText('.econ-psl',        `\u20b9${fmt(liveTotalCredit * 1.5)}`);
       const qtyHint = card.querySelector('.econ-qty-hint');
-      if (qtyHint) qtyHint.textContent = `(×${curQty})`;
+      if (qtyHint) qtyHint.textContent = `(\u00d7${curQty})`;
+      // Update credit breakdown equation spans live
+      card.querySelectorAll('[data-cb-leg]').forEach(span => {
+        const lo     = span.dataset.cbLeg;
+        const action = span.dataset.cbAction;
+        const priceIn = card.querySelector(`input[data-leg-price="${lo}"]`);
+        const p = parseFloat(priceIn?.value) || 0;
+        span.textContent = `${action === 'SELL' ? '+' : '\u2212'}\u20b9${fmt(p)}`;
+        span.style.color = action === 'SELL' ? 'var(--ok)' : 'var(--err)';
+      });
+      const cbNet = card.querySelector('[data-cb-net]');
+      if (cbNet) {
+        cbNet.textContent = `\u20b9${fmt(Math.abs(liveCreditPerUnit))}/unit`;
+        cbNet.style.color = liveCreditPerUnit >= 0 ? 'var(--ok)' : 'var(--err)';
+      }
+      const cbStatus = card.querySelector('[data-cb-status]');
+      if (cbStatus) {
+        const rangeLo = parseFloat(card.dataset.sugRangeLo) || 0;
+        const rangeHi = parseFloat(card.dataset.sugRangeHi) || 0;
+        if (rangeHi > rangeLo + 0.5) {
+          const within = liveCreditPerUnit >= rangeLo && liveCreditPerUnit <= rangeHi;
+          const above  = liveCreditPerUnit > rangeHi;
+          cbStatus.textContent = within || above ? '\u2713 good to execute' : '\u2193 below minimum \u2014 wait';
+          cbStatus.className = 'cb-live-status ' + (within || above ? 'cb-status-ok' : 'cb-status-warn');
+        }
+      }
+      // Update Upper/Lower BE live from short strikes + live credit
+      const scStrike = parseFloat(card.dataset.shortCallStrike);
+      const spStrike = parseFloat(card.dataset.shortPutStrike);
+      const ubEl = card.querySelector('.econ-ub');
+      const lbEl = card.querySelector('.econ-lb');
+      if (ubEl && !isNaN(scStrike)) ubEl.textContent = '\u20b9' + fmt(scStrike + liveCreditPerUnit);
+      if (lbEl && !isNaN(spStrike)) lbEl.textContent = '\u20b9' + fmt(spStrike - liveCreditPerUnit);
     };
     card.addEventListener('input', e => {
       const inp = e.target;
@@ -485,7 +1080,7 @@ async function loadTrades() {
       openSupplementForm(e.target.dataset.tradeId);
     }));
     $$('.btn-close-trade').forEach(b => b.addEventListener('click', e => {
-      openCloseForm(e.target.dataset.tradeId);
+      openCloseForm(e.target.dataset.tradeId, parseFloat(e.target.dataset.netCredit) || 0);
     }));
     $$('.btn-void-trade').forEach(b => b.addEventListener('click', async e => {
       const id = e.target.dataset.tradeId;
@@ -524,7 +1119,7 @@ async function openSupplementForm(tradeId) {
                    data-price="${l.suggested_price}">×
             lot ${l.lot_size} @ ₹${fmt(l.suggested_price)}
           </div>
-          <div class="muted" style="font-size:.8rem">${escapeHtml(l.leg_purpose_note || '')}</div>
+          <div class="muted" style="font-size:.8rem">${escapeHtml(legRoleNote(l.strategy, l))}</div>
         </div>
         <label class="leg-fill">
           <input type="checkbox" class="supp-exec" data-leg="${l.leg_order}" checked>
@@ -573,7 +1168,7 @@ async function submitSupplement(tradeId, panel) {
     loadTrades();
   } catch (err) { toast(err.message, 'err'); }
 }
-async function openCloseForm(tradeId) {
+async function openCloseForm(tradeId, netCreditActual = 0) {
   const panel = document.getElementById(`close-${tradeId}`);
   if (!panel) return;
   panel.hidden = false;
@@ -624,9 +1219,10 @@ async function openCloseForm(tradeId) {
           &nbsp;&nbsp;
           <span class="step-badge step-2">Step 2</span> Return &rarr; enter actual fills &rarr; <strong>Confirm</strong>
         </div>
-        ${legsHtml}
+        <div class="leg-exit-grid">${legsHtml}</div>
+        
         <div class="live-pnl-preview" id="live-pnl-${escapeHtml(tradeId)}">
-          P&amp;L preview: <strong class="live-pnl-value">—</strong>
+          P&amp;L preview: <strong class="live-pnl-value">—</strong><span class="live-pnl-pct muted"></span>
         </div>
         <div class="btn-row" style="margin-top:8px">
           <button class="btn btn-close-trade btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm close &amp; record fills</button>
@@ -652,8 +1248,19 @@ async function openCloseForm(tradeId) {
       const el = panel.querySelector('.live-pnl-value');
       if (!el) return;
       if (!allFilled) { el.textContent = '—'; el.className = 'live-pnl-value'; return; }
+      // % of total credit received = pnl / (net_credit_actual × total_qty)
+      let _totalQty = 0;
+      panel.querySelectorAll('.leg-exit-row').forEach(row => {
+        if (row.dataset.action === 'SELL') _totalQty += (parseInt(row.dataset.lots)||1) * (parseInt(row.dataset.lotSize)||1);
+      });
+      const totalCredit = netCreditActual * (_totalQty || 1);
+      const pctStr = totalCredit > 0
+        ? ` (${total >= 0 ? '+' : ''}${(total / totalCredit * 100).toFixed(0)}% of credit)`
+        : '';
       el.textContent = `₹${fmt(total)}`;
       el.className = 'live-pnl-value ' + (total >= 0 ? 'pnl-pos' : 'pnl-neg');
+      const pctEl = panel.querySelector('.live-pnl-pct');
+      if (pctEl) { pctEl.textContent = pctStr; pctEl.className = 'live-pnl-pct ' + (total >= 0 ? 'pnl-pos' : 'pnl-neg'); }
     }
     panel.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcClosePnl));
     recalcClosePnl(); // init with prefilled values
@@ -717,6 +1324,12 @@ function legNextAction(leg, allLegs) {
   return `${action_note}${extra}`;
 }
 
+// Collapsible original-suggestion panel shown inside each open trade card
+function renderOriginalSuggestion(s) {
+  if (!s) return '';
+  return renderSuggestion(s, true);
+}
+
 function renderTrade(t) {
   const broken = t.broken_state_json ? JSON.parse(t.broken_state_json) : null;
   const brokenHtml = broken && broken.options && broken.options.length ? `
@@ -746,6 +1359,10 @@ function renderTrade(t) {
     // Build target-exit summary for open executed legs
     const openExecLegs = legs.filter(l => l.executed && !l.exit_price);
     let targetSummaryHtml = '';
+    // Strategy-specific profit target %: Iron Butterfly exits earlier (25%) due to narrow wings
+    const _tradeStrategy = (t.suggestion && t.suggestion.strategy) || '';
+    const tradePct      = _tradeStrategy === 'IRON_BUTTERFLY' ? 0.25 : 0.50;
+    const tradePctLabel = _tradeStrategy === 'IRON_BUTTERFLY' ? '25%' : '50%';
     if (openExecLegs.length > 0) {
       const netCreditActual = t.net_credit_actual || 0;
       const totalQty = openExecLegs.reduce((a, l) => a + ((l.lots_actual || l.lots || 1) * (l.lot_size || 1)), 0) || 1;
@@ -754,9 +1371,9 @@ function renderTrade(t) {
       openExecLegs.forEach(l => {
         perUnitCredit += (l.action === 'SELL' ? 1 : -1) * (l.fill_price || 0);
       });
-      const target50pct = perUnitCredit * 0.5 * totalQty;
+      const targetPct = perUnitCredit * tradePct * totalQty;
       const targetRows = openExecLegs.map(l => {
-        const tc = (l.fill_price || 0) * 0.5;
+        const tc = (l.fill_price || 0) * tradePct;
         const lotsUsed = l.lots_actual || l.lots || 1;
         const lotSize = l.lot_size || 1;
         const qty = lotsUsed * lotSize;
@@ -765,41 +1382,43 @@ function renderTrade(t) {
         return `<div class="target-row">
           <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'} tag-sm">${escapeHtml(l.action||'')}</span>
           <span><strong>${escapeHtml(l.symbol||'')} ${l.strike||''} ${escapeHtml(l.option_type||'')}</strong></span>
-          <span>${closeVerb} ${sign} <strong>\u20b9${fmt(tc)}</strong> <span class="muted">(50% of \u20b9${fmt(l.fill_price)} entry \u00d7 ${qty}u)</span></span>
+          <span>${closeVerb} ${sign} <strong>\u20b9${fmt(tc)}</strong> <span class="muted">(${tradePctLabel} of \u20b9${fmt(l.fill_price)} entry \u00d7 ${qty}u)</span></span>
         </div>`;
       }).join('');
       targetSummaryHtml = `<div class="target-exit-box">
-        <div class="target-exit-title">\u{1F3AF} Target exit (50% profit capture)</div>
+        <div class="target-exit-title">\u{1F3AF} Target exit (${tradePctLabel} profit capture)</div>
         ${targetRows}
-        <div class="target-exit-keep">Keep ~\u20b9${fmt(target50pct)} of the \u20b9${fmt(netCreditActual * totalQty)} total credit received</div>
+        <div class="target-exit-keep">Keep ~\u20b9${fmt(targetPct)} of the \u20b9${fmt(netCreditActual * totalQty)} total credit received</div>
       </div>`;
     }
     legsHtml = `<div class="trade-legs-section">
       ${targetSummaryHtml}
-      ${legs.map(l => {
+      <div class="trade-legs-grid">${legs.map(l => {
         const done = !!l.executed;
         const lotsUsed = l.lots_actual || l.lots || 0;
         const tag = `<span class="tag ${(l.action||'') === 'SELL' ? 'tag-err' : 'tag-ok'}">${escapeHtml(l.action||'')}</span>`;
         const instrument = `${escapeHtml(l.symbol||'')} ${l.strike||''} ${escapeHtml(l.option_type||'')}`;
         if (done && l.exit_price != null) {
           const pnlClass = l.leg_pnl != null ? (l.leg_pnl >= 0 ? 'pnl-profit' : 'pnl-loss') : '';
-          return `<div class="trade-leg-row leg-done leg-exited">
-            ${tag}
+          return `<div class="trade-leg-row leg-done leg-exited action-${l.action}">
+            <div class="leg-action-col">${tag}${spreadBadge(legs, l)}</div>
             <div class="tl-info">
               <span class="tl-instrument">${instrument}</span>
+              <div class="muted" style="font-size:.8rem">${escapeHtml(legRoleNote(l.strategy, l))}</div>
               <span class="leg-status-done">\u2713 Filled @ \u20b9${fmt(l.fill_price)} \u00b7 ${lotsUsed} lot${lotsUsed !== 1 ? 's' : ''}</span>
-              <span class="leg-exit-info">\u21b3 Closed @ \u20b9${fmt(l.exit_price)}${l.leg_pnl != null ? ` &nbsp;<span class="${pnlClass}">P&L: \u20b9${fmt(l.leg_pnl)}</span>` : ''}</span>
+              <span class="leg-exit-info">\u21b3 Closed @ \u20b9${fmt(l.exit_price)}${l.leg_pnl != null ? (() => { const legBase = (l.fill_price||0)*(l.lots_actual||l.lots||1)*(l.lot_size||1); const legPct = legBase > 0 ? ` (${l.leg_pnl >= 0 ? '+' : ''}${(l.leg_pnl/legBase*100).toFixed(0)}%)` : ''; return ` &nbsp;<span class="${pnlClass}">P&L: \u20b9${fmt(l.leg_pnl)}${legPct}</span>`; })() : ''}</span>
             </div>
           </div>`;
         } else if (done) {
-          const targetClose = (l.fill_price || 0) * 0.5;
+          const targetClose = (l.fill_price || 0) * tradePct;
           const closeHint = l.action === 'SELL'
-            ? `<span class="leg-target-close">Target buy back \u2264 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(50% of \u20b9${fmt(l.fill_price)} entry)</span></span>`
-            : `<span class="leg-target-close">Target sell back \u2265 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(50% of \u20b9${fmt(l.fill_price)} entry)</span></span>`;
-          return `<div class="trade-leg-row leg-done">
-            ${tag}
+            ? `<span class="leg-target-close">Target buy back \u2264 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(${tradePctLabel} of \u20b9${fmt(l.fill_price)} entry)</span></span>`
+            : `<span class="leg-target-close">Target sell back \u2265 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(${tradePctLabel} of \u20b9${fmt(l.fill_price)} entry)</span></span>`;
+          return `<div class="trade-leg-row leg-done action-${l.action}">
+            <div class="leg-action-col">${tag}${spreadBadge(legs, l)}</div>
             <div class="tl-info">
               <span class="tl-instrument">${instrument}</span>
+              <div class="muted" style="font-size:.8rem">${escapeHtml(legRoleNote(l.strategy, l))}</div>
               <span class="leg-status-done">\u2713 Filled</span>
               <span class="tl-fill">@ \u20b9${fmt(l.fill_price)} \u00b7 ${lotsUsed} lot${lotsUsed !== 1 ? 's' : ''}</span>
               ${closeHint}
@@ -808,7 +1427,7 @@ function renderTrade(t) {
         } else {
           const note = legNextAction(l, legs);
           return `<div class="trade-leg-row leg-pending">
-            ${tag}
+            <div class="leg-action-col">${tag}${spreadBadge(legs, l)}</div>
             <div class="tl-info">
               <span class="tl-instrument">${instrument}</span>
               <span class="leg-status-pending">\u23f3 Pending</span>
@@ -816,7 +1435,8 @@ function renderTrade(t) {
             </div>
           </div>`;
         }
-      }).join('')}
+      }).join('')}</div>
+      ${creditBreakdownHtml(legs.filter(l => l.executed), 'trade')}
     </div>`;
   }
 
@@ -830,18 +1450,108 @@ function renderTrade(t) {
       </div>
     </div>
     <div class="kv-grid">
+      ${(() => {
+        // Compute BEs from actual fill prices — more accurate than DB-stored values
+        // which were copied from the suggestion at execution time.
+        const scLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE' && l.fill_price != null);
+        const spLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'PE' && l.fill_price != null);
+        let fillNetCredit = 0;
+        legs.filter(l => l.executed && l.fill_price != null).forEach(l => {
+          fillNetCredit += (l.action === 'SELL' ? 1 : -1) * parseFloat(l.fill_price);
+        });
+        const realUBE = scLeg ? parseFloat(scLeg.strike) + fillNetCredit : null;
+        const realLBE = spLeg ? parseFloat(spLeg.strike) - fillNetCredit : null;
+        const beRows = [];
+        if (realUBE != null) beRows.push(`<div><span class="k">Upper BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realUBE)}</span></div>`);
+        if (realLBE != null) beRows.push(`<div><span class="k">Lower BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realLBE)}</span></div>`);
+        return `
       <div><span class="k">Type</span><br><span class="v">${escapeHtml(t.position_type)}</span></div>
       <div><span class="k">Net credit</span><br><span class="v">\u20b9${fmt(t.net_credit_actual)}</span></div>
       <div><span class="k">P&amp;L</span><br><span class="v">\u20b9${fmt(t.net_pnl)}${pctHint(t.net_pnl, t.net_credit_actual, 'credit')}</span></div>
       <div><span class="k">Status</span><br><span class="v">${escapeHtml(t.status)}</span></div>
+      <div><span class="k">Entry date</span><br><span class="v">${fmtDt(t.executed_on)}</span></div>
+      ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}
+      ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : ''}
+      ${beRows.join('')}`;
+      })()}
     </div>
+    ${(() => {
+      const shortCallLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE');
+      const shortPutLeg  = legs.find(l => l.action === 'SELL' && l.option_type === 'PE');
+      const ul = (t.suggestion && t.suggestion.underlying) || '';
+      const spot = t.spot_at_execution != null ? parseFloat(t.spot_at_execution) : null;
+      // Compute actual net credit per unit from fill prices
+      const execLegs = legs.filter(l => l.executed && l.fill_price != null);
+      let actualNetCredit = 0;
+      execLegs.forEach(l => { actualNetCredit += (l.action === 'SELL' ? 1 : -1) * parseFloat(l.fill_price || 0); });
+      // Compute real BEs from fills
+      const realUpperBE = shortCallLeg ? parseFloat(shortCallLeg.strike) + actualNetCredit : null;
+      const realLowerBE = shortPutLeg  ? parseFloat(shortPutLeg.strike)  - actualNetCredit : null;
+      const beHtml = (realUpperBE != null || realLowerBE != null) ? (() => {
+        const parts = [];
+        if (realLowerBE != null) parts.push(`Lower BE <strong>\u20b9${fmt(realLowerBE)}</strong>`);
+        if (realUpperBE != null) parts.push(`Upper BE <strong>\u20b9${fmt(realUpperBE)}</strong>`);
+        const spotBelowUpperBE = spot != null && realUpperBE != null && spot < realUpperBE;
+        const spotAboveLowerBE = spot != null && realLowerBE != null && spot > realLowerBE;
+        const safeAtEntry = (!realLowerBE || spotAboveLowerBE) && (!realUpperBE || spotBelowUpperBE);
+        const beStatus = spot != null
+          ? `<span class="pz-spot ${safeAtEntry ? 'pz-inside' : 'pz-outside'}">${safeAtEntry ? '\u2713 spot inside BEs at entry' : '\u26a0 spot outside BEs at entry'}</span>`
+          : '';
+        return `<div class="pz-be-row">\u{1F4CF} Actual BEs (from fills): ${parts.join(' \u00b7 ')}${beStatus ? ' &nbsp;\u00b7&nbsp; ' + beStatus : ''}</div>`;
+      })() : '';
+      if (shortCallLeg && shortPutLeg) {
+        const pzLow  = parseFloat(shortPutLeg.strike);
+        const pzHigh = parseFloat(shortCallLeg.strike);
+        const inside = spot != null && spot >= pzLow && spot <= pzHigh;
+        const spotTag = spot != null
+          ? `<span class="pz-spot ${inside ? 'pz-inside' : 'pz-outside'}">Spot at entry \u20b9${fmt(spot)} ${inside ? '\u2713 inside zone' : '\u26a0 outside zone'}</span>` : '';
+        return `<div class="profit-zone-bar">\u{1F3AF} Max profit if ${escapeHtml(ul)} stays <strong>\u20b9${fmt(pzLow)} \u2013 \u20b9${fmt(pzHigh)}</strong>${spotTag ? ' &nbsp;\u00b7&nbsp; ' + spotTag : ''}${beHtml}</div>`;
+      } else if (shortCallLeg) {
+        const pzHigh = parseFloat(shortCallLeg.strike);
+        const inside = spot != null && spot <= pzHigh;
+        const spotTag = spot != null ? `<span class="pz-spot ${inside ? 'pz-inside' : 'pz-outside'}">Spot \u20b9${fmt(spot)} ${inside ? '\u2713 below strike' : '\u26a0 above strike'}</span>` : '';
+        return `<div class="profit-zone-bar">\u{1F3AF} Max profit if ${escapeHtml(ul)} stays below <strong>\u20b9${fmt(pzHigh)}</strong>${spotTag ? ' &nbsp;\u00b7&nbsp; ' + spotTag : ''}${beHtml}</div>`;
+      } else if (shortPutLeg) {
+        const pzLow = parseFloat(shortPutLeg.strike);
+        const inside = spot != null && spot >= pzLow;
+        const spotTag = spot != null ? `<span class="pz-spot ${inside ? 'pz-inside' : 'pz-outside'}">Spot \u20b9${fmt(spot)} ${inside ? '\u2713 above strike' : '\u26a0 below strike'}</span>` : '';
+        return `<div class="profit-zone-bar">\u{1F3AF} Max profit if ${escapeHtml(ul)} stays above <strong>\u20b9${fmt(pzLow)}</strong>${spotTag ? ' &nbsp;\u00b7&nbsp; ' + spotTag : ''}${beHtml}</div>`;
+      }
+      return '';
+    })()}
     <div class="sl-monitor-section">
       <div class="sl-monitor-label">Stop-loss monitor</div>
       <div class="sl-monitor-grid">
-        <div class="sl-field">
-          <label class="sl-label">Nifty SL level</label>
-          <span class="sl-prem-val">${t.actual_stop_loss_level != null ? `\u20b9${fmt(t.actual_stop_loss_level)}` : '\u2014 not set'}</span>
-        </div>
+        ${(() => {
+          const twoSided = t.suggestion && ['IRON_CONDOR', 'IRON_BUTTERFLY'].includes(t.suggestion.strategy);
+          if (twoSided && t.actual_stop_loss_level != null) {
+            const legs = (t.suggestion.legs || []);
+            const shortCallLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE');
+            const shortPutLeg  = legs.find(l => l.action === 'SELL' && l.option_type === 'PE');
+            const upperSl = t.actual_stop_loss_level;
+            const slBuffer = shortCallLeg ? upperSl - shortCallLeg.strike : 0;
+            const lowerSl  = shortPutLeg  ? shortPutLeg.strike - slBuffer : null;
+            return `<div class="sl-field sl-two-sided" style="grid-column:1/-1">
+              <label class="sl-label">SL triggers <span class="muted" style="font-size:.7rem">(independent — close only the breached spread)</span></label>
+              <div class="sl-two-rows" style="margin-top:6px">
+                <div class="sl-trigger-row">
+                  <span class="sl-dir-badge sl-dir-up">▲ rises above</span>
+                  <span class="sl-prem-val">₹${fmt(upperSl)}</span>
+                  <span class="sl-action-hint">→ close call spread (legs ${shortCallLeg ? shortCallLeg.leg_order : '?'}+${shortCallLeg ? shortCallLeg.leg_order + 1 : '?'})</span>
+                </div>
+                <div class="sl-trigger-row">
+                  <span class="sl-dir-badge sl-dir-dn">▼ falls below</span>
+                  <span class="sl-prem-val">₹${fmt(lowerSl)}</span>
+                  <span class="sl-action-hint">→ close put spread (legs ${shortPutLeg ? shortPutLeg.leg_order : '?'}+${shortPutLeg ? shortPutLeg.leg_order + 1 : '?'})</span>
+                </div>
+              </div>
+            </div>`;
+          }
+          return `<div class="sl-field">
+            <label class="sl-label">Nifty SL level</label>
+            <span class="sl-prem-val">${t.actual_stop_loss_level != null ? `\u20b9${fmt(t.actual_stop_loss_level)}` : '\u2014 not set'}</span>
+          </div>`;
+        })()}
         <div class="sl-field">
           <label class="sl-label">Spot at entry</label>
           <span class="sl-prem-val">${t.spot_at_execution != null ? `\u20b9${fmt(t.spot_at_execution)}` : '\u2014 not set'}</span>
@@ -861,12 +1571,13 @@ function renderTrade(t) {
     ${legsHtml}
     ${t.exit_instruction ? `<p class="muted" style="margin:8px 0 0">Exit: ${escapeHtml(t.exit_instruction)}</p>` : ''}
     ${brokenHtml}
+    ${renderOriginalSuggestion(t.suggestion)}
     <div class="btn-row" style="margin-top:10px">
       <button class="btn btn-ghost btn-resuggest" data-trade-id="${escapeHtml(t.trade_id)}">
         Generate resuggestion</button>
       ${isPartial ? `<button class="btn btn-warn btn-complete-trade" data-trade-id="${escapeHtml(t.trade_id)}">
         Complete Trade</button>` : ''}
-      ${hasExecutedLegs ? `<button class="btn btn-close-trade" data-trade-id="${escapeHtml(t.trade_id)}">
+      ${hasExecutedLegs ? `<button class="btn btn-close-trade" data-trade-id="${escapeHtml(t.trade_id)}" data-net-credit="${t.net_credit_actual || 0}">
         Close Trade</button>` : ''}
       <button class="btn btn-danger btn-void-trade" data-trade-id="${escapeHtml(t.trade_id)}"
               style="margin-left:auto">Void Trade</button>
@@ -941,7 +1652,7 @@ function renderHistoryTrade(t) {
       <td>${escapeHtml(l.symbol||'')} <strong>${l.strike||''}</strong> ${escapeHtml(l.option_type||'')}</td>
       <td class="muted">${escapeHtml(fmtDt(l.fill_time))}</td>
       <td class="muted">${escapeHtml(fmtDt(l.exit_time))}</td>
-      <td class="muted">${escapeHtml(l.leg_purpose_note||'')}</td>
+      <td class="muted">${escapeHtml(legRoleNote(s.strategy, l))}</td>
       <td class="num muted">${sugRange}</td>
       <td class="num">${l.fill_price != null ? '₹'+fmt(l.fill_price) : '—'}</td>
       <td class="num">${l.exit_price != null ? '₹'+fmt(l.exit_price) : '—'}</td>
@@ -958,7 +1669,7 @@ function renderHistoryTrade(t) {
         <span class="tag ${statusCls}">${escapeHtml(t.status || '')}</span>
         ${t.position_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(t.position_type)}</span>` : ''}
       </div>
-      <div class="hist-card-pnl ${pnlClass}">${pnl != null ? pnlSign+'₹'+fmt(pnl) : '—'}</div>
+      <div class="hist-card-pnl ${pnlClass}">${pnl != null ? pnlSign+'₹'+fmt(pnl) : '—'}${pnl != null && t.net_credit_actual ? `<span class="hist-pnl-pct"> (${pnl >= 0 ? '+' : ''}${(pnl / Math.abs(t.net_credit_actual) * 100).toFixed(0)}% of credit)</span>` : ''}</div>
     </div>
     <div class="hist-card-meta muted">
       ${escapeHtml(t.trade_name || t.trade_id)}

@@ -538,6 +538,19 @@ class SuggestionRepo:
         n = (row["n"] if row else 0) + 1
         return f"{prefix}{n:03d}"
 
+    def has_suggestion_for(self, underlying: str, day: date) -> bool:
+        """Return True if a real (non-NO_SUGGESTION) suggestion already exists
+        for this underlying on `day`. Used to prevent double-insertion on re-runs."""
+        start = datetime.combine(day, datetime.min.time())
+        end   = start + timedelta(days=1)
+        v = self.db.scalar(
+            "SELECT COUNT(*) FROM options_suggestions "
+            "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "
+            "AND strategy <> 'NONE' AND status <> 'NO_SUGGESTION'",
+            [underlying, start, end],
+        )
+        return bool(v and v > 0)
+
     def get(self, suggestion_id: str) -> Optional[dict]:
         return self.db.fetch_one(
             "SELECT * FROM options_suggestions WHERE suggestion_id = ?", [suggestion_id]
@@ -724,9 +737,11 @@ class TradeRepo:
             "  tl.suggestion_leg_id, "
             "  sl.symbol, sl.expiry_date, sl.strike, sl.option_type, sl.action, "
             "  sl.lots, sl.lot_size, sl.suggested_price, "
-            "  sl.suggested_price_low, sl.suggested_price_high, sl.leg_purpose_note "
+            "  sl.suggested_price_low, sl.suggested_price_high, sl.leg_purpose_note, "
+            "  os.strategy "
             "FROM options_trade_legs tl "
             "JOIN options_suggestion_legs sl ON sl.id = tl.suggestion_leg_id "
+            "JOIN options_suggestions os ON os.suggestion_id = sl.suggestion_id "
             "WHERE tl.trade_id = ? ORDER BY tl.leg_order",
             [trade_id],
         )

@@ -209,11 +209,8 @@ def assemble_suggestion(
     ])
 
     qty_total = sum(l.lots * l.lot_size for l in legs)
-    # Net credit/debit in rupees: per-share * lots * lot_size for each leg, summed
-    net_credit_rs = sum(
-        (1.0 if l.action == "SELL" else -1.0) * l.suggested_price * l.lots * l.lot_size
-        for l in legs
-    )
+    # np_per_share already computed above; store that as the per-unit net credit
+    # (lots × lot_size scaling belongs only in total-credit display, not this field)
     # Max profit/loss in rupees (defined-risk strategies)
     if max_profit_ps == float("inf"):
         max_profit_rs = float("inf")
@@ -225,7 +222,7 @@ def assemble_suggestion(
     estimated_net_pnl = (max_profit_rs if max_profit_rs != float("inf") else 0.0) - charges.total
 
     economics = SuggestionEconomics(
-        net_credit=round(net_credit_rs, 2),
+        net_credit=round(np_per_share, 2),  # per-unit (per-share) net credit/debit
         max_profit=round(max_profit_rs, 2) if max_profit_rs != float("inf") else float("inf"),
         max_loss=round(max_loss_rs, 2),
         upper_breakeven=upper_be,
@@ -266,17 +263,28 @@ def assemble_suggestion(
 def _compute_stop_loss(
     legs: Sequence[SuggestionLeg], strategy: str, max_loss_rs: float
 ) -> float | None:
-    """Conservative SL: 1.5× net credit for credit strategies, 50% of debit for buying."""
-    np_ps = leg_builder.net_premium(legs)
-    if strategy in _CREDIT_STRATEGIES:
-        if np_ps <= 0:
-            return None
-        return round(np_ps * 1.5, 2)
-    if strategy in _DEBIT_STRATEGIES:
-        debit = -np_ps
-        if debit <= 0:
-            return None
-        return round(debit * 0.5, 2)
+    """Return a spot-level SL based on short strikes + 50% of wing width.
+
+    For a call spread (or two-sided strategy), SL = short_call + 50% of CE wing.
+    For a put-only spread, SL = short_put - 50% of PE wing.
+    The frontend derives the complementary put/call SL symmetrically for two-sided
+    strategies (Iron Condor, Iron Butterfly) using the stored call-side SL.
+    Debit strategies have no meaningful single spot-level SL; return None.
+    """
+    sc = next((l for l in legs if l.action == "SELL" and l.option_type == "CE"), None)
+    sp = next((l for l in legs if l.action == "SELL" and l.option_type == "PE"), None)
+    lc = next((l for l in legs if l.action == "BUY"  and l.option_type == "CE"), None)
+    lp = next((l for l in legs if l.action == "BUY"  and l.option_type == "PE"), None)
+
+    # Strategies with a call spread: SL = short call + 50% of CE wing width
+    if sc and lc:
+        ce_width = lc.strike - sc.strike
+        return round(sc.strike + ce_width * 0.5)
+    # Put-only spreads (no short call): SL = short put - 50% of PE wing width
+    if sp and lp and not sc:
+        pe_width = sp.strike - lp.strike
+        return round(sp.strike - pe_width * 0.5)
+    # Debit strategies / naked longs: no spot-level SL
     return None
 
 
@@ -292,12 +300,33 @@ def _explain(
     parts.append(f"{strategy.replace('_', ' ').title()} on {underlying}.")
     parts.append(f"IV Rank {iv_rank:.0f}, trend {indicators.trend.lower()}, "
                  f"VIX {indicators.vix_close:.1f} ({indicators.vix_regime.lower()}).")
-    parts.append(f"DTE {dte}, expected move ±{indicators.expected_move:.0f} pts.")
+    parts.append(f"DTE {dte}, expected move \u00b1{indicators.expected_move:.0f} pts.")
     if econ.upper_breakeven is not None and econ.lower_breakeven is not None:
-        parts.append(f"Profit zone: {econ.lower_breakeven:.0f} – {econ.upper_breakeven:.0f}.")
+        parts.append(f"Profit zone: {econ.lower_breakeven:.0f}\u2013{econ.upper_breakeven:.0f}.")
     elif econ.upper_breakeven is not None:
         parts.append(f"Breakeven up to {econ.upper_breakeven:.0f}.")
     elif econ.lower_breakeven is not None:
-        parts.append(f"Breakeven down to {econ.lower_breakeven:.0f}.")
-    parts.append(f"PoP ≈ {econ.probability_of_profit:.0f}%.")
-    return " ".join(parts)
+        parts.append(f"Profit if {underlying} stays above {econ.lower_breakeven:.0f}.")
+    parts.append(f"PoP \u2248 {econ.probability_of_profit:.0f}%.")
+    intro = " ".join(parts)
+
+    lines: List[str] = [intro, ""]
+
+    # Entry
+    lines.append("ENTRY THRESHOLDS")
+    lines.append("\u2022 Execute at open (09:20\u201309:45 IST)")
+    lines.append("")
+
+    # Timeline (SL/target omitted \u2014 the frontend computes those from leg data)
+    lines.append("TIMELINE")
+    if strategy in _CREDIT_STRATEGIES:
+        d1 = round(dte * 0.35)
+        d2 = round(dte * 0.55)
+        lines.append(f"\u2022 Monitor theta decay daily; peak decay around day {d1}\u2013{d2}")
+        lines.append(f"\u2022 Theta accelerates in the final 7 DTE \u2014 close or roll before expiry")
+    elif strategy in _DEBIT_STRATEGIES:
+        half = max(1, dte // 2)
+        lines.append(f"\u2022 Look for a decisive move within {half} days; time decay works against you")
+        lines.append(f"\u2022 Close before the final 7 DTE if the move has not materialised")
+
+    return "\n".join(lines)
