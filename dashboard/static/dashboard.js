@@ -510,6 +510,35 @@ function renderPlainEnglishStructured(s) {
   return contextHtml + confHtml + introHtml + entryHtml + timelineHtml + renderExitPlan(s);
 }
 
+// Estimate Zerodha charges from actual executed legs — mirrors engine/charges.py.
+// Uses fill_price × (lots_actual || lots) × lot_size for each executed leg.
+function estChargesFromLegs(execLegs) {
+  if (!execLegs || !execLegs.length) return null;
+  const BROKERAGE = 20.0;
+  const STT_SELL   = 0.0005;
+  const EXCHANGE   = 0.000530;
+  const SEBI       = 0.000001;
+  const STAMP_BUY  = 0.00003;
+  const GST        = 0.18;
+  let brokerage = 0, stt = 0, exchange = 0, sebi = 0, stamp = 0;
+  for (const leg of execLegs) {
+    const price   = parseFloat(leg.fill_price || 0);
+    const lots    = parseInt(leg.lots_actual || leg.lots || 1);
+    const lotSize = parseInt(leg.lot_size || 1);
+    const qty     = lots * lotSize;
+    if (qty <= 0 || price <= 0) continue;
+    const turnover = price * qty;
+    brokerage += 2.0 * BROKERAGE;          // entry + assumed exit
+    exchange  += EXCHANGE * turnover * 2.0;
+    sebi      += SEBI    * turnover * 2.0;
+    if ((leg.action || '').toUpperCase() === 'BUY')  stamp += STAMP_BUY * turnover;
+    if ((leg.action || '').toUpperCase() === 'SELL') stt   += STT_SELL  * turnover;
+  }
+  const gst   = GST * (brokerage + exchange + sebi);
+  const total = brokerage + stt + exchange + sebi + stamp + gst;
+  return Math.round(total * 100) / 100;
+}
+
 // Credit breakdown box — shows per-leg contribution and the net combined credit.
 // mode='suggest': uses suggested_price / suggested_price_low / suggested_price_high
 // mode='trade':   uses fill_price (actual fills)
@@ -1628,6 +1657,18 @@ function renderTrade(t) {
       ${estMl != null ? `<div><span class="k">Est. max loss</span><br><span class="v pnl-loss">₹${fmt(estMl)}<span class="econ-ml-hint">${pctHint(estMl, t.net_credit_actual, 'credit')}</span></span></div>` : '<div></div>'}
       ${estPop != null ? `<div><span class="k">Est. PoP</span><br><span class="v">${fmtPct(estPop)}</span></div>` : '<div></div>'}
       ${estDte != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${estDte}</span></div>` : '<div></div>'}
+      ${(() => {
+        // Charges: compute from actual fills; fall back to suggestion estimate
+        const execWithFills = legs.filter(l => l.executed && l.fill_price != null);
+        const estChg = execWithFills.length > 0
+          ? estChargesFromLegs(execWithFills)
+          : (t.suggestion && t.suggestion.estimated_charges_total != null ? t.suggestion.estimated_charges_total : null);
+        const estNetPnl = (estMp != null && estChg != null) ? (estMp - estChg) : null;
+        return [
+          estChg    != null ? `<div><span class="k">Est. charges <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(estChg)}</span></div>` : '<div></div>',
+          estNetPnl != null ? `<div><span class="k">Est. net P&amp;L</span><br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">₹${fmt(estNetPnl)}</span></div>` : '<div></div>',
+        ].join('');
+      })()}
       ${realUBE != null ? `<div><span class="k">Upper BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(realUBE)}</span></div>` : '<div></div>'}
       ${realLBE != null ? `<div><span class="k">Lower BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(realLBE)}</span></div>` : '<div></div>'}
       <div><span class="k">P&amp;L</span><br><span class="v">₹${fmt(t.net_pnl)}${pctHint(t.net_pnl, t.net_credit_actual, 'credit')}</span></div>
