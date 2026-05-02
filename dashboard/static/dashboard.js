@@ -1613,13 +1613,13 @@ function renderTrade(t) {
       ${t.actual_max_profit != null ? `<div><span class="k">Est. max profit</span><br><span class="v pnl-profit">₹${fmt(t.actual_max_profit)}</span></div>` : ''}
       ${t.actual_max_loss   != null ? `<div><span class="k">Est. max loss</span><br><span class="v pnl-loss">₹${fmt(t.actual_max_loss)}<span class="econ-ml-hint">${pctHint(t.actual_max_loss, t.net_credit_actual, 'credit')}</span></span></div>` : ''}
       ${t.suggestion && t.suggestion.probability_of_profit != null ? `<div><span class="k">Est. PoP</span><br><span class="v">${fmtPct(t.suggestion.probability_of_profit)}</span></div>` : ''}
+      ${beRows.join('')}
+      ${t.suggestion && t.suggestion.dte != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${t.suggestion.dte}</span></div>` : ''}
       <div><span class="k">P&amp;L</span><br><span class="v">₹${fmt(t.net_pnl)}${pctHint(t.net_pnl, t.net_credit_actual, 'credit')}</span></div>
       <div><span class="k">Status</span><br><span class="v">${escapeHtml(t.status)}</span></div>
       <div><span class="k">Entry date</span><br><span class="v">${fmtDt(t.executed_on)}</span></div>
       ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}
-      ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : ''}
-      ${t.suggestion && t.suggestion.dte != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${t.suggestion.dte}</span></div>` : ''}
-      ${beRows.join('')}`;
+      ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : ''}`;
       })()}
     </div>
     ${(() => {
