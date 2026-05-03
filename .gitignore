@@ -17,3 +17,8 @@ archive/
 *.sqlite
 .DS_Store
 Thumbs.db
+
+# Test outputs
+tests/coverage_html/
+.coverage
+coverage.xml

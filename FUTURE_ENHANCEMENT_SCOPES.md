@@ -3,6 +3,8 @@
 All known gaps, deferred items, and improvement ideas in one place.  
 Pick up from here in future development sessions.
 
+> **Convention:** Every entry below is paired with a `@pytest.mark.future` skipped test stub in `tests/`. When an entry is implemented, the skip is removed AND the entry is deleted from this doc. See `tests/README.md` and `.github/copilot-instructions.md` for the full convention.
+
 ---
 
 ## 🔴 Engine Correctness (Fix These First)
@@ -106,6 +108,39 @@ Pick up from here in future development sessions.
 ### Companion BPS/BCS strike optimization
 **Issue:** Companion BPS/BCS spreads reuse IC strike selection (which optimises for full-range neutrality). A standalone BPS/BCS may prefer strikes closer to the money.  
 **Fix:** Add independent strike selection for companions when they are the primary strategy.
+
+### Suggestion engine integration tests
+**Issue:** `lifecycle/suggestion_engine.py` (~480 lines) is the central orchestrator wiring downloader → indicators → strategy selector → leg builder → confidence → DB. Currently zero direct test coverage; only the underlying engine modules are unit-tested.  
+**Fix:** Build a fake-DB harness covering: (a) happy-path SUG-* row insert with legs, (b) NO_SUGGESTION when confidence below threshold, (c) deduplication via `has_suggestion_for`, (d) `expire_stale_pending` is called before fresh insert.  
+**Tests:** `tests/test_lifecycle/test_suggestion_engine_future.py` (4 stubs)
+
+### Trade executor unit tests
+**Issue:** `lifecycle/trade_executor.py` records actual fills and computes actual_max_profit/loss. Currently no direct tests.  
+**Fix:** Mock TradeRepo + verify TRD-* row written with correct economics from fill prices.  
+**Test:** `tests/test_lifecycle/test_suggestion_engine_future.py::test_trade_executor_records_fill_prices`
+
+### Dashboard route coverage — close/supplement/config endpoints
+**Issue:** Phase 4 added smoke + helper tests for `dashboard/server.py`, but the
+close-trade, supplement-trade, and config GET/PATCH routes are still stubbed.  
+**Fix:** Wire the remaining POST/PATCH routes to test fixtures and assert the
+DB writes happen as expected.  
+**Tests:** `tests/test_dashboard/test_server.py::test_close_trade_persists_exit_fills`,
+`::test_supplement_adds_remaining_legs`, `::test_config_get_and_patch`
+
+### Full multi-day simulation walkthrough
+**Issue:** Phase 4 covers `_classify_day1` and `_compute_day_pnl`, but no test
+walks a synthetic chain through every trading day of an iron condor's life.  
+**Fix:** Build a 14-day synthetic chain fixture and assert day-by-day P&L
+progression + correct expiry-day close.  
+**Test:** `tests/test_simulation/test_simulator.py::test_full_simulation_walk_to_expiry`
+
+### Simulation: include estimated charges in net P&L
+**Issue:** `update_simulation` hardcodes `sim_charges=0.0`, so `sim_net_pnl`
+matches `sim_final_pnl`. Real-world net P&L is materially lower after STT,
+brokerage, and exchange fees.  
+**Fix:** Call `engine.charges.estimate_charges` on the simulated fills and
+subtract from gross P&L when writing the summary row.  
+**Test:** `tests/test_simulation/test_simulator.py::test_simulation_includes_charges_in_net_pnl`
 
 ---
 
