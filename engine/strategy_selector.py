@@ -336,7 +336,7 @@ def _explain(
     parts.append(f"{strategy.replace('_', ' ').title()} on {underlying}.")
     parts.append(f"IV Rank {iv_rank:.0f}, trend {indicators.trend.lower()}, "
                  f"VIX {indicators.vix_close:.1f} ({indicators.vix_regime.lower()}).")
-    parts.append(f"DTE {dte}, expected move \u00b1{indicators.expected_move:.0f} pts.")
+    parts.append(f"Entry DTE {dte}, expected move \u00b1{indicators.expected_move:.0f} pts.")
     if econ.upper_breakeven is not None and econ.lower_breakeven is not None:
         parts.append(f"Profit zone: {econ.lower_breakeven:.0f}\u2013{econ.upper_breakeven:.0f}.")
     elif econ.upper_breakeven is not None:

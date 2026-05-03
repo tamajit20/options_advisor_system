@@ -53,6 +53,18 @@ from utils import days_between, now_ist, today_ist
 logger = logging.getLogger(__name__)
 
 
+def _next_trading_day(d: date) -> date:
+    """Return the next weekday after `d` (skips Sat/Sun).
+    Used to compute entry DTE: suggestions generated on Friday evening
+    are entered Monday morning (+3 cal days), not Tuesday (+1).
+    NSE holidays are not considered here — DTE is approximate anyway.
+    """
+    nxt = d + timedelta(days=1)
+    while nxt.weekday() >= 5:   # 5=Sat, 6=Sun
+        nxt += timedelta(days=1)
+    return nxt
+
+
 def _is_monthly_expiry(expiry: date) -> bool:
     """True when expiry is the last Thursday of its calendar month (NSE monthly F&O)."""
     if expiry.weekday() != 3:   # must be Thursday
@@ -70,12 +82,17 @@ def _pick_expiries_in_band(
     - If monthly and weekly fall on the same Thursday (last week of month),
       return only that date tagged as 'Monthly'.
     - Otherwise return nearest monthly + nearest weekly (both, if different dates).
+
+    DTE is measured from the ENTRY day (next trading day after generation),
+    not the generation day.  Mon-Thu: entry is next calendar day (+1).
+    Friday: entry is Monday (+3 calendar days).
     """
+    entry_day = _next_trading_day(trade_date)
     expiries = fo.expiries_for(symbol, trade_date)
     dte_min = STRATEGY_CONFIG["dte_min"]
     dte_max = STRATEGY_CONFIG["dte_max"]
     in_band = [e for e in expiries
-               if dte_min <= days_between(trade_date, e) <= dte_max]
+               if dte_min <= days_between(entry_day, e) <= dte_max]
     if not in_band:
         return []
 
@@ -158,7 +175,10 @@ def _evaluate_underlying(
     no_suggestions: list[NoSuggestion] = []
 
     for expiry, expiry_type in expiry_candidates:
-        dte = days_between(trade_date, expiry)
+        # entry_dte: calendar days from the actual entry day to expiry.
+        # Mon-Thu generated → entered next day (+1); Fri generated → entered Monday (+3).
+        entry_day = _next_trading_day(trade_date)
+        entry_dte = max(days_between(entry_day, expiry), 0)
 
         chain = fo.get_chain(symbol, trade_date, expiry)
         if not chain:
@@ -180,14 +200,14 @@ def _evaluate_underlying(
             spot_history=spot_history,
             vix_history=vix_history,
             atm_iv=atm_iv,
-            dte=dte,
+            dte=entry_dte,
             fii_net_futures=fii_net_futures,
         )
 
         confidence = evaluate_confidence(
             iv_rank=iv_rank,
             indicators=indicators,
-            dte=dte,
+            dte=entry_dte,
             has_high_impact_event_this_week=has_event,
             high_impact_event_description=event_desc,
             events_calendar_row_count=events_total,
@@ -211,7 +231,7 @@ def _evaluate_underlying(
                 underlying=symbol,
                 expiry=expiry,
                 expiry_type=expiry_type,
-                dte=dte,
+                dte=entry_dte,
                 spot=spot,
                 chain=chain,
                 indicators=indicators,
@@ -255,7 +275,7 @@ def _evaluate_underlying(
                         underlying=symbol,
                         expiry=expiry,
                         expiry_type=expiry_type,
-                        dte=dte,
+                        dte=entry_dte,
                         spot=spot,
                         chain=chain,
                         indicators=indicators,
