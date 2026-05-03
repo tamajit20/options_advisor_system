@@ -413,8 +413,12 @@ def run_suggestion_engine(
     else:
         logger.info("Suggestion engine: using explicit trade_date=%s", trade_date)
 
-    # Execution window: when/how to enter this trade
-    entry_day = _next_trading_day(trade_date)
+    # Execution window: when/how to enter this trade.
+    # Use max(trade_date, today) so that a weekend/late run with stale data
+    # still produces an entry_day in the future (e.g. Sun run with Thu data
+    # → entry_day = Monday, not the already-passed Friday).
+    _today = now_ist().date()
+    entry_day = _next_trading_day(max(trade_date, _today))
     exec_window = _execution_window(entry_day, now_ist())
     sug_repo = SuggestionRepo(db)
     notif_repo = NotificationRepo(db)
