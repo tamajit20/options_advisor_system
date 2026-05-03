@@ -587,37 +587,78 @@ class SuggestionRepo:
         n = (row["n"] if row else 0) + 1
         return f"{prefix}{n:03d}"
 
-    def has_suggestion_for(self, underlying: str, day: date, expiry_type: str = "", strategy: str = "") -> bool:
-        """Return True if a real (non-NO_SUGGESTION) suggestion already exists
-        for this underlying + expiry_type + strategy on `day`. Used to prevent double-insertion on re-runs.
-        When expiry_type is provided, scoped to that type so weekly and monthly can coexist.
-        When strategy is also provided, scoped further so IC + BPS + BCS can coexist."""
-        start = datetime.combine(day, datetime.min.time())
-        end   = start + timedelta(days=1)
-        if expiry_type and strategy:
-            v = self.db.scalar(
+    def has_suggestion_for(self, underlying: str, day: date, expiry_type: str = "",
+                            strategy: str = "", entry_date: "Optional[date]" = None) -> bool:
+        """Return True if a PENDING/real suggestion already exists for this
+        underlying + expiry_type + strategy WITH THE SAME entry_date.
+
+        When entry_date is provided, the check is scoped to that exact execution
+        date — so running the engine on Saturday for Monday entry does NOT block
+        even if a Friday-entry suggestion already exists for the same data date.
+        When entry_date is None (legacy) we fall back to generated_on date-range.
+        """
+        if entry_date is not None:
+            base = (
                 "SELECT COUNT(*) FROM options_suggestions "
-                "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "
+                "WHERE underlying = ? "
                 "AND strategy <> 'NONE' AND status <> 'NO_SUGGESTION' "
-                "AND expiry_type = ? AND strategy = ?",
-                [underlying, start, end, expiry_type, strategy],
+                "AND entry_date = ?"
             )
-        elif expiry_type:
-            v = self.db.scalar(
-                "SELECT COUNT(*) FROM options_suggestions "
-                "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "
-                "AND strategy <> 'NONE' AND status <> 'NO_SUGGESTION' "
-                "AND expiry_type = ?",
-                [underlying, start, end, expiry_type],
-            )
+            params: list = [underlying, entry_date]
+            if expiry_type and strategy:
+                base += " AND expiry_type = ? AND strategy = ?"
+                params += [expiry_type, strategy]
+            elif expiry_type:
+                base += " AND expiry_type = ?"
+                params += [expiry_type]
+            v = self.db.scalar(base, params)
         else:
-            v = self.db.scalar(
-                "SELECT COUNT(*) FROM options_suggestions "
-                "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "
-                "AND strategy <> 'NONE' AND status <> 'NO_SUGGESTION'",
-                [underlying, start, end],
-            )
+            start = datetime.combine(day, datetime.min.time())
+            end   = start + timedelta(days=1)
+            if expiry_type and strategy:
+                v = self.db.scalar(
+                    "SELECT COUNT(*) FROM options_suggestions "
+                    "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "
+                    "AND strategy <> 'NONE' AND status <> 'NO_SUGGESTION' "
+                    "AND expiry_type = ? AND strategy = ?",
+                    [underlying, start, end, expiry_type, strategy],
+                )
+            elif expiry_type:
+                v = self.db.scalar(
+                    "SELECT COUNT(*) FROM options_suggestions "
+                    "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "
+                    "AND strategy <> 'NONE' AND status <> 'NO_SUGGESTION' "
+                    "AND expiry_type = ?",
+                    [underlying, start, end, expiry_type],
+                )
+            else:
+                v = self.db.scalar(
+                    "SELECT COUNT(*) FROM options_suggestions "
+                    "WHERE underlying = ? AND generated_on >= ? AND generated_on < ? "
+                    "AND strategy <> 'NONE' AND status <> 'NO_SUGGESTION'",
+                    [underlying, start, end],
+                )
         return bool(v and v > 0)
+
+    def expire_stale_pending(self, underlying: str, expiry_type: str,
+                             strategy: str, new_entry_date: date) -> int:
+        """Mark PENDING suggestions for the same underlying+expiry_type+strategy
+        as IGNORED when their entry_date is older than new_entry_date (or NULL).
+
+        Called before inserting a fresh suggestion so the old stale one is
+        hidden from the dashboard immediately rather than lingering.
+        Returns number of rows updated.
+        """
+        cur = self.db.execute(
+            "UPDATE options_suggestions SET status = 'IGNORED' "
+            "WHERE underlying = ? AND expiry_type = ? AND strategy = ? "
+            "AND status = 'PENDING' "
+            "AND (entry_date IS NULL OR entry_date < ?)",
+            [underlying, expiry_type, strategy, new_entry_date],
+        )
+        n = cur.rowcount or 0
+        cur.close()
+        return n
 
     def get(self, suggestion_id: str) -> Optional[dict]:
         return self.db.fetch_one(
@@ -696,14 +737,14 @@ class SuggestionRepo:
             )
 
         # Fallback for legacy rows without entry_date: only show if generated
-        # within the last 3 calendar days (the longest possible gap between
-        # generation and execution is Friday→Monday = 3 days).
+        # within the last 1 calendar day — anything older is definitively stale
+        # (we can't tell the entry day, so we err on the side of hiding).
         if not rows:
             rows = self.db.fetch_all(
                 "SELECT TOP (5) * FROM options_suggestions "
                 "WHERE status IN ('PENDING', 'IGNORED') "
                 "AND entry_date IS NULL "
-                "AND generated_on >= DATEADD(day, -3, SYSDATETIME()) "
+                "AND generated_on >= DATEADD(day, -1, SYSDATETIME()) "
                 "ORDER BY generated_on DESC"
             )
         return rows

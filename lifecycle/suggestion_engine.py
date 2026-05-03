@@ -472,10 +472,27 @@ def run_suggestion_engine(
     persisted: List[Suggestion] = []
 
     for sug in best_by_expiry_type.values():
-        # Per-type dedup: skip if already stored for this underlying+expiry_type+strategy today
-        if sug_repo.has_suggestion_for(sug.underlying, trade_date, sug.expiry_type, sug.strategy):
-            logger.info("Suggestion already exists for %s %s on %s — skipping",
-                        sug.underlying, sug.expiry_type, trade_date)
+        # Retire any PENDING suggestion for the same slot with an older entry_date.
+        # This covers the case where data_date is unchanged (e.g. weekend re-run)
+        # but entry_day has moved forward (Fri→Mon becomes the new execution day).
+        expired = sug_repo.expire_stale_pending(
+            sug.underlying, sug.expiry_type, sug.strategy, entry_day
+        )
+        if expired:
+            logger.info(
+                "Expired %d stale PENDING suggestion(s) for %s %s — new entry day is %s",
+                expired, sug.underlying, sug.expiry_type, entry_day,
+            )
+
+        # Dedup: skip only if a suggestion for this EXACT entry_date already exists
+        if sug_repo.has_suggestion_for(
+            sug.underlying, trade_date, sug.expiry_type, sug.strategy,
+            entry_date=entry_day,
+        ):
+            logger.info(
+                "Suggestion already exists for %s %s entry_date=%s — skipping",
+                sug.underlying, sug.expiry_type, entry_day,
+            )
             continue
         sug_repo.insert(sug)
         sug_repo.insert_legs(sug.suggestion_id, sug.legs)
