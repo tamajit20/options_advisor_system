@@ -219,28 +219,80 @@ def get_scheduler() -> Optional[BackgroundScheduler]:
     return _SCHEDULER
 
 
-def trigger_job_now(job_name: str) -> bool:
+def trigger_job_now(job_name: str, trade_date: str | None = None) -> bool:
     """Dispatch an immediate one-off run of a configured job.
 
     Returns True if dispatched, False if the job_name is unknown.
     Raises RuntimeError if the scheduler is not running.
+
+    trade_date: optional ISO date string 'YYYY-MM-DD'.  When provided it is
+    passed as a keyword argument to the job function.  Only jobs whose
+    orchestrator accepts a trade_date parameter will use it; others ignore it.
     """
     if job_name not in JOB_FUNCS:
         return False
     sch = _SCHEDULER
     if sch is None or not sch.running:
         raise RuntimeError("Scheduler is not running")
-    fn = JOB_FUNCS[job_name]
+
+    base_fn = JOB_FUNCS[job_name]
+    if trade_date:
+        from datetime import date as _date
+        from database.connection import SQLServerConnection as _DB
+        _td = _date.fromisoformat(trade_date)
+        # Jobs that support trade_date (download + calc + lifecycle) share the same
+        # pattern: the underlying orchestrator accepts trade_date keyword arg.
+        # We wrap the job to inject it.
+        _SUPPORTED = {
+            "fo_bhav_download", "spot_bhav_download", "vix_download", "fii_download",
+            "iv_calculation", "suggestion_engine", "exit_engine",
+        }
+        if job_name in _SUPPORTED:
+            from lifecycle.download_orchestrator import (
+                run_fo_bhav, run_spot_bhav, run_vix, run_fii,
+            )
+            from lifecycle.iv_orchestrator import run_iv_calculation
+            from lifecycle.suggestion_engine import run_suggestion_engine
+            from lifecycle.exit_orchestrator import run_exit_engine
+            _orch_map = {
+                "fo_bhav_download":   lambda db: run_fo_bhav(db, _td),
+                "spot_bhav_download": lambda db: run_spot_bhav(db, _td),
+                "vix_download":       lambda db: run_vix(db, _td),
+                "fii_download":       lambda db: run_fii(db, _td),
+                "iv_calculation":     lambda db: run_iv_calculation(db, _td),
+                "suggestion_engine":  lambda db: run_suggestion_engine(db, _td),
+                "exit_engine":        lambda db: run_exit_engine(db, _td),
+            }
+            orch = _orch_map[job_name]
+            def fn():
+                from database.connection import SQLServerConnection as _DBC
+                import traceback as _tb
+                db = _DBC()
+                try:
+                    db.connect()
+                    orch(db)
+                    db.commit()
+                except Exception:
+                    logger.exception("Manual job %s (trade_date=%s) failed", job_name, trade_date)
+                    try: db.rollback()
+                    except Exception: pass
+                finally:
+                    db.close()
+        else:
+            fn = base_fn
+    else:
+        fn = base_fn
+
     run_at = datetime.now()
     sch.add_job(
         fn,
         trigger=DateTrigger(run_date=run_at),
         id=f"manual-{job_name}-{run_at.strftime('%Y%m%d%H%M%S%f')}",
-        name=f"Manual {job_name}",
+        name=f"Manual {job_name}" + (f" ({trade_date})" if trade_date else ""),
         misfire_grace_time=600,
         max_instances=1,
     )
-    logger.info("Manual trigger queued: %s", job_name)
+    logger.info("Manual trigger queued: %s trade_date=%s", job_name, trade_date or "auto")
     return True
 
 
