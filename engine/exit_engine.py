@@ -11,11 +11,12 @@ Inputs:
     - indicators (for SL_HIT detection: SL hit if trade is X% in loss)
 
 Decision codes:
-    HOLD          — keep
-    EXIT_TOMORROW — DTE ≤ 1, close at next open
-    SL_HIT        — current loss ≥ SL level
-    EXPIRE        — DTE = 0
-    TAKE_PROFIT   — current profit ≥ take_profit_fraction × max_profit
+    HOLD             — keep
+    EXIT_TOMORROW    — DTE ≤ 1, close at next open
+    SL_HIT           — current loss ≥ SL level
+    EXPIRE           — DTE = 0
+    TAKE_PROFIT      — current profit ≥ take_profit_fraction × max_profit (strategy-aware)
+    TIME_DECAY_DONE  — DTE ≤ time_decay_exit_dte for credit spread; theta extracted, gamma risk
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ def evaluate_exit(
     max_loss_rs: float,
     sl_level_per_share: float | None,
     days_to_expiry: int,
+    strategy: str = "",              # Phase 2: drives strategy-aware TP and time-decay exit
     as_of: datetime | None = None,
 ) -> ExitDecision:
     as_of = as_of or datetime.utcnow()
@@ -69,8 +71,9 @@ def evaluate_exit(
     # entry_net_credit is positive for credit strategies; current_value is what we'd net if we closed.
     current_pnl = entry_net_credit + current_value
 
-    # Take profit
-    tp_fraction = STRATEGY_CONFIG["take_profit_fraction"]
+    # Take profit — strategy-aware (Phase 2)
+    tp_overrides = STRATEGY_CONFIG.get("strategy_take_profit_fraction", {}) or {}
+    tp_fraction = float(tp_overrides.get(strategy, STRATEGY_CONFIG["take_profit_fraction"]))
     if max_profit_rs > 0 and current_pnl >= tp_fraction * max_profit_rs:
         return ExitDecision(
             trade_id=trade_id, decision="TAKE_PROFIT",
@@ -96,6 +99,17 @@ def evaluate_exit(
         return ExitDecision(
             trade_id=trade_id, decision="EXIT_TOMORROW",
             reason=f"DTE={days_to_expiry} — close at next open to avoid expiry risk",
+            as_of=as_of,
+        )
+
+    # Time-decay exit (Phase 2) — credit spreads at low DTE: theta extracted, gamma risk dominates.
+    td_dte    = int(STRATEGY_CONFIG.get("time_decay_exit_dte", 3))
+    td_strats = STRATEGY_CONFIG.get("time_decay_exit_strategies", []) or []
+    if strategy in td_strats and days_to_expiry <= td_dte:
+        return ExitDecision(
+            trade_id=trade_id, decision="TIME_DECAY_DONE",
+            reason=f"DTE={days_to_expiry} (≤{td_dte}) for {strategy} — "
+                   f"theta mostly captured (P&L ₹{current_pnl:.0f}); close to avoid gamma risk",
             as_of=as_of,
         )
 

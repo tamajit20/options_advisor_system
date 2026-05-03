@@ -262,7 +262,7 @@ class BrokenTradeOption:
 @dataclass
 class ExitDecision:
     trade_id:    str
-    decision:    str           # HOLD / EXIT_TOMORROW / SL_HIT / EXPIRE / TAKE_PROFIT
+    decision:    str           # HOLD / EXIT_TOMORROW / SL_HIT / EXPIRE / TAKE_PROFIT / TIME_DECAY_DONE
     reason:      str
     as_of:       datetime
 

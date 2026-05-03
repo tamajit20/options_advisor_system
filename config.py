@@ -191,7 +191,29 @@ STRATEGY_CONFIG = {
     "min_credit_to_width_ratio": 0.20,   # 20% — e.g. ₹40 credit on ₹200-wide condor
 
     # Take-profit threshold for exit engine (fraction of max profit)
-    "take_profit_fraction": 0.80,
+    "take_profit_fraction": 0.80,   # default fallback when strategy not in override map
+
+    # Strategy-aware take-profit overrides (Phase 2)
+    # IC / BPS / BCS — close at 50% credit captured (tastytrade convention; gamma risk dominates after).
+    # IRON_BUTTERFLY  — ATM short tends to give back profits fast; book at 75%.
+    # Debit / naked — keep default (0.80) so directional plays run.
+    "strategy_take_profit_fraction": {
+        "IRON_CONDOR":      0.50,
+        "BULL_PUT_SPREAD":  0.50,
+        "BEAR_CALL_SPREAD": 0.50,
+        "IRON_BUTTERFLY":   0.75,
+        "JADE_LIZARD":      0.50,
+    },
+
+    # Time-decay exit (Phase 2)
+    # When DTE drops to or below this threshold, credit spreads have already extracted
+    # most theta and face exploding gamma risk. Exit alert fires regardless of P&L.
+    "time_decay_exit_dte": 3,
+    "time_decay_exit_strategies": [
+        "IRON_CONDOR", "IRON_BUTTERFLY",
+        "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD",
+        "JADE_LIZARD",
+    ],
 
     # Stop-loss threshold for exit engine (fraction of max loss)
     # Exit when current loss reaches this fraction of the defined max loss.

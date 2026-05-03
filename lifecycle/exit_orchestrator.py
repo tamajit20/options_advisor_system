@@ -62,6 +62,13 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
         if not sug_legs:
             continue
 
+        # Phase 2: strategy drives strategy-aware TP and time-decay exit
+        sug_row = db.fetch_one(
+            "SELECT strategy FROM options_suggestions WHERE suggestion_id = ?",
+            [trade["suggestion_id"]],
+        )
+        strategy = (sug_row or {}).get("strategy", "") or ""
+
         underlying = sug_legs[0]["symbol"]
         expiry = sug_legs[0]["expiry_date"]
         dte = days_between(trade_date, expiry)
@@ -112,6 +119,7 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
             max_loss_rs=float(trade.get("actual_max_loss") or 0.0),
             sl_level_per_share=trade.get("actual_stop_loss_level"),
             days_to_expiry=dte,
+            strategy=strategy,
             as_of=now_ist(),
         )
         decisions_made += 1
