@@ -329,6 +329,26 @@ function renderPlainEnglishStructured(s) {
   }
   if (spot)               chips.push(`<span class="ctx-chip">Spot ₹${escapeHtml(spot)}</span>`);
   if (ivRank)             chips.push(`<span class="ctx-chip ctx-iv">IV Rank ${escapeHtml(ivRank)}%</span>`);
+  // IV/HV chip — parsed from confidence gate detail in conditions_json
+  (() => {
+    if (!s.conditions_json) return;
+    let raw = s.conditions_json;
+    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { return; } }
+    if (!Array.isArray(raw)) return;
+    const ivGate = raw.find(c => (c.label || '').toLowerCase().includes('iv premium'));
+    if (!ivGate) return;
+    const m = (ivGate.detail || '').match(/IV\/HV ratio\s+([\d.]+)/i);
+    if (!m) return;
+    const ratio = parseFloat(m[1]);
+    const isStale = ratio < 1.0;
+    const chipClass = isStale ? 'ctx-chip ctx-data-stale' : 'ctx-chip ctx-iv';
+    const tooltip = ratio >= 1.40
+      ? `IV/HV ${ratio.toFixed(2)} \u2014 options overpriced vs realised vol (butterfly eligible)`
+      : ratio >= 1.0
+      ? `IV/HV ${ratio.toFixed(2)} \u2014 options moderately priced (condor preferred)`
+      : `IV/HV ${ratio.toFixed(2)} \u2014 options cheaper than realised vol`;
+    chips.push(`<span class="${chipClass}" title="${escapeHtml(tooltip)}">IV/HV ${ratio.toFixed(2)}</span>`);
+  })();
   // Data provenance: show which NSE feed dates were used, with a stale warning
   // when any secondary feed lags the primary FO+IV date.
   if (s.data_date) {
@@ -735,6 +755,11 @@ function parseConditions(s) {
       const m = d.match(/DTE\s+(\d+)/i);
       if (m) out.dte = parseInt(m[1]);
     }
+    // "IV/HV ratio 0.91 (IV 17% vs HV-20 19%) — ..."
+    if (lbl.includes('iv premium')) {
+      const m = d.match(/IV\/HV ratio\s+([\d.]+)/i);
+      if (m) out.ivPremium = parseFloat(m[1]);
+    }
   });
   return out;
 }
@@ -771,10 +796,15 @@ function renderStrategyRationale(s) {
        ivRank < 20 ? `very low (${ivRank.toFixed(0)})` :
                      `low (${ivRank.toFixed(0)})`)
     : 'elevated';
-  const ivPremDesc = ivRank != null
-    ? (ivRank > 50 ? 'options premiums are rich — a good time to be a seller'
-                   : 'options are cheap relative to their recent norm')
-    : 'options premiums are in a favourable zone';
+  const ivPremium  = ctx.ivPremium ?? null;
+  const ivPremDesc = ivPremium != null
+    ? (ivPremium >= 1.40 ? `IV/HV ${ivPremium.toFixed(2)} — options significantly overpriced vs realised vol (strong selling edge)`
+     : ivPremium >= 1.0  ? `IV/HV ${ivPremium.toFixed(2)} — options moderately priced vs realised vol`
+                         : `IV/HV ${ivPremium.toFixed(2)} — options cheaper than realised vol (weaker selling edge)`)
+    : (ivRank != null
+      ? (ivRank > 50 ? 'options premiums are rich — a good time to be a seller'
+                     : 'options are cheap relative to their recent norm')
+      : 'options premiums are in a favourable zone');
   const vixDesc = vixClose != null
     ? `VIX at ${vixClose.toFixed(1)} (${(vixRegime||'stable').toLowerCase()})`
     : 'VIX stable';
