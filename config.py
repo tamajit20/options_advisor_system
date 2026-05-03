@@ -140,6 +140,11 @@ STRATEGY_CONFIG = {
     "iv_rank_writing_min":   50.0,   # >50% → consider writing path
     "iv_rank_buying_max":    30.0,   # <30% → consider buying path
     "iv_rank_butterfly_min": 70.0,   # very-high IV → prefer iron butterfly over condor
+    # Butterfly also requires IV/HV-20 premium ≥ this threshold — i.e. options must be
+    # materially more expensive than realised vol justifies. When IV rank is high but
+    # iv_premium is moderate (1.1–1.3) the elevated IV is a genuine fear premium and
+    # the EM is wide → ATM short legs would be too tight; fall back to IRON_CONDOR.
+    "iv_butterfly_min_premium": 1.40,
     "iv_rank_naked_long_max": 20.0,  # very-low IV → naked long preferred over debit spread
     # 30–50 mid-zone → debit spreads (BULL_CALL_SPREAD / BEAR_PUT_SPREAD), no sideways play
 

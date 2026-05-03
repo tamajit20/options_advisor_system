@@ -54,6 +54,7 @@ def select_strategy(
     iv_writing_min   = STRATEGY_CONFIG["iv_rank_writing_min"]
     iv_buying_max    = STRATEGY_CONFIG["iv_rank_buying_max"]
     iv_butterfly_min = STRATEGY_CONFIG.get("iv_rank_butterfly_min",   70.0)
+    iv_butterfly_min_prem = STRATEGY_CONFIG.get("iv_butterfly_min_premium", 1.40)
     iv_naked_long_max = STRATEGY_CONFIG.get("iv_rank_naked_long_max", 20.0)
     pcr_bull = STRATEGY_CONFIG.get("pcr_strong_bullish_below", 0.55)
     pcr_bear = STRATEGY_CONFIG.get("pcr_strong_bearish_above", 1.55)
@@ -65,8 +66,14 @@ def select_strategy(
     # ---------- WRITING regime (high IV) ----------
     if iv_rank > iv_writing_min:
         if trend == "SIDEWAYS":
-            # Very-high IV + tight expected move → butterfly captures more premium
-            if iv_rank > iv_butterfly_min:
+            # Butterfly only when BOTH (a) IV rank is very high (>70) AND (b) IV is
+            # materially above realised vol (iv_premium ≥ 1.40). Otherwise the wide
+            # expected move makes ATM short legs too tight → use Iron Condor instead
+            # (short legs at EM, more breathing room). iv_premium=None → conservative
+            # fallback to Condor (HV-20 may be missing on new underlyings).
+            iv_premium = getattr(indicators, "iv_premium", None)
+            if iv_rank > iv_butterfly_min and iv_premium is not None \
+                    and iv_premium >= iv_butterfly_min_prem:
                 return "IRON_BUTTERFLY"
             return "IRON_CONDOR"
         if trend == "BULLISH":
