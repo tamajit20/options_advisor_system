@@ -371,11 +371,13 @@ def _explain(
     if strategy in _CREDIT_STRATEGIES:
         d1 = round(dte * 0.35)
         d2 = round(dte * 0.55)
+        close_before = max(2, round(dte * 0.25))   # ~2 days for weekly, ~5 for monthly
         lines.append(f"\u2022 Monitor theta decay daily; peak decay around day {d1}\u2013{d2}")
-        lines.append(f"\u2022 Theta accelerates in the final 7 DTE \u2014 close or roll before expiry")
+        lines.append(f"\u2022 Theta accelerates in the final {close_before} DTE \u2014 close or roll before expiry")
     elif strategy in _DEBIT_STRATEGIES:
         half = max(1, dte // 2)
+        close_before = max(2, round(dte * 0.25))
         lines.append(f"\u2022 Look for a decisive move within {half} days; time decay works against you")
-        lines.append(f"\u2022 Close before the final 7 DTE if the move has not materialised")
+        lines.append(f"\u2022 Close before the final {close_before} DTE if the move has not materialised")
 
     return "\n".join(lines)
