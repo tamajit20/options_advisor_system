@@ -221,8 +221,11 @@ class Suggestion:
     economics:        SuggestionEconomics
     execution_window: str             # e.g., "9:20 AM – 9:45 AM tomorrow (IST)"
     plain_english:    str             # explanation shown to user
-    data_date:        Optional[date] = None  # NSE bhav date the analysis is based on
+    data_date:        Optional[date] = None  # NSE bhav date the analysis is based on (FO+IV)
     entry_date:       Optional[date] = None  # intended execution date (next trading day)
+    spot_data_date:   Optional[date] = None  # actual trade_date of the spot row used
+    fii_data_date:    Optional[date] = None  # actual trade_date of the FII row used
+    vix_data_date:    Optional[date] = None  # trade_date of the most recent VIX row used
 
 
 @dataclass

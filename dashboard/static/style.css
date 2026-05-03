@@ -745,6 +745,7 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .ctx-chip.ctx-pass       { color: var(--ok);   border-color: rgba(34,197,94,.35); }
 .ctx-chip.ctx-fail       { color: var(--err);  border-color: rgba(239,68,68,.35); }
 .ctx-chip.ctx-data-date  { color: var(--text-dim); border-color: rgba(148,163,184,.25); font-style: italic; }
+.ctx-chip.ctx-data-stale { color: var(--warn); border-color: rgba(234,179,8,.4); font-style: italic; }
 .ctx-chip.ctx-entry-date { color: var(--ok);   border-color: rgba(34,197,94,.3); font-weight: 700; }
 .ctx-sep { color: var(--text-dim); font-size: .8rem; opacity: .4; }
 .sug-section { margin: 0 0 12px; }

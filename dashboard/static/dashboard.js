@@ -329,15 +329,59 @@ function renderPlainEnglishStructured(s) {
   }
   if (spot)               chips.push(`<span class="ctx-chip">Spot ₹${escapeHtml(spot)}</span>`);
   if (ivRank)             chips.push(`<span class="ctx-chip ctx-iv">IV Rank ${escapeHtml(ivRank)}%</span>`);
-  // Data provenance: show which NSE bhav date was used and the intended entry date
+  // Data provenance: show which NSE feed dates were used, with a stale warning
+  // when any secondary feed lags the primary FO+IV date.
   if (s.data_date) {
-    const dd = s.data_date.slice(0, 10);  // "YYYY-MM-DD"
-    const dFmt = new Date(dd + 'T00:00:00').toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'2-digit' });
-    chips.push(`<span class="ctx-chip ctx-data-date" title="NSE bhav/EOD data used for this analysis">NSE data \u00b7 ${escapeHtml(dFmt)}</span>`);
+    const foIvDate  = s.data_date.slice(0, 10);
+    const spotDate  = s.spot_data_date  ? s.spot_data_date.slice(0, 10)  : null;
+    const fiiDate   = s.fii_data_date   ? s.fii_data_date.slice(0, 10)   : null;
+    const vixDate   = s.vix_data_date   ? s.vix_data_date.slice(0, 10)   : null;
+
+    function fmtShort(d) {
+      return new Date(d + 'T00:00:00').toLocaleDateString('en-IN',
+        { day:'2-digit', month:'short', year:'2-digit' });
+    }
+
+    const foIvFmt = fmtShort(foIvDate);
+    const allSame = (!spotDate || spotDate === foIvDate)
+                 && (!fiiDate  || fiiDate  === foIvDate)
+                 && (!vixDate  || vixDate  === foIvDate);
+
+    if (allSame) {
+      // Happy path: every feed is from the same date
+      const tipLines = [
+        `FO chain:    ${foIvFmt}`,
+        `IV history:  ${foIvFmt}`,
+        spotDate ? `Spot EOD:    ${foIvFmt}` : '',
+        fiiDate  ? `FII data:    ${foIvFmt}` : '',
+        vixDate  ? `VIX:         ${foIvFmt}` : '',
+      ].filter(Boolean).join('\n');
+      chips.push(`<span class="ctx-chip ctx-data-date" title="${escapeHtml(tipLines)}"` +
+        ` style="cursor:help">NSE data \u00b7 ${escapeHtml(foIvFmt)}</span>`);
+    } else {
+      // Some feeds lagged — show a warning chip plus a full breakdown
+      const staleFeed = [
+        spotDate && spotDate !== foIvDate ? `Spot (${fmtShort(spotDate)})` : null,
+        fiiDate  && fiiDate  !== foIvDate ? `FII (${fmtShort(fiiDate)})`   : null,
+        vixDate  && vixDate  !== foIvDate ? `VIX (${fmtShort(vixDate)})`   : null,
+      ].filter(Boolean).join(', ');
+      const tipLines = [
+        `FO chain:    ${foIvFmt}`,
+        `IV history:  ${foIvFmt}`,
+        spotDate ? `Spot EOD:    ${fmtShort(spotDate)}${spotDate !== foIvDate ? ' \u26a0' : ''}` : '',
+        fiiDate  ? `FII data:    ${fmtShort(fiiDate)}${fiiDate  !== foIvDate ? ' \u26a0' : ''}` : '',
+        vixDate  ? `VIX:         ${fmtShort(vixDate)}${vixDate  !== foIvDate ? ' \u26a0' : ''}` : '',
+        '',
+        `\u26a0 ${staleFeed} used older data`,
+      ].filter(l => l !== null).join('\n');
+      chips.push(`<span class="ctx-chip ctx-data-date ctx-data-stale" title="${escapeHtml(tipLines)}"` +
+        ` style="cursor:help">NSE data \u00b7 ${escapeHtml(foIvFmt)} \u26a0</span>`);
+    }
   }
   if (s.entry_date) {
     const ed = s.entry_date.slice(0, 10);
-    const eFmt = new Date(ed + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'2-digit', month:'short', year:'2-digit' });
+    const eFmt = new Date(ed + 'T00:00:00').toLocaleDateString('en-IN',
+      { weekday:'short', day:'2-digit', month:'short', year:'2-digit' });
     chips.push(`<span class="ctx-chip ctx-entry-date" title="Intended execution date">Execute \u2192 ${escapeHtml(eFmt)}</span>`);
   }  if (s.confidence_score != null) {
     let _warnCount = 0, _errorCount = 0, _failCount = 0, _softFailCount = 0, _total = 7, _passCount = null;

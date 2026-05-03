@@ -214,6 +214,30 @@ _TABLE_DDL: List[str] = [
     )
     ALTER TABLE options_suggestions ADD entry_date DATE NULL
     """,
+    # Migration: actual trade_date of the spot EOD row used (may lag data_date by a day)
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'spot_data_date'
+    )
+    ALTER TABLE options_suggestions ADD spot_data_date DATE NULL
+    """,
+    # Migration: actual trade_date of the FII row used
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'fii_data_date'
+    )
+    ALTER TABLE options_suggestions ADD fii_data_date DATE NULL
+    """,
+    # Migration: trade_date of the most recent VIX row used
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'vix_data_date'
+    )
+    ALTER TABLE options_suggestions ADD vix_data_date DATE NULL
+    """,
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_date ON options_suggestions (generated_on DESC)",
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_status ON options_suggestions (status, generated_on DESC)",
 

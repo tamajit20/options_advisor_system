@@ -523,9 +523,11 @@ class SuggestionRepo:
                net_credit_suggested, max_profit, max_loss,
                upper_breakeven, lower_breakeven, stop_loss_level,
                probability_of_profit, estimated_charges_total, estimated_net_pnl,
-               execution_window, plain_english, data_date, entry_date)
+               execution_window, plain_english,
+               data_date, entry_date, spot_data_date, fii_data_date, vix_data_date)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING',
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?)
             """,
             [
                 s.suggestion_id, s.trade_name, s.generated_on, s.strategy, s.strategy_type,
@@ -534,7 +536,8 @@ class SuggestionRepo:
                 s.economics.net_credit, s.economics.max_profit, s.economics.max_loss,
                 s.economics.upper_breakeven, s.economics.lower_breakeven, s.economics.stop_loss_level,
                 s.economics.probability_of_profit, s.economics.estimated_charges.total, s.economics.estimated_net_pnl,
-                s.execution_window, s.plain_english, s.data_date, s.entry_date,
+                s.execution_window, s.plain_english,
+                s.data_date, s.entry_date, s.spot_data_date, s.fii_data_date, s.vix_data_date,
             ],
         ).close()
 
@@ -692,12 +695,15 @@ class SuggestionRepo:
                 [today],
             )
 
-        # Fallback for legacy rows without entry_date
+        # Fallback for legacy rows without entry_date: only show if generated
+        # within the last 3 calendar days (the longest possible gap between
+        # generation and execution is Friday→Monday = 3 days).
         if not rows:
             rows = self.db.fetch_all(
                 "SELECT TOP (5) * FROM options_suggestions "
                 "WHERE status IN ('PENDING', 'IGNORED') "
                 "AND entry_date IS NULL "
+                "AND generated_on >= DATEADD(day, -3, SYSDATETIME()) "
                 "ORDER BY generated_on DESC"
             )
         return rows

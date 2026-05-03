@@ -159,8 +159,13 @@ def assemble_suggestion(
     existing_trade_names: Iterable[str] = (),
     generated_on: datetime | None = None,
     strategy_override: str | None = None,
-    execution_window: str = "09:20\u201309:45 IST tomorrow",    data_date: date | None = None,
-    entry_date: date | None = None,) -> Suggestion:
+    execution_window: str = "09:20\u201309:45 IST tomorrow",
+    data_date: date | None = None,
+    entry_date: date | None = None,
+    spot_data_date: date | None = None,
+    fii_data_date: date | None = None,
+    vix_data_date: date | None = None,
+) -> Suggestion:
     """Top-level: select strategy, build legs, compute economics, return Suggestion.
 
     If ``strategy_override`` is provided it bypasses ``select_strategy()`` and
@@ -297,6 +302,9 @@ def assemble_suggestion(
         plain_english=plain_english,
         data_date=data_date,
         entry_date=entry_date,
+        spot_data_date=spot_data_date,
+        fii_data_date=fii_data_date,
+        vix_data_date=vix_data_date,
     )
 
 

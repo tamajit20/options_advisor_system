@@ -204,6 +204,7 @@ def _evaluate_underlying(
         logger.warning("Suggestion: no spot for %s on or before %s", symbol, trade_date)
         return [], []
     spot = float(spot_row["close_price"])
+    actual_spot_date: Optional[date] = spot_row.get("trade_date")
 
     expiry_candidates = _pick_expiries_in_band(fo, symbol, trade_date)
     if not expiry_candidates:
@@ -232,13 +233,20 @@ def _evaluate_underlying(
 
     # FII net futures positioning — anchored to trade_date (never future data)
     fii_net_futures: Optional[float] = None
+    actual_fii_date: Optional[date] = None
     try:
         fii_rows = FiiRepo(db).for_date(trade_date)
         fii_row = next((r for r in fii_rows if r.get("client_type") == "FII"), None)
         if fii_row:
             fii_net_futures = float(fii_row["future_long"]) - float(fii_row["future_short"])
+            actual_fii_date = fii_row.get("trade_date")
     except Exception:
         logger.debug("FII net futures unavailable for %s (non-fatal)", symbol)
+
+    # Capture the most recent VIX date used
+    actual_vix_date: Optional[date] = (
+        vix_history[-1].get("trade_date") if vix_history else None
+    )
 
     iv_rows = iv_repo.latest_for(symbol, trade_date)
 
@@ -315,6 +323,9 @@ def _evaluate_underlying(
                 execution_window=execution_window,
                 data_date=trade_date,
                 entry_date=entry_day,
+                spot_data_date=actual_spot_date,
+                fii_data_date=actual_fii_date,
+                vix_data_date=actual_vix_date,
             )
             suggestions.append(primary_suggestion)
             existing_names.append(primary_suggestion.trade_name)
@@ -363,6 +374,9 @@ def _evaluate_underlying(
                         execution_window=execution_window,
                         data_date=trade_date,
                         entry_date=entry_day,
+                        spot_data_date=actual_spot_date,
+                        fii_data_date=actual_fii_date,
+                        vix_data_date=actual_vix_date,
                     )
                     suggestions.append(comp)
                     existing_names.append(comp.trade_name)
