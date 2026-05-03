@@ -1384,8 +1384,56 @@ function bindSuggestionActions() {
   });
 
   $$('.btn-mark-exec').forEach(b => b.addEventListener('click', async (e) => {
-    const card = e.target.closest('.card');
+    const btn  = e.currentTarget;
+    const card = btn.closest('.card');
     const sid  = card.dataset.sugId;
+
+    // ── Lot-count parity validation ──────────────────────────────────────────
+    const execLots = $$('.leg-row', card)
+      .filter(row => row.querySelector('.leg-exec')?.checked)
+      .map(row => parseInt(row.querySelector('.leg-lots')?.value || 1))
+      .filter(n => !isNaN(n));
+    const uniqueLots = [...new Set(execLots)];
+    if (uniqueLots.length > 1) {
+      toast(`All legs must use the same lot count — found ${uniqueLots.join(' & ')} lots. Fix before proceeding.`, 'err');
+      return;
+    }
+    const numLots = uniqueLots[0] || 1;
+
+    // ── Nifty spot at execution — required ───────────────────────────────────
+    const spotInput = card.querySelector('.exec-spot-input');
+    const spotRaw   = spotInput?.value.trim();
+    const spotVal   = spotRaw ? parseFloat(spotRaw) : null;
+    if (!spotVal || isNaN(spotVal) || spotVal <= 0) {
+      if (spotInput) { spotInput.classList.add('input-error'); spotInput.focus(); }
+      toast('Enter the Nifty spot price at execution before proceeding.', 'err');
+      return;
+    }
+    if (spotInput) spotInput.classList.remove('input-error');
+
+    // ── 2-step confirm ────────────────────────────────────────────────────────
+    if (!btn.dataset.confirmed) {
+      btn.dataset.confirmed = '1';
+      btn.textContent = `Confirm execution · ${numLots} lot${numLots !== 1 ? 's' : ''}?`;
+      btn.classList.add('btn-confirm-pending');
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn btn-ghost btn-confirm-cancel';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.addEventListener('click', () => {
+        btn.dataset.confirmed = '';
+        btn.textContent = 'Mark Executed';
+        btn.classList.remove('btn-confirm-pending');
+        cancelBtn.remove();
+      });
+      btn.insertAdjacentElement('afterend', cancelBtn);
+      return;
+    }
+    // Clear confirm state before submitting
+    btn.dataset.confirmed = '';
+    btn.textContent = 'Mark Executed';
+    btn.classList.remove('btn-confirm-pending');
+    btn.nextElementSibling?.classList.contains('btn-confirm-cancel') && btn.nextElementSibling.remove();
+
     const fills = $$('.leg-row', card).map(row => {
       const lotsInput = row.querySelector('.leg-lots');
       const lo = row.querySelector('.leg-exec').dataset.leg;
@@ -1397,9 +1445,6 @@ function bindSuggestionActions() {
               fill_time: new Date().toISOString(),
               lots_override: lotsOverride};
     });
-    const spotInput = card.querySelector('.exec-spot-input');
-    const spotRaw = spotInput?.value.trim();
-    const spotVal = spotRaw ? parseFloat(spotRaw) : null;
     const sugSl   = parseFloat(card.dataset.baseSl)    || 0;
     const sugSpot = parseFloat(card.dataset.spotAtGen) || 0;
     const adjSl = (spotVal != null && !isNaN(spotVal) && spotVal > 0 && sugSl > 0)
@@ -1546,6 +1591,43 @@ async function openSupplementForm(tradeId) {
 }
 
 async function submitSupplement(tradeId, panel) {
+  const btn = panel.querySelector('.btn-supp-submit');
+
+  // ── Lot-count parity validation ──────────────────────────────────────────
+  const execLots = $$('.leg-row[data-leg-order]', panel)
+    .filter(row => row.querySelector('.supp-exec')?.checked)
+    .map(row => parseInt(row.querySelector('.leg-lots')?.value || 1))
+    .filter(n => !isNaN(n));
+  const uniqueLots = [...new Set(execLots)];
+  if (uniqueLots.length > 1) {
+    toast(`All legs must use the same lot count — found ${uniqueLots.join(' & ')} lots. Fix before proceeding.`, 'err');
+    return;
+  }
+  const numLots = uniqueLots[0] || 1;
+
+  // ── 2-step confirm ────────────────────────────────────────────────────────
+  if (!btn.dataset.confirmed) {
+    btn.dataset.confirmed = '1';
+    btn.textContent = `Confirm fills · ${numLots} lot${numLots !== 1 ? 's' : ''}?`;
+    btn.classList.add('btn-confirm-pending');
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn btn-ghost btn-confirm-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => {
+      btn.dataset.confirmed = '';
+      btn.textContent = 'Confirm fills';
+      btn.classList.remove('btn-confirm-pending');
+      cancelBtn.remove();
+    });
+    btn.insertAdjacentElement('afterend', cancelBtn);
+    return;
+  }
+  // Clear confirm state before submitting
+  btn.dataset.confirmed = '';
+  btn.textContent = 'Confirm fills';
+  btn.classList.remove('btn-confirm-pending');
+  btn.nextElementSibling?.classList.contains('btn-confirm-cancel') && btn.nextElementSibling.remove();
+
   const fills = $$('.leg-row[data-leg-order]', panel).map(row => {
     const lo = parseInt(row.dataset.legOrder);
     const exec = row.querySelector('.supp-exec').checked;
@@ -1707,6 +1789,33 @@ async function submitClose(tradeId, panel) {
   if (!exits.length) {
     toast('Enter at least one exit price', 'warn'); return;
   }
+
+  // ── 2-step confirm ────────────────────────────────────────────────────────
+  const btn = panel.querySelector('.btn-close-submit');
+  if (!btn.dataset.confirmed) {
+    const pnlEl = panel.querySelector('.live-pnl-value');
+    const pnlText = pnlEl && pnlEl.textContent !== '—' ? ` · Net P&L ${pnlEl.textContent}` : '';
+    btn.dataset.confirmed = '1';
+    btn.textContent = `Really close${pnlText}?`;
+    btn.classList.add('btn-confirm-pending');
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn btn-ghost btn-confirm-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => {
+      btn.dataset.confirmed = '';
+      btn.textContent = 'Confirm close & record fills';
+      btn.classList.remove('btn-confirm-pending');
+      cancelBtn.remove();
+    });
+    btn.insertAdjacentElement('afterend', cancelBtn);
+    return;
+  }
+  // Clear confirm state before submitting
+  btn.dataset.confirmed = '';
+  btn.textContent = 'Confirm close & record fills';
+  btn.classList.remove('btn-confirm-pending');
+  btn.nextElementSibling?.classList.contains('btn-confirm-cancel') && btn.nextElementSibling.remove();
+
   try {
     await API(`/api/trades/${tradeId}/close`, {
       method: 'POST',
