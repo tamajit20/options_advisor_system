@@ -179,6 +179,20 @@ def assemble_suggestion(
         indicators=indicators,
     )
 
+    # Phase 3: strategy-aware soft-gate threshold.
+    # Some strategies (naked longs, jade lizard) carry asymmetric risk and warrant
+    # a stricter confidence bar than the global 5/7 default.
+    strat_overrides = STRATEGY_CONFIG.get("strategy_min_soft_pass", {}) or {}
+    required = strat_overrides.get(strategy)
+    if required is not None:
+        # Soft gates are checks[:7] in confidence.evaluate (gates 1–7).
+        soft_checks = list(confidence.checks)[:7]
+        soft_pass_count = sum(1 for c in soft_checks if c.status not in ("FAIL", "SOFT_FAIL"))
+        if soft_pass_count < required:
+            raise StrategyVeto(
+                f"{strategy} requires {required}/7 soft gates, got {soft_pass_count}/7"
+            )
+
     # Build legs by strategy (registry-driven dispatch)
     em_builder, no_em_builder = _builder_for(strategy)
     if em_builder is not None:

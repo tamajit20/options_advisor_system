@@ -163,6 +163,16 @@ STRATEGY_CONFIG = {
     "confidence_min_pass_count": 7,     # legacy — no longer used by engine
     "soft_gate_min_pass": 5,            # need ≥5 of 7 soft gates to pass
 
+    # Phase 3: per-strategy soft-gate minimum (Naked longs are the riskiest —
+    # require all 7 soft gates. Debit / uncapped — 6/7. Spreads default to 5/7.)
+    "strategy_min_soft_pass": {
+        "LONG_CALL":      7,
+        "LONG_PUT":       7,
+        "LONG_STRADDLE":  6,
+        "LONG_STRANGLE":  6,
+        "JADE_LIZARD":    6,
+    },
+
     # IV premium vs realised volatility (HV-20) thresholds
     "iv_premium_sell_min": 0.90,        # IV/HV must be ≥0.90 to justify writing premium
     "iv_premium_buy_max":  1.50,        # IV/HV must be ≤1.50 to justify buying premium
