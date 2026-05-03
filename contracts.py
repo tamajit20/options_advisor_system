@@ -122,6 +122,9 @@ class MarketIndicators:
     hv_20:         Optional[float]   # 20-day historical/realised volatility (annualised)
     iv_premium:    Optional[float]   # atm_iv / hv_20 — how expensive options are vs realised vol
     fii_net_futures: Optional[float] # FII net futures position (long − short contracts)
+    adx_14:           Optional[float] = None  # ADX-14 trend strength; None = insufficient history
+    sma20_slope_pct:  Optional[float] = None  # SMA20 5-day slope as % of price; None = insufficient history
+    sma_diff_pct:     Optional[float] = None  # (SMA20 - SMA50) / SMA50 * 100; None = insufficient history
 
 
 @dataclass

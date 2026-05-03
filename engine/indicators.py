@@ -101,18 +101,128 @@ def atr(spot_history: Sequence[dict], period: int = 14) -> Optional[float]:
 
 
 def trend(spot_history: Sequence[dict]) -> str:
-    """SMA20 vs SMA50 → BULLISH / BEARISH / SIDEWAYS."""
+    """Trend classification using SMA crossover + slope + ADX strength.
+
+    Rules:
+        BULLISH  : SMA20 > SMA50 by ``trend_sma_diff_pct`` AND
+                   SMA20 5-day slope > ``trend_slope_min_pct`` AND
+                   ADX-14 >= ``trend_adx_min``
+        BEARISH  : mirror of bullish on the downside
+        SIDEWAYS : everything else (chop, weak directional, insufficient data)
+
+    Insufficient history (< 50 closes for SMA50, or ADX unavailable) → SIDEWAYS
+    (safe fallback — strategy selector treats sideways conservatively).
+    """
     closes = [float(r["close_price"]) for r in spot_history]
     if len(closes) < 50:
         return "SIDEWAYS"
     sma20 = sum(closes[-20:]) / 20
     sma50 = sum(closes[-50:]) / 50
-    diff = (sma20 - sma50) / sma50 * 100.0
-    if diff > 0.5:
+    if sma50 <= 0:
+        return "SIDEWAYS"
+    diff_pct = (sma20 - sma50) / sma50 * 100.0
+
+    slope = _sma20_slope_pct(closes)
+    adx_val = adx(spot_history, 14)
+
+    sma_min   = STRATEGY_CONFIG.get("trend_sma_diff_pct",   0.5)
+    slope_min = STRATEGY_CONFIG.get("trend_slope_min_pct",  0.05)
+    adx_min   = STRATEGY_CONFIG.get("trend_adx_min",        20.0)
+
+    # ADX gate: weak trends (< adx_min) collapse to SIDEWAYS even if SMAs diverge.
+    # Missing ADX (insufficient history) → conservative SIDEWAYS.
+    strong_enough = adx_val is not None and adx_val >= adx_min
+
+    if diff_pct > sma_min and slope is not None and slope > slope_min and strong_enough:
         return "BULLISH"
-    if diff < -0.5:
+    if diff_pct < -sma_min and slope is not None and slope < -slope_min and strong_enough:
         return "BEARISH"
     return "SIDEWAYS"
+
+
+def _sma20_slope_pct(closes: Sequence[float]) -> Optional[float]:
+    """SMA20 percentage change over the last 5 days (today's SMA20 vs SMA20 5 days ago).
+
+    Returns None when we don't have 25 closes (need SMA20 today AND 5 days ago).
+    """
+    if len(closes) < 25:
+        return None
+    sma_today = sum(closes[-20:]) / 20
+    sma_5d_ago = sum(closes[-25:-5]) / 20
+    if sma_5d_ago <= 0:
+        return None
+    return (sma_today - sma_5d_ago) / sma_5d_ago * 100.0
+
+
+def adx(spot_history: Sequence[dict], period: int = 14) -> Optional[float]:
+    """Average Directional Index using Wilder's smoothing.
+
+    Inputs need high_price, low_price, close_price ordered ascending by date.
+    Returns None when fewer than 2*period + 1 rows available (need warm-up period
+    for both DI smoothing and DX-to-ADX smoothing).
+    """
+    if len(spot_history) < 2 * period + 1:
+        return None
+
+    highs  = [float(r["high_price"])  for r in spot_history]
+    lows   = [float(r["low_price"])   for r in spot_history]
+    closes = [float(r["close_price"]) for r in spot_history]
+
+    # Compute True Range, +DM, -DM for each bar (i = 1..n-1)
+    trs:    List[float] = []
+    plus_dm:  List[float] = []
+    minus_dm: List[float] = []
+    for i in range(1, len(spot_history)):
+        up_move   = highs[i] - highs[i - 1]
+        down_move = lows[i - 1] - lows[i]
+        plus_dm.append(up_move   if (up_move   > down_move and up_move   > 0) else 0.0)
+        minus_dm.append(down_move if (down_move > up_move   and down_move > 0) else 0.0)
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i]  - closes[i - 1]),
+        )
+        trs.append(tr)
+
+    if len(trs) < period:
+        return None
+
+    # Wilder smoothing — initial values = simple sum of first `period`
+    atr_w   = sum(trs[:period])
+    plus_w  = sum(plus_dm[:period])
+    minus_w = sum(minus_dm[:period])
+
+    dxs: List[float] = []
+    # First DX from initial smoothed values
+    if atr_w > 0:
+        plus_di  = 100.0 * plus_w  / atr_w
+        minus_di = 100.0 * minus_w / atr_w
+        denom = plus_di + minus_di
+        if denom > 0:
+            dxs.append(100.0 * abs(plus_di - minus_di) / denom)
+
+    # Continue Wilder smoothing through remaining bars
+    for i in range(period, len(trs)):
+        atr_w   = atr_w   - (atr_w   / period) + trs[i]
+        plus_w  = plus_w  - (plus_w  / period) + plus_dm[i]
+        minus_w = minus_w - (minus_w / period) + minus_dm[i]
+        if atr_w <= 0:
+            continue
+        plus_di  = 100.0 * plus_w  / atr_w
+        minus_di = 100.0 * minus_w / atr_w
+        denom = plus_di + minus_di
+        if denom <= 0:
+            continue
+        dxs.append(100.0 * abs(plus_di - minus_di) / denom)
+
+    if len(dxs) < period:
+        return None
+
+    # ADX = Wilder-smoothed average of DX values
+    adx_val = sum(dxs[:period]) / period
+    for dx in dxs[period:]:
+        adx_val = (adx_val * (period - 1) + dx) / period
+    return adx_val
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +298,18 @@ def build_indicators(
     cw, pw = oi_walls(chain_rows)
     hv = hv_20(spot_history)
     iv_prem = (atm_iv / hv) if (hv is not None and hv > 0) else None
+
+    # Phase 1: trend strength + slope diagnostics
+    closes = [float(r["close_price"]) for r in spot_history]
+    sma_diff = None
+    if len(closes) >= 50:
+        sma20_v = sum(closes[-20:]) / 20
+        sma50_v = sum(closes[-50:]) / 50
+        if sma50_v > 0:
+            sma_diff = (sma20_v - sma50_v) / sma50_v * 100.0
+    slope_v = _sma20_slope_pct(closes)
+    adx_v   = adx(spot_history, 14)
+
     return MarketIndicators(
         symbol           = symbol,
         as_of            = as_of,
@@ -204,4 +326,7 @@ def build_indicators(
         hv_20            = hv,
         iv_premium       = iv_prem,
         fii_net_futures  = fii_net_futures,
+        adx_14           = adx_v,
+        sma20_slope_pct  = slope_v,
+        sma_diff_pct     = sma_diff,
     )

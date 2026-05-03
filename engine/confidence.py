@@ -137,9 +137,16 @@ def evaluate(
         if indicators.atr_14 is None:
             return _PASS_WARN, "Insufficient spot history — ATR-14 unavailable, trend unverifiable"
         trend_ok = indicators.trend in ("BULLISH", "BEARISH", "SIDEWAYS")
+        adx_v = indicators.adx_14
+        slope_v = indicators.sma20_slope_pct
+        diff_v = indicators.sma_diff_pct
+        adx_str = f"ADX-14: {adx_v:.1f}" if adx_v is not None else "ADX-14: n/a"
+        slope_str = f"slope: {slope_v:+.2f}%" if slope_v is not None else "slope: n/a"
+        diff_str  = f"SMA20-50 diff: {diff_v:+.2f}%" if diff_v is not None else "SMA-diff: n/a"
         return (
             _PASS if trend_ok else _SOFT_FAIL,
-            f"Trend: {indicators.trend} · ATR-14: {indicators.atr_14:.0f} pts",
+            f"Trend: {indicators.trend} · ATR-14: {indicators.atr_14:.0f} pts · "
+            f"{diff_str} · {slope_str} · {adx_str}",
         )
 
     checks.append(_gate("Trend identifiable", _trend_gate))

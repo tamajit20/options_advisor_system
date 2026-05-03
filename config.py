@@ -200,6 +200,13 @@ STRATEGY_CONFIG = {
     # VIX regime thresholds (% change vs prior close)
     "vix_rising_threshold":  5.0,
     "vix_spiking_threshold": 10.0,
+
+    # Trend detection (Phase 1 upgrade)
+    # Old: SMA20 vs SMA50 with 0.5% threshold (too sensitive to chop).
+    # New: SMA crossover + slope direction + ADX strength.
+    "trend_sma_diff_pct":     0.5,    # SMA20 vs SMA50 minimum % gap
+    "trend_slope_min_pct":    0.05,   # SMA20 5-day slope (% of price) minimum
+    "trend_adx_min":          20.0,   # ADX-14 below this = trend too weak, force SIDEWAYS
 }
 
 
