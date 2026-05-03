@@ -198,6 +198,22 @@ _TABLE_DDL: List[str] = [
     )
     ALTER TABLE options_suggestions ADD expiry_type NVARCHAR(10) NULL
     """,
+    # Migration: add data_date (NSE bhav date used for analysis)
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'data_date'
+    )
+    ALTER TABLE options_suggestions ADD data_date DATE NULL
+    """,
+    # Migration: add entry_date (intended execution date = next trading day after data_date)
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'entry_date'
+    )
+    ALTER TABLE options_suggestions ADD entry_date DATE NULL
+    """,
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_date ON options_suggestions (generated_on DESC)",
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_status ON options_suggestions (status, generated_on DESC)",
 

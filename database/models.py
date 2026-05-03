@@ -182,6 +182,16 @@ class SpotEodRepo:
             [symbol],
         )
 
+    def for_date(self, symbol: str, trade_date: date) -> Optional[dict]:
+        """Return spot row for the exact trade_date, falling back to the most
+        recent row on or before that date (never a future date)."""
+        row = self.db.fetch_one(
+            "SELECT TOP 1 * FROM options_spot_eod "
+            "WHERE symbol = ? AND trade_date <= ? ORDER BY trade_date DESC",
+            [symbol, trade_date],
+        )
+        return row
+
     def history(self, symbol: str, since: date) -> List[dict]:
         return self.db.fetch_all(
             "SELECT * FROM options_spot_eod WHERE symbol = ? AND trade_date >= ? "
@@ -288,6 +298,19 @@ class FiiRepo:
             "SELECT * FROM options_fii_data WHERE trade_date = ?", [last_dt]
         )
 
+    def for_date(self, trade_date: date) -> List[dict]:
+        """Return FII rows for the most recent date on or before trade_date.
+        Prevents using future-dated FII data when running a backdated suggestion."""
+        last_dt = self.db.scalar(
+            "SELECT MAX(trade_date) FROM options_fii_data WHERE trade_date <= ?",
+            [trade_date],
+        )
+        if last_dt is None:
+            return []
+        return self.db.fetch_all(
+            "SELECT * FROM options_fii_data WHERE trade_date = ?", [last_dt]
+        )
+
     def delete_older_than(self, cutoff: date) -> int:
         cur = self.db.execute("DELETE FROM options_fii_data WHERE trade_date < ?", [cutoff])
         n = cur.rowcount or 0
@@ -347,6 +370,10 @@ class IvHistoryRepo:
             "GROUP BY trade_date ORDER BY trade_date",
             [symbol, since],
         )
+
+    def latest_trade_date(self) -> Optional[date]:
+        v = self.db.scalar("SELECT MAX(trade_date) FROM options_iv_history")
+        return v
 
     def latest_for(self, symbol: str, trade_date: date) -> List[dict]:
         return self.db.fetch_all(
@@ -496,9 +523,9 @@ class SuggestionRepo:
                net_credit_suggested, max_profit, max_loss,
                upper_breakeven, lower_breakeven, stop_loss_level,
                probability_of_profit, estimated_charges_total, estimated_net_pnl,
-               execution_window, plain_english)
+               execution_window, plain_english, data_date, entry_date)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING',
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 s.suggestion_id, s.trade_name, s.generated_on, s.strategy, s.strategy_type,
@@ -507,7 +534,7 @@ class SuggestionRepo:
                 s.economics.net_credit, s.economics.max_profit, s.economics.max_loss,
                 s.economics.upper_breakeven, s.economics.lower_breakeven, s.economics.stop_loss_level,
                 s.economics.probability_of_profit, s.economics.estimated_charges.total, s.economics.estimated_net_pnl,
-                s.execution_window, s.plain_english,
+                s.execution_window, s.plain_english, s.data_date, s.entry_date,
             ],
         ).close()
 
@@ -629,6 +656,51 @@ class SuggestionRepo:
             "WHERE status IN ('PENDING', 'IGNORED') "
             "ORDER BY generated_on DESC"
         )
+
+    def active_pending(self) -> List[dict]:
+        """Return PENDING/IGNORED suggestions whose execution window has not yet closed.
+
+        A suggestion is still actionable when:
+          - entry_date > today                 (execution day is in the future), OR
+          - entry_date = today AND time ≤ 15:30 IST (market still open today)
+
+        Fallback: if no rows have entry_date populated (legacy rows before
+        the data_date/entry_date migration), returns the 5 most recent PENDING rows.
+        """
+        from utils import now_ist
+        now = now_ist()
+        today = now.date()
+        from datetime import time as _time
+        mkt_close = _time(15, 30)
+
+        if now.time() <= mkt_close:
+            # Before/at close: include today's entry day + all future entry days
+            rows = self.db.fetch_all(
+                "SELECT * FROM options_suggestions "
+                "WHERE status IN ('PENDING', 'IGNORED') "
+                "AND entry_date >= ? "
+                "ORDER BY generated_on DESC",
+                [today],
+            )
+        else:
+            # After market close: only suggestions with entry_date in the future
+            rows = self.db.fetch_all(
+                "SELECT * FROM options_suggestions "
+                "WHERE status IN ('PENDING', 'IGNORED') "
+                "AND entry_date > ? "
+                "ORDER BY generated_on DESC",
+                [today],
+            )
+
+        # Fallback for legacy rows without entry_date
+        if not rows:
+            rows = self.db.fetch_all(
+                "SELECT TOP (5) * FROM options_suggestions "
+                "WHERE status IN ('PENDING', 'IGNORED') "
+                "AND entry_date IS NULL "
+                "ORDER BY generated_on DESC"
+            )
+        return rows
 
     def delete_older_than(self, cutoff: date) -> int:
         cur = self.db.execute(

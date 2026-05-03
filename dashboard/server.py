@@ -173,14 +173,12 @@ def create_app() -> Flask:
     @_with_db
     def api_suggestion_today(db: SQLServerConnection):
         sug = SuggestionRepo(db)
-        today = today_ist()
-        rows = sug.by_date(today)
-        # If no suggestion was generated today (e.g. holiday, multi-day
-        # weekend, or engine ran last evening for next-day execution),
-        # fall back to the most recent still-actionable (PENDING) suggestion
-        # regardless of how many days ago it was generated.
-        if not rows:
-            rows = sug.latest_pending(limit=1)
+        # Return suggestions whose execution window hasn't closed yet:
+        #   - entry_date > today: execute in the future (e.g. Friday→Monday)
+        #   - entry_date = today AND time ≤ 15:30 IST: still actionable today
+        # After 15:30 on the entry day the suggestion disappears automatically.
+        # Falls back to legacy PENDING rows that pre-date the entry_date column.
+        rows = sug.active_pending()
         out = []
         for r in rows:
             r_out = _row(r)
@@ -753,13 +751,26 @@ def create_app() -> Flask:
         if latest == "RUNNING":
             return jsonify({"error": "Job is already running"}), 409
 
+        # Optional trade_date override from JSON body: { "trade_date": "YYYY-MM-DD" }
+        trade_date: str | None = None
+        body = request.get_json(silent=True) or {}
+        raw_td = body.get("trade_date")
+        if raw_td:
+            try:
+                from datetime import date as _date
+                _date.fromisoformat(str(raw_td))  # validate format
+                trade_date = str(raw_td)
+            except ValueError:
+                return jsonify({"error": f"Invalid trade_date format: {raw_td!r} — use YYYY-MM-DD"}), 400
+
         try:
-            ok = trigger_job_now(job_name)
+            ok = trigger_job_now(job_name, trade_date=trade_date)
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 503
         if not ok:
             return jsonify({"error": "Could not dispatch"}), 500
-        return jsonify({"status": "queued", "job_name": job_name})
+        return jsonify({"status": "queued", "job_name": job_name,
+                        "trade_date": trade_date or "auto"})
 
     @app.route("/api/jobs/<job_name>/history")
     @_with_db

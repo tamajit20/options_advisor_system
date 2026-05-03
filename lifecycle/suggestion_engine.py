@@ -20,7 +20,7 @@ highest-confidence underlying as "the" suggestion of the day.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import List, Optional
 
 from config import STRATEGY_CONFIG
@@ -48,9 +48,78 @@ from engine.confidence import evaluate as evaluate_confidence
 from engine.indicators import build_indicators
 from engine.strategy_selector import assemble_suggestion
 from exceptions import StrategyVeto
-from utils import days_between, now_ist, today_ist
+from utils import days_between, now_ist
 
 logger = logging.getLogger(__name__)
+
+# NSE market hours (IST)
+_NSE_OPEN  = time(9, 15)
+_NSE_CLOSE = time(15, 30)
+
+
+def _resolve_data_date(db: SQLServerConnection) -> Optional[date]:
+    """Return the most recent date for which BOTH FO bhav AND IV calculation
+    are present and consistent.  This is the correct data date to use when
+    the suggestion engine is triggered without an explicit trade_date.
+
+    Logic:
+    - fo_date  = MAX(trade_date) in options_fo_eod
+    - iv_date  = MAX(trade_date) in options_iv_history
+    - If both match              → use that date (the common case after nightly jobs)
+    - If fo_date > iv_date       → IV hasn’t been computed for latest FO yet;
+                                   fall back to iv_date (both tables agree there)
+    - If iv_date > fo_date       → stale IV from a future date; use fo_date
+    - If either is None          → return None (no data at all)
+    """
+    fo_date = FoEodRepo(db).latest_trade_date()
+    iv_date = IvHistoryRepo(db).latest_trade_date()
+    if fo_date is None:
+        logger.warning(
+            "_resolve_data_date: FO bhav table has no data — run fo_bhav_download first"
+        )
+        return None
+    if iv_date is None:
+        logger.warning(
+            "_resolve_data_date: IV history table has no data — run iv_calculation first"
+        )
+        return None
+
+    if fo_date == iv_date:
+        logger.info(
+            "_resolve_data_date: FO and IV both have data for %s — using this date",
+            fo_date,
+        )
+        return fo_date
+
+    chosen = min(fo_date, iv_date)
+    if fo_date > iv_date:
+        logger.info(
+            "_resolve_data_date: FO has data up to %s but IV only computed up to %s. "
+            "IV not yet run for %s. Falling back to %s (latest date where both agree).",
+            fo_date, iv_date, fo_date, chosen,
+        )
+    else:
+        logger.info(
+            "_resolve_data_date: IV has data up to %s but FO only downloaded up to %s. "
+            "Using %s (latest date where both agree).",
+            iv_date, fo_date, chosen,
+        )
+    return chosen
+
+
+def _execution_window(entry_day: date, now: datetime) -> str:
+    """Build the execution window string.
+
+    - If today IS the entry day AND we are currently inside market hours
+      (09:15–15:30 IST) → 'Market is open — execute now at current market price'
+    - Otherwise         → '09:20–09:45 IST {Weekday} DD-Mon-YY'
+    """
+    today = now.date()
+    current_time = now.time()
+    if today == entry_day and _NSE_OPEN <= current_time <= _NSE_CLOSE:
+        return "Market is open — execute now at current market price"
+    day_str = entry_day.strftime("%a %d-%b-%y")
+    return f"09:20\u201309:45 IST {day_str}"
 
 
 def _next_trading_day(d: date) -> date:
@@ -115,6 +184,8 @@ def _evaluate_underlying(
     db: SQLServerConnection,
     symbol: str,
     trade_date: date,
+    entry_day: date,
+    execution_window: str,
 ) -> tuple[list[Suggestion], list[NoSuggestion]]:
     """Evaluate one underlying for all expiry types in the DTE band.
 
@@ -128,9 +199,9 @@ def _evaluate_underlying(
     lot_repo = LotSizeRepo(db)
     event_repo = EventCalendarRepo(db)
 
-    spot_row = sp.latest(symbol)
+    spot_row = sp.for_date(symbol, trade_date)
     if not spot_row:
-        logger.warning("Suggestion: no spot for %s", symbol)
+        logger.warning("Suggestion: no spot for %s on or before %s", symbol, trade_date)
         return [], []
     spot = float(spot_row["close_price"])
 
@@ -159,10 +230,10 @@ def _evaluate_underlying(
     existing_names = [t.get("trade_name") for t in trade_repo.open_trades()
                       if t.get("trade_name")]
 
-    # FII net futures positioning (long − short contracts)
+    # FII net futures positioning — anchored to trade_date (never future data)
     fii_net_futures: Optional[float] = None
     try:
-        fii_rows = FiiRepo(db).latest()
+        fii_rows = FiiRepo(db).for_date(trade_date)
         fii_row = next((r for r in fii_rows if r.get("client_type") == "FII"), None)
         if fii_row:
             fii_net_futures = float(fii_row["future_long"]) - float(fii_row["future_short"])
@@ -177,7 +248,6 @@ def _evaluate_underlying(
     for expiry, expiry_type in expiry_candidates:
         # entry_dte: calendar days from the actual entry day to expiry.
         # Mon-Thu generated → entered next day (+1); Fri generated → entered Monday (+3).
-        entry_day = _next_trading_day(trade_date)
         entry_dte = max(days_between(entry_day, expiry), 0)
 
         chain = fo.get_chain(symbol, trade_date, expiry)
@@ -242,6 +312,9 @@ def _evaluate_underlying(
                 lot_size=lot_size,
                 existing_trade_names=existing_names,
                 generated_on=now_ist(),
+                execution_window=execution_window,
+                data_date=trade_date,
+                entry_date=entry_day,
             )
             suggestions.append(primary_suggestion)
             existing_names.append(primary_suggestion.trade_name)
@@ -287,6 +360,9 @@ def _evaluate_underlying(
                         existing_trade_names=existing_names,
                         generated_on=now_ist(),
                         strategy_override=companion_strategy,
+                        execution_window=execution_window,
+                        data_date=trade_date,
+                        entry_date=entry_day,
                     )
                     suggestions.append(comp)
                     existing_names.append(comp.trade_name)
@@ -307,9 +383,25 @@ def run_suggestion_engine(
     all confidence checks (one suggestion per underlying per day). Underlyings
     that already have a suggestion for today are skipped so re-runs are safe.
 
+    trade_date: the NSE bhav date to use for all data lookups.  When omitted
+    the engine auto-detects the latest date for which both FO bhav AND IV
+    have been computed (they must be consistent).  Pass an explicit date to
+    re-run for a missed day or to back-test.
+
     Returns number of new suggestions persisted.
     """
-    trade_date = trade_date or today_ist()
+    if trade_date is None:
+        trade_date = _resolve_data_date(db)
+        if trade_date is None:
+            logger.warning("Suggestion engine: no consistent FO+IV data found — aborting")
+            return 0
+        logger.info("Suggestion engine: auto-resolved data date → %s", trade_date)
+    else:
+        logger.info("Suggestion engine: using explicit trade_date=%s", trade_date)
+
+    # Execution window: when/how to enter this trade
+    entry_day = _next_trading_day(trade_date)
+    exec_window = _execution_window(entry_day, now_ist())
     sug_repo = SuggestionRepo(db)
     notif_repo = NotificationRepo(db)
 
@@ -320,7 +412,7 @@ def run_suggestion_engine(
 
     for symbol in STRATEGY_CONFIG["underlyings"]:
         try:
-            sugs, nss = _evaluate_underlying(db, symbol, trade_date)
+            sugs, nss = _evaluate_underlying(db, symbol, trade_date, entry_day, exec_window)
         except Exception:
             logger.exception("Suggestion eval failed for %s", symbol)
             continue

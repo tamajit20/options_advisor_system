@@ -159,7 +159,8 @@ def assemble_suggestion(
     existing_trade_names: Iterable[str] = (),
     generated_on: datetime | None = None,
     strategy_override: str | None = None,
-) -> Suggestion:
+    execution_window: str = "09:20\u201309:45 IST tomorrow",    data_date: date | None = None,
+    entry_date: date | None = None,) -> Suggestion:
     """Top-level: select strategy, build legs, compute economics, return Suggestion.
 
     If ``strategy_override`` is provided it bypasses ``select_strategy()`` and
@@ -275,7 +276,8 @@ def assemble_suggestion(
         existing_names=existing_trade_names,
     )
 
-    plain_english = _explain(strategy, underlying, indicators, iv_rank, dte, economics)
+    plain_english = _explain(strategy, underlying, indicators, iv_rank, dte, economics,
+                             execution_window)
 
     return Suggestion(
         suggestion_id=suggestion_id,
@@ -291,8 +293,10 @@ def assemble_suggestion(
         confidence=confidence,
         legs=legs,
         economics=economics,
-        execution_window="09:20–09:45 IST tomorrow",
+        execution_window=execution_window,
         plain_english=plain_english,
+        data_date=data_date,
+        entry_date=entry_date,
     )
 
 
@@ -331,6 +335,7 @@ def _explain(
     iv_rank: float,
     dte: int,
     econ: SuggestionEconomics,
+    execution_window: str = "09:20\u201309:45 IST tomorrow",
 ) -> str:
     parts: List[str] = []
     parts.append(f"{strategy.replace('_', ' ').title()} on {underlying}.")
@@ -350,7 +355,7 @@ def _explain(
 
     # Entry
     lines.append("ENTRY THRESHOLDS")
-    lines.append("\u2022 Execute at open (09:20\u201309:45 IST)")
+    lines.append(f"\u2022 {execution_window}")
     lines.append("")
 
     # Timeline (SL/target omitted \u2014 the frontend computes those from leg data)

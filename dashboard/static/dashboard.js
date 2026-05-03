@@ -329,7 +329,17 @@ function renderPlainEnglishStructured(s) {
   }
   if (spot)               chips.push(`<span class="ctx-chip">Spot ₹${escapeHtml(spot)}</span>`);
   if (ivRank)             chips.push(`<span class="ctx-chip ctx-iv">IV Rank ${escapeHtml(ivRank)}%</span>`);
-  if (s.confidence_score != null) {
+  // Data provenance: show which NSE bhav date was used and the intended entry date
+  if (s.data_date) {
+    const dd = s.data_date.slice(0, 10);  // "YYYY-MM-DD"
+    const dFmt = new Date(dd + 'T00:00:00').toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'2-digit' });
+    chips.push(`<span class="ctx-chip ctx-data-date" title="NSE bhav/EOD data used for this analysis">NSE data \u00b7 ${escapeHtml(dFmt)}</span>`);
+  }
+  if (s.entry_date) {
+    const ed = s.entry_date.slice(0, 10);
+    const eFmt = new Date(ed + 'T00:00:00').toLocaleDateString('en-IN', { weekday:'short', day:'2-digit', month:'short', year:'2-digit' });
+    chips.push(`<span class="ctx-chip ctx-entry-date" title="Intended execution date">Execute \u2192 ${escapeHtml(eFmt)}</span>`);
+  }  if (s.confidence_score != null) {
     let _warnCount = 0, _errorCount = 0, _failCount = 0, _softFailCount = 0, _total = 7, _passCount = null;
     if (s.conditions_json) {
       let _raw = s.conditions_json;
@@ -2161,12 +2171,38 @@ function renderJobCard(j) {
   </div>`;
 }
 
+// Jobs that support an explicit data date override
+const DATE_OVERRIDE_JOBS = new Set([
+  'fo_bhav_download','spot_bhav_download','vix_download','fii_download',
+  'iv_calculation','suggestion_engine','exit_engine',
+]);
+
 async function triggerJob(jobName) {
   if (!jobName) return;
-  if (!confirm(`Trigger "${jobName}" now?`)) return;
+
+  let tradeDate = '';
+  if (DATE_OVERRIDE_JOBS.has(jobName)) {
+    const input = prompt(
+      `Run "${jobName}"\n\nEnter data date (YYYY-MM-DD) to use specific day's data,\nor leave blank to auto-detect the latest available date:`,
+      ''
+    );
+    if (input === null) return;   // user cancelled
+    if (input.trim() !== '') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(input.trim())) {
+        toast('Invalid date format — use YYYY-MM-DD', 'err');
+        return;
+      }
+      tradeDate = input.trim();
+    }
+  } else {
+    if (!confirm(`Trigger "${jobName}" now?`)) return;
+  }
+
   try {
-    await API(`/api/jobs/${encodeURIComponent(jobName)}/trigger`, { method: 'POST' });
-    toast(`Job queued: ${jobName}`, 'ok');
+    const body = tradeDate ? JSON.stringify({ trade_date: tradeDate }) : undefined;
+    const headers = tradeDate ? { 'Content-Type': 'application/json' } : {};
+    await API(`/api/jobs/${encodeURIComponent(jobName)}/trigger`, { method: 'POST', headers, body });
+    toast(`Job queued: ${jobName}${tradeDate ? ' (' + tradeDate + ')' : ' (auto-date)'}`, 'ok');
     setTimeout(() => loadJobs(true), 600);
   } catch (e) {
     toast(`Trigger failed: ${e.message}`, 'err');

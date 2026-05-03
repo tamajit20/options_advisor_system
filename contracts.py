@@ -221,6 +221,8 @@ class Suggestion:
     economics:        SuggestionEconomics
     execution_window: str             # e.g., "9:20 AM – 9:45 AM tomorrow (IST)"
     plain_english:    str             # explanation shown to user
+    data_date:        Optional[date] = None  # NSE bhav date the analysis is based on
+    entry_date:       Optional[date] = None  # intended execution date (next trading day)
 
 
 @dataclass
