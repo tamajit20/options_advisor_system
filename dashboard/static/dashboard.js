@@ -714,6 +714,117 @@ function spreadBadge(allLegs, thisLeg) {
   return '';
 }
 
+// ── Execution order ─────────────────────────────────────────────────────────
+// Compute the safe execution order for a multi-leg strategy.
+//
+//   ENTRY  rule: BUY hedges (long legs) first, then SELL shorts. This avoids
+//                ever holding a naked short between fills.
+//   CLOSE  rule: BUY back shorts first (extinguish risk), then SELL longs.
+//
+//  Strategy-specific overrides (most critical):
+//   - JADE_LIZARD has a NAKED short put. On entry build the call spread first
+//     (BUY long CE → SELL short CE), then add the naked SELL PE last so the
+//     defined-risk side is in place before adding directional risk.
+//     On close, BUY-BACK the naked short PE FIRST (highest risk leg).
+//
+// Returns: Map<leg_order:int, position:int> where position is 1..N execution
+// step. For 1-leg strategies returns an empty map (no order needed).
+function executionOrder(legs, strategy, mode) {
+  const out = new Map();
+  if (!legs || legs.length <= 1) return out;
+  const isJade = strategy === 'JADE_LIZARD';
+  const sorted = [...legs];
+
+  if (mode === 'entry') {
+    if (isJade) {
+      // BUY CE → SELL CE → SELL PE
+      const rank = (l) => {
+        if (l.action === 'BUY'  && l.option_type === 'CE') return 0;
+        if (l.action === 'SELL' && l.option_type === 'CE') return 1;
+        if (l.action === 'SELL' && l.option_type === 'PE') return 2;
+        return 3;
+      };
+      sorted.sort((a, b) => rank(a) - rank(b) || (a.leg_order||0) - (b.leg_order||0));
+    } else {
+      // BUYs first, SELLs last; stable by leg_order
+      sorted.sort((a, b) => {
+        const aBuy = a.action === 'BUY' ? 0 : 1;
+        const bBuy = b.action === 'BUY' ? 0 : 1;
+        if (aBuy !== bBuy) return aBuy - bBuy;
+        return (a.leg_order||0) - (b.leg_order||0);
+      });
+    }
+  } else { // 'close'
+    if (isJade) {
+      // BUY-back naked SELL PE → BUY-back SELL CE → SELL-back BUY CE
+      const rank = (l) => {
+        if (l.action === 'SELL' && l.option_type === 'PE') return 0;
+        if (l.action === 'SELL' && l.option_type === 'CE') return 1;
+        if (l.action === 'BUY'  && l.option_type === 'CE') return 2;
+        return 3;
+      };
+      sorted.sort((a, b) => rank(a) - rank(b) || (a.leg_order||0) - (b.leg_order||0));
+    } else {
+      // SELLs (shorts being bought back) first, BUYs (longs being sold back) last
+      sorted.sort((a, b) => {
+        const aSell = a.action === 'SELL' ? 0 : 1;
+        const bSell = b.action === 'SELL' ? 0 : 1;
+        if (aSell !== bSell) return aSell - bSell;
+        return (a.leg_order||0) - (b.leg_order||0);
+      });
+    }
+  }
+  sorted.forEach((l, i) => out.set(l.leg_order, i + 1));
+  return out;
+}
+
+// Render the execution-step badge for one leg. mode='entry' or 'close'.
+// Returns '' for single-leg strategies (long_call / long_put) where order is moot.
+function execStepBadge(legs, leg, strategy, mode) {
+  const map = executionOrder(legs, strategy, mode);
+  const pos = map.get(leg.leg_order);
+  if (!pos) return '';
+  const cls = mode === 'close' ? 'exec-step exec-step-close' : 'exec-step exec-step-entry';
+  const verb = mode === 'close'
+    ? (leg.action === 'SELL' ? 'Buy back' : 'Sell back')
+    : leg.action;
+  const total = map.size;
+  const tip = mode === 'close'
+    ? `Close step ${pos} of ${total} \u2014 ${verb} this leg now (close shorts before longs)`
+    : `Execution step ${pos} of ${total} \u2014 ${verb} this leg now (acquire hedges before opening shorts)`;
+  return `<span class="${cls}" title="${tip}">${pos}</span>`;
+}
+
+// Banner shown above the legs list explaining the order rule.
+function execOrderBanner(legs, strategy, mode) {
+  if (!legs || legs.length <= 1) return '';
+  const map = executionOrder(legs, strategy, mode);
+  if (!map.size) return '';
+  // Build readable sequence: "BUY 23100 PE \u2192 BUY 24900 CE \u2192 SELL 23400 PE \u2192 SELL 24600 CE"
+  const ordered = [...legs].sort((a, b) => (map.get(a.leg_order)||99) - (map.get(b.leg_order)||99));
+  const seq = ordered.map(l => {
+    const verb = mode === 'close'
+      ? (l.action === 'SELL' ? 'Buy back' : 'Sell back')
+      : l.action;
+    const verbClass = (mode === 'close')
+      ? (l.action === 'SELL' ? 'tag-ok' : 'tag-err')
+      : (l.action === 'SELL' ? 'tag-err' : 'tag-ok');
+    const stepCls = mode === 'close' ? 'exec-step exec-step-close' : 'exec-step exec-step-entry';
+    return `<span class="exec-seq-item">
+      <span class="${stepCls}">${map.get(l.leg_order)}</span>
+      <span class="tag ${verbClass} tag-sm">${verb}</span>
+      ${l.strike||''} ${escapeHtml(l.option_type||'')}
+    </span>`;
+  }).join('<span class="exec-seq-arrow">\u2192</span>');
+  const heading = mode === 'close'
+    ? '\u26a0\ufe0f Close in this order \u2014 buy back short legs FIRST, then sell longs:'
+    : '\u26a0\ufe0f Execute in this order \u2014 acquire hedges (BUY) FIRST, then SELL shorts:';
+  return `<div class="exec-order-banner exec-order-${mode}">
+    <div class="exec-order-heading">${heading}</div>
+    <div class="exec-order-seq">${seq}</div>
+  </div>`;
+}
+
 // ── Strategy rationale ──────────────────────────────────────────────────────
 // Small "why this strategy today" + "what makes it better" block.
 // Uses actual strikes / BEs / spot from the suggestion object, and parses
@@ -1035,6 +1146,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = []) {
     return `
     <div class="leg-row action-${l.action}" data-leg-action="${l.action}">
       <div class="leg-action-col">
+        ${execStepBadge(s.legs, l, s.strategy, 'entry')}
         <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'}">${l.action}</span>
         ${spreadBadge(s.legs, l)}
       </div>
@@ -1096,6 +1208,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = []) {
       <div><span class="k">Est. net P&amp;L</span><br><span class="v econ-npnl">₹${fmt(econ.npnl)}</span></div>
       <div><span class="k">DTE</span><br><span class="v">${s.dte ?? '—'}</span></div>
     </div>
+    ${execOrderBanner(s.legs, s.strategy, 'entry')}
     <div class="legs-grid">${legsHtml}</div>
     ${creditBreakdownHtml(s.legs, 'suggest')}
     ${readOnly ? '' : `
@@ -1391,8 +1504,10 @@ async function openSupplementForm(tradeId) {
     if (!data.legs.length) {
       panel.innerHTML = '<div class="muted">All legs already filled.</div>'; return;
     }
+    const suppStrategy = (data.legs[0] && data.legs[0].strategy) || '';
     const legsHtml = data.legs.map(l => `
       <div class="leg-row action-${escapeHtml(l.action)}" data-leg-order="${l.leg_order}">
+        ${execStepBadge(data.legs, l, suppStrategy, 'entry')}
         <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'}">${escapeHtml(l.action)}</span>
         <div>
           <div><strong>${escapeHtml(l.symbol)} ${l.strike} ${escapeHtml(l.option_type)}</strong></div>
@@ -1413,6 +1528,7 @@ async function openSupplementForm(tradeId) {
     panel.innerHTML = `
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid #2a3744">
         <div class="muted" style="font-size:.8rem;margin-bottom:8px">Fill remaining legs:</div>
+        ${execOrderBanner(data.legs, suppStrategy, 'entry')}
         ${legsHtml}
         <div class="btn-row" style="margin-top:8px">
           <button class="btn btn-accent btn-supp-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm fills</button>
@@ -1466,6 +1582,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     }
     const suggMap = {};
     (sugg.legs || []).forEach(s => { suggMap[s.leg_order] = s.suggested_close; });
+    const closeStrategy = (data.legs[0] && data.legs[0].strategy) || '';
     const legsHtml = data.legs.map(l => {
       const closeAction = l.action === 'SELL' ? 'Buy back' : 'Sell back';
       const lotsUsed = l.lots_actual || l.lots || 1;
@@ -1483,6 +1600,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
              data-lots="${lotsUsed}"
              data-lot-size="${lotSize}">
           <div class="leg-exit-head">
+            ${execStepBadge(data.legs, l, closeStrategy, 'close')}
             <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'}">${escapeHtml(l.action)}</span>
             <strong>${escapeHtml(l.symbol)} ${l.strike} ${escapeHtml(l.option_type)}</strong>
             <span class="muted" style="font-size:.8rem">Entry \u20b9${fmt(l.fill_price)} \u00d7 ${lotsUsed} lots</span>
@@ -1502,6 +1620,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
           &nbsp;&nbsp;
           <span class="step-badge step-2">Step 2</span> Return &rarr; enter actual fills &rarr; <strong>Confirm</strong>
         </div>
+        ${execOrderBanner(data.legs, closeStrategy, 'close')}
         <div class="leg-exit-grid">${legsHtml}</div>
         
         <div class="live-pnl-preview" id="live-pnl-${escapeHtml(tradeId)}">
@@ -1695,7 +1814,23 @@ function renderTrade(t) {
     }
     legsHtml = `<div class="trade-legs-section">
       ${targetSummaryHtml}
-      <div class="trade-legs-grid">${legs.map(l => {
+      ${(() => {
+        // Close-order banner shown above legs when there are open executed legs.
+        const openExec = legs.filter(l => l.executed && !l.exit_price);
+        const tradeStrategy2 = (t.suggestion && t.suggestion.strategy) || '';
+        return openExec.length > 1 ? execOrderBanner(openExec, tradeStrategy2, 'close') : '';
+      })()}
+      ${(() => {
+        // Entry-order banner when there are still pending (un-executed) legs to fill.
+        const pending = legs.filter(l => !l.executed);
+        const tradeStrategy3 = (t.suggestion && t.suggestion.strategy) || '';
+        return pending.length > 1 ? execOrderBanner(pending, tradeStrategy3, 'entry') : '';
+      })()}
+      <div class="trade-legs-grid">${(() => {
+        const tradeStrategy = (t.suggestion && t.suggestion.strategy) || '';
+        const openExec = legs.filter(l => l.executed && !l.exit_price);
+        const pending  = legs.filter(l => !l.executed);
+        return legs.map(l => {
         const done = !!l.executed;
         const lotsUsed = l.lots_actual || l.lots || 0;
         const tag = `<span class="tag ${(l.action||'') === 'SELL' ? 'tag-err' : 'tag-ok'}">${escapeHtml(l.action||'')}</span>`;
@@ -1717,7 +1852,7 @@ function renderTrade(t) {
             ? `<span class="leg-target-close">Target buy back \u2264 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(${tradePctLabel} of \u20b9${fmt(l.fill_price)} entry)</span></span>`
             : `<span class="leg-target-close">Target sell back \u2265 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(${tradePctLabel} of \u20b9${fmt(l.fill_price)} entry)</span></span>`;
           return `<div class="trade-leg-row leg-done action-${l.action}">
-            <div class="leg-action-col">${tag}${spreadBadge(legs, l)}</div>
+            <div class="leg-action-col">${execStepBadge(openExec, l, tradeStrategy, 'close')}${tag}${spreadBadge(legs, l)}</div>
             <div class="tl-info">
               <span class="tl-instrument">${instrument}</span>
               <div class="muted" style="font-size:.8rem">${escapeHtml(legRoleNote(l.strategy, l))}</div>
@@ -1729,7 +1864,7 @@ function renderTrade(t) {
         } else {
           const note = legNextAction(l, legs);
           return `<div class="trade-leg-row leg-pending">
-            <div class="leg-action-col">${tag}${spreadBadge(legs, l)}</div>
+            <div class="leg-action-col">${execStepBadge(pending, l, tradeStrategy, 'entry')}${tag}${spreadBadge(legs, l)}</div>
             <div class="tl-info">
               <span class="tl-instrument">${instrument}</span>
               <span class="leg-status-pending">\u23f3 Pending</span>
@@ -1737,7 +1872,8 @@ function renderTrade(t) {
             </div>
           </div>`;
         }
-      }).join('')}</div>
+      }).join('');
+      })()}</div>
       ${creditBreakdownHtml(legs.filter(l => l.executed), 'trade')}
     </div>`;
   }

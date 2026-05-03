@@ -883,6 +883,18 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .pnl-pos{color:#81c784}
 .pnl-neg{color:#ef5350}
 
+/* --- Execution order badges & banner --- */
+.exec-step{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:50%;font-size:.7rem;font-weight:800;padding:0 5px;margin-right:6px;font-family:ui-monospace,monospace;line-height:1;cursor:help}
+.exec-step.exec-step-entry{background:#1e3a8a;color:#bfdbfe;border:1px solid #3b82f6}
+.exec-step.exec-step-close{background:#7c2d12;color:#fed7aa;border:1px solid #ea580c}
+.exec-order-banner{margin:8px 0 12px;padding:10px 12px;border-radius:6px;font-size:.82rem;line-height:1.6;border:1px solid}
+.exec-order-banner.exec-order-entry{background:rgba(30,58,138,.15);border-color:#1e3a8a;color:#bfdbfe}
+.exec-order-banner.exec-order-close{background:rgba(124,45,18,.15);border-color:#7c2d12;color:#fed7aa}
+.exec-order-heading{font-weight:600;margin-bottom:6px;font-size:.8rem}
+.exec-order-seq{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.exec-seq-item{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;background:rgba(0,0,0,.25);border-radius:4px;font-size:.78rem}
+.exec-seq-arrow{color:#64748b;font-weight:700;margin:0 2px}
+
 
 /* --- Close trade simulation --- */
 .close-step-banner{font-size:.78rem;color:#8898aa;margin-bottom:10px;line-height:1.7}
