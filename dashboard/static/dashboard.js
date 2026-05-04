@@ -41,7 +41,7 @@ const toast = (msg, kind='info') => {
 };
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'history', 'logs', 'jobs', 'config'];
+const TABS = ['suggestion', 'trades', 'history', 'logs', 'jobs', 'wsmon', 'config'];
 function switchTab(name) {
   TABS.forEach(t => {
     const panel = document.getElementById(`panel-${t}`);
@@ -55,9 +55,11 @@ function switchTab(name) {
   if (name === 'history')    loadHistory();
   if (name === 'logs')       loadLogs();
   if (name === 'jobs')       loadJobs();
+  if (name === 'wsmon')      loadWsMonitor();
   if (name === 'config')     loadConfig();
   // Stop jobs auto-refresh when leaving the tab
-  if (name !== 'jobs') stopJobsAutoRefresh();
+  if (name !== 'jobs')  stopJobsAutoRefresh();
+  if (name !== 'wsmon') stopWsMonitorAutoRefresh();
 }
 $$('.nav-item, .bnav-item').forEach(b =>
   b.addEventListener('click', () => switchTab(b.dataset.tab))
@@ -2695,6 +2697,181 @@ document.addEventListener('DOMContentLoaded', () => {
     if (auto.checked) startJobsAutoRefresh();
   }
 });
+
+// ---------------- WS Monitor ----------------
+let _wsmonTimer = null;
+const WSMON_INTERVAL_MS = 2000;
+
+function stopWsMonitorAutoRefresh() {
+  if (_wsmonTimer) {
+    clearInterval(_wsmonTimer);
+    _wsmonTimer = null;
+  }
+}
+function startWsMonitorAutoRefresh() {
+  stopWsMonitorAutoRefresh();
+  _wsmonTimer = setInterval(() => {
+    if (document.getElementById('panel-wsmon')?.classList.contains('active')) {
+      loadWsMonitor({ silent: true });
+    }
+  }, WSMON_INTERVAL_MS);
+}
+
+function _fmtAge(iso) {
+  if (!iso) return '—';
+  const t = new Date(iso).getTime();
+  if (!isFinite(t)) return '—';
+  const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (sec < 60)   return sec + 's ago';
+  if (sec < 3600) return Math.round(sec / 60) + 'm ago';
+  return Math.round(sec / 3600) + 'h ago';
+}
+function _wsmonStateClass(state) {
+  const s = (state || '').toLowerCase();
+  if (s === 'connected')                       return 'wsmon-state-ok';
+  if (s === 'connecting' || s === 'unknown')   return 'wsmon-state-warn';
+  if (s === 'degraded')                        return 'wsmon-state-warn';
+  if (s === 'token_expired' || s === 'disconnected' || s === 'stopped') return 'wsmon-state-err';
+  return 'wsmon-state-warn';
+}
+
+async function loadWsMonitor({ silent = false } = {}) {
+  const summary = $('#wsmon-summary');
+  const eventsEl = $('#wsmon-events');
+  if (!silent && summary) summary.classList.add('loading');
+
+  const topic  = $('#wsmon-topic')?.value || '';
+  const symbol = ($('#wsmon-symbol')?.value || '').trim();
+  const qs = new URLSearchParams();
+  if (topic)  qs.set('topic', topic);
+  if (symbol) qs.set('symbol', symbol);
+  qs.set('limit', '200');
+
+  let snap;
+  try {
+    snap = await API('/api/ws/monitor?' + qs.toString());
+  } catch (err) {
+    if (summary) {
+      summary.classList.remove('loading');
+      summary.innerHTML = `<div class="empty">Failed to load WS telemetry: ${escapeHtml(String(err))}</div>`;
+    }
+    return;
+  }
+
+  if (!snap || snap.available === false) {
+    if (summary) {
+      summary.classList.remove('loading');
+      summary.innerHTML = `<div class="empty">WS telemetry unavailable.<br><span class="muted">${escapeHtml(snap?.reason || 'no snapshot')}</span></div>`;
+    }
+    if (eventsEl) eventsEl.innerHTML = '';
+    return;
+  }
+
+  if (summary) {
+    summary.classList.remove('loading');
+    const stateClass = _wsmonStateClass(snap.connection_state);
+    const runnerState = snap.runner_state || snap.connection_state || 'unknown';
+    const topSyms = (snap.top_symbols || []).slice(0, 8)
+      .map(t => `<span class="wsmon-pill">${escapeHtml(t.symbol)}<small>${t.ticks}</small></span>`)
+      .join('');
+    summary.innerHTML = `
+      <div class="wsmon-cards">
+        <div class="wsmon-card">
+          <div class="wsmon-card-label">Provider</div>
+          <div class="wsmon-card-value">${escapeHtml(snap.provider || '—')}</div>
+        </div>
+        <div class="wsmon-card">
+          <div class="wsmon-card-label">Runner state</div>
+          <div class="wsmon-card-value ${stateClass}">${escapeHtml(runnerState)}</div>
+        </div>
+        <div class="wsmon-card">
+          <div class="wsmon-card-label">Connection state</div>
+          <div class="wsmon-card-value ${_wsmonStateClass(snap.connection_state)}">${escapeHtml(snap.connection_state || 'unknown')}</div>
+        </div>
+        <div class="wsmon-card">
+          <div class="wsmon-card-label">Last tick</div>
+          <div class="wsmon-card-value">${escapeHtml(_fmtAge(snap.last_tick_at))}</div>
+        </div>
+        <div class="wsmon-card">
+          <div class="wsmon-card-label">Tick rate (${Math.round(snap.rate_window_seconds || 60)}s avg)</div>
+          <div class="wsmon-card-value">${(snap.tick_rate_per_sec ?? 0).toFixed(2)} /s</div>
+        </div>
+        <div class="wsmon-card">
+          <div class="wsmon-card-label">Total ticks</div>
+          <div class="wsmon-card-value">${(snap.tick_count_total || 0).toLocaleString()}</div>
+        </div>
+        <div class="wsmon-card">
+          <div class="wsmon-card-label">Subscribed tokens</div>
+          <div class="wsmon-card-value">${snap.subscribed_tokens ?? '—'}</div>
+        </div>
+        <div class="wsmon-card">
+          <div class="wsmon-card-label">Reconnect attempts</div>
+          <div class="wsmon-card-value">${snap.reconnect_attempts ?? 0}</div>
+        </div>
+      </div>
+      ${snap.last_error ? `<div class="wsmon-error">Last error: <code>${escapeHtml(snap.last_error)}</code></div>` : ''}
+      ${topSyms ? `<div class="wsmon-tops"><span class="muted">Top symbols:</span> ${topSyms}</div>` : ''}
+      <div class="muted" style="font-size:.74rem;margin-top:.4rem;">
+        Snapshot @ ${escapeHtml(snap.generated_at || '')} &middot; uptime ${Math.round(snap.uptime_seconds || 0)}s
+      </div>
+    `;
+  }
+
+  if (eventsEl) {
+    const evs = snap.recent_events || [];
+    if (!evs.length) {
+      eventsEl.classList.remove('loading');
+      eventsEl.innerHTML = '<div class="empty">No events match the current filter.</div>';
+      return;
+    }
+    const rows = evs.map(e => {
+      const tag = String(e.topic || '').toLowerCase();
+      let detail = '';
+      if (tag === 'tick') {
+        const px = e.last_price != null ? Number(e.last_price).toFixed(2) : '—';
+        const strike = e.strike != null ? `${e.strike}${e.option_type || ''}` : '';
+        detail = `<span class="wsmon-ev-sym">${escapeHtml(e.symbol || '?')}</span> ${escapeHtml(strike)} <span class="wsmon-ev-px">@ ${px}</span>`;
+      } else if (tag === 'connection_state') {
+        detail = `<span class="wsmon-ev-state ${_wsmonStateClass(e.state)}">${escapeHtml(e.state || '?')}</span>${e.detail ? ` <span class="muted">${escapeHtml(String(e.detail))}</span>` : ''}`;
+      } else if (tag === 'token_expired') {
+        detail = `<span class="wsmon-ev-state wsmon-state-err">token_expired</span>`;
+      } else {
+        detail = escapeHtml(JSON.stringify(e));
+      }
+      return `<div class="wsmon-ev wsmon-ev-${escapeHtml(tag)}">
+        <span class="wsmon-ev-ts">${escapeHtml((e.ts || '').replace('T',' ').slice(0,19))}</span>
+        <span class="wsmon-ev-tag">${escapeHtml(tag)}</span>
+        ${detail}
+      </div>`;
+    }).join('');
+    eventsEl.classList.remove('loading');
+    eventsEl.innerHTML = `<div class="wsmon-ev-list">${rows}</div>`;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const panel = document.getElementById('panel-wsmon');
+  if (!panel) return;
+  $('#wsmon-refresh')?.addEventListener('click', () => loadWsMonitor());
+  $('#wsmon-topic')?.addEventListener('change', () => loadWsMonitor());
+  $('#wsmon-symbol')?.addEventListener('input', _debounce(() => loadWsMonitor(), 300));
+  const auto = $('#wsmon-auto');
+  if (auto) {
+    auto.addEventListener('change', () => {
+      if (auto.checked) startWsMonitorAutoRefresh();
+      else stopWsMonitorAutoRefresh();
+    });
+    if (auto.checked) startWsMonitorAutoRefresh();
+  }
+});
+
+function _debounce(fn, ms) {
+  let t = null;
+  return (...args) => {
+    if (t) clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
 
 // ---------------- Boot ----------------
 loadSuggestion();

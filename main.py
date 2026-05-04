@@ -215,6 +215,7 @@ def _cmd_ws_runner() -> int:
         make_db_leg_loader,
     )
     from providers.zerodha.ws_runner import KiteWSRunner
+    from providers.ws_monitor import WSMonitor, default_snapshot_path
 
     if (PROVIDERS_CONFIG.get("active") or "").strip().lower() != "zerodha":
         print("ERROR: --ws-runner requires OPT_PROVIDERS=zerodha")
@@ -276,15 +277,27 @@ def _cmd_ws_runner() -> int:
         event_bus=bus,
     )
 
+    # WS telemetry — observes events the runner already publishes and
+    # writes a periodic JSON snapshot to data/ws_status.json that the
+    # dashboard reads. Adds zero Zerodha API load.
+    ws_monitor = WSMonitor(
+        snapshot_path=default_snapshot_path(),
+        event_bus=bus,
+        provider="zerodha",
+        status_fn=runner.status,
+    )
+
     print(f"Starting WS runner (user_id={session.user_id})")
     sub_manager.start()
     monitor.start()
     regen_watcher.start()
+    ws_monitor.start()
     try:
         runner.start()
     except KeyboardInterrupt:
         runner.stop()
     finally:
+        ws_monitor.stop()
         regen_watcher.stop()
         monitor.stop()
         sub_manager.stop()
@@ -292,6 +305,7 @@ def _cmd_ws_runner() -> int:
             db.close()
         except Exception:
             pass
+
     status = runner.status()
     print(f"WS runner exited — final state={status.state.value}, last_error={status.last_error}")
     if status.state.value == "token_expired":

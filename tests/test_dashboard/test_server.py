@@ -216,3 +216,97 @@ def test_supplement_adds_remaining_legs():
 def test_config_get_and_patch():
     """Config tab: GET returns current overrides, PATCH writes a new one."""
     pass
+
+
+# ---------------------------------------------------------------------------
+# /api/ws/monitor
+# ---------------------------------------------------------------------------
+class TestWsMonitorEndpoint:
+    def _write_snapshot(self, tmp_path, payload):
+        path = tmp_path / "ws_status.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def test_returns_unavailable_when_file_missing(self, client, mocker, tmp_path):
+        mocker.patch(
+            "providers.ws_monitor.default_snapshot_path",
+            return_value=tmp_path / "absent.json",
+        )
+        resp = client.get("/api/ws/monitor")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["available"] is False
+        assert "reason" in body
+
+    def test_returns_snapshot_when_file_exists(self, client, mocker, tmp_path):
+        path = self._write_snapshot(tmp_path, {
+            "provider": "zerodha",
+            "connection_state": "connected",
+            "tick_count_total": 42,
+            "tick_rate_per_sec": 1.5,
+            "rate_window_seconds": 60,
+            "recent_events": [
+                {"ts": "2025-04-01T09:30:00", "topic": "tick", "symbol": "NIFTY"},
+                {"ts": "2025-04-01T09:30:01", "topic": "tick", "symbol": "BANKNIFTY"},
+                {"ts": "2025-04-01T09:30:02", "topic": "connection_state",
+                 "state": "connected", "provider": "zerodha"},
+            ],
+        })
+        mocker.patch("providers.ws_monitor.default_snapshot_path", return_value=path)
+        resp = client.get("/api/ws/monitor")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["available"] is True
+        assert body["provider"] == "zerodha"
+        assert body["tick_count_total"] == 42
+        # most-recent first
+        assert body["recent_events"][0]["topic"] == "connection_state"
+
+    def test_filters_by_topic(self, client, mocker, tmp_path):
+        path = self._write_snapshot(tmp_path, {
+            "provider": "zerodha",
+            "recent_events": [
+                {"ts": "2025-04-01T09:30:00", "topic": "tick", "symbol": "NIFTY"},
+                {"ts": "2025-04-01T09:30:01", "topic": "connection_state", "state": "connected"},
+            ],
+        })
+        mocker.patch("providers.ws_monitor.default_snapshot_path", return_value=path)
+        resp = client.get("/api/ws/monitor?topic=tick")
+        body = resp.get_json()
+        assert len(body["recent_events"]) == 1
+        assert body["recent_events"][0]["topic"] == "tick"
+
+    def test_filters_by_symbol(self, client, mocker, tmp_path):
+        path = self._write_snapshot(tmp_path, {
+            "provider": "zerodha",
+            "recent_events": [
+                {"ts": "2025-04-01T09:30:00", "topic": "tick", "symbol": "NIFTY"},
+                {"ts": "2025-04-01T09:30:01", "topic": "tick", "symbol": "BANKNIFTY"},
+            ],
+        })
+        mocker.patch("providers.ws_monitor.default_snapshot_path", return_value=path)
+        resp = client.get("/api/ws/monitor?symbol=banknifty")
+        body = resp.get_json()
+        assert len(body["recent_events"]) == 1
+        assert body["recent_events"][0]["symbol"] == "BANKNIFTY"
+
+    def test_limit_caps_results(self, client, mocker, tmp_path):
+        events = [
+            {"ts": f"2025-04-01T09:30:{i:02d}", "topic": "tick", "symbol": "NIFTY"}
+            for i in range(50)
+        ]
+        path = self._write_snapshot(tmp_path, {"provider": "zerodha",
+                                                "recent_events": events})
+        mocker.patch("providers.ws_monitor.default_snapshot_path", return_value=path)
+        resp = client.get("/api/ws/monitor?limit=5")
+        body = resp.get_json()
+        assert len(body["recent_events"]) == 5
+
+    def test_corrupt_json_returns_unavailable(self, client, mocker, tmp_path):
+        path = tmp_path / "ws_status.json"
+        path.write_text("not json", encoding="utf-8")
+        mocker.patch("providers.ws_monitor.default_snapshot_path", return_value=path)
+        resp = client.get("/api/ws/monitor")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["available"] is False

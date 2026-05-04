@@ -850,6 +850,55 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"ok": True, "key": flag_key, "value": payload["value"]})
 
+    # ---------- WS Monitor (Phase 2b telemetry surface) ------------------
+    @app.route("/api/ws/monitor")
+    def api_ws_monitor():
+        """Read-only telemetry from the WS runner.
+
+        Reads `data/ws_status.json` written by `providers/ws_monitor.py`
+        inside the ws_runner container. Performs ZERO Zerodha calls.
+
+        Optional query params:
+            ?topic=tick|connection_state|token_expired   filter recent_events
+            ?symbol=NIFTY                                filter recent_events
+            ?limit=50                                    cap recent_events
+        """
+        from providers.ws_monitor import default_snapshot_path
+        path = default_snapshot_path()
+        if not path.exists():
+            return jsonify({
+                "available": False,
+                "reason":    "ws_status.json not found \u2014 the WS runner is not "
+                             "writing telemetry yet (start the stock_ws_runner "
+                             "container or run `python main.py --ws-runner`).",
+            })
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                snap = json.load(f)
+        except (OSError, ValueError) as exc:
+            return jsonify({
+                "available": False,
+                "reason":    f"failed to read ws_status.json: {exc}",
+            })
+
+        topic_f  = (request.args.get("topic")  or "").strip().lower()
+        symbol_f = (request.args.get("symbol") or "").strip().upper()
+        try:
+            limit = int(request.args.get("limit", "200"))
+        except ValueError:
+            limit = 200
+        events = snap.get("recent_events") or []
+        if topic_f:
+            events = [e for e in events if str(e.get("topic", "")).lower() == topic_f]
+        if symbol_f:
+            events = [e for e in events
+                      if str(e.get("symbol", "")).upper() == symbol_f]
+        # Most-recent first, capped.
+        events = list(reversed(events))[:max(0, limit)]
+        snap["recent_events"] = events
+        snap["available"] = True
+        return jsonify(snap)
+
     # ---------- Health ----------
     @app.route("/health")
     def health():

@@ -57,6 +57,9 @@
     <button class="nav-item" data-tab="jobs">
       <span class="nav-icon">🔧</span><span class="nav-label">Jobs</span>
     </button>
+    <button class="nav-item" data-tab="wsmon">
+      <span class="nav-icon">📡</span><span class="nav-label">WS Monitor</span>
+    </button>
     <button class="nav-item" data-tab="config">
       <span class="nav-icon">⚙️</span><span class="nav-label">Config</span>
     </button>
@@ -153,6 +156,30 @@
       <div id="jobs-container" class="loading">Loading…</div>
     </article>
 
+    <article class="panel" id="panel-wsmon" aria-hidden="true">
+      <h2 class="panel-title">WebSocket Monitor</h2>
+      <p class="muted" style="margin-top:-.4rem;font-size:.82rem;">
+        Passive observability of the live tick stream. Reads a JSON snapshot
+        the WS runner writes every second &mdash; <strong>zero extra Zerodha
+        API calls</strong>. Recent events auto-prune after 5&nbsp;minutes.
+      </p>
+      <div id="wsmon-summary" class="wsmon-summary loading">Loading…</div>
+      <div class="filter-row wsmon-filter-bar">
+        <select id="wsmon-topic">
+          <option value="">All topics</option>
+          <option value="tick">Ticks</option>
+          <option value="connection_state">Connection state</option>
+          <option value="token_expired">Token expired</option>
+        </select>
+        <input id="wsmon-symbol" type="search" placeholder="Symbol filter (e.g. NIFTY)" />
+        <label class="wsmon-auto-label" title="Live refresh">
+          <input type="checkbox" id="wsmon-auto" checked> live
+        </label>
+        <button id="wsmon-refresh" class="btn btn-ghost">Refresh</button>
+      </div>
+      <div id="wsmon-events" class="wsmon-events loading">Loading…</div>
+    </article>
+
     <article class="panel" id="panel-config" aria-hidden="true">
       <h2 class="panel-title">Configuration</h2>
       <p class="muted">Runtime overrides — these take precedence over <code>config.py</code> defaults.</p>
@@ -168,6 +195,7 @@
   <button class="bnav-item" data-tab="history"><span>📜</span><span>Hist</span></button>
   <button class="bnav-item" data-tab="logs"><span>🪵</span><span>Logs</span></button>
   <button class="bnav-item" data-tab="jobs"><span>🔧</span><span>Jobs</span></button>
+  <button class="bnav-item" data-tab="wsmon"><span>📡</span><span>WS</span></button>
   <button class="bnav-item" data-tab="config"><span>⚙️</span><span>Cfg</span></button>
 </nav>
 
