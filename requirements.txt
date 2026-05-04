@@ -15,6 +15,10 @@ scipy>=1.11.0
 # Timezone
 pytz>=2023.3
 
+# Zerodha Kite Connect — official SDK (MIT). Only loaded when
+# OPT_PROVIDERS=zerodha; safe to keep installed at all times.
+kiteconnect>=5.2
+
 # Email
 # (uses stdlib smtplib + email — no extra package needed)
 

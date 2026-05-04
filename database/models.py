@@ -1100,11 +1100,16 @@ class NotificationRepo:
         self.db.execute(
             "INSERT INTO options_notifications "
             "(created_at, notif_type, severity, title, body, "
-            " related_suggestion_id, related_trade_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " related_suggestion_id, related_trade_id, "
+            " source_event_id, provider, tick_age_ms, flag_state_at_dispatch) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 n.created_at, n.notif_type, n.severity, n.title[:200], n.body,
                 n.related_suggestion_id, n.related_trade_id,
+                getattr(n, "source_event_id", None),
+                getattr(n, "provider", None),
+                getattr(n, "tick_age_ms", None),
+                getattr(n, "flag_state_at_dispatch", None),
             ],
         ).close()
 
@@ -1137,6 +1142,75 @@ class NotificationRepo:
         cur = self.db.execute(
             "DELETE FROM options_notifications WHERE created_at < ?",
             [datetime.combine(cutoff, datetime.min.time())],
+        )
+        n = cur.rowcount or 0
+        cur.close()
+        return n
+
+
+# ---------------------------------------------------------------------------
+# IntradayCloseSnapshotRepo (Phase 2b.1)
+# ---------------------------------------------------------------------------
+class IntradayCloseSnapshotRepo:
+    """Persistence layer for the 15:35 IST live-LTP capture used by the
+    19:35 EOD-vs-live drift verifier. See `lifecycle/snapshot_orchestrator.py`.
+
+    Rows are unique on `(snapshot_date, trade_id, leg_order)` so a re-run
+    of the 15:35 job (or a manual trigger) cleanly replaces the day's
+    capture for that leg.
+    """
+
+    def __init__(self, db: SQLServerConnection):
+        self.db = db
+
+    def insert_many(self, rows: List[dict]) -> int:
+        """Bulk insert/replace today's snapshot rows.
+
+        Each `row` dict must contain:
+            snapshot_date, captured_at, trade_id, leg_order, symbol,
+            expiry_date, strike, option_type, ltp, source, provider,
+            freshness_ms
+
+        Idempotent via DELETE-then-INSERT scoped to (snapshot_date, trade_id,
+        leg_order). Returns the count of rows inserted.
+        """
+        if not rows:
+            return 0
+        keys = {(r["snapshot_date"], r["trade_id"], r["leg_order"]) for r in rows}
+        for snap_date, trade_id, leg_order in keys:
+            self.db.execute(
+                "DELETE FROM options_intraday_close_snapshot "
+                "WHERE snapshot_date = ? AND trade_id = ? AND leg_order = ?",
+                [snap_date, trade_id, leg_order],
+            ).close()
+        for r in rows:
+            self.db.execute(
+                "INSERT INTO options_intraday_close_snapshot "
+                "(snapshot_date, captured_at, trade_id, leg_order, symbol, "
+                " expiry_date, strike, option_type, ltp, source, provider, "
+                " freshness_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    r["snapshot_date"], r["captured_at"], r["trade_id"],
+                    r["leg_order"], r["symbol"], r["expiry_date"],
+                    r["strike"], r["option_type"], r.get("ltp"),
+                    r.get("source"), r.get("provider"), r.get("freshness_ms"),
+                ],
+            ).close()
+        return len(rows)
+
+    def get_by_date(self, snapshot_date: date) -> List[dict]:
+        """Return all snapshot rows captured on `snapshot_date`."""
+        return self.db.fetch_all(
+            "SELECT * FROM options_intraday_close_snapshot "
+            "WHERE snapshot_date = ? ORDER BY trade_id, leg_order",
+            [snapshot_date],
+        )
+
+    def delete_older_than(self, cutoff: date) -> int:
+        cur = self.db.execute(
+            "DELETE FROM options_intraday_close_snapshot WHERE snapshot_date < ?",
+            [cutoff],
         )
         n = cur.rowcount or 0
         cur.close()

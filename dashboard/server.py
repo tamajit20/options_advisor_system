@@ -812,6 +812,44 @@ def create_app() -> Flask:
         )
         return jsonify({"runs": [_row(r) for r in rows]})
 
+    # ---------- Runtime flags (Phase 4) ----------
+    @app.route("/api/runtime-flags")
+    @_with_db
+    def api_runtime_flags_list(db: SQLServerConnection):
+        from database.runtime_flags import RuntimeFlagsRepo
+        repo = RuntimeFlagsRepo(db, cache_ttl_seconds=0)
+        return jsonify({
+            "flags": [
+                {
+                    "key":           f.key,
+                    "value":         f.value,
+                    "type":          f.type,
+                    "description":   f.description,
+                    "last_modified": _ist_iso(f.last_modified) if f.last_modified else None,
+                    "modified_by":   f.modified_by,
+                }
+                for f in repo.all()
+            ]
+        })
+
+    @app.route("/api/runtime-flags/<flag_key>", methods=["POST"])
+    @_with_db
+    def api_runtime_flags_set(db: SQLServerConnection, flag_key: str):
+        from database.runtime_flags import RuntimeFlagsRepo
+        payload = request.get_json(silent=True) or {}
+        if "value" not in payload:
+            return jsonify({"error": "missing 'value' in body"}), 400
+        repo = RuntimeFlagsRepo(db, cache_ttl_seconds=0)
+        try:
+            repo.set(flag_key, payload["value"], modified_by="dashboard")
+            db.commit()
+        except KeyError as exc:
+            return jsonify({"error": str(exc)}), 404
+        except (ValueError, TypeError) as exc:
+            db.rollback()
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "key": flag_key, "value": payload["value"]})
+
     # ---------- Health ----------
     @app.route("/health")
     def health():

@@ -330,3 +330,8 @@ class Notification:
     body:                     str
     related_suggestion_id:    Optional[str] = None
     related_trade_id:         Optional[str] = None
+    # ---- Phase 2c provenance markers (all optional; None = unknown) ----
+    source_event_id:          Optional[str] = None      # tick id / cycle id that triggered this
+    provider:                 Optional[str] = None      # e.g. 'zerodha', 'nse_eod'
+    tick_age_ms:              Optional[int] = None      # age of the tick at dispatch
+    flag_state_at_dispatch:   Optional[str] = None      # JSON snapshot of runtime flags

@@ -447,6 +447,185 @@ _TABLE_DDL: List[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS IX_options_notifications_unread ON options_notifications (read_at, created_at DESC)",
+
+    # ---------------- Runtime kill switches (Phase 4) ----------------
+    # Single-row key/value table that the live components poll. Designed so
+    # the operator can disable WS streaming, alert categories, or trade
+    # execution without restarting the container. Bool flags are stored as
+    # BIT (0/1). last_modified + modified_by give us a basic audit trail.
+    """
+    IF OBJECT_ID('options_runtime_flags', 'U') IS NULL
+    CREATE TABLE options_runtime_flags (
+        flag_key       NVARCHAR(50)  NOT NULL PRIMARY KEY,
+        flag_value     NVARCHAR(200) NOT NULL,  -- stringified; int/bool/text
+        flag_type      NVARCHAR(10)  NOT NULL,  -- 'bool' | 'int' | 'text'
+        description    NVARCHAR(500) NULL,
+        last_modified  DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        modified_by    NVARCHAR(50)  NULL
+    )
+    """,
+
+    # ---------------- Intraday close snapshot (Phase 2b.1) ----------------
+    # Captured at 15:35 IST — 5 minutes after equity F&O market close — by
+    # reading live LTP for every leg of every ACTIVE trade. The 19:35 IST
+    # drift verifier compares each row to the corresponding settled close
+    # in `options_fo_eod` (loaded by the 18:30 fo_bhav_download job) and
+    # fires a WARNING notification if any leg has drifted by more than
+    # `STRATEGY_CONFIG["intraday_close_drift_pct"]` (default 5%).
+    #
+    # `source` records which tier produced the LTP (LIVE/EOD/MIXED) so a
+    # snapshot row taken when the provider had already fallen back to EOD
+    # can be excluded from drift comparison (it would always match by
+    # construction). `freshness_ms` is the WS/REST tick age at capture.
+    """
+    IF OBJECT_ID('options_intraday_close_snapshot', 'U') IS NULL
+    CREATE TABLE options_intraday_close_snapshot (
+        id            BIGINT IDENTITY(1,1) PRIMARY KEY,
+        snapshot_date DATE          NOT NULL,
+        captured_at   DATETIME2(0)  NOT NULL,
+        trade_id      NVARCHAR(40)  NOT NULL,
+        leg_order     INT           NOT NULL,
+        symbol        NVARCHAR(50)  NOT NULL,
+        expiry_date   DATE          NOT NULL,
+        strike        DECIMAL(18,4) NOT NULL,
+        option_type   NVARCHAR(2)   NOT NULL,
+        ltp           DECIMAL(18,4) NULL,
+        source        NVARCHAR(10)  NULL,      -- 'LIVE' | 'EOD' | 'MIXED'
+        provider      NVARCHAR(40)  NULL,
+        freshness_ms  INT           NULL,
+        CONSTRAINT UX_options_intraday_close_snapshot UNIQUE
+            (snapshot_date, trade_id, leg_order)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_intraday_close_snapshot_date "
+    "ON options_intraday_close_snapshot (snapshot_date)",
+
+    # ---------------- Provenance markers (Phase 2c) ----------------
+    # Goal: every row that downstream code reasons about must declare WHICH
+    # data tier produced it (EOD vs LIVE), WHICH adapter served the data
+    # (nse_eod / zerodha), WHEN the underlying data is from, and WHY the
+    # row was written (EOD batch / 09:35 validator / WS regen / manual).
+    # All columns are nullable so legacy rows and unmigrated writers
+    # continue to work — code reading these fields must treat NULL as
+    # "unknown".
+    #
+    # Column dictionary
+    # -----------------
+    # data_source             enum text:  'EOD' | 'LIVE' | 'MIXED'
+    # provider                str: e.g. 'nse_eod', 'zerodha'
+    # data_as_of              ts of underlying data (tick time / EOD date)
+    # trigger_type            enum text:  'EOD_RUN' | 'INTRADAY_VALIDATOR'
+    #                                     | 'WS_REGEN' | 'MANUAL'
+    # trigger_reason          free text, e.g. 'VIX 18.4->19.7'
+    # market_state_at_gen     enum text:  'PRE_OPEN' | 'OPEN_VOLATILE'
+    #                                     | 'OPEN_STABLE' | 'CLOSE_AUCTION'
+    #                                     | 'POST_CLOSE'
+    # live_data_freshness_ms  int — only set when data_source='LIVE'
+    # engine_version          short git SHA / version tag
+    # validator_status        enum text:  'NOT_VALIDATED' | 'STILL_GOOD_0935'
+    #                                     | 'STALE_0935' | 'STALE_INTRADAY'
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'data_source')
+    ALTER TABLE options_suggestions ADD data_source NVARCHAR(10) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'provider')
+    ALTER TABLE options_suggestions ADD provider NVARCHAR(40) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'data_as_of')
+    ALTER TABLE options_suggestions ADD data_as_of DATETIME2(0) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'trigger_type')
+    ALTER TABLE options_suggestions ADD trigger_type NVARCHAR(30) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'trigger_reason')
+    ALTER TABLE options_suggestions ADD trigger_reason NVARCHAR(500) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'market_state_at_gen')
+    ALTER TABLE options_suggestions ADD market_state_at_gen NVARCHAR(20) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'live_data_freshness_ms')
+    ALTER TABLE options_suggestions ADD live_data_freshness_ms INT NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'engine_version')
+    ALTER TABLE options_suggestions ADD engine_version NVARCHAR(20) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'validator_status')
+    ALTER TABLE options_suggestions ADD validator_status NVARCHAR(30) NULL
+    """,
+
+    # leg_price_basis: which price tier was used for THIS leg's credit calc.
+    # Values: 'SETTLED_CLOSE' | 'LIVE_BID_ASK_MID' | 'LIVE_LTP' | 'LIVE_SYNTHETIC'
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestion_legs') AND name = 'leg_price_basis')
+    ALTER TABLE options_suggestion_legs ADD leg_price_basis NVARCHAR(30) NULL
+    """,
+
+    # Trade-side execution provenance — what tier priced the leg at click time
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'execution_data_source')
+    ALTER TABLE options_trades ADD execution_data_source NVARCHAR(10) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'execution_provider')
+    ALTER TABLE options_trades ADD execution_provider NVARCHAR(40) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'execution_freshness_ms')
+    ALTER TABLE options_trades ADD execution_freshness_ms INT NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'gate_passed')
+    ALTER TABLE options_trades ADD gate_passed BIT NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'time_from_suggestion_sec')
+    ALTER TABLE options_trades ADD time_from_suggestion_sec INT NULL
+    """,
+
+    # Notification provenance — links each alert back to its tick / cycle
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_notifications') AND name = 'source_event_id')
+    ALTER TABLE options_notifications ADD source_event_id NVARCHAR(80) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_notifications') AND name = 'provider')
+    ALTER TABLE options_notifications ADD provider NVARCHAR(40) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_notifications') AND name = 'tick_age_ms')
+    ALTER TABLE options_notifications ADD tick_age_ms INT NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_notifications') AND name = 'flag_state_at_dispatch')
+    ALTER TABLE options_notifications ADD flag_state_at_dispatch NVARCHAR(MAX) NULL
+    """,
 ]
 
 
@@ -534,4 +713,6 @@ def list_tables() -> List[str]:
         "options_job_log",
         "options_config",
         "options_notifications",
+        "options_runtime_flags",
+        "options_intraday_close_snapshot",
     ]

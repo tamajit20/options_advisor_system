@@ -49,3 +49,22 @@ class StrategyVeto(OptionsAdvisorError):
     NOT a failure — the system is correctly choosing not to suggest. Caught
     by the suggestion engine and converted to a `NoSuggestion` record.
     """
+
+
+# ---------------------------------------------------------------------------
+# Provider-layer errors
+# ---------------------------------------------------------------------------
+class ProviderError(JobFailure):
+    """A market-data provider call failed in a way that doesn't necessarily
+    require user intervention (network blip, rate limit, instrument missing).
+
+    Callers should catch and fall back to the EOD provider when possible.
+    """
+
+
+class TokenExpiredError(CriticalError):
+    """The provider's auth token is no longer valid (e.g. Kite 403 / TokenException).
+
+    Distinct from `ProviderError` because it ALWAYS requires user action
+    (re-login on dashboard) and must NEVER be retried automatically.
+    """

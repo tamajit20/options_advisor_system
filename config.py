@@ -79,6 +79,17 @@ SCHEDULER_CONFIG = {
         "suggestion_engine":  {"hour": 19, "minute": 30, "enabled": True},
         "simulation_update":  {"hour": 19, "minute": 45, "enabled": True},
         "exit_engine":        {"hour": 19, "minute": 50, "enabled": True},
+        # Phase 2b.1 — live-vs-settled drift detection
+        # 15:35 IST: capture live LTP for every leg of every ACTIVE trade.
+        # 19:35 IST: compare to today's settled close (loaded by fo_bhav at
+        #            18:30) and fire a DRIFT_WARNING for legs that diverge
+        #            beyond STRATEGY_CONFIG["intraday_close_drift_pct"].
+        "intraday_close_snapshot": {
+            "day_of_week": "mon-fri", "hour": 15, "minute": 35, "enabled": True,
+        },
+        "drift_verifier": {
+            "day_of_week": "mon-fri", "hour": 19, "minute": 35, "enabled": True,
+        },
         # Maintenance (Sunday 02:00)
         "weekly_cleanup":     {"day_of_week": "sun", "hour": 2,  "minute":  0, "enabled": True},
         # Events calendar sync — Monday 07:00 before market open
@@ -95,6 +106,8 @@ SCHEDULER_CONFIG = {
         "simulation_update":  600,
         "exit_engine":        300,
         "weekly_cleanup":     1800,
+        "intraday_close_snapshot": 300,
+        "drift_verifier":          120,
     },
 }
 
@@ -234,6 +247,19 @@ STRATEGY_CONFIG = {
     # Exit when current loss reaches this fraction of the defined max loss.
     "stop_loss_fraction": 0.50,   # 50% of max loss — standard for defined-risk options
 
+    # Phase 2b-iii — intraday WS-driven SL alert
+    # Per-leg "short premium doubled" rule used by lifecycle/intraday_monitor.
+    # When a SHORT leg's live LTP rises above fill_price * intraday_sl_multiplier
+    # we fire a CRITICAL SL_TRIGGER notification (once per leg per day).
+    "intraday_sl_multiplier": 2.0,
+
+    # Phase 2b.1 — drift verifier threshold (%)
+    # The 19:35 drift verifier compares each 15:35 live LTP capture to the
+    # corresponding settled close from the EOD bhav. Any leg whose abs
+    # drift exceeds this percentage fires a single rolled-up DRIFT_WARNING
+    # notification. 5% is calibrated to be loud only on real feed problems.
+    "intraday_close_drift_pct": 5.0,
+
     # VIX regime thresholds (% change vs prior close)
     "vix_rising_threshold":  5.0,
     "vix_spiking_threshold": 10.0,
@@ -299,6 +325,49 @@ DASHBOARD_CONFIG = {
 
 
 # ---------------------------------------------------------------------------
+# Market-data providers (pluggable)
+# ---------------------------------------------------------------------------
+# OPT_PROVIDERS controls which adapter serves live market data:
+#     ""         → nse_eod only (Mode A — current behaviour, no live feed)
+#     "zerodha"  → Zerodha Kite for live; nse_eod for history & fallback
+#
+# READ-ONLY enforcement: the provider layer is market-data-only. The Zerodha
+# adapter NEVER calls order/portfolio/holdings/margin endpoints — see
+# /memories/session/plan.md "MARKET-DATA-ONLY ZERODHA INTEGRATION".
+PROVIDERS_CONFIG = {
+    "active": _env("OPT_PROVIDERS", "").strip().lower(),
+    # Per-key TTLs for the in-process live cache (seconds).
+    "cache_ttl_seconds_quote": float(_env("OPT_PROVIDER_CACHE_TTL_QUOTE", "5")),
+    "cache_ttl_seconds_chain": float(_env("OPT_PROVIDER_CACHE_TTL_CHAIN", "5")),
+    # Hard cap on the cache to avoid runaway memory.
+    "cache_max_entries": _env_int("OPT_PROVIDER_CACHE_MAX_ENTRIES", 10_000),
+}
+
+
+# ---------------------------------------------------------------------------
+# Zerodha (Kite Connect) — read-only market data API
+# ---------------------------------------------------------------------------
+# Used only when PROVIDERS_CONFIG["active"] == "zerodha".
+# Credentials come from a SEPARATE Zerodha account (data subscription only),
+# never the user's trading account. Daily login flow refreshes access_token
+# (Kite tokens expire 06:00 IST every day).
+#
+# Note: the older `ZERODHA_CONFIG` above is the trading-charges calculator
+# (brokerage, STT, etc.) and is unrelated to this API config.
+ZERODHA_API_CONFIG = {
+    "api_key":      _env("OPT_ZERODHA_API_KEY", ""),
+    "api_secret":   _env("OPT_ZERODHA_API_SECRET", ""),
+    # Persisted access_token — refreshed by the daily login job; safe to keep
+    # blank in env (the dashboard supplies it after the request_token flow).
+    "access_token": _env("OPT_ZERODHA_ACCESS_TOKEN", ""),
+    # Hard kill switch — if False, the adapter refuses to initialise even if
+    # OPT_PROVIDERS=zerodha. Useful for emergency disable from .env without
+    # touching code.
+    "enabled":      _env_bool("OPT_ZERODHA_ENABLED", True),
+}
+
+
+# ---------------------------------------------------------------------------
 # Alerts / Notifications
 # ---------------------------------------------------------------------------
 ALERTS_CONFIG = {
@@ -313,6 +382,16 @@ ALERTS_CONFIG = {
 
     # Severity levels that trigger email (lower severities only go to dashboard)
     "email_severities": ["CRITICAL", "ERROR"],
+
+    # Telegram channel (Phase 5). The bot is created via @BotFather; chat_id can
+    # be a personal user id, a group id (negative number), or a channel username
+    # like "@my_channel". Disabled by default — must be explicitly opted in.
+    "telegram_enabled":   _env_bool("OPT_TELEGRAM_ENABLED", False),
+    "telegram_bot_token": _env("OPT_TELEGRAM_BOT_TOKEN", ""),
+    "telegram_chat_id":   _env("OPT_TELEGRAM_CHAT_ID", ""),
+    # Severity floor for Telegram. Anything at or above this level is sent.
+    "telegram_severities": ["CRITICAL", "ERROR", "WARNING"],
+    "telegram_timeout_seconds": _env_int("OPT_TELEGRAM_TIMEOUT_SECONDS", 5),
 }
 
 

@@ -25,3 +25,51 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # WebSocket runner (Phase 2b)
+  #
+  # Long-lived sidecar that streams Zerodha live ticks into the in-process
+  # cache + event_bus. Reuses the same image as `options_advisor` so a single
+  # `docker compose build` covers both. It does NOT expose any port: it talks
+  # only to upstream Kite and downstream SQL Server.
+  #
+  # Started by default. To run the stack without live data, use:
+  #     docker compose up -d options_advisor
+  #
+  # The runner refuses to start unless:
+  #     1. OPT_PROVIDERS=zerodha          (in .env.docker)
+  #     2. OPT_ZERODHA_ENABLED=true       (in .env.docker)
+  #     3. data/zerodha_session.json exists and the access_token is still
+  #        valid for the current trading day. If not, the container exits
+  #        with code 2 and the on-failure restart policy will retry up to
+  #        the configured limit.
+  # ---------------------------------------------------------------------------
+  ws_runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stock_ws_runner
+    image: stock_options_advisor:latest
+    command: ["python", "main.py", "--ws-runner"]
+    restart: on-failure:5
+    stop_grace_period: 15s
+    environment:
+      - TZ=Asia/Kolkata
+    env_file:
+      - .env.docker
+    volumes:
+      # Share the same data dir so the persisted Zerodha session written by
+      # `--zerodha-login` (run from the main container) is visible here.
+      - ./logs:/app/logs
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      options_advisor:
+        condition: service_started
+    # No HTTP healthcheck: the runner has no listening socket. Liveness is
+    # implicit in the process not exiting; failures use exit codes (2 for
+    # config / token errors) and trigger the on-failure restart policy.
+    # Connection state is published on event_bus and visible via the main
+    # app's /providers endpoint.

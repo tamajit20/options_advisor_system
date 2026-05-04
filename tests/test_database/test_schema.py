@@ -22,10 +22,12 @@ class TestNormalizeDdl:
 
 
 class TestListTables:
-    def test_returns_19_tables(self):
+    def test_returns_20_tables(self):
         tables = sc.list_tables()
-        assert len(tables) == 19
+        assert len(tables) == 21
         assert all(t.startswith("options_") for t in tables)
+        assert "options_runtime_flags" in tables
+        assert "options_intraday_close_snapshot" in tables
 
 
 class TestCreateAllTables:
