@@ -198,9 +198,64 @@ STRATEGY_CONFIG = {
         "JADE_LIZARD":    6,
     },
 
-    # IV premium vs realised volatility (HV-20) thresholds
-    "iv_premium_sell_min": 0.90,        # IV/HV must be ≥0.90 to justify writing premium
-    "iv_premium_buy_max":  1.50,        # IV/HV must be ≤1.50 to justify buying premium
+    # IV premium vs realised volatility (HV-20) thresholds — REGIME-WIDE GATE
+    # These are the *default* bands used by engine/confidence.py for ALL strategies.
+    # The regime-wide gate is intentionally permissive (SOFT_FAIL only above
+    # iv_premium_buy_max) so that no single strategy class is silently vetoed
+    # by a shared knob. Strategy-specific stricter limits live below in
+    # `strategy_iv_premium_buy_max` (analogous to `iv_butterfly_min_prem`).
+    #
+    # WRITING (selling premium):
+    #   PASS    if IV/HV ≥ iv_premium_sell_min            (premium adequate)
+    # BUYING (paying premium) — TIERED display, single SOFT_FAIL boundary:
+    #   PASS       if IV/HV ≤ iv_premium_buy_pass         (real edge: IV ≤ realised vol)
+    #   PASS_WARN  if IV/HV ≤ iv_premium_buy_warn         (neutral / no edge)
+    #   PASS_WARN  if IV/HV ≤ iv_premium_buy_max          (warn but does not block)
+    #   SOFT_FAIL  otherwise                              (overpaying badly)
+    "iv_premium_sell_min": 0.90,
+    "iv_premium_buy_pass": 1.00,        # ≤1.00 → real buying edge
+    "iv_premium_buy_warn": 1.20,        # 1.00–1.20 → neutral; cosmetic boundary only
+    "iv_premium_buy_max":  1.50,        # >1.50 → SOFT_FAIL (regime-wide ceiling)
+
+    # ---------------------------------------------------------------
+    # Per-strategy IV/HV ceiling for BUYING regime (pattern mirrors
+    # `iv_butterfly_min_prem` for IRON_BUTTERFLY).
+    #
+    # When a strategy appears in this map, strategy_selector enforces a
+    # *stricter* veto than the regime-wide `iv_premium_buy_max`. Strategies
+    # NOT listed here are unaffected and continue to use only the regime gate.
+    #
+    # Naked long premium structures suffer most from overpaying for IV (no
+    # offsetting short leg to recover the IV decay), so we cap them tighter.
+    # Spreads/condors/credit strategies are not listed — unchanged behaviour.
+    # ---------------------------------------------------------------
+    "strategy_iv_premium_buy_max": {
+        "LONG_STRADDLE":     1.20,   # both legs are long premium — strictest
+        "LONG_STRANGLE":     1.20,   # same risk profile as straddle
+        "LONG_CALL":         1.20,   # naked long single leg
+        "LONG_PUT":          1.20,   # naked long single leg
+        # BULL_CALL_SPREAD / BEAR_PUT_SPREAD (debit verticals): NOT listed.
+        #   Short leg partially funds the long, so IV-overpay impact is muted.
+        # IRON_CONDOR / IRON_BUTTERFLY / BPS / BCS / JL: NOT listed (credit).
+    },
+
+    # Long-premium profit-target multiplier (multiplied by debit paid).
+    #
+    #   target_debit_multiple = base + dte/dte_scale, capped at max
+    #
+    # Example with defaults (base=0.50, dte_scale=14, max=1.50):
+    #     DTE  =  3 → 0.50 + 3/14  ≈ 0.71×  → 71% of debit
+    #     DTE  =  7 → 0.50 + 7/14  ≈ 1.00×  → 100% of debit  (was hard-coded 2×)
+    #     DTE  = 14 → 0.50 + 14/14 = 1.50×  → 150% of debit
+    #     DTE  = 30 → capped       = 1.50×
+    #
+    # Rationale: a long straddle held to expiry needs spot to move past BE; with
+    # only 7 DTE remaining, theta decay makes 2× a low-probability target that
+    # encourages users to hold past optimal exit. Scaling with DTE (and capping
+    # at 1.5×) sets a realistic anchor that matches expected behaviour.
+    "long_premium_target_base": 0.50,
+    "long_premium_target_dte_scale": 14.0,
+    "long_premium_target_max": 1.50,
 
     # FII net futures positioning (long − short contracts) threshold
     # FII position beyond this magnitude against the trend triggers a soft-fail.

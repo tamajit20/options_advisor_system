@@ -19,6 +19,7 @@ from typing import List, Mapping, Optional, Sequence
 
 from contracts import SuggestionLeg
 from engine.iv_calculator import black_scholes_delta
+from config import STRATEGY_CONFIG
 
 
 # ---------------------------------------------------------------------------
@@ -429,20 +430,59 @@ def spread_width(legs: Sequence[SuggestionLeg]) -> float:
     return max(widths) if widths else 0.0
 
 
+# Strategies that pay net premium (debit). For these, PoP must measure the
+# probability that S_T crosses the breakeven, NOT |delta| of any leg, because
+# delta over-states the true profit probability for long-premium structures
+# (an ATM long straddle has Δ ≈ 0.5 per leg → naive PoP ≈ 50%, but the spot
+# must move past BE = K ± debit to be in profit, which is ~35–42% in reality).
+_DEBIT_STRATEGIES_PoP = frozenset({
+    "LONG_STRADDLE", "LONG_STRANGLE", "LONG_CALL", "LONG_PUT",
+    "BULL_CALL_SPREAD", "BEAR_PUT_SPREAD",
+})
+
+
+def _prob_below(spot: float, level: float, dte: int, vol: float) -> float:
+    """Lognormal P(S_T < level) under risk-neutral GBM with r=0.
+
+    Returns 0.0 / 1.0 at the asymptotes; ``0.5`` if any input is degenerate
+    (zero vol, zero dte, non-positive prices) — caller treats as "no signal".
+    """
+    if vol <= 0 or dte <= 0 or spot <= 0 or level <= 0:
+        return 0.5
+    t = dte / 365.0
+    sigma_sqrt_t = vol * math.sqrt(t)
+    # r = 0 is intentional — we already use IV (which embeds the carry) and
+    # mixing in risk_free_rate would double-count. The dominant term is volatility.
+    d2 = (math.log(spot / level) - 0.5 * vol * vol * t) / sigma_sqrt_t
+    from engine.iv_calculator import norm  # local import to avoid cycle at module load
+    return float(norm.cdf(-d2))
+
+
 def estimate_pop(
     legs: Sequence[SuggestionLeg],
     spot: float,
     dte: int,
     atm_iv: float,
     chain: Optional[Sequence[Mapping]] = None,
+    strategy: Optional[str] = None,
 ) -> float:
-    """Probability of profit ≈ 1 − |Δ_short_leg| (averaged across short legs).
+    """Probability of profit.
 
-    When *chain* is supplied, uses the per-strike implied volatility (skew-
-    adjusted) rather than ATM IV for delta computation.  This corrects the
-    systematic overstatement of PoP for OTM put shorts, which trade at a
-    persistent volatility premium (put skew) on Indian index options.
-    Falls back to *atm_iv* for any leg whose market price cannot be solved.
+    For **credit / writing strategies** (no debit paid; profit = decay): use the
+    classical ``1 − |Δ_short|`` approximation, which closely tracks the
+    probability of finishing past the short strike. This is unchanged from the
+    original behaviour.
+
+    For **debit / long-premium strategies** (LONG_STRADDLE, LONG_STRANGLE,
+    LONG_CALL, LONG_PUT, BULL_CALL_SPREAD, BEAR_PUT_SPREAD): the historical
+    ``|Δ_long|`` formula systematically over-states PoP because it returns the
+    probability that the long option finishes ITM (S past strike), but actual
+    profit requires S to move past **breakeven** (S past strike ± debit). We
+    now compute the lognormal probability ``P(S_T crosses BE)`` directly, which
+    is materially lower (e.g. ~35–42% for an ATM straddle vs the old ~50%).
+
+    When *chain* is supplied, the credit-side path uses per-strike IV (skew-
+    adjusted) for delta computation. Falls back to *atm_iv* otherwise.
     """
     from engine.iv_calculator import implied_vol as _implied_vol  # avoid circular at module level
 
@@ -459,9 +499,22 @@ def estimate_pop(
         iv, converged = _implied_vol(mkt, spot, leg.strike, dte, leg.option_type)
         return iv if converged and iv > 0 else atm_iv
 
+    # ---- Debit / long-premium path: BE-crossing probability ----
+    if strategy in _DEBIT_STRATEGIES_PoP:
+        upper_be, lower_be = breakevens(legs, strategy)
+        # Probabilities of profit on each side of the breakeven envelope
+        p_above = (1.0 - _prob_below(spot, upper_be, dte, atm_iv)) if upper_be is not None else 0.0
+        p_below = _prob_below(spot, lower_be, dte, atm_iv) if lower_be is not None else 0.0
+        # The two regions are disjoint for any of these structures, so simple sum
+        pop = (p_above + p_below) * 100.0
+        return max(0.0, min(100.0, pop))
+
+    # ---- Credit / writing path: 1 − |Δ_short| (unchanged behaviour) ----
     short_legs = [l for l in legs if l.action == "SELL"]
     if not short_legs:
-        # Long-premium strategy — use long-leg delta as a rough estimate
+        # Long-premium strategy that wasn't tagged via `strategy=` — fall back
+        # to delta-based estimate so callers without a strategy hint still
+        # get a non-zero answer (legacy callers).
         long_legs = [l for l in legs if l.action == "BUY"]
         if not long_legs:
             return 50.0
@@ -588,3 +641,34 @@ def max_profit_loss(legs: Sequence[SuggestionLeg], strategy: str) -> tuple[float
         upside_loss   = max(call_width - np_, 0.0)
         return max(np_, 0.0), max(downside_loss, upside_loss)
     return 0.0, 0.0
+
+
+# ---------------------------------------------------------------------------
+# Profit target — DTE-aware multiple of debit paid (long-premium strategies)
+# ---------------------------------------------------------------------------
+def long_premium_target_multiple(dte: int) -> float:
+    """Return the profit-target multiple for a long-premium structure given DTE.
+
+    The historical UI used a flat ``2× debit`` target for long straddles /
+    strangles, which is unrealistic at short DTE: theta decay makes 2× a
+    low-probability outcome that encourages users to over-hold.
+
+    The new formula scales with time-to-expiry:
+
+        multiple = base + dte / dte_scale,   capped at max
+
+    With defaults (``base=0.50``, ``dte_scale=14``, ``max=1.50``):
+
+        DTE  =  3  →  0.71×   (71% of debit)
+        DTE  =  7  →  1.00×   (100% — was hard-coded 2×)
+        DTE  = 14  →  1.50×   (150% — capped)
+        DTE  = 30  →  1.50×   (capped)
+
+    All three knobs are configurable via ``STRATEGY_CONFIG``.
+    """
+    base      = STRATEGY_CONFIG.get("long_premium_target_base",      0.50)
+    dte_scale = STRATEGY_CONFIG.get("long_premium_target_dte_scale", 14.0)
+    cap       = STRATEGY_CONFIG.get("long_premium_target_max",       1.50)
+    if dte <= 0 or dte_scale <= 0:
+        return float(base)
+    return float(min(cap, base + dte / dte_scale))

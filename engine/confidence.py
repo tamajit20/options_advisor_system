@@ -156,6 +156,8 @@ def evaluate(
     iv_writing_min = STRATEGY_CONFIG["iv_rank_writing_min"]
     iv_buying_max  = STRATEGY_CONFIG["iv_rank_buying_max"]
     iv_premium_sell_min = STRATEGY_CONFIG.get("iv_premium_sell_min", 0.90)
+    iv_premium_buy_pass = STRATEGY_CONFIG.get("iv_premium_buy_pass", 1.00)
+    iv_premium_buy_warn = STRATEGY_CONFIG.get("iv_premium_buy_warn", 1.20)
     iv_premium_buy_max  = STRATEGY_CONFIG.get("iv_premium_buy_max",  1.50)
 
     def _iv_premium_gate():
@@ -170,16 +172,40 @@ def evaluate(
                 f"IV/HV ratio {prem:.2f} (IV {indicators.hv_20*prem*100:.0f}% vs "
                 f"HV-20 {indicators.hv_20*100:.0f}%) — "
                 + ("premium adequate for writing" if ok
-                   else f"IV below realised vol, need \u2265{iv_premium_sell_min:.2f}×"),
+                   else f"IV below realised vol, need \u2265{iv_premium_sell_min:.2f}\u00d7"),
             )
         if iv_rank is not None and iv_rank < iv_buying_max:
-            # BUYING regime: IV must be reasonably priced vs realised vol
-            ok = prem <= iv_premium_buy_max
+            # BUYING regime — TIERED display, single SOFT_FAIL boundary at buy_max:
+            #   ≤ buy_pass  → real edge          (PASS)
+            #   ≤ buy_warn  → neutral            (PASS_WARN)
+            #   ≤ buy_max   → warn but not block (PASS_WARN)
+            #   >  buy_max  → overpaying badly   (SOFT_FAIL)
+            #
+            # Strategy-specific stricter caps are enforced in
+            # engine/strategy_selector.py via STRATEGY_CONFIG["strategy_iv_premium_buy_max"]
+            # so this regime gate stays permissive for spreads/credit strategies.
+            if prem <= iv_premium_buy_pass:
+                return (
+                    _PASS,
+                    f"IV/HV ratio {prem:.2f} \u2264 {iv_premium_buy_pass:.2f}\u00d7 — "
+                    f"IV at-or-below realised vol, real buying edge",
+                )
+            if prem <= iv_premium_buy_warn:
+                return (
+                    _PASS_WARN,
+                    f"IV/HV ratio {prem:.2f} (between {iv_premium_buy_pass:.2f} and "
+                    f"{iv_premium_buy_warn:.2f}\u00d7) — neutral, no buying edge from IV",
+                )
+            if prem <= iv_premium_buy_max:
+                return (
+                    _PASS_WARN,
+                    f"IV/HV ratio {prem:.2f} (between {iv_premium_buy_warn:.2f} and "
+                    f"{iv_premium_buy_max:.2f}\u00d7) — IV elevated; per-strategy caps may apply",
+                )
             return (
-                _PASS if ok else _SOFT_FAIL,
-                f"IV/HV ratio {prem:.2f} — "
-                + ("options fairly priced for buying" if ok
-                   else f"IV expensive vs realised vol, need \u2264{iv_premium_buy_max:.2f}×"),
+                _SOFT_FAIL,
+                f"IV/HV ratio {prem:.2f} > {iv_premium_buy_max:.2f}\u00d7 — "
+                f"options expensive vs realised vol, overpaying for IV",
             )
         # Mid-IV zone — no strong opinion, pass with info
         return _PASS, f"IV/HV ratio {prem:.2f} (mid-IV zone, no premium constraint)"

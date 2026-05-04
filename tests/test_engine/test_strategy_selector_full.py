@@ -163,3 +163,118 @@ class TestAssembleSuggestion:
         # plain_english should mention the strategy and entry section
         assert "ENTRY" in sug.plain_english
         assert "TIMELINE" in sug.plain_english
+
+
+# ---------------------------------------------------------------------------
+# Per-strategy IV/HV ceiling (mirrors iv_butterfly_min_prem pattern).
+# Verifies that yesterday's IRON_BUTTERFLY gating is untouched and that the
+# new naked-long cap fires only for the listed strategies.
+# ---------------------------------------------------------------------------
+class TestPerStrategyIvPremiumCap:
+    def _ind(self, iv_premium: float, trend: str = "SIDEWAYS"):
+        return _make_indicators(trend=trend, iv_premium=iv_premium)
+
+    def test_long_straddle_vetoed_when_iv_premium_above_cap(self,
+                                                            sample_chain):
+        # Buying regime (iv_rank=15) + iv_premium=1.30 > 1.20 cap → veto
+        ind = self._ind(iv_premium=1.30, trend="SIDEWAYS")
+        with pytest.raises(StrategyVeto, match="strategy_iv_premium_buy_max"):
+            ss.assemble_suggestion(
+                suggestion_id="S-LS-1", underlying="NIFTY",
+                expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=sample_chain,
+                indicators=ind,
+                confidence=_all_pass_confidence(),
+                iv_rank=15.0, atm_iv=0.18, lots=1, lot_size=75,
+                strategy_override="LONG_STRADDLE",
+            )
+
+    def test_long_straddle_passes_when_iv_premium_within_cap(self,
+                                                              sample_chain):
+        # Buying regime + iv_premium=1.10 ≤ 1.20 cap → no veto
+        ind = self._ind(iv_premium=1.10, trend="SIDEWAYS")
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-LS-2", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=15.0, atm_iv=0.18, lots=1, lot_size=75,
+            strategy_override="LONG_STRADDLE",
+        )
+        assert sug.strategy == "LONG_STRADDLE"
+
+    def test_long_call_vetoed_above_cap(self, sample_chain):
+        ind = self._ind(iv_premium=1.30, trend="BULLISH")
+        with pytest.raises(StrategyVeto, match="strategy_iv_premium_buy_max"):
+            ss.assemble_suggestion(
+                suggestion_id="S-LC-1", underlying="NIFTY",
+                expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=sample_chain,
+                indicators=ind,
+                confidence=_all_pass_confidence(),
+                iv_rank=15.0, atm_iv=0.18, lots=1, lot_size=75,
+                strategy_override="LONG_CALL",
+            )
+
+    def test_iron_condor_unaffected_by_naked_long_cap(self, sample_chain,
+                                                      mocker):
+        """IRON_CONDOR is NOT in strategy_iv_premium_buy_max → no per-strategy
+        veto. Yesterday's behaviour preserved."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})
+        # iv_premium=1.30 (above naked-long cap), in writing regime → unaffected
+        ind = self._ind(iv_premium=1.30, trend="SIDEWAYS")
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-IC-1", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+        )
+        assert sug.strategy == "IRON_CONDOR"
+
+    def test_bull_call_spread_unaffected(self, sample_chain, mocker):
+        """Debit verticals are NOT in the per-strategy cap map."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})
+        ind = self._ind(iv_premium=1.40, trend="BULLISH")
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-BCS-1", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=40.0, atm_iv=0.18, lots=1, lot_size=75,
+            strategy_override="BULL_CALL_SPREAD",
+        )
+        assert sug.strategy == "BULL_CALL_SPREAD"
+
+    def test_writing_regime_skips_naked_long_cap(self, sample_chain):
+        """Cap applies only in BUYING regime (iv_rank < buying_max).
+        High iv_rank → strategy override allowed even with high iv_premium."""
+        ind = self._ind(iv_premium=1.50, trend="SIDEWAYS")
+        # iv_rank=60 → writing regime; per-strategy cap should not fire
+        # even though we override to LONG_STRADDLE (artificial scenario)
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-LS-W", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+            strategy_override="LONG_STRADDLE",
+        )
+        assert sug.strategy == "LONG_STRADDLE"
+
+    def test_butterfly_gate_still_works(self):
+        """Yesterday's iv_butterfly_min_prem is independent of new map."""
+        # iv_rank > 70 + iv_premium=1.50 → IRON_BUTTERFLY (yesterday's path)
+        ind = self._ind(iv_premium=1.50, trend="SIDEWAYS")
+        assert ss.select_strategy(iv_rank=80.0, trend="SIDEWAYS",
+                                   indicators=ind) == "IRON_BUTTERFLY"
+        # iv_rank > 70 but iv_premium=1.20 < 1.40 → fall back to IC
+        ind2 = self._ind(iv_premium=1.20, trend="SIDEWAYS")
+        assert ss.select_strategy(iv_rank=80.0, trend="SIDEWAYS",
+                                   indicators=ind2) == "IRON_CONDOR"

@@ -167,8 +167,10 @@ function renderExitPlan(s) {
   // ── 1. Profit target — strategy-specific capture % ───────────────────────
   // Iron Butterfly: narrow wings → gamma risk rises fast → exit at 25%
   // All other credit spreads: 50% (Tastyworks research, EV maximised at ~50%)
-  // Long Straddle/Strangle: need a big move → target 2× debit (100% return)
-  // Long Call/Put: directional → target 100% return on premium
+  // Long Straddle/Strangle: DTE-aware multiple of debit (mirrors
+  //   engine.leg_builder.long_premium_target_multiple). Replaces the
+  //   historical flat 2× target which was unrealistic at short DTE.
+  // Long Call/Put: DTE-aware (same formula)
   // Debit spreads (Bull Call, Bear Put): limited profit → 50% of spread width
   if (isCredit) {
     const pct     = strategy === 'IRON_BUTTERFLY' ? 0.25 : 0.50;
@@ -179,15 +181,25 @@ function renderExitPlan(s) {
     rows.push({ label: 'Profit target', val: `close when ${pctLabel} of credit is captured (₹${fmt(target)}/unit retained)${dteStr}${reason}`, key: true });
   } else if (isDebit) {
     const debit = Math.abs(np);
+    // DTE-aware multiplier — see engine.leg_builder.long_premium_target_multiple
+    // Defaults (config.py): base=0.50, dte_scale=14, cap=1.50.
+    const TARGET_BASE = 0.50, TARGET_DTE_SCALE = 14.0, TARGET_MAX = 1.50;
+    const dteSafe = (typeof dte === 'number' && dte > 0) ? dte : 0;
+    const mult = dteSafe === 0
+      ? TARGET_BASE
+      : Math.min(TARGET_MAX, TARGET_BASE + dteSafe / TARGET_DTE_SCALE);
     if (['LONG_STRADDLE', 'LONG_STRANGLE'].includes(strategy)) {
-      const target2x = Math.round(debit * 2 * 10) / 10;
-      rows.push({ label: 'Profit target', val: `exit when position doubles — gain ₹${fmt(target2x)}/unit (2× debit paid)`, key: true });
+      const target = Math.round(debit * mult * 10) / 10;
+      const pctLabel = `${Math.round(mult * 100)}%`;
+      rows.push({ label: 'Profit target', val: `close when position gains ₹${fmt(target)}/unit (${pctLabel} of debit, scaled to ${dteSafe} DTE)`, key: true });
     } else if (['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(strategy)) {
       const target50 = Math.round(debit * 0.5 * 10) / 10;
       rows.push({ label: 'Profit target', val: `close when spread gains ₹${fmt(target50)}/unit (50% of debit paid)`, key: true });
     } else {
-      // LONG_CALL, LONG_PUT — directional, target full return
-      rows.push({ label: 'Profit target', val: `close when position gains ₹${fmt(Math.round(debit * 10) / 10)}/unit (100% return on premium)`, key: true });
+      // LONG_CALL, LONG_PUT — directional, also DTE-aware
+      const target = Math.round(debit * mult * 10) / 10;
+      const pctLabel = `${Math.round(mult * 100)}%`;
+      rows.push({ label: 'Profit target', val: `close when position gains ₹${fmt(target)}/unit (${pctLabel} of premium, scaled to ${dteSafe} DTE)`, key: true });
     }
   }
 

@@ -294,3 +294,139 @@ def test_long_strangle_uses_full_expected_move(sample_chain, expiry_date):
 def test_jade_lizard_vetoes_when_net_credit_below_call_spread_width():
     """When fixed, builder/selector should raise StrategyVeto if upside risk is undefined."""
     pass
+
+
+# ---------------------------------------------------------------------------
+# PoP — credit vs debit paths (regression for over-stated long-premium PoP)
+# ---------------------------------------------------------------------------
+
+from contracts import SuggestionLeg as _Leg  # noqa: E402
+
+
+def _make_long_straddle_legs(strike: float, debit_each_side: float):
+    """Two BUY legs at the same strike — straddle."""
+    return [
+        _Leg(leg_order=1, hedge_pair_leg=None, symbol="NIFTY",
+             expiry_date=date(2026, 5, 7), strike=strike, option_type="CE",
+             action="BUY", lots=1, lot_size=75,
+             suggested_price=debit_each_side, suggested_price_low=debit_each_side * 0.98,
+             suggested_price_high=debit_each_side * 1.02, leg_purpose_note=""),
+        _Leg(leg_order=2, hedge_pair_leg=None, symbol="NIFTY",
+             expiry_date=date(2026, 5, 7), strike=strike, option_type="PE",
+             action="BUY", lots=1, lot_size=75,
+             suggested_price=debit_each_side, suggested_price_low=debit_each_side * 0.98,
+             suggested_price_high=debit_each_side * 1.02, leg_purpose_note=""),
+    ]
+
+
+def _make_short_strangle_legs(short_call: float, short_put: float, credit_each_leg: float):
+    return [
+        _Leg(leg_order=1, hedge_pair_leg=None, symbol="NIFTY",
+             expiry_date=date(2026, 5, 7), strike=short_call, option_type="CE",
+             action="SELL", lots=1, lot_size=75,
+             suggested_price=credit_each_leg, suggested_price_low=credit_each_leg * 0.98,
+             suggested_price_high=credit_each_leg * 1.02, leg_purpose_note=""),
+        _Leg(leg_order=2, hedge_pair_leg=None, symbol="NIFTY",
+             expiry_date=date(2026, 5, 7), strike=short_put, option_type="PE",
+             action="SELL", lots=1, lot_size=75,
+             suggested_price=credit_each_leg, suggested_price_low=credit_each_leg * 0.98,
+             suggested_price_high=credit_each_leg * 1.02, leg_purpose_note=""),
+    ]
+
+
+class TestEstimatePopLongPremium:
+    """The historical avg(|Δ_long|) formula returned ~50% for an ATM long
+    straddle, dramatically over-stating PoP. The fix uses lognormal
+    BE-crossing probability, which should give ~30–45% for typical
+    7-DTE ATM straddles."""
+
+    def test_long_straddle_pop_is_below_50_when_atm(self):
+        # ATM straddle, 7 DTE, IV 18% — true PoP ≈ 35–42%
+        legs = _make_long_straddle_legs(strike=24100.0, debit_each_side=260.0)
+        pop = estimate_pop(legs, spot=24100.0, dte=7, atm_iv=0.18,
+                            strategy="LONG_STRADDLE")
+        assert 25.0 < pop < 50.0, f"ATM long straddle PoP should be 25–50%, got {pop}"
+
+    def test_long_straddle_pop_is_lower_than_old_delta_estimate(self):
+        # Old formula: avg(|Δ_long|) for ATM both legs ≈ 0.5 each → ~50%
+        # New formula must be materially lower
+        legs = _make_long_straddle_legs(strike=24100.0, debit_each_side=260.0)
+        new_pop = estimate_pop(legs, spot=24100.0, dte=7, atm_iv=0.18,
+                                strategy="LONG_STRADDLE")
+        # Old behaviour for reference (no strategy hint → falls back to delta)
+        old_pop = estimate_pop(legs, spot=24100.0, dte=7, atm_iv=0.18,
+                                strategy=None)
+        assert new_pop < old_pop, (
+            f"BE-crossing PoP ({new_pop}) should be below delta-based PoP ({old_pop})"
+        )
+
+    def test_long_straddle_pop_increases_with_more_time(self):
+        legs = _make_long_straddle_legs(strike=24100.0, debit_each_side=260.0)
+        pop_3 = estimate_pop(legs, spot=24100.0, dte=3, atm_iv=0.18,
+                              strategy="LONG_STRADDLE")
+        pop_30 = estimate_pop(legs, spot=24100.0, dte=30, atm_iv=0.18,
+                               strategy="LONG_STRADDLE")
+        assert pop_30 > pop_3
+
+    def test_long_straddle_pop_increases_with_higher_iv(self):
+        legs = _make_long_straddle_legs(strike=24100.0, debit_each_side=260.0)
+        pop_low_iv = estimate_pop(legs, spot=24100.0, dte=7, atm_iv=0.10,
+                                    strategy="LONG_STRADDLE")
+        pop_high_iv = estimate_pop(legs, spot=24100.0, dte=7, atm_iv=0.30,
+                                    strategy="LONG_STRADDLE")
+        assert pop_high_iv > pop_low_iv
+
+    def test_long_call_pop_uses_be_crossing(self):
+        legs = [_Leg(leg_order=1, hedge_pair_leg=None, symbol="NIFTY",
+                     expiry_date=date(2026, 5, 7), strike=24100.0, option_type="CE",
+                     action="BUY", lots=1, lot_size=75,
+                     suggested_price=200.0, suggested_price_low=196.0,
+                     suggested_price_high=204.0, leg_purpose_note="")]
+        pop = estimate_pop(legs, spot=24100.0, dte=7, atm_iv=0.18,
+                            strategy="LONG_CALL")
+        # BE = 24300; P(S_T > 24300) at ATM with low DTE should be < 50%
+        assert 0 < pop < 50
+
+    def test_credit_strategy_unchanged(self):
+        """Short strangles must keep using ``1 − |Δ_short|`` formula."""
+        legs = _make_short_strangle_legs(short_call=24300.0, short_put=23900.0,
+                                          credit_each_leg=80.0)
+        pop = estimate_pop(legs, spot=24100.0, dte=7, atm_iv=0.18,
+                            strategy="BULL_PUT_SPREAD")  # any credit strategy
+        # Both shorts ~1σ OTM → |Δ| each ≈ 0.30 → PoP ≈ 70%
+        assert 50 < pop < 90
+
+    def test_degenerate_inputs_return_safe_value(self):
+        legs = _make_long_straddle_legs(strike=24100.0, debit_each_side=260.0)
+        # zero IV → BE-crossing falls back to neutral 50% from each side; clamp keeps it sensible
+        pop = estimate_pop(legs, spot=24100.0, dte=7, atm_iv=0.0,
+                            strategy="LONG_STRADDLE")
+        assert 0.0 <= pop <= 100.0
+
+
+class TestLongPremiumTargetMultiple:
+    """DTE-aware profit target for long-premium structures (FIX #4)."""
+
+    def test_short_dte_gives_modest_target(self):
+        # 3 DTE → 0.50 + 3/14 ≈ 0.71
+        m = leg_builder.long_premium_target_multiple(3)
+        assert 0.65 < m < 0.80
+
+    def test_seven_dte_gives_around_one(self):
+        # 7 DTE → 0.50 + 7/14 = 1.00 (replaces hard-coded 2×)
+        m = leg_builder.long_premium_target_multiple(7)
+        assert m == pytest.approx(1.00, abs=0.05)
+
+    def test_caps_at_max(self):
+        # 100 DTE — should cap at 1.50
+        m = leg_builder.long_premium_target_multiple(100)
+        assert m == pytest.approx(1.50, abs=1e-9)
+
+    def test_zero_dte_returns_base(self):
+        m = leg_builder.long_premium_target_multiple(0)
+        assert m == pytest.approx(0.50, abs=1e-9)
+
+    def test_monotone_increasing_until_cap(self):
+        for a, b in [(1, 5), (5, 10), (10, 14)]:
+            assert leg_builder.long_premium_target_multiple(a) < \
+                   leg_builder.long_premium_target_multiple(b)

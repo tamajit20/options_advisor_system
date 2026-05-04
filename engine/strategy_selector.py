@@ -206,6 +206,26 @@ def assemble_suggestion(
                 f"{strategy} requires {required}/7 soft gates, got {soft_pass_count}/7"
             )
 
+    # Per-strategy IV/HV ceiling for the BUYING regime.
+    # The regime-wide gate in confidence.py is intentionally permissive so that
+    # spreads/credit strategies are unaffected by a single shared knob. Strategies
+    # listed in `strategy_iv_premium_buy_max` get a stricter veto here, mirroring
+    # the `iv_butterfly_min_prem` pattern used for IRON_BUTTERFLY in select_strategy().
+    # Strategies NOT in the map are skipped → no behaviour change.
+    strat_iv_caps = STRATEGY_CONFIG.get("strategy_iv_premium_buy_max", {}) or {}
+    strat_iv_cap = strat_iv_caps.get(strategy)
+    if strat_iv_cap is not None:
+        iv_prem = getattr(indicators, "iv_premium", None)
+        # Only enforce in the buying regime (IV rank low). Writing regime is unaffected.
+        iv_buying_max_rank = STRATEGY_CONFIG["iv_rank_buying_max"]
+        in_buying_regime = (iv_rank is not None) and (iv_rank < iv_buying_max_rank)
+        if in_buying_regime and iv_prem is not None and iv_prem > strat_iv_cap:
+            raise StrategyVeto(
+                f"{strategy} requires IV/HV \u2264 {strat_iv_cap:.2f}\u00d7 "
+                f"(strategy_iv_premium_buy_max), got {iv_prem:.2f}\u00d7 \u2014 "
+                f"naked long premium overpays for IV here"
+            )
+
     # Build legs by strategy (registry-driven dispatch)
     em_builder, no_em_builder = _builder_for(strategy)
     if em_builder is not None:
@@ -242,8 +262,10 @@ def assemble_suggestion(
 
     max_profit_ps, max_loss_ps = leg_builder.max_profit_loss(legs, strategy)
     upper_be, lower_be = leg_builder.breakevens(legs, strategy)
-    # Pass chain so estimate_pop uses per-strike IV (skew-adjusted) for short legs
-    pop = leg_builder.estimate_pop(legs, spot, dte, atm_iv, chain=chain)
+    # Pass chain so estimate_pop uses per-strike IV (skew-adjusted) for short legs.
+    # Pass strategy so debit / long-premium structures use BE-crossing probability
+    # instead of the |Δ_long| approximation (which over-states PoP).
+    pop = leg_builder.estimate_pop(legs, spot, dte, atm_iv, chain=chain, strategy=strategy)
 
     # Charges (per-share priced — we want totals → multiply by qty)
     charges = estimate_charges([
