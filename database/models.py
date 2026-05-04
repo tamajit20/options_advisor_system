@@ -702,17 +702,16 @@ class SuggestionRepo:
         )
 
     def active_pending(self) -> List[dict]:
-        """Return PENDING suggestions whose execution window has not yet closed.
+        """Return suggestions that are still relevant on the Suggestions page.
 
-        A suggestion is still actionable when:
-          - entry_date > today                    (execution day is in the future), OR
-          - entry_date = today AND time ≤ 09:45 IST (within the execution window)
+        Display rules by status:
+          PENDING  — shown while the execution window is open:
+                     entry_date >= today (before 09:45) or entry_date > today (after 09:45)
+          EXECUTED — always shown for entry_date >= today so the user can see
+                     what trade was placed, regardless of the time of day.
+          IGNORED  — never shown (superseded; a fresh PENDING row exists instead).
 
-        Only PENDING rows are returned — IGNORED rows are superseded and should
-        not appear alongside the fresh replacement suggestion.
-
-        Fallback: if no rows have entry_date populated (legacy rows before
-        the data_date/entry_date migration), returns the 5 most recent PENDING rows.
+        Fallback: legacy rows without entry_date are shown for up to 1 calendar day.
         """
         from utils import now_ist
         now = now_ist()
@@ -721,22 +720,23 @@ class SuggestionRepo:
         exec_window_close = _time(9, 45)
 
         if now.time() <= exec_window_close:
-            # Within execution window: include today's entry day + all future entry days
+            # Within execution window: PENDING and EXECUTED for today and future
             rows = self.db.fetch_all(
                 "SELECT * FROM options_suggestions "
-                "WHERE status = 'PENDING' "
+                "WHERE status IN ('PENDING', 'EXECUTED') "
                 "AND entry_date >= ? "
                 "ORDER BY generated_on DESC",
                 [today],
             )
         else:
-            # Execution window closed for today: only future entry days
+            # After execution window: PENDING only for future days,
+            # but EXECUTED still visible for today (already acted on) and future.
             rows = self.db.fetch_all(
                 "SELECT * FROM options_suggestions "
-                "WHERE status = 'PENDING' "
-                "AND entry_date > ? "
+                "WHERE (status = 'PENDING' AND entry_date > ?) "
+                "   OR (status = 'EXECUTED' AND entry_date >= ?) "
                 "ORDER BY generated_on DESC",
-                [today],
+                [today, today],
             )
 
         # Fallback for legacy rows without entry_date: only show if generated
