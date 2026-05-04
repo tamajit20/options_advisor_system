@@ -1164,6 +1164,9 @@ function renderSuggestion(s, readOnly = false, allSuggestions = []) {
       <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
       <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
     </div>
+    <div class="card-id-row">
+      <span class="id-chip" title="Suggestion ID">SID&nbsp;${escapeHtml(s.suggestion_id || '—')}</span>
+    </div>
     ${renderStrategyRationale(s)}
     ${renderPlainEnglishStructured(s)}
     <div class="kv-grid">
@@ -1996,6 +1999,10 @@ function renderTrade(t) {
           ${escapeHtml(t.daily_status || t.status)}</span>
       </div>
     </div>
+    <div class="card-id-row">
+      <span class="id-chip" title="Trade ID">TID&nbsp;${escapeHtml(t.trade_id || '—')}</span>
+      ${t.suggestion_id ? `<span class="id-chip" title="Suggestion ID">SID&nbsp;${escapeHtml(t.suggestion_id)}</span>` : ''}
+    </div>
     <div class="kv-grid">
       ${(() => {
         // Compute BEs from actual fill prices — more accurate than DB-stored values
@@ -2169,7 +2176,23 @@ function renderTrade(t) {
 }
 
 // ---------------- Tab 3: History ----------------
-async function loadHistory() {
+
+// ---- Sub-tab switcher ----
+let _histActiveSubtab = 'trades';
+document.querySelectorAll('.hist-subtab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.hist-subtab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    _histActiveSubtab = btn.dataset.htab;
+    $('#hist-pane-trades').hidden      = (_histActiveSubtab !== 'trades');
+    $('#hist-pane-suggestions').hidden = (_histActiveSubtab !== 'suggestions');
+    if (_histActiveSubtab === 'trades')       loadHistory();
+    if (_histActiveSubtab === 'suggestions')  loadHistorySuggestions();
+  });
+});
+
+function loadHistory() {
+  if (_histActiveSubtab !== 'trades') return;
   const c = $('#history-container');
   c.className='loading'; c.textContent='Loading…';
 
@@ -2183,9 +2206,7 @@ async function loadHistory() {
   params.set('to_date', toEl.value);
   if (instrEl.value) params.set('underlying', instrEl.value);
 
-  try {
-    const data = await API('/api/history/closed-trades?' + params);
-
+  API('/api/history/closed-trades?' + params).then(data => {
     // Populate instrument dropdown (preserve selection)
     const cur = instrEl.value;
     instrEl.innerHTML = '<option value="">All instruments</option>';
@@ -2200,9 +2221,84 @@ async function loadHistory() {
     }
     c.className='';
     c.innerHTML = data.trades.map(renderHistoryTrade).join('');
+  }).catch(e => {
+    c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
+  });
+}
+
+async function loadHistorySuggestions() {
+  if (_histActiveSubtab !== 'suggestions') return;
+  const c = $('#hsug-container');
+  c.className='loading'; c.textContent='Loading…';
+
+  const fromEl = $('#hsug-from'), toEl = $('#hsug-to');
+  const instrEl = $('#hsug-instrument'), statusEl = $('#hsug-status');
+  if (!fromEl.value) { const d = new Date(); d.setDate(d.getDate()-30); fromEl.value = d.toISOString().slice(0,10); }
+  if (!toEl.value)   { toEl.value = new Date().toISOString().slice(0,10); }
+
+  const params = new URLSearchParams();
+  params.set('from_date', fromEl.value);
+  params.set('to_date',   toEl.value);
+  if (instrEl.value)  params.set('underlying', instrEl.value);
+  if (statusEl.value) params.set('status',     statusEl.value);
+
+  try {
+    const data = await API('/api/history/suggestions?' + params);
+
+    // Populate instrument dropdown
+    const cur = instrEl.value;
+    instrEl.innerHTML = '<option value="">All instruments</option>';
+    (data.underlyings || []).forEach(u => {
+      const o = document.createElement('option'); o.value = u; o.textContent = u;
+      if (u === cur) o.selected = true;
+      instrEl.appendChild(o);
+    });
+
+    if (!data.suggestions.length) {
+      c.className=''; c.innerHTML='<div class="empty">No suggestions in the selected period.</div>'; return;
+    }
+    c.className='';
+    c.innerHTML = data.suggestions.map(renderHistorySuggestion).join('');
   } catch (e) {
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+function renderHistorySuggestion(s) {
+  const statusCls = s.status === 'EXECUTED' ? 'tag-ok'
+                  : s.status === 'IGNORED'  ? 'tag-warn'
+                  : s.status === 'PENDING'  ? 'tag-acc'
+                  : 'tag-muted';
+  return `
+  <div class="hist-card" style="border-left-color: var(--accent)">
+    <div class="hist-card-head">
+      <div class="hist-card-title">
+        <strong class="hist-instr">${escapeHtml(s.underlying || '')}</strong>
+        <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
+        <span class="tag ${statusCls}">${escapeHtml(s.status || '')}</span>
+        ${s.expiry_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(s.expiry_type)}</span>` : ''}
+      </div>
+      <div class="hist-card-pnl">
+        ${s.confidence_score != null ? `<span class="muted" style="font-size:.85rem">Confidence ${s.confidence_score}/7</span>` : ''}
+      </div>
+    </div>
+    <div class="hist-card-meta muted">
+      ${escapeHtml(s.trade_name || s.suggestion_id)}
+      &nbsp;·&nbsp;Generated: ${fmtDt(s.generated_on)}
+      ${s.expiry_date ? '&nbsp;·&nbsp;Expiry: '+fmtDt(s.expiry_date) : ''}
+      ${s.dte != null ? '&nbsp;·&nbsp;DTE: '+s.dte : ''}
+      ${s.entry_date ? '&nbsp;·&nbsp;Entry day: '+s.entry_date : ''}
+    </div>
+    ${s.net_credit_suggested != null ? `
+    <div class="hcmp-grid">
+      <div class="hcmp-header"><span>Economics (Suggested)</span></div>
+      <div class="hcmp-row"><span class="hcmp-key">Net credit</span><span class="hcmp-sug">₹${fmt(s.net_credit_suggested)}</span></div>
+      ${s.max_profit != null ? `<div class="hcmp-row"><span class="hcmp-key">Max profit</span><span class="hcmp-sug">₹${fmt(s.max_profit)}</span></div>` : ''}
+      ${s.max_loss != null ? `<div class="hcmp-row"><span class="hcmp-key">Max loss</span><span class="hcmp-sug">₹${fmt(s.max_loss)}</span></div>` : ''}
+      ${s.stop_loss_level != null ? `<div class="hcmp-row"><span class="hcmp-key">Stop loss</span><span class="hcmp-sug">${fmt(s.stop_loss_level)}</span></div>` : ''}
+    </div>` : ''}
+    ${s.plain_english ? `<div class="hist-card-meta muted" style="margin-top:8px;white-space:pre-line">${escapeHtml(s.plain_english)}</div>` : ''}
+  </div>`;
 }
 
 function renderHistoryTrade(t) {
@@ -2341,11 +2437,18 @@ $('#log-refresh').addEventListener('click', loadLogs);
 $('#log-level').addEventListener('change', loadLogs);
 $('#log-search').addEventListener('keydown', e => { if (e.key === 'Enter') loadLogs(); });
 
-// History filter bindings
+// History filter bindings — Trades sub-tab
 $('#hist-refresh').addEventListener('click', loadHistory);
 $('#hist-instrument').addEventListener('change', loadHistory);
 $('#hist-from').addEventListener('change', loadHistory);
 $('#hist-to').addEventListener('change', loadHistory);
+
+// History filter bindings — Suggestions sub-tab
+$('#hsug-refresh').addEventListener('click', loadHistorySuggestions);
+$('#hsug-instrument').addEventListener('change', loadHistorySuggestions);
+$('#hsug-status').addEventListener('change', loadHistorySuggestions);
+$('#hsug-from').addEventListener('change', loadHistorySuggestions);
+$('#hsug-to').addEventListener('change', loadHistorySuggestions);
 
 // ---------------- Tab 5: Config ----------------
 async function loadConfig() {

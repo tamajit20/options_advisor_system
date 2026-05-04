@@ -75,19 +75,53 @@
 
     <article class="panel" id="panel-history" aria-hidden="true">
       <h2 class="panel-title">History</h2>
-      <div class="filter-row hist-filter-bar">
-        <label class="hist-filter-label">From
-          <input type="date" id="hist-from" class="hist-date-input">
-        </label>
-        <label class="hist-filter-label">To
-          <input type="date" id="hist-to" class="hist-date-input">
-        </label>
-        <select id="hist-instrument">
-          <option value="">All instruments</option>
-        </select>
-        <button class="btn" id="hist-refresh">Refresh</button>
+
+      <!-- Sub-tabs -->
+      <div class="hist-subtabs">
+        <button class="hist-subtab active" data-htab="trades">Trades</button>
+        <button class="hist-subtab" data-htab="suggestions">Suggestions</button>
       </div>
-      <div id="history-container" class="loading">Loading…</div>
+
+      <!-- Trades sub-tab -->
+      <div id="hist-pane-trades">
+        <div class="filter-row hist-filter-bar">
+          <label class="hist-filter-label">From
+            <input type="date" id="hist-from" class="hist-date-input">
+          </label>
+          <label class="hist-filter-label">To
+            <input type="date" id="hist-to" class="hist-date-input">
+          </label>
+          <select id="hist-instrument">
+            <option value="">All instruments</option>
+          </select>
+          <button class="btn" id="hist-refresh">Refresh</button>
+        </div>
+        <div id="history-container" class="loading">Loading…</div>
+      </div>
+
+      <!-- Suggestions sub-tab -->
+      <div id="hist-pane-suggestions" hidden>
+        <div class="filter-row hist-filter-bar">
+          <label class="hist-filter-label">From
+            <input type="date" id="hsug-from" class="hist-date-input">
+          </label>
+          <label class="hist-filter-label">To
+            <input type="date" id="hsug-to" class="hist-date-input">
+          </label>
+          <select id="hsug-instrument">
+            <option value="">All instruments</option>
+          </select>
+          <select id="hsug-status">
+            <option value="">All statuses</option>
+            <option>PENDING</option>
+            <option>EXECUTED</option>
+            <option>IGNORED</option>
+            <option>NO_SUGGESTION</option>
+          </select>
+          <button class="btn" id="hsug-refresh">Refresh</button>
+        </div>
+        <div id="hsug-container" class="loading">Loading…</div>
+      </div>
     </article>
 
     <article class="panel" id="panel-logs" aria-hidden="true">

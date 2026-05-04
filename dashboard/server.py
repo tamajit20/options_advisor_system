@@ -393,15 +393,43 @@ def create_app() -> Flask:
     @app.route("/api/history/suggestions")
     @_with_db
     def api_history_suggestions(db: SQLServerConnection):
-        days = int(request.args.get("days", 30))
-        since = (datetime.utcnow() - timedelta(days=days))
+        from_date  = request.args.get("from_date")
+        to_date    = request.args.get("to_date")
+        underlying = request.args.get("underlying", "").strip()
+        status_f   = request.args.get("status", "").strip().upper()
+
+        # Fallback: legacy ?days= support
+        if not from_date:
+            days = int(request.args.get("days", 30))
+            from_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+        if not to_date:
+            to_date = datetime.utcnow().strftime("%Y-%m-%d")
+
+        valid_statuses = {"PENDING", "EXECUTED", "IGNORED", "NO_SUGGESTION"}
+        if status_f and status_f not in valid_statuses:
+            status_f = ""
+
+        filters: list[str] = ["CONVERT(date, generated_on) >= ?", "CONVERT(date, generated_on) <= ?"]
+        params: list = [from_date, to_date]
+        if underlying:
+            filters.append("underlying = ?")
+            params.append(underlying)
+        if status_f:
+            filters.append("status = ?")
+            params.append(status_f)
+        else:
+            # Default: show all non-trivial statuses
+            filters.append("status IN ('PENDING','EXECUTED','IGNORED')")
+
+        where = " AND ".join(filters)
         rows = db.fetch_all(
-            "SELECT TOP 200 * FROM options_suggestions "
-            "WHERE generated_on >= ? AND status IN ('EXECUTED', 'IGNORED') "
-            "ORDER BY generated_on DESC",
-            [since],
+            f"SELECT TOP 300 * FROM options_suggestions "
+            f"WHERE {where} ORDER BY generated_on DESC",
+            params,
         )
-        return jsonify({"suggestions": [_row(r) for r in rows]})
+        # Collect unique underlyings for the dropdown
+        underlyings = sorted({r["underlying"] for r in rows if r.get("underlying")})
+        return jsonify({"suggestions": [_row(r) for r in rows], "underlyings": underlyings})
 
     @app.route("/api/history/trades")
     @_with_db

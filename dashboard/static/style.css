@@ -87,6 +87,13 @@ a { color: var(--accent); text-decoration: none; }
   margin-bottom: 8px; flex-wrap: wrap; gap: 8px;
 }
 .card h3 { margin: 0 0 4px; font-size: 1rem; }
+.card-id-row { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.id-chip {
+  font-size: .72rem; font-family: 'Courier New', monospace;
+  color: var(--text-dim); background: rgba(255,255,255,.05);
+  border: 1px solid #2e3e50; border-radius: 4px;
+  padding: 1px 7px; letter-spacing: .02em; user-select: all;
+}
 
 /* ── Strategy rationale block ─────────────────────────────────────────────── */
 .strategy-rationale {
@@ -420,17 +427,32 @@ input:focus, select:focus, textarea:focus {
 .pnl-loss   { color: var(--err); }
 .tag-sm     { font-size: 9px; padding: 1px 5px; }
 
+/* ---------- History sub-tabs ---------- */
+.hist-subtabs {
+  display: flex; gap: 4px; margin-bottom: 16px;
+  border-bottom: 2px solid #2a3744;
+  padding-bottom: 0;
+}
+.hist-subtab {
+  background: none; border: none; border-bottom: 3px solid transparent;
+  color: var(--text-dim); font-size: .88rem; font-weight: 600;
+  padding: 7px 18px; cursor: pointer; margin-bottom: -2px;
+  transition: color .15s, border-color .15s;
+}
+.hist-subtab:hover { color: var(--text); }
+.hist-subtab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
 /* ---------- History redesigned cards ---------- */
 .hist-filter-bar { align-items: flex-end; }
 .hist-filter-label { font-size: .8rem; color: var(--text-dim); display: flex; flex-direction: column; gap: 2px; }
 .hist-date-input,
-#hist-instrument {
+#hist-instrument, #hsug-instrument, #hsug-status {
   background: var(--surface); border: 1px solid #3a4a5a; border-radius: 6px;
   color: var(--text); padding: 5px 8px; font-size: .85rem; cursor: pointer;
   height: 32px; box-sizing: border-box;
 }
 .hist-date-input:focus,
-#hist-instrument:focus { outline: none; border-color: var(--primary); }
+#hist-instrument:focus, #hsug-instrument:focus, #hsug-status:focus { outline: none; border-color: var(--primary); }
 .hist-filter-bar .btn { height: 32px; padding: 0 14px; }
 .hist-card {
   background: var(--surface);

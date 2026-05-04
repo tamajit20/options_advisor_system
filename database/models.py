@@ -702,11 +702,14 @@ class SuggestionRepo:
         )
 
     def active_pending(self) -> List[dict]:
-        """Return PENDING/IGNORED suggestions whose execution window has not yet closed.
+        """Return PENDING suggestions whose execution window has not yet closed.
 
         A suggestion is still actionable when:
-          - entry_date > today                 (execution day is in the future), OR
-          - entry_date = today AND time ≤ 15:30 IST (market still open today)
+          - entry_date > today                    (execution day is in the future), OR
+          - entry_date = today AND time ≤ 09:45 IST (within the execution window)
+
+        Only PENDING rows are returned — IGNORED rows are superseded and should
+        not appear alongside the fresh replacement suggestion.
 
         Fallback: if no rows have entry_date populated (legacy rows before
         the data_date/entry_date migration), returns the 5 most recent PENDING rows.
@@ -715,22 +718,22 @@ class SuggestionRepo:
         now = now_ist()
         today = now.date()
         from datetime import time as _time
-        mkt_close = _time(15, 30)
+        exec_window_close = _time(9, 45)
 
-        if now.time() <= mkt_close:
-            # Before/at close: include today's entry day + all future entry days
+        if now.time() <= exec_window_close:
+            # Within execution window: include today's entry day + all future entry days
             rows = self.db.fetch_all(
                 "SELECT * FROM options_suggestions "
-                "WHERE status IN ('PENDING', 'IGNORED') "
+                "WHERE status = 'PENDING' "
                 "AND entry_date >= ? "
                 "ORDER BY generated_on DESC",
                 [today],
             )
         else:
-            # After market close: only suggestions with entry_date in the future
+            # Execution window closed for today: only future entry days
             rows = self.db.fetch_all(
                 "SELECT * FROM options_suggestions "
-                "WHERE status IN ('PENDING', 'IGNORED') "
+                "WHERE status = 'PENDING' "
                 "AND entry_date > ? "
                 "ORDER BY generated_on DESC",
                 [today],
