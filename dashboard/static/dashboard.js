@@ -2700,7 +2700,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ---------------- WS Monitor ----------------
 let _wsmonTimer = null;
-const WSMON_INTERVAL_MS = 2000;
+const WSMON_INTERVAL_MS = 1000;
 
 function stopWsMonitorAutoRefresh() {
   if (_wsmonTimer) {
