@@ -18,8 +18,28 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    """Coerce a numeric value into something SQL Server FLOAT will accept.
+
+    SQL Server's `float`/`real` columns reject ``inf`` / ``-inf`` / ``NaN``
+    with a TDS protocol error ("Parameter N (\"\"): not a valid instance of
+    float"). Callers (e.g. unlimited-profit strategies that store
+    ``float('inf')``) should not blow up the INSERT — store NULL instead.
+    """
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f):
+        return None
+    return f
 
 from contracts import (
     FoBhavRow,
@@ -531,11 +551,11 @@ class SuggestionRepo:
             """,
             [
                 s.suggestion_id, s.trade_name, s.generated_on, s.strategy, s.strategy_type,
-                s.underlying, s.expiry_date, s.expiry_type, s.dte, s.spot_at_generation, s.confidence.score,
+                s.underlying, s.expiry_date, s.expiry_type, s.dte, _safe_float(s.spot_at_generation), s.confidence.score,
                 json.dumps([c.__dict__ for c in s.confidence.checks]),
-                s.economics.net_credit, s.economics.max_profit, s.economics.max_loss,
-                s.economics.upper_breakeven, s.economics.lower_breakeven, s.economics.stop_loss_level,
-                s.economics.probability_of_profit, s.economics.estimated_charges.total, s.economics.estimated_net_pnl,
+                _safe_float(s.economics.net_credit), _safe_float(s.economics.max_profit), _safe_float(s.economics.max_loss),
+                _safe_float(s.economics.upper_breakeven), _safe_float(s.economics.lower_breakeven), _safe_float(s.economics.stop_loss_level),
+                _safe_float(s.economics.probability_of_profit), _safe_float(s.economics.estimated_charges.total), _safe_float(s.economics.estimated_net_pnl),
                 s.execution_window, s.plain_english,
                 s.data_date, s.entry_date, s.spot_data_date, s.fii_data_date, s.vix_data_date,
             ],
@@ -552,8 +572,8 @@ class SuggestionRepo:
         self.db.executemany(sql, [
             (
                 suggestion_id, leg.leg_order, leg.hedge_pair_leg, leg.symbol, leg.expiry_date,
-                leg.strike, leg.option_type, leg.action, leg.lots, leg.lot_size,
-                leg.suggested_price, leg.suggested_price_low, leg.suggested_price_high,
+                _safe_float(leg.strike), leg.option_type, leg.action, leg.lots, leg.lot_size,
+                _safe_float(leg.suggested_price), _safe_float(leg.suggested_price_low), _safe_float(leg.suggested_price_high),
                 leg.leg_purpose_note,
             )
             for leg in legs

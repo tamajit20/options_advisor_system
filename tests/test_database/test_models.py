@@ -24,6 +24,7 @@ from database.models import (
     SuggestionRepo,
     TradeRepo,
     VixRepo,
+    _safe_float,
 )
 
 
@@ -262,6 +263,35 @@ class TestSuggestionRepo:
             assert col in sql
         assert params[-1] == "SUG-1"
         assert "LIVE" in params and "zerodha" in params and "WS_REGEN" in params
+
+
+class TestSafeFloat:
+    """`_safe_float` shields SQL Server FLOAT columns from inf/NaN values."""
+
+    def test_finite_passes_through(self):
+        assert _safe_float(1.5) == 1.5
+        assert _safe_float(0) == 0.0
+        assert _safe_float(-1234.56) == -1234.56
+
+    def test_int_is_coerced(self):
+        assert _safe_float(7) == 7.0
+
+    def test_none_returns_none(self):
+        assert _safe_float(None) is None
+
+    def test_inf_becomes_none(self):
+        assert _safe_float(float("inf")) is None
+        assert _safe_float(float("-inf")) is None
+
+    def test_nan_becomes_none(self):
+        assert _safe_float(float("nan")) is None
+
+    def test_non_numeric_returns_none(self):
+        assert _safe_float("abc") is None
+        assert _safe_float(object()) is None
+
+    def test_numeric_string_is_coerced(self):
+        assert _safe_float("3.14") == 3.14
 
 
 # ---------------------------------------------------------------------------
