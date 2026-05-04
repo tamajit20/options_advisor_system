@@ -290,6 +290,13 @@ STRATEGY_CONFIG = {
     # the typical ATM-edge short on a credit spread.
     "min_short_strike_buffer_pct": 1.5,
 
+    # Adverse-move auto-advisor (engine/adverse_move_advisor.py).
+    # Fires an ADVERSE_MOVE_WARNING notification once a trade's MTM
+    # crosses this percentage of max_loss while still under the hard SL
+    # threshold (stop_loss_fraction). 30% is roughly the midpoint of the
+    # 0..SL band and gives the user time to plan a roll/partial-close.
+    "adverse_move_warning_pct": 30.0,
+
     # Opportunity-regen-on-tick (lifecycle/opportunity_regen_watcher.py)
     # When the live spot / VIX moves more than these thresholds vs the
     # day's first observed tick, fire a single OPPORTUNITY_REGEN_HINT

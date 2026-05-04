@@ -19,6 +19,7 @@ from datetime import date
 from contracts import Notification
 from database.connection import SQLServerConnection
 from database.models import FoEodRepo, NotificationRepo, TradeRepo
+from engine.adverse_move_advisor import assess_adverse_move
 from engine.exit_engine import evaluate_exit
 from utils import days_between, now_ist, today_ist
 
@@ -130,6 +131,35 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
         # closing prices, and notify so the user can act.
         if decision.decision == "HOLD":
             trd.update_status(trade_id, "ACTIVE", "OPEN", None)
+            # Adverse-move early warning. Computes the same MTM that
+            # evaluate_exit just used (entry_net_credit + current_value)
+            # and fires a notification when we cross the warning band.
+            entry_credit = float(trade.get("net_credit_actual") or 0.0)
+            max_loss_rs  = float(trade.get("actual_max_loss") or 0.0)
+            current_value = 0.0
+            for leg in legs_for_engine:
+                key = (float(leg["strike"]), leg["option_type"])
+                mid = next((c["mid_price"] for c in current_chain
+                            if (c["strike"], c["option_type"]) == key), 0.0)
+                qty = int(leg["lots"]) * int(leg["lot_size"])
+                sign = -1.0 if leg["action"] == "SELL" else 1.0
+                current_value += sign * mid * qty
+            current_pnl = entry_credit + current_value
+            advice = assess_adverse_move(
+                current_pnl=current_pnl, max_loss_rs=max_loss_rs,
+            )
+            if advice is not None:
+                notif.insert(Notification(
+                    created_at=now_ist(),
+                    notif_type="ADVERSE_MOVE_WARNING",
+                    severity="WARNING",
+                    title=(
+                        f"{trade.get('trade_name') or trade_id}: "
+                        f"{advice.headline}"
+                    ),
+                    body=advice.recovery_hint,
+                    related_trade_id=trade_id,
+                ))
         else:
             # Build per-leg suggested closing prices (mid of latest chain)
             suggested_lines = []

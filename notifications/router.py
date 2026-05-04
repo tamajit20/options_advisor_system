@@ -55,6 +55,10 @@ _TYPE_TO_FLAG = {
     # validator chatter together.
     "SUGGESTION_STILL_GOOD":  "opportunity_alerts",
     "SUGGESTION_STALE":       "opportunity_alerts",
+    # Adverse-move early warning fires before SL_HIT — share the same flag
+    # so silencing SL chatter also silences the early warning (the user
+    # already opted out of risk-side notifications).
+    "ADVERSE_MOVE_WARNING":   "sl_alerts",
 }
 
 
