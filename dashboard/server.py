@@ -857,6 +857,48 @@ def create_app() -> Flask:
                         "service": "options_advisor_dashboard",
                         "port": DASHBOARD_CONFIG["port"]})
 
+    # ---------- System status (read-only summary used by the UI banner) ----
+    @app.route("/api/system-status")
+    @_with_db
+    def api_system_status(db: SQLServerConnection):
+        """Lightweight read-only banner data for the dashboard.
+
+        Returns the few runtime signals the UI surfaces as banners /
+        chips so the page doesn't have to call /api/runtime-flags +
+        scheduler endpoints separately. All values are best-effort.
+        """
+        from database.runtime_flags import (
+            FLAG_CIRCUIT_BREAKER_ACTIVE,
+            FLAG_KILL_SWITCH,
+            FLAG_TRADE_EXECUTION_ENABLED,
+            RuntimeFlagsRepo,
+        )
+        cb_active = False
+        kill_switch = False
+        trade_exec_enabled = True
+        try:
+            repo = RuntimeFlagsRepo(db, cache_ttl_seconds=0)
+            cb_active = repo.get_bool(FLAG_CIRCUIT_BREAKER_ACTIVE, default=False)
+            kill_switch = repo.get_bool(FLAG_KILL_SWITCH, default=False)
+            trade_exec_enabled = repo.get_bool(
+                FLAG_TRADE_EXECUTION_ENABLED, default=True,
+            )
+        except Exception:
+            logger.debug("system-status: runtime_flags read failed", exc_info=True)
+        sch_running = False
+        try:
+            from scheduler.scheduler import get_scheduler
+            sch = get_scheduler()
+            sch_running = bool(sch and sch.running)
+        except Exception:
+            logger.debug("system-status: scheduler probe failed", exc_info=True)
+        return jsonify({
+            "circuit_breaker_active": cb_active,
+            "kill_switch":             kill_switch,
+            "trade_execution_enabled": trade_exec_enabled,
+            "scheduler_running":       sch_running,
+        })
+
     return app
 
 

@@ -255,6 +255,20 @@ input:focus, select:focus, textarea:focus {
   border: 1px dashed #3a4754; border-radius: 10px;
 }
 
+/* ---------- System banners (Phase 4 / Task 7 surfacing) ---------- */
+.sys-banner {
+  margin: 0 0 12px; padding: 10px 14px; border-radius: 8px;
+  font-size: .92rem; line-height: 1.35; border: 1px solid transparent;
+}
+.sys-banner-err {
+  background: rgba(239,68,68,.12); color: var(--err);
+  border-color: rgba(239,68,68,.35);
+}
+.sys-banner-warn {
+  background: rgba(251,191,36,.10); color: var(--warn);
+  border-color: rgba(251,191,36,.30);
+}
+
 /* ---------- Suggestion card legs ---------- */
 .legs-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;

@@ -112,15 +112,32 @@ async function loadSuggestion() {
   const c = $('#suggestion-container');
   c.className = 'loading'; c.textContent = 'Loading…';
   try {
+    // Fetch system status (best-effort) for the top banner; never blocks
+    // the suggestion render if it fails.
+    let bannerHtml = '';
+    try {
+      const st = await API('/api/system-status');
+      const banners = [];
+      if (st.circuit_breaker_active) {
+        banners.push(`<div class="sys-banner sys-banner-err">\ud83d\udea8 Daily P&amp;L circuit breaker is <strong>ACTIVE</strong> \u2014 new executions are blocked until reset.</div>`);
+      }
+      if (st.kill_switch) {
+        banners.push(`<div class="sys-banner sys-banner-err">\ud83d\uded1 Kill switch is ON \u2014 all alerts and execution are paused.</div>`);
+      }
+      if (st.trade_execution_enabled === false) {
+        banners.push(`<div class="sys-banner sys-banner-warn">\u26a0\ufe0f Trade execution disabled by runtime flag.</div>`);
+      }
+      bannerHtml = banners.join('');
+    } catch {}
     const data = await API('/api/suggestion/today');
     const list = data.suggestions || [];
     if (!list.length) {
       c.className = '';
-      c.innerHTML = '<div class="empty">No suggestion yet.</div>';
+      c.innerHTML = bannerHtml + '<div class="empty">No suggestion yet.</div>';
       return;
     }
     c.className = '';
-    c.innerHTML = list.map(s => renderSuggestion(s, false, list)).join('');
+    c.innerHTML = bannerHtml + list.map(s => renderSuggestion(s, false, list)).join('');
     bindSuggestionActions();
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
@@ -403,7 +420,34 @@ function renderPlainEnglishStructured(s) {
     const eFmt = new Date(ed + 'T00:00:00').toLocaleDateString('en-IN',
       { weekday:'short', day:'2-digit', month:'short', year:'2-digit' });
     chips.push(`<span class="ctx-chip ctx-entry-date" title="Intended execution date">Execute \u2192 ${escapeHtml(eFmt)}</span>`);
-  }  if (s.confidence_score != null) {
+  }
+  // Phase 2c: validator status (set by 09:35 IST intraday_validator)
+  if (s.validator_status) {
+    const vs = s.validator_status;
+    if (vs === 'STILL_GOOD_0935') {
+      chips.push(`<span class="ctx-chip ctx-pass" title="Validated by 09:35 IST intraday validator">\u2713 Still good 09:35</span>`);
+    } else if (vs === 'STALE_0935' || vs === 'STALE_INTRADAY') {
+      chips.push(`<span class="ctx-chip ctx-fail" title="Re-priced after open and was no longer actionable">\u2717 Stale 09:35</span>`);
+    }
+  }
+  // Phase 2c: provenance chips (data source / trigger)
+  if (s.data_source) {
+    const cls = s.data_source === 'LIVE' ? 'ctx-chip ctx-iv'
+              : s.data_source === 'EOD'  ? 'ctx-chip'
+              : 'ctx-chip';
+    const tip = s.provider ? `Source: ${s.data_source} via ${s.provider}` : `Source: ${s.data_source}`;
+    chips.push(`<span class="${cls}" title="${escapeHtml(tip)}">${escapeHtml(s.data_source)}</span>`);
+  }
+  if (s.trigger_type) {
+    const label = s.trigger_type === 'EOD_RUN'              ? 'EOD'
+                : s.trigger_type === 'INTRADAY_VALIDATOR'   ? '09:35 check'
+                : s.trigger_type === 'WS_REGEN'             ? 'Tick regen'
+                : s.trigger_type === 'MANUAL'               ? 'Manual'
+                : s.trigger_type;
+    const tip = s.trigger_reason ? `Trigger: ${s.trigger_type}\n${s.trigger_reason}` : `Trigger: ${s.trigger_type}`;
+    chips.push(`<span class="ctx-chip" title="${escapeHtml(tip)}">${escapeHtml(label)}</span>`);
+  }
+  if (s.confidence_score != null) {
     let _warnCount = 0, _errorCount = 0, _failCount = 0, _softFailCount = 0, _total = 7, _passCount = null;
     if (s.conditions_json) {
       let _raw = s.conditions_json;

@@ -158,6 +158,39 @@ class TestApiMarkExecuted:
         assert resp.get_json()["trade_id"] == "TRD-001"
 
 
+class TestApiSystemStatus:
+    def test_returns_status_keys(self, client, mocker):
+        # Stub RuntimeFlagsRepo to avoid touching the DB
+        mocker.patch(
+            "database.runtime_flags.RuntimeFlagsRepo.get_bool",
+            side_effect=lambda key, default=False: {
+                "circuit_breaker_active": True,
+                "kill_switch": False,
+                "trade_execution_enabled": True,
+            }.get(key, default),
+        )
+        resp = client.get("/api/system-status")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["circuit_breaker_active"] is True
+        assert body["kill_switch"] is False
+        assert body["trade_execution_enabled"] is True
+        assert "scheduler_running" in body
+
+    def test_fail_open_when_runtime_flags_raise(self, client, mocker):
+        mocker.patch(
+            "database.runtime_flags.RuntimeFlagsRepo.get_bool",
+            side_effect=RuntimeError("table missing"),
+        )
+        resp = client.get("/api/system-status")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        # Defaults applied — endpoint must not 500
+        assert body["circuit_breaker_active"] is False
+        assert body["kill_switch"] is False
+        assert body["trade_execution_enabled"] is True
+
+
 # ---------------------------------------------------------------------------
 # Future-scope placeholders for routes not yet covered
 # ---------------------------------------------------------------------------
