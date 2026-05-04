@@ -42,6 +42,7 @@ from lifecycle.snapshot_orchestrator import (
     run_drift_verifier,
     run_intraday_close_snapshot,
 )
+from lifecycle.intraday_validator import run_intraday_validator
 from lifecycle.suggestion_engine import run_suggestion_engine
 from simulation.simulator import run_simulation_update
 from utils import now_ist, today_ist
@@ -164,6 +165,10 @@ def job_drift_verifier():
              requires=["fo_bhav_download"])
 
 
+def job_intraday_validator():
+    _run_job("intraday_validator", run_intraday_validator)
+
+
 def job_weekly_cleanup():
     """Apply retention policy and trim historical data."""
     from datetime import timedelta as _td
@@ -205,6 +210,7 @@ JOB_FUNCS = {
     "weekly_cleanup":     job_weekly_cleanup,
     "intraday_close_snapshot": job_intraday_close_snapshot,
     "drift_verifier":          job_drift_verifier,
+    "intraday_validator":      job_intraday_validator,
 }
 
 

@@ -49,6 +49,12 @@ _TYPE_TO_FLAG = {
     "PERFECT_CLOSURE":        "closure_alerts",
     "PERFECT_ENTRY":          "opportunity_alerts",
     "OPPORTUNITY_REGEN_HINT": "opportunity_alerts",
+    # 09:35 validator outputs are also gated by opportunity_alerts — they
+    # advise the user whether to act on the morning suggestion. The flag is
+    # the same toggle a user would flip when they want to silence regen +
+    # validator chatter together.
+    "SUGGESTION_STILL_GOOD":  "opportunity_alerts",
+    "SUGGESTION_STALE":       "opportunity_alerts",
 }
 
 

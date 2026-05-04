@@ -90,6 +90,12 @@ SCHEDULER_CONFIG = {
         "drift_verifier": {
             "day_of_week": "mon-fri", "hour": 19, "minute": 35, "enabled": True,
         },
+        # 09:35 IST: re-validate today's PENDING suggestions against live
+        # opening chain. Avoids 09:30 by 5 min so the worst of opening-tick
+        # noise has settled.
+        "intraday_validator": {
+            "day_of_week": "mon-fri", "hour": 9, "minute": 35, "enabled": True,
+        },
         # Maintenance (Sunday 02:00)
         "weekly_cleanup":     {"day_of_week": "sun", "hour": 2,  "minute":  0, "enabled": True},
         # Events calendar sync — Monday 07:00 before market open
@@ -108,6 +114,7 @@ SCHEDULER_CONFIG = {
         "weekly_cleanup":     1800,
         "intraday_close_snapshot": 300,
         "drift_verifier":          120,
+        "intraday_validator":      180,
     },
 }
 
@@ -259,6 +266,14 @@ STRATEGY_CONFIG = {
     # drift exceeds this percentage fires a single rolled-up DRIFT_WARNING
     # notification. 5% is calibrated to be loud only on real feed problems.
     "intraday_close_drift_pct": 5.0,
+
+    # 09:35 IST opening-bell validator (lifecycle/intraday_validator.py)
+    # Re-prices each PENDING suggestion against the live opening chain;
+    # net credit moving more than this percentage off the originally
+    # suggested credit flips the suggestion to STALE_0935 + status='IGNORED'.
+    # 15% allows for normal post-open volatility settling without
+    # being so loose that a real regime shift slips through.
+    "intraday_validator_tolerance_pct": 15.0,
 
     # Opportunity-regen-on-tick (lifecycle/opportunity_regen_watcher.py)
     # When the live spot / VIX moves more than these thresholds vs the
