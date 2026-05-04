@@ -33,6 +33,7 @@ from typing import Optional, Sequence
 from contracts import TradeLegFill
 from database.connection import SQLServerConnection
 from database.models import SuggestionRepo, TradeRepo
+from database.runtime_flags import FLAG_CIRCUIT_BREAKER_ACTIVE, RuntimeFlagsRepo
 from engine.broken_trade_advisor import advise, diagnose
 from engine.charges import estimate_charges_per_txn
 from engine.execution_validator import validate_execution
@@ -58,9 +59,22 @@ def mark_executed(
     if not legs:
         raise ValueError(f"Suggestion {suggestion_id} has no legs")
 
+    # Read circuit-breaker flag (best-effort — fail-open if the table is
+    # not migrated yet so existing tests / fresh installs still work).
+    cb_active = False
+    try:
+        cb_active = RuntimeFlagsRepo(db).get_bool(
+            FLAG_CIRCUIT_BREAKER_ACTIVE, default=False,
+        )
+    except Exception:
+        logger.debug("trade_executor: circuit_breaker flag read failed",
+                     exc_info=True)
+
     # Centralized pre-execution gate. ValueError lets the dashboard
     # route surface a 400 with the exact veto reasons.
-    gate = validate_execution(suggestion, legs)
+    gate = validate_execution(
+        suggestion, legs, circuit_breaker_active=cb_active,
+    )
     if not gate.ok:
         logger.warning(
             "Execution blocked for %s: %s", suggestion_id, gate.reason()

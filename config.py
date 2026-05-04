@@ -297,6 +297,16 @@ STRATEGY_CONFIG = {
     # 0..SL band and gives the user time to plan a roll/partial-close.
     "adverse_move_warning_pct": 30.0,
 
+    # Daily P&L circuit breaker (engine/circuit_breaker.py).
+    # Aggregate open-trade MTM is checked at the end of every EOD
+    # exit-engine run. If total_pnl < -capital * pct/100, we set the
+    # `circuit_breaker_active` runtime flag and fire a CRITICAL
+    # notification. While the flag is on, execution_validator vetoes
+    # all new executions.
+    # Capital should reflect the operator's actual options trading float.
+    "daily_pnl_circuit_breaker_capital_rs": 500_000.0,
+    "daily_pnl_circuit_breaker_pct":         3.0,
+
     # Opportunity-regen-on-tick (lifecycle/opportunity_regen_watcher.py)
     # When the live spot / VIX moves more than these thresholds vs the
     # day's first observed tick, fire a single OPPORTUNITY_REGEN_HINT

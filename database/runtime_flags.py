@@ -58,6 +58,7 @@ FLAG_SL_ALERTS = "sl_alerts"
 FLAG_CLOSURE_ALERTS = "closure_alerts"
 FLAG_OPPORTUNITY_ALERTS = "opportunity_alerts"
 FLAG_TRADE_EXECUTION_ENABLED = "trade_execution_enabled"
+FLAG_CIRCUIT_BREAKER_ACTIVE = "circuit_breaker_active"
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +108,18 @@ DEFAULT_FLAGS: List[_FlagSpec] = [
         default="false",
         type="bool",
         description="Reserved. The system does not place broker orders today; flag exists for forward compatibility.",
+    ),
+    _FlagSpec(
+        key=FLAG_CIRCUIT_BREAKER_ACTIVE,
+        default="false",
+        type="bool",
+        description=(
+            "Set automatically by the EOD exit_orchestrator when aggregate "
+            "open-trade MTM has breached daily_pnl_circuit_breaker_pct of "
+            "capital. While True, execution_validator vetoes new "
+            "PENDING→EXECUTED transitions. Operator clears manually after "
+            "reviewing the day's losses."
+        ),
     ),
 ]
 

@@ -19,7 +19,9 @@ from datetime import date
 from contracts import Notification
 from database.connection import SQLServerConnection
 from database.models import FoEodRepo, NotificationRepo, TradeRepo
+from database.runtime_flags import FLAG_CIRCUIT_BREAKER_ACTIVE, RuntimeFlagsRepo
 from engine.adverse_move_advisor import assess_adverse_move
+from engine.circuit_breaker import check_daily_pnl_breach
 from engine.exit_engine import evaluate_exit
 from utils import days_between, now_ist, today_ist
 
@@ -47,6 +49,7 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
 
     open_trades = trd.open_trades()
     decisions_made = 0
+    aggregate_mtm = 0.0  # sum of current_pnl across all open trades for circuit breaker
 
     for trade in open_trades:
         trade_id = trade["trade_id"]
@@ -145,6 +148,7 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
                 sign = -1.0 if leg["action"] == "SELL" else 1.0
                 current_value += sign * mid * qty
             current_pnl = entry_credit + current_value
+            aggregate_mtm += current_pnl
             advice = assess_adverse_move(
                 current_pnl=current_pnl, max_loss_rs=max_loss_rs,
             )
@@ -199,4 +203,38 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
 
     db.commit()
     logger.info("Exit engine: %d open trades evaluated", decisions_made)
+
+    # Daily P&L circuit breaker. Aggregate MTM is summed only for HOLD
+    # trades — anything triggering an exit decision will be closed soon
+    # and would only confuse the budget once the user records fills.
+    breach = check_daily_pnl_breach(total_pnl_rs=aggregate_mtm)
+    if breach is not None:
+        logger.warning(
+            "circuit_breaker: daily P&L breach ₹%.0f (%.2f%% of capital)",
+            breach.total_pnl_rs, breach.pct_of_capital,
+        )
+        try:
+            flags = RuntimeFlagsRepo(db)
+            flags.set(FLAG_CIRCUIT_BREAKER_ACTIVE, True, modified_by="exit_engine")
+        except Exception:
+            logger.exception("circuit_breaker: failed to set runtime flag")
+        try:
+            notif.insert(Notification(
+                created_at=now_ist(),
+                notif_type="DAILY_PNL_BREACH",
+                severity="CRITICAL",
+                title=breach.headline,
+                body=(
+                    f"Aggregate open-trade MTM ₹{breach.total_pnl_rs:+,.0f} "
+                    f"breached the daily limit of –₹{breach.limit_rs:,.0f} "
+                    f"({breach.limit_pct:.1f}% of ₹{breach.capital_rs:,.0f}). "
+                    "New executions are now blocked. Review open positions "
+                    "and clear the `circuit_breaker_active` runtime flag "
+                    "manually once you've decided next steps."
+                ),
+            ))
+            db.commit()
+        except Exception:
+            logger.exception("circuit_breaker: failed to insert notification")
+
     return decisions_made

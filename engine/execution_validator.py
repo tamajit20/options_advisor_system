@@ -121,6 +121,7 @@ def validate_execution(
     *,
     now: Optional[datetime] = None,
     today: Optional[date] = None,
+    circuit_breaker_active: bool = False,
 ) -> ExecutionValidation:
     """Run all pre-execution checks. See module docstring for details."""
     if not STRATEGY_CONFIG.get("execution_validator_enabled", True):
@@ -132,6 +133,17 @@ def validate_execution(
     vetoes:   List[str] = []
     warnings: List[str] = []
     details: dict = {}
+
+    # 0. Daily P&L circuit breaker (system-wide). Hard veto regardless
+    # of whether this individual trade looks fine — the operator has
+    # exhausted their daily budget.
+    if circuit_breaker_active:
+        vetoes.append(
+            "daily P&L circuit breaker is active — aggregate losses "
+            "have breached the configured limit; clear the runtime "
+            "flag to resume executions"
+        )
+        details["circuit_breaker_active"] = True
 
     # 1. Status -------------------------------------------------------------
     status = (suggestion.get("status") or "").upper()

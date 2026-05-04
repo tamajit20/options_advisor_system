@@ -59,6 +59,9 @@ _TYPE_TO_FLAG = {
     # so silencing SL chatter also silences the early warning (the user
     # already opted out of risk-side notifications).
     "ADVERSE_MOVE_WARNING":   "sl_alerts",
+    # Circuit-breaker is a hard system-wide alarm — always show, but it
+    # uses sl_alerts as the operator-facing risk-flag bucket.
+    "DAILY_PNL_BREACH":       "sl_alerts",
 }
 
 

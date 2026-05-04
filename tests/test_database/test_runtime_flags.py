@@ -20,6 +20,7 @@ import pytest
 
 from database.runtime_flags import (
     DEFAULT_FLAGS,
+    FLAG_CIRCUIT_BREAKER_ACTIVE,
     FLAG_CLOSURE_ALERTS,
     FLAG_KILL_SWITCH,
     FLAG_OPPORTUNITY_ALERTS,
@@ -100,6 +101,7 @@ def test_default_flag_inventory_complete():
         FLAG_CLOSURE_ALERTS,
         FLAG_OPPORTUNITY_ALERTS,
         FLAG_TRADE_EXECUTION_ENABLED,
+        FLAG_CIRCUIT_BREAKER_ACTIVE,
     }
 
 
