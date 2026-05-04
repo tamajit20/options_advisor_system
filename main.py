@@ -203,6 +203,7 @@ def _cmd_ws_runner() -> int:
         IntradayMonitor,
         make_db_snapshot_loader,
     )
+    from lifecycle.opportunity_regen_watcher import OpportunityRegenWatcher
     from notifications import build_notifier
     from providers.cache import TTLCache
     from providers.event_bus import get_event_bus
@@ -267,14 +268,24 @@ def _cmd_ws_runner() -> int:
         event_bus=bus,
     )
 
+    # Opportunity-regen-on-tick — fires OPPORTUNITY_REGEN_HINT (gated by
+    # `opportunity_alerts` flag) when intraday VIX or spot moves enough
+    # to invalidate the morning's suggestion regime.
+    regen_watcher = OpportunityRegenWatcher(
+        notifier=build_notifier(db, provider="zerodha"),
+        event_bus=bus,
+    )
+
     print(f"Starting WS runner (user_id={session.user_id})")
     sub_manager.start()
     monitor.start()
+    regen_watcher.start()
     try:
         runner.start()
     except KeyboardInterrupt:
         runner.stop()
     finally:
+        regen_watcher.stop()
         monitor.stop()
         sub_manager.stop()
         try:

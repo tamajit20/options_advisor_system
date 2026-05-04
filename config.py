@@ -260,6 +260,17 @@ STRATEGY_CONFIG = {
     # notification. 5% is calibrated to be loud only on real feed problems.
     "intraday_close_drift_pct": 5.0,
 
+    # Opportunity-regen-on-tick (lifecycle/opportunity_regen_watcher.py)
+    # When the live spot / VIX moves more than these thresholds vs the
+    # day's first observed tick, fire a single OPPORTUNITY_REGEN_HINT
+    # per (trigger, symbol, day) so the user knows that morning's
+    # suggestions may need a refresh. Tight thresholds are noisy; loose
+    # ones miss real regime shifts. 5%/0.7% are calibrated to flag the
+    # kind of intraday move that historically invalidates a sideways IC
+    # without flagging routine chop.
+    "regen_vix_pct_threshold":  5.0,
+    "regen_spot_pct_threshold": 0.7,
+
     # VIX regime thresholds (% change vs prior close)
     "vix_rising_threshold":  5.0,
     "vix_spiking_threshold": 10.0,

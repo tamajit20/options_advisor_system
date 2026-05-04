@@ -45,9 +45,10 @@ logger = logging.getLogger(__name__)
 # Mapping from notif_type to the runtime flag that must be ON for the event
 # to be dispatched. Keys are uppercase. A missing key means "no gate".
 _TYPE_TO_FLAG = {
-    "SL_TRIGGER":      "sl_alerts",
-    "PERFECT_CLOSURE": "closure_alerts",
-    "PERFECT_ENTRY":   "opportunity_alerts",
+    "SL_TRIGGER":             "sl_alerts",
+    "PERFECT_CLOSURE":        "closure_alerts",
+    "PERFECT_ENTRY":          "opportunity_alerts",
+    "OPPORTUNITY_REGEN_HINT": "opportunity_alerts",
 }
 
 

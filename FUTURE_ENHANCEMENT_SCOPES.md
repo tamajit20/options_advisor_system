@@ -48,6 +48,11 @@ Pick up from here in future development sessions.
 **Issue:** Greeks (vega/delta/theta) are computed at suggestion time but never tracked on open trades. A trade at 50% profit target but with exploding vega is risky to hold.  
 **Fix:** Add daily Greek recomputation stored against the trade record in `options_trades`.
 
+### OpportunityRegenWatcher — PCR cross trigger
+**File:** `lifecycle/opportunity_regen_watcher.py`  
+**Issue:** v1 of the watcher only triggers on VIX % change and spot %  change. PCR-band-cross (neutral → strong-bullish/bearish or vice versa) is conceptually a strong regime-shift signal but the live WebSocket tick stream carries only LTP/depth — full chain OI is needed to compute PCR. Adding it would require rate-limited REST `quote()` calls or a dedicated chain-OI snapshot.  
+**Fix:** Either (a) piggy-back on `SubscriptionManager`'s 60s reload to also snapshot ATM±5 chain OI, recompute PCR, and emit `OPPORTUNITY_REGEN_HINT` on band crossings; or (b) add a separate intraday scheduler job that hits the public NSE chain JSON every 5 min and computes PCR.
+
 ---
 
 ## 🟡 Strategy & Regime Coverage
