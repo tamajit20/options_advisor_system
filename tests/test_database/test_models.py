@@ -222,6 +222,47 @@ class TestSuggestionRepo:
         _, params = mock_db.execute.call_args[0]
         assert params == ["EXECUTED", "SUG-1"]
 
+    def test_write_provenance_skips_when_all_none(self, mock_db):
+        SuggestionRepo(mock_db).write_provenance("SUG-1")
+        mock_db.execute.assert_not_called()
+
+    def test_write_provenance_only_writes_supplied_fields(self, mock_db):
+        SuggestionRepo(mock_db).write_provenance(
+            "SUG-1",
+            data_source="EOD",
+            provider="nse_eod",
+            engine_version="v1",
+        )
+        sql, params = mock_db.execute.call_args[0]
+        assert "UPDATE options_suggestions SET" in sql
+        # Three fields supplied + suggestion_id at end
+        assert params == ["EOD", "nse_eod", "v1", "SUG-1"]
+        # Columns not supplied must not appear in the SQL
+        assert "trigger_type" not in sql
+        assert "live_data_freshness_ms" not in sql
+
+    def test_write_provenance_full_payload(self, mock_db):
+        SuggestionRepo(mock_db).write_provenance(
+            "SUG-1",
+            data_source="LIVE",
+            provider="zerodha",
+            data_as_of=datetime(2025, 6, 10, 9, 35),
+            trigger_type="WS_REGEN",
+            trigger_reason="VIX 18.4->19.7",
+            market_state_at_gen="OPEN_STABLE",
+            live_data_freshness_ms=120,
+            engine_version="v1",
+        )
+        sql, params = mock_db.execute.call_args[0]
+        for col in (
+            "data_source", "provider", "data_as_of", "trigger_type",
+            "trigger_reason", "market_state_at_gen",
+            "live_data_freshness_ms", "engine_version",
+        ):
+            assert col in sql
+        assert params[-1] == "SUG-1"
+        assert "LIVE" in params and "zerodha" in params and "WS_REGEN" in params
+
 
 # ---------------------------------------------------------------------------
 # Trade
@@ -242,6 +283,25 @@ class TestTradeRepo:
         TradeRepo(mock_db).update_pnl("TRD-1", 1000.0, 50.0, 950.0)
         _, params = mock_db.execute.call_args[0]
         assert params == [1000.0, 50.0, 950.0, "TRD-1"]
+
+    def test_write_execution_provenance_skips_when_all_none(self, mock_db):
+        TradeRepo(mock_db).write_execution_provenance("TRD-1")
+        mock_db.execute.assert_not_called()
+
+    def test_write_execution_provenance_partial(self, mock_db):
+        TradeRepo(mock_db).write_execution_provenance(
+            "TRD-1",
+            execution_data_source="EOD",
+            gate_passed=True,
+            time_from_suggestion_sec=42,
+        )
+        sql, params = mock_db.execute.call_args[0]
+        assert "UPDATE options_trades SET" in sql
+        assert "execution_data_source" in sql
+        assert "gate_passed" in sql
+        assert "time_from_suggestion_sec" in sql
+        assert "execution_provider" not in sql
+        assert params == ["EOD", True, 42, "TRD-1"]
 
 
 # ---------------------------------------------------------------------------

@@ -65,3 +65,36 @@ def safe_int(v, default: Optional[int] = None) -> Optional[int]:
 def days_between(a: date, b: date) -> int:
     """Calendar days from a to b (b - a)."""
     return (b - a).days
+
+
+# ---------------------------------------------------------------------------
+# Phase 2c provenance helpers
+# ---------------------------------------------------------------------------
+ENGINE_VERSION = "v1"  # bump when business-logic-affecting changes ship
+
+
+def market_state_at(now: datetime) -> str:
+    """Classify a moment of the trading day for provenance stamping.
+
+    NSE cash equity hours run 09:15\u201315:30 IST. The 09:15\u201309:30 window is
+    notoriously volatile; the closing-auction window is 15:00\u201315:30
+    (we tag the last 15 min specifically). All times are IST \u2014 callers
+    pass `now_ist()`.
+
+    Returns one of:
+        'PRE_OPEN'        \u2014 before 09:15
+        'OPEN_VOLATILE'   \u2014 09:15\u201309:30
+        'OPEN_STABLE'     \u2014 09:30\u201315:00
+        'CLOSE_AUCTION'   \u2014 15:00\u201315:30
+        'POST_CLOSE'      \u2014 after 15:30
+    """
+    t = now.time()
+    if t < datetime(now.year, now.month, now.day, 9, 15).time():
+        return "PRE_OPEN"
+    if t < datetime(now.year, now.month, now.day, 9, 30).time():
+        return "OPEN_VOLATILE"
+    if t < datetime(now.year, now.month, now.day, 15, 0).time():
+        return "OPEN_STABLE"
+    if t <= datetime(now.year, now.month, now.day, 15, 30).time():
+        return "CLOSE_AUCTION"
+    return "POST_CLOSE"

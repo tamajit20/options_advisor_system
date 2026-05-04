@@ -173,6 +173,27 @@ def mark_executed(
         })
     trd.insert_legs(trade_id, trade_legs)
     sug.update_status(suggestion_id, "EXECUTED")
+    # Phase 2c: stamp execution provenance (best-effort).
+    try:
+        gen_on = suggestion.get("generated_on")
+        time_from = None
+        if gen_on is not None:
+            try:
+                time_from = int((now_ist() - gen_on).total_seconds())
+            except Exception:
+                time_from = None
+        trd.write_execution_provenance(
+            trade_id,
+            execution_data_source=suggestion.get("data_source"),
+            execution_provider=suggestion.get("provider"),
+            gate_passed=True,
+            time_from_suggestion_sec=time_from,
+        )
+    except Exception:
+        logger.exception(
+            "trade_executor: write_execution_provenance failed for %s",
+            trade_id,
+        )
     db.commit()
     logger.info("Trade %s created: %s (%s)", trade_id, position_type, state)
     return trade_id

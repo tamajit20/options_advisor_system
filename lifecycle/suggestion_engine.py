@@ -500,6 +500,26 @@ def run_suggestion_engine(
             continue
         sug_repo.insert(sug)
         sug_repo.insert_legs(sug.suggestion_id, sug.legs)
+        # Phase 2c: stamp provenance (best-effort \u2014 swallow failures so a
+        # not-yet-migrated DB doesn't break suggestion generation).
+        try:
+            from utils import ENGINE_VERSION, market_state_at
+            sug_repo.write_provenance(
+                sug.suggestion_id,
+                data_source="EOD",
+                provider="nse_eod",
+                data_as_of=datetime.combine(
+                    sug.data_date, datetime.min.time()
+                ) if sug.data_date else None,
+                trigger_type="EOD_RUN",
+                market_state_at_gen=market_state_at(now_ist()),
+                engine_version=ENGINE_VERSION,
+            )
+        except Exception:
+            logger.exception(
+                "suggestion_engine: write_provenance failed for %s",
+                sug.suggestion_id,
+            )
         notif_repo.insert(Notification(
             created_at=now_ist(),
             notif_type="NEW_SUGGESTION",

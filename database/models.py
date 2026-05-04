@@ -677,6 +677,50 @@ class SuggestionRepo:
             [status, suggestion_id],
         ).close()
 
+    def write_provenance(
+        self,
+        suggestion_id: str,
+        *,
+        data_source: Optional[str] = None,
+        provider: Optional[str] = None,
+        data_as_of: Optional[datetime] = None,
+        trigger_type: Optional[str] = None,
+        trigger_reason: Optional[str] = None,
+        market_state_at_gen: Optional[str] = None,
+        live_data_freshness_ms: Optional[int] = None,
+        engine_version: Optional[str] = None,
+    ) -> None:
+        """Phase 2c: stamp provenance columns after insert.
+
+        Best-effort. Migration may not have run on legacy DBs \u2014 callers
+        should swallow exceptions and log. We update only non-None fields
+        so partial provenance (e.g. WS regen knows trigger_type but not
+        live_data_freshness_ms) doesn't NULL-out previously written values.
+        """
+        sets: list[str] = []
+        params: list = []
+        for col, val in [
+            ("data_source",            data_source),
+            ("provider",               provider),
+            ("data_as_of",             data_as_of),
+            ("trigger_type",           trigger_type),
+            ("trigger_reason",         trigger_reason),
+            ("market_state_at_gen",    market_state_at_gen),
+            ("live_data_freshness_ms", live_data_freshness_ms),
+            ("engine_version",         engine_version),
+        ]:
+            if val is not None:
+                sets.append(f"{col} = ?")
+                params.append(val)
+        if not sets:
+            return
+        params.append(suggestion_id)
+        self.db.execute(
+            f"UPDATE options_suggestions SET {', '.join(sets)} "
+            "WHERE suggestion_id = ?",
+            params,
+        ).close()
+
     def by_date(self, day: date) -> List[dict]:
         start = datetime.combine(day, datetime.min.time())
         end = start + timedelta(days=1)
@@ -855,6 +899,41 @@ class TradeRepo:
             "UPDATE options_trades SET status = ?, daily_status = ?, exit_instruction = ? "
             "WHERE trade_id = ?",
             [status, daily_status, exit_instruction, trade_id],
+        ).close()
+
+    def write_execution_provenance(
+        self,
+        trade_id: str,
+        *,
+        execution_data_source: Optional[str] = None,
+        execution_provider: Optional[str] = None,
+        execution_freshness_ms: Optional[int] = None,
+        gate_passed: Optional[bool] = None,
+        time_from_suggestion_sec: Optional[int] = None,
+    ) -> None:
+        """Phase 2c: stamp execution-time provenance after `insert`.
+
+        Best-effort \u2014 callers swallow exceptions to fail-open on legacy
+        DBs without the migration. Only non-None fields are written.
+        """
+        sets: list[str] = []
+        params: list = []
+        for col, val in [
+            ("execution_data_source",    execution_data_source),
+            ("execution_provider",       execution_provider),
+            ("execution_freshness_ms",   execution_freshness_ms),
+            ("gate_passed",              gate_passed),
+            ("time_from_suggestion_sec", time_from_suggestion_sec),
+        ]:
+            if val is not None:
+                sets.append(f"{col} = ?")
+                params.append(val)
+        if not sets:
+            return
+        params.append(trade_id)
+        self.db.execute(
+            f"UPDATE options_trades SET {', '.join(sets)} WHERE trade_id = ?",
+            params,
         ).close()
 
     def update_pnl(self, trade_id: str, gross: float, charges: float, net: float) -> None:
