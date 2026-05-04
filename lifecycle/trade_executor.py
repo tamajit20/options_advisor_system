@@ -35,6 +35,7 @@ from database.connection import SQLServerConnection
 from database.models import SuggestionRepo, TradeRepo
 from engine.broken_trade_advisor import advise, diagnose
 from engine.charges import estimate_charges_per_txn
+from engine.execution_validator import validate_execution
 from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,15 @@ def mark_executed(
     legs = sug.legs(suggestion_id)
     if not legs:
         raise ValueError(f"Suggestion {suggestion_id} has no legs")
+
+    # Centralized pre-execution gate. ValueError lets the dashboard
+    # route surface a 400 with the exact veto reasons.
+    gate = validate_execution(suggestion, legs)
+    if not gate.ok:
+        logger.warning(
+            "Execution blocked for %s: %s", suggestion_id, gate.reason()
+        )
+        raise ValueError(f"Execution blocked: {gate.reason()}")
 
     fills_by_order = {f.leg_order: f for f in fills}
 

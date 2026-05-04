@@ -275,6 +275,21 @@ STRATEGY_CONFIG = {
     # being so loose that a real regime shift slips through.
     "intraday_validator_tolerance_pct": 15.0,
 
+    # Centralized pre-execution gate (engine/execution_validator.py)
+    # Run by lifecycle/trade_executor.mark_executed before flipping a
+    # suggestion to a real trade. Setting `execution_validator_enabled`
+    # to False is an emergency override — ALL checks below are skipped.
+    "execution_validator_enabled": True,
+    # Hard ceiling on the age of the underlying data backing the
+    # suggestion. 240m = 4h covers the EOD->next-day window comfortably
+    # while blocking yesterday's stale rollover suggestions if they leak.
+    "execution_validator_max_data_age_minutes": 240.0,
+    # Minimum distance from spot for any SELL leg, expressed as a % of spot.
+    # 1.5% on NIFTY 23,000 ≈ 350 pts — enough to avoid a structurally bad
+    # short strike a single tick away from being ITM, without rejecting
+    # the typical ATM-edge short on a credit spread.
+    "min_short_strike_buffer_pct": 1.5,
+
     # Opportunity-regen-on-tick (lifecycle/opportunity_regen_watcher.py)
     # When the live spot / VIX moves more than these thresholds vs the
     # day's first observed tick, fire a single OPPORTUNITY_REGEN_HINT

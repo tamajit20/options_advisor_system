@@ -17,27 +17,34 @@ def fake_suggestion():
         "max_profit": 6000.0, "max_loss": 14000.0,
         "upper_breakeven": 23300.0, "lower_breakeven": 22700.0,
         "stop_loss_level": 23250.0,
+        # Required by engine.execution_validator pre-execution gate
+        "status": "PENDING",
+        "spot_at_generation": 23000.0,
+        "validator_status": None,
+        "data_as_of": None,
+        "entry_date": None,
     }
 
 
 @pytest.fixture
 def fake_legs():
+    # Strikes clear engine.execution_validator's 1.5% buffer vs spot 23000.
     return [
         {"id": 1, "leg_order": 1, "symbol": "NIFTY",
          "expiry_date": "2026-05-14",
-         "strike": 23200.0, "option_type": "CE", "action": "SELL",
+         "strike": 23500.0, "option_type": "CE", "action": "SELL",
          "lots": 1, "lot_size": 75},
         {"id": 2, "leg_order": 2, "symbol": "NIFTY",
          "expiry_date": "2026-05-14",
-         "strike": 23300.0, "option_type": "CE", "action": "BUY",
+         "strike": 23600.0, "option_type": "CE", "action": "BUY",
          "lots": 1, "lot_size": 75},
         {"id": 3, "leg_order": 3, "symbol": "NIFTY",
          "expiry_date": "2026-05-14",
-         "strike": 22800.0, "option_type": "PE", "action": "SELL",
+         "strike": 22500.0, "option_type": "PE", "action": "SELL",
          "lots": 1, "lot_size": 75},
         {"id": 4, "leg_order": 4, "symbol": "NIFTY",
          "expiry_date": "2026-05-14",
-         "strike": 22700.0, "option_type": "PE", "action": "BUY",
+         "strike": 22400.0, "option_type": "PE", "action": "BUY",
          "lots": 1, "lot_size": 75},
     ]
 
