@@ -122,25 +122,24 @@ def _cmd_zerodha_login() -> int:
     Prints the login URL, prompts for the `request_token` from the redirect URL,
     exchanges it for an access_token, and persists the session. Run once per
     morning (Kite tokens expire 06:00 IST daily)."""
-    from config import ZERODHA_API_CONFIG
-    from datetime import datetime, timedelta, timezone
-
-    api_key = ZERODHA_API_CONFIG.get("api_key", "")
-    api_secret = ZERODHA_API_CONFIG.get("api_secret", "")
-    if not api_key or not api_secret:
-        print("ERROR: OPT_ZERODHA_API_KEY and OPT_ZERODHA_API_SECRET must be set in env.")
-        return 2
-
     try:
-        from kiteconnect import KiteConnect  # type: ignore[import-not-found]
+        from providers.zerodha.session import build_login_url, exchange_request_token
     except ImportError:
         print("ERROR: kiteconnect not installed. Run: pip install kiteconnect>=5.2")
         return 2
 
-    kite = KiteConnect(api_key=api_key)
+    try:
+        login_url = build_login_url()
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}")
+        return 2
+    except ImportError:
+        print("ERROR: kiteconnect not installed. Run: pip install kiteconnect>=5.2")
+        return 2
+
     print("")
     print("Step 1 — open this URL in your browser, log in, and approve the app:")
-    print(f"    {kite.login_url()}")
+    print(f"    {login_url}")
     print("")
     print("Step 2 — after login you will be redirected to your registered URL")
     print("         with a 'request_token=XXXX' query parameter. Paste the value below.")
@@ -155,21 +154,12 @@ def _cmd_zerodha_login() -> int:
         return 2
 
     try:
-        data = kite.generate_session(request_token, api_secret=api_secret)
+        session = exchange_request_token(request_token)
     except Exception as exc:
         print(f"ERROR: generate_session failed: {exc}")
         return 3
 
-    from providers.zerodha.session import ZerodhaSession, save_session
-    _IST = timezone(timedelta(hours=5, minutes=30))
-    session = ZerodhaSession(
-        api_key=api_key,
-        access_token=data["access_token"],
-        user_id=data.get("user_id", ""),
-        generated_at=datetime.now(tz=_IST),
-    )
-    path = save_session(session)
-    print(f"OK — session saved to {path}")
+    print(f"OK — session saved.")
     print(f"     user_id={session.user_id}  generated_at={session.generated_at.isoformat()}")
     print("     Token is valid until 06:00 IST tomorrow.")
     return 0
@@ -398,6 +388,36 @@ def _cmd_ws_runner() -> int:
     ws_watchdog.start()
     chain_aggregator.start()
     live_risk_monitor.start()
+
+    # Session-revocation watcher — polls data/zerodha_session.json every 5s
+    # and gracefully stops the runner if the file is deleted (dashboard logout)
+    # or rewritten with a token whose access_token differs from ours
+    # (user re-logged in elsewhere). Exits with code 0 so the on-failure
+    # restart policy does NOT bring the runner back up — that's the point
+    # of a logout.
+    import threading as _threading
+    from providers.zerodha.session import load_session as _load_sess
+
+    def _watch_session():
+        my_token = session.access_token
+        while not runner._stop_event.is_set():  # type: ignore[attr-defined]
+            try:
+                cur = _load_sess()
+                if cur is None:
+                    print("Session file removed — stopping WS runner (logout).")
+                    runner.stop()
+                    return
+                if cur.access_token != my_token:
+                    print("Session token rotated — stopping WS runner so it picks up new token.")
+                    runner.stop()
+                    return
+            except Exception:
+                pass
+            if runner._stop_event.wait(5.0):  # type: ignore[attr-defined]
+                return
+
+    _threading.Thread(target=_watch_session, name="zerodha-session-watch", daemon=True).start()
+
     try:
         runner.start()
     except KeyboardInterrupt:

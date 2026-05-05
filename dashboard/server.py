@@ -19,7 +19,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any, Dict
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request
 
 # Datetimes stored in the DB are naive IST (the runtime TZ is Asia/Kolkata).
 # Format them as plain readable strings — no UTC offset needed.
@@ -167,6 +167,81 @@ def create_app() -> Flask:
     @app.route("/api/theme")
     def api_theme():
         return jsonify(DASHBOARD_CONFIG["theme"])
+
+    # ---------- Zerodha daily login flow ----------
+    # Two endpoints work together so the operator can re-mint a Kite
+    # access_token without dropping into a shell:
+    #   GET  /zerodha/login        — 302 redirect to Kite's OAuth login URL
+    #   POST /api/zerodha/exchange — JSON {request_token}; the dashboard's
+    #                                Config card collects the token (raw or
+    #                                pasted as a redirect URL) and posts it.
+    #   GET  /api/zerodha/status   — JSON snapshot of current session validity.
+    #   POST /api/zerodha/logout   — clear persisted session (ws_runner exits).
+    @app.route("/zerodha/login")
+    def zerodha_login_redirect():
+        try:
+            from providers.zerodha.session import build_login_url
+            url = build_login_url()
+        except (RuntimeError, ImportError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        return redirect(url, code=302)
+
+    @app.route("/api/zerodha/exchange", methods=["POST"])
+    def api_zerodha_exchange():
+        body = request.get_json(silent=True) or {}
+        rt = (body.get("request_token") or "").strip()
+        if not rt:
+            return jsonify({"ok": False, "error": "request_token is required"}), 400
+        try:
+            from providers.zerodha.session import exchange_request_token
+            session = exchange_request_token(rt)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("zerodha exchange failed")
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({
+            "ok": True,
+            "user_id": session.user_id,
+            "generated_at": session.generated_at.isoformat(),
+        })
+
+    @app.route("/api/zerodha/status")
+    def api_zerodha_status():
+        from providers.zerodha.session import is_token_valid, load_session
+        s = load_session()
+        if s is None:
+            return jsonify({
+                "has_session": False,
+                "valid": False,
+                "user_id": None,
+                "generated_at": None,
+            })
+        return jsonify({
+            "has_session": True,
+            "valid": bool(is_token_valid(s)),
+            "user_id": s.user_id,
+            "generated_at": s.generated_at.isoformat(),
+        })
+
+    @app.route("/api/zerodha/logout", methods=["POST"])
+    def api_zerodha_logout():
+        """Clear the persisted Zerodha session.
+
+            The ws_runner container watches the session file and will exit
+            cleanly within ~5 seconds of the file being removed. Restart
+            policy `on-failure:5` does not relaunch it (exit 0 = clean stop).
+            """
+        from providers.zerodha.session import clear_session
+        removed = clear_session()
+        return jsonify({
+            "ok": True,
+            "removed": bool(removed),
+            "message": (
+                "Session cleared. WS runner will disconnect within ~5s." if removed
+                else "No persisted session found."
+            ),
+        })
 
     # ---------- Tab 1: Suggestion ----------
     @app.route("/api/suggestion/today")

@@ -164,3 +164,56 @@ def clear_session(path: Optional[Path] = None) -> bool:
         return True
     except FileNotFoundError:
         return False
+
+
+# ---------------------------------------------------------------------------
+# OAuth exchange — shared between CLI (`main.py --zerodha-login`) and the
+# Flask dashboard's /zerodha/login flow.
+# ---------------------------------------------------------------------------
+def build_login_url() -> str:
+    """Return the Kite Connect login URL for the configured api_key."""
+    from config import ZERODHA_API_CONFIG
+    from kiteconnect import KiteConnect  # type: ignore[import-not-found]
+
+    api_key = ZERODHA_API_CONFIG.get("api_key", "")
+    if not api_key:
+        raise RuntimeError("OPT_ZERODHA_API_KEY is not set")
+    return KiteConnect(api_key=api_key).login_url()
+
+
+def exchange_request_token(request_token: str) -> ZerodhaSession:
+    """Exchange a Kite ``request_token`` for an access_token and persist it.
+
+    Raises:
+        RuntimeError: api credentials missing.
+        ValueError:   request_token empty.
+        Exception:    kiteconnect.generate_session() failure (token reused / invalid).
+    """
+    from config import ZERODHA_API_CONFIG
+    from kiteconnect import KiteConnect  # type: ignore[import-not-found]
+
+    api_key = ZERODHA_API_CONFIG.get("api_key", "")
+    api_secret = ZERODHA_API_CONFIG.get("api_secret", "")
+    if not api_key or not api_secret:
+        raise RuntimeError("OPT_ZERODHA_API_KEY / OPT_ZERODHA_API_SECRET not set")
+
+    request_token = (request_token or "").strip()
+    if not request_token:
+        raise ValueError("empty request_token")
+
+    kite = KiteConnect(api_key=api_key)
+    data = kite.generate_session(request_token, api_secret=api_secret)
+
+    session = ZerodhaSession(
+        api_key=api_key,
+        access_token=data["access_token"],
+        user_id=data.get("user_id", ""),
+        generated_at=datetime.now(tz=_IST),
+    )
+    save_session(session)
+    logger.info(
+        "zerodha session minted: user_id=%s generated_at=%s",
+        session.user_id, session.generated_at.isoformat(),
+    )
+    return session
+

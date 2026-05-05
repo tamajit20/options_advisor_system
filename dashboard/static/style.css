@@ -1095,31 +1095,31 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .cb-status-warn { color: var(--warn); }
 
 /* ---------- WS Monitor (Phase 2b telemetry surface) ---------- */
-.wsmon-summary { margin-bottom: 14px; }
+.wsmon-summary { margin-bottom: 8px; }
 .wsmon-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 6px;
 }
 .wsmon-card {
   background: var(--surface);
   border: 1px solid #2a3744;
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: 6px;
+  padding: 5px 8px;
 }
-.wsmon-card-label { font-size: .7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
-.wsmon-card-value { font-size: 1.1rem; font-weight: 700; margin-top: 2px; word-break: break-word; }
+.wsmon-card-label { font-size: .62rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+.wsmon-card-value { font-size: .92rem; font-weight: 700; margin-top: 1px; word-break: break-word; }
 .wsmon-state-ok   { color: var(--ok); }
 .wsmon-state-warn { color: var(--warn); }
 .wsmon-state-err  { color: var(--err); }
 .wsmon-error { margin-top: 8px; font-size: .82rem; color: var(--err); background: rgba(239,68,68,.08); border-left: 3px solid var(--err); padding: 6px 10px; border-radius: 4px; }
-.wsmon-tops { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.wsmon-pill { display: inline-flex; align-items: center; gap: 6px; background: var(--surface-alt); border: 1px solid #2a3744; border-radius: 999px; padding: 2px 10px; font-size: .78rem; }
-.wsmon-pill small { color: var(--text-dim); font-size: .7rem; }
-.wsmon-filter-bar { margin-top: 12px; align-items: center; }
-.wsmon-auto-label { font-size: .78rem; color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; }
-.wsmon-events { margin-top: 8px; }
-.wsmon-ev-list { display: flex; flex-direction: column; gap: 2px; max-height: 65vh; overflow-y: auto; border: 1px solid #2a3744; border-radius: 6px; padding: 4px; background: rgba(0,0,0,.18); }
+.wsmon-tops { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: .75rem; }
+.wsmon-pill { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-alt); border: 1px solid #2a3744; border-radius: 999px; padding: 1px 8px; font-size: .72rem; }
+.wsmon-pill small { color: var(--text-dim); font-size: .65rem; }
+.wsmon-filter-bar { margin-top: 6px; align-items: center; }
+.wsmon-auto-label { font-size: .72rem; color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; }
+.wsmon-events { margin-top: 6px; }
+.wsmon-ev-list { display: flex; flex-direction: column; gap: 2px; max-height: 78vh; overflow-y: auto; border: 1px solid #2a3744; border-radius: 6px; padding: 4px; background: rgba(0,0,0,.18); }
 .wsmon-ev { display: grid; grid-template-columns: 150px 110px 1fr; gap: 8px; align-items: center; padding: 4px 8px; font-family: ui-monospace, 'Courier New', monospace; font-size: .78rem; border-bottom: 1px solid rgba(255,255,255,.03); }
 .wsmon-ev:last-child { border-bottom: 0; }
 .wsmon-ev-ts  { color: var(--text-dim); }

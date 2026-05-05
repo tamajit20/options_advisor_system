@@ -39,7 +39,6 @@ from lifecycle.events_seeder import run_events_seed
 from lifecycle.exit_orchestrator import run_exit_engine
 from lifecycle.iv_orchestrator import run_iv_calculation
 from lifecycle.event_eve_review import run_event_eve_review
-from lifecycle.zerodha_relogin_reminder import run_zerodha_relogin_reminder
 from lifecycle.snapshot_orchestrator import (
     run_drift_verifier,
     run_intraday_close_snapshot,
@@ -240,8 +239,6 @@ def job_exit():       _run_job("exit_engine",        run_exit_engine,
                                requires=["fo_bhav_download"])
 def job_events_seed(): _run_job("events_seed",       run_events_seed)
 def job_event_eve_review(): _run_job("event_eve_review", run_event_eve_review)
-def job_zerodha_relogin_reminder():
-    _run_job("zerodha_relogin_reminder", run_zerodha_relogin_reminder)
 
 
 def job_intraday_close_snapshot():
@@ -303,7 +300,6 @@ JOB_FUNCS = {
     "exit_engine":        job_exit,
     "events_seed":        job_events_seed,
     "event_eve_review":   job_event_eve_review,
-    "zerodha_relogin_reminder": job_zerodha_relogin_reminder,
     "weekly_cleanup":     job_weekly_cleanup,
     "intraday_close_snapshot": job_intraday_close_snapshot,
     "drift_verifier":          job_drift_verifier,

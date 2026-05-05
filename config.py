@@ -130,15 +130,6 @@ SCHEDULER_CONFIG = {
         "weekly_cleanup":     {"day_of_week": "sun", "hour": 2,  "minute":  0, "enabled": True},
         # Events calendar sync — Monday 07:00 before market open
         "events_seed":        {"day_of_week": "mon", "hour": 7,  "minute":  0, "enabled": True},
-        # Zerodha access tokens expire daily at ~06:00 IST. This job runs
-        # at 06:05 IST Mon-Fri, checks data/zerodha_session.json, and if
-        # the token is missing/expired posts a CRITICAL notification with
-        # the steps to run --zerodha-login. No-op when OPT_PROVIDERS!=zerodha
-        # or OPT_ZERODHA_ENABLED=false. Cannot auto-login (Kite OAuth
-        # requires interactive request_token paste).
-        "zerodha_relogin_reminder": {
-            "day_of_week": "mon-fri", "hour": 6, "minute": 5, "enabled": True,
-        },
     },
     # Each job also gets a max wallclock budget (seconds) — enforced by orchestrator
     "job_timeout_seconds": {

@@ -530,6 +530,15 @@ class EventCalendarRepo:
 # ---------------------------------------------------------------------------
 
 class SuggestionRepo:
+    # Class-level counter cache so all SuggestionRepo instances using the
+    # same DB connection share state. _evaluate_underlying creates a fresh
+    # repo per symbol, but persistence is batched at the end of the run —
+    # so a per-instance cache would let every symbol's first ID collide at
+    # 001 (MAX returns the same pre-batch value for all of them).
+    # Key: (id(db), date) — different DB connections (e.g. test mocks) get
+    # independent caches and don't pollute each other.
+    _next_seq_cache: dict[tuple[int, date], int] = {}
+
     def __init__(self, db: SQLServerConnection):
         self.db = db
 
@@ -603,21 +612,31 @@ class SuggestionRepo:
     def next_suggestion_id(self, today: date) -> str:
         # Use MAX(seq), not COUNT(*) — when an old suggestion is deleted the
         # row count drops and we'd hand out an ID that already exists,
-        # producing a PK violation on insert.  Parse the trailing 3-digit
+        # producing a PK violation on insert. Parse the trailing 3-digit
         # sequence and bump it.
+        #
+        # Per-instance cache: once the first call has queried MAX, subsequent
+        # calls increment the cached value locally. This prevents collisions
+        # when several IDs are issued before any INSERT is committed (e.g.
+        # primary + companion suggestions built in one engine run).
         prefix = f"SUG-{today.strftime('%Y%m%d')}-"
-        row = self.db.fetch_one(
-            "SELECT MAX(suggestion_id) AS m FROM options_suggestions "
-            "WHERE suggestion_id LIKE ?",
-            [prefix + "%"],
-        )
-        last = (row or {}).get("m")
-        try:
-            n = (int(str(last).rsplit("-", 1)[-1]) if last else 0) + 1
-        except (ValueError, AttributeError):
-            n = 1
+        key = (id(self.db), today)
+        cached = self._next_seq_cache.get(key)
+        if cached is None:
+            row = self.db.fetch_one(
+                "SELECT MAX(suggestion_id) AS m FROM options_suggestions "
+                "WHERE suggestion_id LIKE ?",
+                [prefix + "%"],
+            )
+            last = (row or {}).get("m")
+            try:
+                n = (int(str(last).rsplit("-", 1)[-1]) if last else 0) + 1
+            except (ValueError, AttributeError):
+                n = 1
+        else:
+            n = cached + 1
+        self._next_seq_cache[key] = n
         return f"{prefix}{n:03d}"
-
     def has_suggestion_for(self, underlying: str, day: date, expiry_type: str = "",
                             strategy: str = "", entry_date: "Optional[date]" = None) -> bool:
         """Return True if a PENDING/real suggestion already exists for this

@@ -32,6 +32,12 @@
     <span class="brand-name">Options Advisor</span>
   </div>
   <div class="header-actions">
+    <a id="zerodha-login-btn" class="icon-btn" href="/zerodha/login"
+       title="Zerodha login (daily token refresh)"
+       aria-label="Zerodha login">
+      <span id="zerodha-login-icon">🔑</span>
+      <span id="zerodha-login-label" class="muted" style="font-size:.75rem;margin-left:.25rem;">Login</span>
+    </a>
     <button id="notif-btn" class="icon-btn" title="Notifications" aria-label="Notifications">
       <span class="bell">🔔</span>
       <span id="notif-count" class="notif-count" hidden>0</span>
@@ -138,7 +144,7 @@
         <input id="log-search" type="search" placeholder="Search…" />
         <button id="log-refresh" class="btn">Refresh</button>
       </div>
-      <div id="jobs-strip" class="jobs-strip"></div>
+      <div id="jobs-strip" class="jobs-strip" style="display:none"></div>
       <div id="logs-container" class="loading">Loading…</div>
     </article>
 
@@ -157,11 +163,9 @@
     </article>
 
     <article class="panel" id="panel-wsmon" aria-hidden="true">
-      <h2 class="panel-title">WebSocket Monitor</h2>
-      <p class="muted" style="margin-top:-.4rem;font-size:.82rem;">
-        Passive observability of the live tick stream. Reads a JSON snapshot
-        the WS runner writes every second &mdash; <strong>zero extra Zerodha
-        API calls</strong>. Recent events auto-prune after 5&nbsp;minutes.
+      <h2 class="panel-title" style="margin-bottom:.2rem;">WebSocket Monitor</h2>
+      <p class="muted" style="margin:0 0 .4rem 0;font-size:.72rem;">
+        Live tick stream snapshot (refreshed each second). Events auto-prune after 5&nbsp;min.
       </p>
       <div id="wsmon-summary" class="wsmon-summary loading">Loading…</div>
       <div class="filter-row wsmon-filter-bar">
@@ -183,6 +187,27 @@
     <article class="panel" id="panel-config" aria-hidden="true">
       <h2 class="panel-title">Configuration</h2>
       <p class="muted">Runtime overrides — these take precedence over <code>config.py</code> defaults.</p>
+
+      <!-- Zerodha session card -->
+      <div id="zerodha-session-card" class="card" style="margin: 0.75rem 0; padding: 1rem; border:1px solid var(--border, #ddd); border-radius:8px;">
+        <h3 style="margin:0 0 .5rem 0;font-size:1rem;">Zerodha Session</h3>
+        <div id="zerodha-status" class="muted">Checking…</div>
+        <ol style="margin:.6rem 0 .4rem 1.1rem;padding:0;font-size:.88rem;line-height:1.5;">
+          <li>Click <a href="/zerodha/login" target="_blank" rel="noopener"><strong>Open Kite Login ↗</strong></a>, complete login + 2FA.</li>
+          <li>Kite redirects to <code>http://localhost:5001/?...&amp;request_token=XYZ&amp;...</code> (the page won't load &mdash; that's fine).</li>
+          <li>Copy the <strong>full URL</strong> from the address bar (or just the <code>request_token</code> value) and paste below.</li>
+        </ol>
+        <div style="display:flex;gap:.4rem;align-items:center;margin-top:.5rem;flex-wrap:wrap;">
+          <input id="zerodha-token-input" type="text" placeholder="Paste redirect URL or request_token…"
+                 style="flex:1;min-width:240px;padding:.4rem .6rem;border:1px solid var(--border,#ccc);border-radius:6px;font-family:monospace;font-size:.85rem;">
+          <button id="zerodha-submit-btn" class="btn">Submit Token</button>
+          <button id="zerodha-logout-btn" class="btn btn-ghost">Logout (disconnect WS)</button>
+        </div>
+        <div id="zerodha-submit-msg" class="muted" style="margin-top:.4rem;font-size:.82rem;">
+          Tokens expire daily ~06:00 IST. Run this each morning before market.
+        </div>
+      </div>
+
       <div id="config-container" class="loading">Loading…</div>
     </article>
   </section>

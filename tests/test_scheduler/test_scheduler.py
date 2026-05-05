@@ -114,12 +114,6 @@ def test_event_eve_review_job_registered():
     assert sched.JOB_FUNCS["event_eve_review"] is sched.job_event_eve_review
 
 
-def test_zerodha_relogin_reminder_job_registered():
-    """Daily re-login reminder must be registered."""
-    assert "zerodha_relogin_reminder" in sched.JOB_FUNCS
-    assert sched.JOB_FUNCS["zerodha_relogin_reminder"] is sched.job_zerodha_relogin_reminder
-
-
 # ---------------------------------------------------------------------------
 # Phase 3 — #6 data-freshness gate
 # ---------------------------------------------------------------------------

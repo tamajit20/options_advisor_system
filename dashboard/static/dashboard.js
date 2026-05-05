@@ -60,10 +60,29 @@ function switchTab(name) {
   // Stop jobs auto-refresh when leaving the tab
   if (name !== 'jobs')  stopJobsAutoRefresh();
   if (name !== 'wsmon') stopWsMonitorAutoRefresh();
+  try { localStorage.setItem('activeTab', name); } catch (_) {}
+  try {
+    if (window.location.hash !== '#' + name) {
+      history.replaceState(null, '', '#' + name);
+    }
+  } catch (_) {}
 }
 $$('.nav-item, .bnav-item').forEach(b =>
   b.addEventListener('click', () => switchTab(b.dataset.tab))
 );
+// Restore last active tab on page load (URL hash takes precedence over localStorage)
+(function restoreActiveTab() {
+  let initial = null;
+  const hash = (window.location.hash || '').replace(/^#/, '');
+  if (hash && TABS.includes(hash)) initial = hash;
+  if (!initial) {
+    try {
+      const saved = localStorage.getItem('activeTab');
+      if (saved && TABS.includes(saved)) initial = saved;
+    } catch (_) {}
+  }
+  if (initial) switchTab(initial);
+})();
 
 // ---------------- Notifications ----------------
 async function refreshNotifBadge() {
@@ -2480,15 +2499,7 @@ async function loadLogs() {
   if (lvl) params.set('level', lvl);
   if (q)   params.set('search', q);
   try {
-    const [logs, jobs] = await Promise.all([
-      API('/api/logs?' + params),
-      API('/api/jobs/latest'),
-    ]);
-    $('#jobs-strip').innerHTML = jobs.jobs.map(j => `
-      <div class="job-pill ${escapeHtml(j.status)}">
-        <strong>${escapeHtml(j.job_name)}</strong><br>
-        <span class="muted" style="font-size:.7rem">${escapeHtml(j.finished_at || j.started_at || '')}</span>
-      </div>`).join('') || '<div class="muted">No job runs yet.</div>';
+    const logs = await API('/api/logs?' + params);
     if (!logs.logs.length) {
       c.className=''; c.innerHTML = '<div class="empty">No logs.</div>'; return;
     }
@@ -2530,6 +2541,8 @@ $('#hsug-to').addEventListener('change', loadHistorySuggestions);
 
 // ---------------- Tab 5: Config ----------------
 async function loadConfig() {
+  // Fire-and-forget refresh of the Zerodha session card.
+  loadZerodhaStatus();
   const c = $('#config-container');
   c.className='loading'; c.textContent='Loading…';
   try {
@@ -2937,3 +2950,163 @@ function _debounce(fn, ms) {
 loadSuggestion();
 refreshNotifBadge();
 setInterval(refreshNotifBadge, 60000);
+
+// ---------------- Zerodha session card ----------------
+async function loadZerodhaStatus() {
+  const el = document.getElementById('zerodha-status');
+  const headerBtn = document.getElementById('zerodha-login-btn');
+  const headerIcon = document.getElementById('zerodha-login-icon');
+  const headerLabel = document.getElementById('zerodha-login-label');
+  // Defensive: always force the header pill to point at the OAuth redirect
+  // route (works even if a stale HTML cache still has the old hash href).
+  if (headerBtn) {
+    headerBtn.setAttribute('href', '/zerodha/login');
+    headerBtn.removeAttribute('target');
+  }
+  try {
+    const r = await fetch('/api/zerodha/status');
+    const d = await r.json();
+    // Update header pill (always present)
+    if (headerBtn && headerIcon && headerLabel) {
+      if (!d.has_session) {
+        headerIcon.textContent = '🔑';
+        headerLabel.textContent = 'Login';
+        headerBtn.style.color = '#b91c1c';
+        headerBtn.title = 'Zerodha — no session. Click to log in.';
+      } else if (d.valid) {
+        headerIcon.textContent = '✓';
+        headerLabel.textContent = 'Zerodha';
+        headerBtn.style.color = '#047857';
+        headerBtn.title = `Zerodha session valid (user_id ${d.user_id || ''}).`;
+      } else {
+        headerIcon.textContent = '⚠';
+        headerLabel.textContent = 'Re-login';
+        headerBtn.style.color = '#b45309';
+        headerBtn.title = 'Zerodha session expired. Click to re-login.';
+      }
+    }
+    // Update Config-tab card if present
+    if (el) {
+      if (!d.has_session) {
+        el.innerHTML = '<span style="color:#b91c1c;font-weight:600;">✗ No session.</span> ' +
+          'Click <em>Open Login Flow</em> to mint today\'s token.';
+      } else if (d.valid) {
+        el.innerHTML = `<span style="color:#047857;font-weight:600;">✓ Valid</span> ` +
+          `&middot; user_id <code>${escapeHtml(d.user_id || '')}</code> ` +
+          `&middot; generated <code>${escapeHtml(d.generated_at || '')}</code>`;
+      } else {
+        el.innerHTML = '<span style="color:#b45309;font-weight:600;">⚠ Expired.</span> ' +
+          'Re-login required (token resets daily at 06:00 IST).';
+      }
+    }
+  } catch (e) {
+    if (el) el.textContent = 'Status unavailable: ' + e;
+  }
+}
+
+// Refresh header pill on boot and every 60s.
+loadZerodhaStatus();
+setInterval(loadZerodhaStatus, 60000);
+
+// Auto-capture: when Kite redirects back to http://localhost:5001/?...&request_token=XYZ
+// the dashboard itself loads with the token in the URL. Pre-fill the input,
+// scrub the URL (so reloads don't try to reuse a single-use token), switch
+// to the Config tab and surface the card so the user just clicks Submit.
+(function _autoCaptureRequestToken() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const rt = params.get('request_token');
+    if (!rt) return;
+    const apply = () => {
+      const inp = document.getElementById('zerodha-token-input');
+      if (!inp) return false;
+      inp.value = rt;
+      // Strip query string so a refresh doesn't reuse the (single-use) token.
+      const clean = window.location.pathname + window.location.hash;
+      window.history.replaceState({}, document.title, clean);
+      const card = document.getElementById('zerodha-session-card');
+      const tab = document.querySelector('[data-tab="config"], a[href="#config"], button[data-tab-target="config"]');
+      if (tab) tab.click();
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const msg = document.getElementById('zerodha-submit-msg');
+      if (msg) { msg.textContent = '↑ request_token captured from redirect — click Submit Token.'; msg.style.color = ''; }
+      inp.focus();
+      return true;
+    };
+    if (!apply()) {
+      // DOM not ready yet — retry after load.
+      window.addEventListener('DOMContentLoaded', apply, { once: true });
+    }
+  } catch (e) { /* non-fatal */ }
+})();
+
+// Extract request_token from a pasted string. Accepts:
+//   • a full redirect URL (any host:port — we don't care):
+//       http://localhost:5000/?action=login&status=success&request_token=ABC123
+//   • a query-string fragment:  ?request_token=ABC123&...
+//   • the raw token value:      ABC123
+function _extractRequestToken(raw) {
+  const s = (raw || '').trim();
+  if (!s) return '';
+  const m = s.match(/[?&]request_token=([^&\s]+)/i);
+  if (m) return decodeURIComponent(m[1]);
+  // Looks like a bare token if it has no spaces and no '=' / '?'
+  if (!/[\s?=]/.test(s)) return s;
+  return '';
+}
+
+// Submit handler — parses paste, posts to /api/zerodha/exchange.
+document.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('#zerodha-submit-btn');
+  if (!btn) return;
+  const inp = document.getElementById('zerodha-token-input');
+  const msg = document.getElementById('zerodha-submit-msg');
+  const rt = _extractRequestToken(inp ? inp.value : '');
+  if (!rt) {
+    if (msg) { msg.textContent = '⚠ Could not find request_token. Paste the full redirect URL or just the token value.'; msg.style.color = '#c00'; }
+    return;
+  }
+  btn.disabled = true;
+  if (msg) { msg.textContent = 'Exchanging request_token…'; msg.style.color = ''; }
+  try {
+    const r = await fetch('/api/zerodha/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_token: rt }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      if (msg) { msg.textContent = `✓ Logged in as ${d.user_id} at ${d.generated_at}`; msg.style.color = '#0a0'; }
+      if (inp) inp.value = '';
+      loadZerodhaStatus();
+    } else {
+      if (msg) { msg.textContent = '✗ ' + (d.error || 'exchange failed'); msg.style.color = '#c00'; }
+    }
+  } catch (e) {
+    if (msg) { msg.textContent = '✗ ' + e; msg.style.color = '#c00'; }
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Logout handler — wires up the button on the Config card.
+document.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('#zerodha-logout-btn');
+  if (!btn) return;
+  if (!confirm('Clear Zerodha session and disconnect the WS runner?\n\nYou will need to re-login before the next market open.')) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/zerodha/logout', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      toast(d.message || 'Session cleared.');
+      loadZerodhaStatus();
+    } else {
+      toast('Logout failed: ' + (d.error || 'unknown'));
+    }
+  } catch (e) {
+    toast('Logout failed: ' + e);
+  } finally {
+    btn.disabled = false;
+  }
+});

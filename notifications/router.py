@@ -68,8 +68,6 @@ _TYPE_TO_FLAG = {
     "EVENT_AHEAD_REVIEW":     "sl_alerts",
     # Phase 3 — #7 dead-man WS watchdog. Operator-critical, risk-side.
     "WS_DEAD_MAN":            "sl_alerts",
-    # Daily Zerodha re-login reminder — operator-critical (blocks live data).
-    "ZERODHA_RELOGIN_REQUIRED": "sl_alerts",
 }
 
 
