@@ -554,10 +554,10 @@ class SuggestionRepo:
                probability_of_profit, estimated_charges_total, estimated_net_pnl,
                execution_window, plain_english,
                data_date, entry_date, spot_data_date, fii_data_date, vix_data_date,
-               oi_pcr_change, edge_score, credit_grade)
+               oi_pcr_change, edge_score, credit_grade, em_calibration_warning)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING',
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 s.suggestion_id, s.trade_name, s.generated_on, s.strategy, s.strategy_type,
@@ -571,6 +571,7 @@ class SuggestionRepo:
                 _safe_float(s.oi_pcr_change),
                 _safe_float(getattr(s.economics, "edge_score", None)),
                 getattr(s.economics, "credit_grade", None),
+                getattr(s, "em_calibration_warning", None),
             ],
         ).close()
 
@@ -1510,4 +1511,90 @@ class AtmIvTimeseriesRepo:
         n = cur.rowcount or 0
         cur.close()
         return n
+
+
+# ---------------------------------------------------------------------------
+# Expected-move calibration (review item #10)
+# ---------------------------------------------------------------------------
+class EmCalibrationRepo:
+    """Persistence for the expected-move vs realised-move calibration log.
+
+    Populated at expiry settlement by
+    ``lifecycle/em_calibration_recorder.record_settled_expiries``.  Read
+    at suggestion-time (cohort lookup keyed by ``(underlying, dte_band)``)
+    to compute the warning chip surfaced by ``engine/em_calibration``.
+    """
+
+    def __init__(self, db: SQLServerConnection):
+        self.db = db
+
+    def insert_one(self, row: dict) -> None:
+        self.db.execute(
+            """
+            INSERT INTO options_em_calibration
+              (suggestion_id, underlying, generated_on, expiry_date,
+               dte_at_entry, dte_band, spot_at_entry, spot_at_expiry,
+               atm_iv_at_entry, expected_move, realised_move, realised_ratio)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                row["suggestion_id"], row["underlying"], row["generated_on"],
+                row["expiry_date"], int(row["dte_at_entry"]), row["dte_band"],
+                _safe_float(row["spot_at_entry"]), _safe_float(row["spot_at_expiry"]),
+                _safe_float(row["atm_iv_at_entry"]), _safe_float(row["expected_move"]),
+                _safe_float(row["realised_move"]), _safe_float(row["realised_ratio"]),
+            ],
+        ).close()
+
+    def exists_for_suggestion(self, suggestion_id: str) -> bool:
+        v = self.db.scalar(
+            "SELECT COUNT(*) FROM options_em_calibration WHERE suggestion_id = ?",
+            [suggestion_id],
+        )
+        return bool(v and v > 0)
+
+    def recent_ratios(
+        self, underlying: str, dte_band: str, limit: int,
+    ) -> List[float]:
+        """Return the most recent ``realised_ratio`` values for the cohort.
+
+        Order is newest-first so callers can slice the freshest N.  Median
+        in :func:`engine.em_calibration.compute_calibration_warning` makes
+        ordering immaterial, but we keep DESC for human-readable log dumps.
+        """
+        rows = self.db.fetch_all(
+            "SELECT TOP (?) realised_ratio FROM options_em_calibration "
+            "WHERE underlying = ? AND dte_band = ? "
+            "ORDER BY generated_on DESC, id DESC",
+            [int(limit), underlying, dte_band],
+        )
+        return [float(r["realised_ratio"]) for r in rows
+                if r.get("realised_ratio") is not None]
+
+    def settled_suggestions_pending_calibration(
+        self, expiry_date: date,
+    ) -> List[dict]:
+        """Return suggestion rows whose ``expiry_date == expiry_date`` that
+        do not yet have a calibration row.
+
+        Used by the settle-time recorder.  Each returned dict carries the
+        fields the recorder needs to compute realised vs expected: the
+        suggestion identity, generated_on, dte, spot_at_generation, and the
+        data_date / underlying for ATM-IV lookup.
+        """
+        return self.db.fetch_all(
+            """
+            SELECT s.suggestion_id, s.underlying, s.generated_on, s.expiry_date,
+                   s.dte, s.spot_at_generation, s.data_date
+              FROM options_suggestions s
+              LEFT JOIN options_em_calibration c
+                     ON c.suggestion_id = s.suggestion_id
+             WHERE s.expiry_date = ?
+               AND s.strategy <> 'NONE'
+               AND s.spot_at_generation IS NOT NULL
+               AND s.dte IS NOT NULL
+               AND c.id IS NULL
+            """,
+            [expiry_date],
+        )
 

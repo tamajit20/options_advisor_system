@@ -33,6 +33,7 @@ from contracts import (
 )
 from database.connection import SQLServerConnection
 from database.models import (
+    EmCalibrationRepo,
     EventCalendarRepo,
     FiiRepo,
     FoEodRepo,
@@ -45,6 +46,7 @@ from database.models import (
     VixRepo,
 )
 from engine.confidence import evaluate as evaluate_confidence
+from engine.em_calibration import band_dte, compute_calibration_warning
 from engine.indicators import build_indicators
 from engine.iv_calculator import implied_vol
 from engine.iv_rank import iv_rank as compute_iv_rank, pick_atm_iv
@@ -58,6 +60,43 @@ logger = logging.getLogger(__name__)
 # NSE market hours (IST)
 _NSE_OPEN  = time(9, 15)
 _NSE_CLOSE = time(15, 30)
+
+
+def _attach_em_calibration_warning(db: SQLServerConnection, sug: Suggestion) -> None:
+    """Look up the (underlying, dte_band) calibration cohort for ``sug`` and
+    attach a warning string when the median realised/expected deviates
+    materially from 1.0.
+
+    No-op when:
+      * the cohort has fewer than ``em_calibration_min_samples`` rows,
+      * the deviation is below ``em_calibration_deviation_threshold``,
+      * any DB error occurs (best-effort — never blocks suggestion flow).
+    """
+    try:
+        band = band_dte(sug.dte)
+        if band == "unknown":
+            return
+        ratios = EmCalibrationRepo(db).recent_ratios(
+            underlying=sug.underlying,
+            dte_band=band,
+            limit=int(STRATEGY_CONFIG.get("em_calibration_lookback_limit", 12)),
+        )
+        warning = compute_calibration_warning(
+            ratios,
+            underlying=sug.underlying,
+            dte=sug.dte,
+            min_samples=int(STRATEGY_CONFIG.get("em_calibration_min_samples", 4)),
+            deviation_threshold=float(
+                STRATEGY_CONFIG.get("em_calibration_deviation_threshold", 0.25)
+            ),
+        )
+        if warning:
+            sug.em_calibration_warning = warning
+    except Exception:
+        logger.exception(
+            "EM-calib warning lookup failed for %s — leaving chip blank",
+            sug.suggestion_id,
+        )
 
 
 def _resolve_data_date(db: SQLServerConnection) -> Optional[date]:
@@ -459,6 +498,7 @@ def _evaluate_underlying(
             )
             suggestions.append(primary_suggestion)
             existing_names.append(primary_suggestion.trade_name)
+            _attach_em_calibration_warning(db, primary_suggestion)
         except StrategyVeto as veto:
             no_suggestions.append(NoSuggestion(
                 generated_on=now_ist(),
@@ -511,6 +551,7 @@ def _evaluate_underlying(
                     )
                     suggestions.append(comp)
                     existing_names.append(comp.trade_name)
+                    _attach_em_calibration_warning(db, comp)
                     logger.info("Companion suggestion %s (%s) generated alongside %s",
                                 comp.trade_name, companion_strategy, primary_suggestion.trade_name)
                 except StrategyVeto as veto:

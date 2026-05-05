@@ -45,6 +45,21 @@ def run_fo_bhav(db: SQLServerConnection, trade_date: date | None = None) -> int:
         logger.warning("Expiry calendar refresh failed (non-fatal): %s", exc)
     db.commit()
     logger.info("FO bhav %s: upserted %d rows", trade_date, n)
+
+    # Settle-time hook for review item #10 — record realised vs expected
+    # moves for every suggestion that just expired.  Best-effort: a
+    # failure here must NOT roll back the bhav upsert above.
+    try:
+        from lifecycle.em_calibration_recorder import record_settled_expiries
+        recorded = record_settled_expiries(db, trade_date)
+        if recorded:
+            db.commit()
+    except Exception:
+        logger.exception("EM-calib recorder failed (non-fatal)")
+        try:
+            db.rollback()
+        except Exception:
+            pass
     return n
 
 

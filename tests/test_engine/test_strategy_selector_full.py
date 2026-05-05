@@ -384,14 +384,31 @@ class TestPerStrategyBuyPassVeto:
 
 
 # ---------------------------------------------------------------------------
-# Future-scope stub — review item #10 expected-move calibration validator.
+# Review item #10 — realised-move vs expected-move calibration validator.
+# Detailed engine-level coverage lives in tests/test_engine/test_em_calibration.py;
+# this single test pins the integration contract: when historical realised/
+# expected ratios deviate >25% from 1.0, ``compute_calibration_warning``
+# emits a non-empty string that ``lifecycle/suggestion_engine.py`` attaches
+# to ``Suggestion.em_calibration_warning``.
 # ---------------------------------------------------------------------------
-@pytest.mark.future
-@pytest.mark.skip(reason="future: realised-move vs expected-move calibration validator (FUTURE_ENHANCEMENT_SCOPES.md → Data Quality)")
 def test_expected_move_calibration_warning_when_realised_exceeds_expected():
-    """After 4+ expiries, if realised |close-close| moves consistently exceed
-    the expected_move envelope by >25% for a given (underlying, dte_band),
-    the suggestion should carry a calibration warning chip and optionally
-    apply a per-underlying expected_move multiplier. Will require a new
-    `options_em_calibration` table populated at expiry settlement."""
-    pass
+    from engine.em_calibration import compute_calibration_warning
+
+    # Six expiries where realised consistently overshoots expected by ~50%.
+    ratios = [1.55, 1.42, 1.48, 1.61, 1.50, 1.45]
+    msg = compute_calibration_warning(
+        ratios,
+        underlying="NIFTY",
+        dte=14,
+        min_samples=4,
+        deviation_threshold=0.25,
+    )
+    assert msg is not None
+    assert "NIFTY" in msg
+    assert "over" in msg.lower()
+    # Calm cohort centred on 1.0 should NOT raise a warning.
+    calm = [0.95, 1.02, 1.07, 0.98, 1.04, 1.01]
+    assert compute_calibration_warning(
+        calm, underlying="NIFTY", dte=14,
+        min_samples=4, deviation_threshold=0.25,
+    ) is None

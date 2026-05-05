@@ -100,12 +100,6 @@ Pick up from here in future development sessions.
 
 ## 🟡 Data Quality
 
-### Expected-move calibration vs realised moves
-**Files:** `engine/indicators.py` (or new `engine/em_calibration.py`), `lifecycle/snapshot_orchestrator.py`
-**Issue:** `expected_move = spot × atm_iv × √(dte/365)` is the only check we do; we never verify that historic realised moves over comparable DTE windows actually lined up with the expected envelope. If realised |close-close| consistently exceeds (or undershoots) expected-move at 14 DTE for, say, BANKNIFTY, condor short strikes are systematically too narrow (or too wide). The IV/HV ratio catches the symmetric case but not the *path-skew* (e.g. fat lower tail).
-**Fix:** After every expiry settles, log `(underlying, dte_at_entry, expected_move, realised_move_at_close)` to a new `options_em_calibration` table. Run a weekly job that computes `realised/expected` quantiles per (underlying, dte_band); surface a warning chip "EM under-calibrated for BANKNIFTY @ 14DTE: realised 1.32× over last 8 expiries" on suggestions where the calibration coefficient deviates >25%. Optionally feed the coefficient back into a per-underlying expected-move multiplier.
-**Why deferred:** Needs a new table, a settle-time hook, and ≥4 weeks of post-expiry data before the calibration is statistically meaningful. Not implementable in a single commit alongside live engine tweaks.
-
 ### OI change (delta) not tracked
 **File:** `engine/indicators.py`  
 **Issue:** Uses raw OI level from the chain. Day-over-day OI change per strike is a better conviction signal (OI building = real positioning, OI shedding = unwinding).  

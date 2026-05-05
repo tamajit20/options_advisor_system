@@ -379,6 +379,20 @@ STRATEGY_CONFIG = {
     "iv_premium_buy_pass_tolerance": 0.15,
 
     # ---------------------------------------------------------------
+    # Expected-move calibration (review item #10).  After every expiry
+    # settles, `lifecycle/em_calibration_recorder` logs realised/expected
+    # for each suggestion to `options_em_calibration`.  At suggestion
+    # time we look up the median realised/expected for the same
+    # (underlying, dte_band) cohort and surface a warning chip when it
+    # deviates from 1.0 by more than the threshold below.  The cohort
+    # must contain at least `em_calibration_min_samples` rows or no
+    # warning fires (small samples are statistically meaningless).
+    # ---------------------------------------------------------------
+    "em_calibration_min_samples":         4,
+    "em_calibration_deviation_threshold": 0.25,
+    "em_calibration_lookback_limit":      12,   # most recent N expiries per cohort
+
+    # ---------------------------------------------------------------
     # Edge score — numeric quality score 0–100 (display + ranking only;
     # never blocks a suggestion). Component weights MUST sum to ≤100.
     # ---------------------------------------------------------------

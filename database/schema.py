@@ -728,6 +728,45 @@ _TABLE_DDL: List[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS IX_options_atm_iv_5min_sym_exp ON options_atm_iv_5min (symbol, expiry_date, snapshot_at)",
+
+    # ---------------- Expected-move calibration (review item #10) -----------
+    # One row per settled (suggestion, expiry).  Populated by the
+    # `lifecycle/em_calibration_recorder` hook the day fo_bhav lands the
+    # expiry's settlement close.  Used by `engine/em_calibration` to compute
+    # the realised/expected median per (underlying, dte_band) and surface a
+    # warning chip on subsequent suggestions when calibration drifts.
+    """
+    IF OBJECT_ID('options_em_calibration', 'U') IS NULL
+    CREATE TABLE options_em_calibration (
+        id              BIGINT IDENTITY(1,1) PRIMARY KEY,
+        suggestion_id   NVARCHAR(40)  NOT NULL,
+        underlying      NVARCHAR(50)  NOT NULL,
+        generated_on    DATE          NOT NULL,
+        expiry_date     DATE          NOT NULL,
+        dte_at_entry    INT           NOT NULL,
+        dte_band        NVARCHAR(10)  NOT NULL,  -- '0-7' | '8-21' | '22+'
+        spot_at_entry   DECIMAL(18,4) NOT NULL,
+        spot_at_expiry  DECIMAL(18,4) NOT NULL,
+        atm_iv_at_entry DECIMAL(10,6) NOT NULL,
+        expected_move   DECIMAL(18,4) NOT NULL,  -- spot×iv×√(dte/365), points
+        realised_move   DECIMAL(18,4) NOT NULL,  -- |spot_at_expiry - spot_at_entry|
+        realised_ratio  DECIMAL(10,4) NOT NULL,  -- realised / expected
+        created_at      DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        CONSTRAINT UX_options_em_calibration UNIQUE (suggestion_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_em_calibration_lookup "
+    "ON options_em_calibration (underlying, dte_band, generated_on DESC)",
+
+    # Migration: surface the calibration warning on the suggestion row so the
+    # dashboard can render a chip without recomputing on every page load.
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'em_calibration_warning'
+    )
+    ALTER TABLE options_suggestions ADD em_calibration_warning NVARCHAR(500) NULL
+    """,
 ]
 
 

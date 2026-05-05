@@ -261,6 +261,7 @@ class Suggestion:
     fii_data_date:    Optional[date] = None  # actual trade_date of the FII row used
     vix_data_date:    Optional[date] = None  # trade_date of the most recent VIX row used
     oi_pcr_change:    Optional[float] = None  # OI change momentum: ΣΔPut OI / ΣΔCall OI (EOD=day-over-day, LIVE=since open)
+    em_calibration_warning: Optional[str] = None  # set when realised/expected median for (underlying, dte_band) deviates >threshold
 
 
 @dataclass

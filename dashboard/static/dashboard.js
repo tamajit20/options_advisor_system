@@ -464,6 +464,12 @@ function renderPlainEnglishStructured(s) {
       { weekday:'short', day:'2-digit', month:'short', year:'2-digit' });
     chips.push(`<span class="ctx-chip ctx-entry-date" title="Intended execution date">Execute \u2192 ${escapeHtml(eFmt)}</span>`);
   }
+  // Review item #10: expected-move calibration warning. Server-computed
+  // when realised/expected median for (underlying, dte_band) deviates >25%
+  // from 1.0 over the most recent expiry cohort.
+  if (s.em_calibration_warning) {
+    chips.push(`<span class="ctx-chip ctx-fail" title="Historical realised vs expected move drifted \u2014 short strikes may be miscalibrated">\u26A0 ${escapeHtml(s.em_calibration_warning)}</span>`);
+  }
   // Phase 2c: validator status (set by 09:35 IST intraday_validator)
   if (s.validator_status) {
     const vs = s.validator_status;
@@ -2407,10 +2413,10 @@ function renderHistorySuggestion(s) {
     </div>
     <div class="hist-card-meta muted">
       ${escapeHtml(s.trade_name || s.suggestion_id)}
-      &nbsp;·&nbsp;Generated: ${fmtDt(s.generated_on)}
+      &nbsp;·&nbsp;Suggestion Date: ${fmtDt(s.generated_on)}
       ${s.expiry_date ? '&nbsp;·&nbsp;Expiry: '+fmtDt(s.expiry_date) : ''}
       ${s.dte != null ? '&nbsp;·&nbsp;DTE: '+s.dte : ''}
-      ${s.entry_date ? '&nbsp;·&nbsp;Entry day: '+s.entry_date : ''}
+      ${s.entry_date ? '&nbsp;·&nbsp;Execution Date: '+fmtDt(s.entry_date) : ''}
     </div>
     ${s.net_credit_suggested != null ? `
     <div class="hcmp-grid">

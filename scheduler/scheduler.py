@@ -70,12 +70,24 @@ def _run_job(
     fn: Callable[[SQLServerConnection], int],
     *,
     requires: Optional[list[str]] = None,
+    skip_freshness: bool = False,
+    job_id_suffix: Optional[str] = None,
 ) -> None:
-    """Open DB, run `fn`, persist start/finish via JobLogRepo, post notification."""
+    """Open DB, run `fn`, persist start/finish via JobLogRepo, post notification.
+
+    skip_freshness: when True, bypass both the chain-skip and data-freshness
+    gates. Used by manual `Run now` triggers where the operator is explicitly
+    overriding the trade_date (e.g. backfilling yesterday) and wants the run
+    to execute regardless of upstream freshness.
+    job_id_suffix: optional extra suffix for the job_id so manual reruns of
+    the same day don't overwrite the scheduled run's row.
+    """
     job_id = _make_job_id(job_name)
+    if job_id_suffix:
+        job_id = f"{job_id}-{job_id_suffix}"
 
     # Chain-skip: if any required upstream job FAILED today, skip this one.
-    if requires:
+    if requires and not skip_freshness:
         for upstream in requires:
             up_status = _LAST_STATUS.get(upstream)
             if up_status in ("FAILED", "CRITICAL"):
@@ -90,7 +102,7 @@ def _run_job(
         # restart). For each upstream we run a registered probe against
         # the DB; if the data isn't present yet we skip with a clear
         # reason rather than running on stale inputs.
-        if requires:
+        if requires and not skip_freshness:
             stale = _check_data_freshness(db, requires)
             if stale is not None:
                 _record_skipped_with_db(
@@ -350,13 +362,16 @@ def trigger_job_now(job_name: str, trade_date: str | None = None) -> bool:
         raise RuntimeError("Scheduler is not running")
 
     base_fn = JOB_FUNCS[job_name]
+    manual_suffix = f"manual-{datetime.now().strftime('%H%M%S')}"
+
     if trade_date:
         from datetime import date as _date
-        from database.connection import SQLServerConnection as _DB
         _td = _date.fromisoformat(trade_date)
         # Jobs that support trade_date (download + calc + lifecycle) share the same
         # pattern: the underlying orchestrator accepts trade_date keyword arg.
-        # We wrap the job to inject it.
+        # We wrap the job to inject it, then run it through `_run_job` so the
+        # manual run is fully logged in `options_job_log` (the dashboard reads
+        # job status from that table).
         _SUPPORTED = {
             "fo_bhav_download", "spot_bhav_download", "vix_download", "fii_download",
             "iv_calculation", "suggestion_engine", "exit_engine",
@@ -368,33 +383,29 @@ def trigger_job_now(job_name: str, trade_date: str | None = None) -> bool:
             from lifecycle.iv_orchestrator import run_iv_calculation
             from lifecycle.suggestion_engine import run_suggestion_engine
             from lifecycle.exit_orchestrator import run_exit_engine
-            _orch_map = {
-                "fo_bhav_download":   lambda db: run_fo_bhav(db, _td),
-                "spot_bhav_download": lambda db: run_spot_bhav(db, _td),
-                "vix_download":       lambda db: run_vix(db, _td),
-                "fii_download":       lambda db: run_fii(db, _td),
-                "iv_calculation":     lambda db: run_iv_calculation(db, _td),
-                "suggestion_engine":  lambda db: run_suggestion_engine(db, _td),
-                "exit_engine":        lambda db: run_exit_engine(db, _td),
+            _orch_map: dict[str, Callable[[SQLServerConnection], int]] = {
+                "fo_bhav_download":   lambda db: run_fo_bhav(db, _td) or 0,
+                "spot_bhav_download": lambda db: run_spot_bhav(db, _td) or 0,
+                "vix_download":       lambda db: run_vix(db, _td) or 0,
+                "fii_download":       lambda db: run_fii(db, _td) or 0,
+                "iv_calculation":     lambda db: run_iv_calculation(db, _td) or 0,
+                "suggestion_engine":  lambda db: run_suggestion_engine(db, _td) or 0,
+                "exit_engine":        lambda db: run_exit_engine(db, _td) or 0,
             }
             orch = _orch_map[job_name]
             def fn():
-                from database.connection import SQLServerConnection as _DBC
-                import traceback as _tb
-                db = _DBC()
-                try:
-                    db.connect()
-                    orch(db)
-                    db.commit()
-                except Exception:
-                    logger.exception("Manual job %s (trade_date=%s) failed", job_name, trade_date)
-                    try: db.rollback()
-                    except Exception: pass
-                finally:
-                    db.close()
+                # Manual override: bypass the freshness gate (operator chose
+                # the date) but still log start/finish to options_job_log.
+                _run_job(
+                    job_name, orch,
+                    skip_freshness=True,
+                    job_id_suffix=manual_suffix,
+                )
         else:
             fn = base_fn
     else:
+        # Plain manual run (no date override): use the registered job function
+        # directly. It already routes through `_run_job` and logs to the DB.
         fn = base_fn
 
     run_at = datetime.now()
