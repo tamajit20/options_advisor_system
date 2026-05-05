@@ -1,0 +1,16 @@
+{
+  "as_of": "2026-01-01T00:00:00",
+  "stats": {
+    "ticks_in": 0,
+    "evaluations": 0,
+    "alerts_fired": 0,
+    "alerts_suppressed": 0,
+    "stale_skips": 0,
+    "session_skips": 0,
+    "silenced_skips": 0,
+    "reloads": 0,
+    "trailing_steps_armed": 0,
+    "mtm_published": 0,
+    "trades_watched": 0
+  }
+}
