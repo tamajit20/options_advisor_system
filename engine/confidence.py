@@ -341,6 +341,40 @@ def evaluate(
 
     checks.append(_gate("ATM strikes liquid (spread within budget)", _spread_gate))
 
+    # 13. IV-Rank vs IV/HV conflict — advisory only (issue #4).
+    # When the two regime-classification signals disagree, edge is weak even
+    # when both individual gates pass (high IV Rank but low IV/HV ratio →
+    # price-driven IV not premium-rich, weak selling edge; low IV Rank but
+    # IV/HV ≥ 1 → cheap rank but not cheap vs realised vol, weak buying edge).
+    # Emits PASS_WARN with explanatory text; does NOT count toward soft_failed
+    # (advisory gates live at index ≥ 9 and are excluded from the soft slice).
+    iv_writing_min_v = STRATEGY_CONFIG.get("iv_rank_writing_min", 50.0)
+    iv_buying_max_v = STRATEGY_CONFIG.get("iv_rank_buying_max", 30.0)
+    iv_premium_sell_min_v = STRATEGY_CONFIG.get("iv_premium_sell_min", 0.90)
+    iv_premium_buy_pass_v = STRATEGY_CONFIG.get("iv_premium_buy_pass", 1.00)
+
+    def _iv_conflict_gate():
+        prem = indicators.iv_premium
+        if iv_rank is None or prem is None:
+            return _PASS_WARN, "IV-Rank or IV/HV unavailable — cannot detect regime conflict"
+        # Writing regime claimed by rank, but premium thin
+        if iv_rank > iv_writing_min_v and prem < iv_premium_sell_min_v:
+            return (
+                _PASS_WARN,
+                f"Conflict: IV Rank {iv_rank:.0f} suggests writing but IV/HV {prem:.2f} "
+                f"< {iv_premium_sell_min_v:.2f} — weak selling edge",
+            )
+        # Buying regime claimed by rank, but premium not actually cheap
+        if iv_rank < iv_buying_max_v and prem > iv_premium_buy_pass_v:
+            return (
+                _PASS_WARN,
+                f"Conflict: IV Rank {iv_rank:.0f} suggests buying but IV/HV {prem:.2f} "
+                f"> {iv_premium_buy_pass_v:.2f} — weak buying edge",
+            )
+        return _PASS, "IV Rank and IV/HV signals aligned"
+
+    checks.append(_gate("IV Rank vs IV/HV alignment", _iv_conflict_gate))
+
     # ══════════════════════════════════════════════════════════════
     # Score + all_passed
     # ══════════════════════════════════════════════════════════════

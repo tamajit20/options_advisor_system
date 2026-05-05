@@ -20,10 +20,10 @@ class TestEvaluate:
             events_calendar_row_count=10,
         )
         assert result.all_passed is True
-        # 7 soft + event + DTE + 3 trajectory gates = 12 total.
+        # 7 soft + event + DTE + 3 trajectory + IV-Rank/IV-HV alignment = 13 total.
         # Trajectory gates are PASS_WARN when indicator fields are None
         # (default sample_indicators has no live trajectory).
-        assert result.total == 12
+        assert result.total == 13
         assert result.score >= 8
 
     def test_dte_below_band_hard_fails(self, sample_indicators):

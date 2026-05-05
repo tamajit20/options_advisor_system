@@ -238,6 +238,22 @@ _TABLE_DDL: List[str] = [
     )
     ALTER TABLE options_suggestions ADD vix_data_date DATE NULL
     """,
+    # Migration: edge_score (0–100, display + ranking only — issue #10)
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'edge_score'
+    )
+    ALTER TABLE options_suggestions ADD edge_score DECIMAL(6,2) NULL
+    """,
+    # Migration: credit_grade tag for credit strategies — "weak"/"good"/"strong"/NULL
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'credit_grade'
+    )
+    ALTER TABLE options_suggestions ADD credit_grade NVARCHAR(10) NULL
+    """,
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_date ON options_suggestions (generated_on DESC)",
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_status ON options_suggestions (status, generated_on DESC)",
 

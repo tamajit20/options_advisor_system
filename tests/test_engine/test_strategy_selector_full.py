@@ -121,7 +121,7 @@ class TestAssembleSuggestion:
 
     def test_assembles_iron_condor(self, sample_chain, sample_indicators, mocker):
         from config import STRATEGY_CONFIG
-        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0, "strategy_min_credit_to_width_ratio": {}})
         sug = ss.assemble_suggestion(
             suggestion_id="S-1", underlying="NIFTY",
             expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
@@ -137,7 +137,7 @@ class TestAssembleSuggestion:
 
     def test_strategy_override_bypasses_selector(self, sample_chain, sample_indicators, mocker):
         from config import STRATEGY_CONFIG
-        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0, "strategy_min_credit_to_width_ratio": {}})
         sug = ss.assemble_suggestion(
             suggestion_id="S-2", underlying="NIFTY",
             expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
@@ -151,7 +151,7 @@ class TestAssembleSuggestion:
 
     def test_explain_renders_for_credit_strategy(self, sample_chain, sample_indicators, mocker):
         from config import STRATEGY_CONFIG
-        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0, "strategy_min_credit_to_width_ratio": {}})
         sug = ss.assemble_suggestion(
             suggestion_id="S-3", underlying="NIFTY",
             expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
@@ -190,8 +190,13 @@ class TestPerStrategyIvPremiumCap:
             )
 
     def test_long_straddle_passes_when_iv_premium_within_cap(self,
-                                                              sample_chain):
-        # Buying regime + iv_premium=1.10 ≤ 1.20 cap → no veto
+                                                              sample_chain,
+                                                              mocker):
+        # Buying regime + iv_premium=1.10 ≤ 1.20 cap → no veto from old cap.
+        # Patch out the new per-strategy buy_pass map so this test continues to
+        # exercise ONLY the legacy `strategy_iv_premium_buy_max` gate.
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {"strategy_iv_premium_buy_pass": {}})
         ind = self._ind(iv_premium=1.10, trend="SIDEWAYS")
         sug = ss.assemble_suggestion(
             suggestion_id="S-LS-2", underlying="NIFTY",
@@ -222,7 +227,7 @@ class TestPerStrategyIvPremiumCap:
         """IRON_CONDOR is NOT in strategy_iv_premium_buy_max → no per-strategy
         veto. Yesterday's behaviour preserved."""
         from config import STRATEGY_CONFIG
-        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0, "strategy_min_credit_to_width_ratio": {}})
         # iv_premium=1.30 (above naked-long cap), in writing regime → unaffected
         ind = self._ind(iv_premium=1.30, trend="SIDEWAYS")
         sug = ss.assemble_suggestion(
@@ -238,7 +243,7 @@ class TestPerStrategyIvPremiumCap:
     def test_bull_call_spread_unaffected(self, sample_chain, mocker):
         """Debit verticals are NOT in the per-strategy cap map."""
         from config import STRATEGY_CONFIG
-        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0, "strategy_min_credit_to_width_ratio": {}})
         ind = self._ind(iv_premium=1.40, trend="BULLISH")
         sug = ss.assemble_suggestion(
             suggestion_id="S-BCS-1", underlying="NIFTY",
@@ -278,3 +283,115 @@ class TestPerStrategyIvPremiumCap:
         ind2 = self._ind(iv_premium=1.20, trend="SIDEWAYS")
         assert ss.select_strategy(iv_rank=80.0, trend="SIDEWAYS",
                                    indicators=ind2) == "IRON_CONDOR"
+
+
+# ---------------------------------------------------------------------------
+# Per-strategy buy_pass soft veto (review item #8 follow-up).
+# `strategy_iv_premium_buy_pass` was previously edge_score-only; promoted to
+# a soft veto when iv_premium > buy_pass × (1 + tolerance) in the buying regime.
+# ---------------------------------------------------------------------------
+class TestPerStrategyBuyPassVeto:
+    def _ind(self, iv_premium: float, trend: str = "SIDEWAYS"):
+        return _make_indicators(trend=trend, iv_premium=iv_premium)
+
+    def test_long_straddle_vetoed_above_buy_pass_threshold(self, sample_chain):
+        # buy_pass=0.85, tolerance=0.15 → ceiling = 0.978. iv_premium=1.05 > ceiling.
+        ind = self._ind(iv_premium=1.05, trend="SIDEWAYS")
+        with pytest.raises(StrategyVeto, match="buy_pass threshold"):
+            ss.assemble_suggestion(
+                suggestion_id="S-BP-1", underlying="NIFTY",
+                expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=sample_chain,
+                indicators=ind,
+                confidence=_all_pass_confidence(),
+                iv_rank=15.0, atm_iv=0.18, lots=1, lot_size=75,
+                strategy_override="LONG_STRADDLE",
+            )
+
+    def test_long_straddle_passes_at_buy_pass_threshold(self, sample_chain):
+        # iv_premium=0.95 < 0.978 ceiling → no veto.
+        ind = self._ind(iv_premium=0.95, trend="SIDEWAYS")
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-BP-2", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=15.0, atm_iv=0.18, lots=1, lot_size=75,
+            strategy_override="LONG_STRADDLE",
+        )
+        assert sug.strategy == "LONG_STRADDLE"
+
+    def test_iron_condor_unaffected_by_buy_pass(self, sample_chain, mocker):
+        """IRON_CONDOR is NOT in strategy_iv_premium_buy_pass → veto skipped.
+        Strategy isolation: tightening buy_pass for naked longs does not bleed
+        into credit strategies."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0,
+                                            "strategy_min_credit_to_width_ratio": {}})
+        ind = self._ind(iv_premium=1.30, trend="SIDEWAYS")
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-BP-IC", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+        )
+        assert sug.strategy == "IRON_CONDOR"
+
+    def test_writing_regime_skips_buy_pass_veto(self, sample_chain):
+        """buy_pass veto only fires in buying regime (iv_rank < buying_max)."""
+        ind = self._ind(iv_premium=1.50, trend="SIDEWAYS")
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-BP-W", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,  # writing regime
+            strategy_override="LONG_STRADDLE",
+        )
+        assert sug.strategy == "LONG_STRADDLE"
+
+    def test_per_strategy_thresholds_isolated(self, sample_chain, mocker):
+        """LONG_CALL has buy_pass=0.90, LONG_STRADDLE 0.85 — at iv_premium=1.00,
+        ceiling for LONG_CALL is 1.035 (passes), for LONG_STRADDLE is 0.978
+        (vetoes). Tightening one strategy's threshold cannot affect another."""
+        ind = self._ind(iv_premium=1.00, trend="BULLISH")
+        # LONG_CALL passes — below its 1.035 ceiling.
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-BP-LC", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=15.0, atm_iv=0.18, lots=1, lot_size=75,
+            strategy_override="LONG_CALL",
+        )
+        assert sug.strategy == "LONG_CALL"
+        # LONG_STRADDLE vetoes — above its 0.978 ceiling.
+        with pytest.raises(StrategyVeto, match="buy_pass threshold"):
+            ss.assemble_suggestion(
+                suggestion_id="S-BP-LS", underlying="NIFTY",
+                expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=sample_chain,
+                indicators=self._ind(iv_premium=1.00, trend="SIDEWAYS"),
+                confidence=_all_pass_confidence(),
+                iv_rank=15.0, atm_iv=0.18, lots=1, lot_size=75,
+                strategy_override="LONG_STRADDLE",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Future-scope stub — review item #10 expected-move calibration validator.
+# ---------------------------------------------------------------------------
+@pytest.mark.future
+@pytest.mark.skip(reason="future: realised-move vs expected-move calibration validator (FUTURE_ENHANCEMENT_SCOPES.md → Data Quality)")
+def test_expected_move_calibration_warning_when_realised_exceeds_expected():
+    """After 4+ expiries, if realised |close-close| moves consistently exceed
+    the expected_move envelope by >25% for a given (underlying, dte_band),
+    the suggestion should carry a calibration warning chip and optionally
+    apply a per-underlying expected_move multiplier. Will require a new
+    `options_em_calibration` table populated at expiry settlement."""
+    pass

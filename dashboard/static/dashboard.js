@@ -70,8 +70,11 @@ function switchTab(name) {
 $$('.nav-item, .bnav-item').forEach(b =>
   b.addEventListener('click', () => switchTab(b.dataset.tab))
 );
-// Restore last active tab on page load (URL hash takes precedence over localStorage)
-(function restoreActiveTab() {
+// Restore last active tab on page load (URL hash takes precedence over localStorage).
+// MUST defer until after the whole script parses, otherwise switchTab() touches
+// `let` bindings (_histActiveSubtab, _jobsTimer, _wsmonTimer) declared further
+// down → TDZ ReferenceError that breaks Jobs/Logs/Wsmon tabs.
+function _restoreActiveTab() {
   let initial = null;
   const hash = (window.location.hash || '').replace(/^#/, '');
   if (hash && TABS.includes(hash)) initial = hash;
@@ -82,7 +85,14 @@ $$('.nav-item, .bnav-item').forEach(b =>
     } catch (_) {}
   }
   if (initial) switchTab(initial);
-})();
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _restoreActiveTab);
+} else {
+  // Script already parsed (e.g. defer/module): run on next tick so all top-level
+  // `let`/`const` declarations below this point have been initialized.
+  setTimeout(_restoreActiveTab, 0);
+}
 
 // ---------------- Notifications ----------------
 async function refreshNotifBadge() {
@@ -523,6 +533,22 @@ function renderPlainEnglishStructured(s) {
       : _softFailCount > 0 ? ` \u26a0 ${_softFailCount} soft fail${_softFailCount > 1 ? 's' : ''}`
       : _warnCount > 0 ? ` \u26a0 ${_warnCount} warned` : '';
     chips.push(`<span class="${chipClass}" data-sug-id="${escapeHtml(s.suggestion_id||'')}" style="cursor:pointer" title="Click to see all checks">${displayScore}/${_total} checks \u2713${warnSuffix} <span style="font-size:.7rem;opacity:.7">\u25bc</span></span><span class="conf-logic-info" tabindex="0" aria-label="Confidence gate logic">\u24d8<span class="conf-logic-popup"><strong>How gating works</strong><br><br><span style="color:#f87171">\u2717 Hard gate</span> &mdash; always blocks:<br>&nbsp;&bull; DTE within target band<br><br><span style="color:#fbbf24">\u2717 Soft gates</span> &mdash; need \u22655 of 7:<br>&nbsp;&bull; IV Rank in actionable zone<br>&nbsp;&bull; VIX stable or falling<br>&nbsp;&bull; PCR in neutral band<br>&nbsp;&bull; OI walls visible<br>&nbsp;&bull; Trend identifiable<br>&nbsp;&bull; IV premium vs realised vol (HV-20)<br>&nbsp;&bull; FII positioning aligned with trend<br><br><span style="color:#fbbf24">\u26a0 Warning (never blocks):</span><br>&nbsp;&bull; High-impact event this week<br><br><span style="opacity:.6;font-size:.72rem">1\u20132 soft gate misses = trade proceeds with caution<br>3+ soft gate misses = blocked</span><br><br><span style="opacity:.5;font-size:.72rem">\u26a0 = data unavailable &nbsp;\u26a1 = gate error</span></span></span>`);
+  }
+  // Edge score (0-100) — composite quality blend; display + ranking only.
+  if (s.edge_score != null) {
+    const es = parseFloat(s.edge_score);
+    const esCls = es >= 70 ? 'ctx-chip ctx-pass'
+                : es >= 50 ? 'ctx-chip ctx-warn'
+                :            'ctx-chip ctx-fail';
+    const esTip = 'Edge score (0-100): weighted blend of PoP, credit-to-width (or debit discount), IV regime alignment, and confidence headroom. Higher = better trade quality.';
+    chips.push(`<span class="${esCls}" title="${escapeHtml(esTip)}">Edge ${es.toFixed(0)}/100</span>`);
+  }
+  // Credit-to-width grade for credit strategies — visual quality tag
+  if (s.credit_grade) {
+    const gradeMap = { strong: 'ctx-chip ctx-pass', good: 'ctx-chip ctx-pass', weak: 'ctx-chip ctx-warn' };
+    const gCls = gradeMap[s.credit_grade] || 'ctx-chip';
+    const gTip = 'Credit-to-width ratio grade: weak (<25%), good (25-30%), strong (>=30%). Strong credits compensate better for the spread risk.';
+    chips.push(`<span class="${gCls}" title="${escapeHtml(gTip)}">Credit: ${escapeHtml(s.credit_grade)}</span>`);
   }
   // Reference date for "day N" → actual date conversion.
   // Use generated_on if present, else today.

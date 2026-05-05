@@ -250,6 +250,28 @@ def assemble_suggestion(
                 f"naked long premium overpays for IV here"
             )
 
+    # Per-strategy IV/HV buy_pass veto (review item #8 follow-up).
+    # `strategy_iv_premium_buy_pass` is the per-strategy "real edge" threshold
+    # used by edge_score; promote it to a soft veto when iv_premium exceeds it
+    # by more than `iv_premium_buy_pass_tolerance`. Catches marginal-IV buys
+    # that previously slipped through because the regime-wide buy_max was much
+    # looser than the per-strategy buy_pass. Each strategy carries its own
+    # threshold — strategy isolation preserved. Buying regime only.
+    buy_pass_overrides = STRATEGY_CONFIG.get("strategy_iv_premium_buy_pass", {}) or {}
+    buy_pass = buy_pass_overrides.get(strategy)
+    if buy_pass is not None:
+        iv_prem = getattr(indicators, "iv_premium", None)
+        iv_buying_max_rank = STRATEGY_CONFIG["iv_rank_buying_max"]
+        in_buying_regime = (iv_rank is not None) and (iv_rank < iv_buying_max_rank)
+        tol = float(STRATEGY_CONFIG.get("iv_premium_buy_pass_tolerance", 0.10))
+        threshold = float(buy_pass) * (1.0 + tol)
+        if in_buying_regime and iv_prem is not None and iv_prem > threshold:
+            raise StrategyVeto(
+                f"{strategy} IV/HV {iv_prem:.2f}\u00d7 exceeds buy_pass threshold "
+                f"{buy_pass:.2f}\u00d7 (+{tol*100:.0f}% tolerance \u2192 ceiling "
+                f"{threshold:.2f}\u00d7) \u2014 marginal buying edge, premium too rich"
+            )
+
     # Build legs by strategy (registry-driven dispatch)
     em_builder, no_em_builder = _builder_for(strategy)
     if em_builder is not None:
@@ -275,13 +297,21 @@ def assemble_suggestion(
     # Credit-to-width ratio veto: for defined-risk credit strategies the net credit
     # must be at least min_credit_to_width_ratio × spread width.  A condor collecting
     # 3 pts on a 200-pt width (1.5%) doesn't compensate for the risk.
-    min_cw_ratio = STRATEGY_CONFIG.get("min_credit_to_width_ratio", 0.20)
+    #
+    # Per-strategy override (issue #7): each credit strategy can demand its own
+    # minimum via STRATEGY_CONFIG["strategy_min_credit_to_width_ratio"]. Strategies
+    # absent from the override map fall back to the regime-wide
+    # `min_credit_to_width_ratio`. Strict isolation: tightening one strategy's
+    # threshold cannot affect any other strategy.
+    cw_default = STRATEGY_CONFIG.get("min_credit_to_width_ratio", 0.20)
+    cw_overrides = STRATEGY_CONFIG.get("strategy_min_credit_to_width_ratio", {}) or {}
+    min_cw_ratio = float(cw_overrides.get(strategy, cw_default))
+    spread_w_for_grade = leg_builder.spread_width(legs)
     if strategy in _CREDIT_STRATEGIES:
-        sw = leg_builder.spread_width(legs)
-        if sw > 0 and np_per_share < min_cw_ratio * sw:
+        if spread_w_for_grade > 0 and np_per_share < min_cw_ratio * spread_w_for_grade:
             raise StrategyVeto(
-                f"Credit-to-width ratio too low: {np_per_share:.1f}/{sw:.0f} = "
-                f"{np_per_share/sw*100:.1f}% < {min_cw_ratio*100:.0f}% minimum"
+                f"Credit-to-width ratio too low: {np_per_share:.1f}/{spread_w_for_grade:.0f} = "
+                f"{np_per_share/spread_w_for_grade*100:.1f}% < {min_cw_ratio*100:.0f}% minimum"
             )
 
     max_profit_ps, max_loss_ps = leg_builder.max_profit_loss(legs, strategy)
@@ -326,6 +356,29 @@ def assemble_suggestion(
         estimated_charges=charges,
         estimated_net_pnl=round(estimated_net_pnl, 2),
     )
+
+    # Numeric edge score (issue #10) — display + ranking only, never gates.
+    # Per-strategy weighted blend of PoP, credit-to-width grade (or debit
+    # discount), IV regime alignment, and confidence headroom.
+    from engine import edge_score as _edge
+    _grade = (
+        _edge.grade_credit_to_width(np_per_share / spread_w_for_grade)
+        if (strategy in _CREDIT_STRATEGIES and spread_w_for_grade > 0)
+        else None
+    )
+    _score, _components = _edge.compute(
+        strategy=strategy,
+        pop=pop,
+        legs=legs,
+        net_premium_per_share=np_per_share,
+        spread_width=spread_w_for_grade,
+        iv_rank=iv_rank,
+        iv_premium=getattr(indicators, "iv_premium", None),
+        confidence=confidence,
+    )
+    economics.edge_score = _score
+    economics.edge_score_components = _components
+    economics.credit_grade = _grade
 
     trade_name = make_trade_name(
         underlying=underlying,

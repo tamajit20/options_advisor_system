@@ -546,35 +546,41 @@ def _persist_and_notify(
     notif_repo = NotificationRepo(db)
 
     # ── Cross-underlying dedup ─────────────────────────────────────────────
+    # Same-strategy candidates across underlyings: keep the one with higher
+    # confidence score; on a tie, fall back to higher edge_score (issue #10).
+    # This is strictly within one (expiry_type, strategy) bucket so it cannot
+    # bias one strategy class against another (strategy isolation).
     best_by_expiry_type: dict[str, Suggestion] = {}
     for sug in all_candidates:
         key = f"{sug.expiry_type}:{sug.strategy}"
         existing = best_by_expiry_type.get(key)
+        if existing is None:
+            best_by_expiry_type[key] = sug
+            continue
+        new_es = getattr(sug.economics, "edge_score", 0.0) or 0.0
+        old_es = getattr(existing.economics, "edge_score", 0.0) or 0.0
         is_better = (
-            existing is None
-            or sug.confidence.score > existing.confidence.score
-            or (
-                sug.confidence.score == existing.confidence.score
-                and (sug.confidence.score or 0) >= (existing.confidence.score or 0)
-            )
+            sug.confidence.score > existing.confidence.score
+            or (sug.confidence.score == existing.confidence.score and new_es > old_es)
         )
         if is_better:
-            if existing is not None:
-                logger.info(
-                    "Cross-underlying dedup: dropping %s (%s, score=%d) in favour of %s (%s, score=%d)",
-                    existing.underlying, key, existing.confidence.score,
-                    sug.underlying, key, sug.confidence.score,
-                )
-                no_suggestions.append(NoSuggestion(
-                    generated_on=now_ist(),
-                    underlying=existing.underlying,
-                    confidence=existing.confidence,
-                    reason=(
-                        f"[{key}] Dropped — correlation dedup: "
-                        f"{sug.underlying} has equal/higher confidence score "
-                        f"({sug.confidence.score} vs {existing.confidence.score})"
-                    ),
-                ))
+            logger.info(
+                "Cross-underlying dedup: dropping %s (%s, score=%d, edge=%.1f) "
+                "in favour of %s (%s, score=%d, edge=%.1f)",
+                existing.underlying, key, existing.confidence.score, old_es,
+                sug.underlying, key, sug.confidence.score, new_es,
+            )
+            no_suggestions.append(NoSuggestion(
+                generated_on=now_ist(),
+                underlying=existing.underlying,
+                confidence=existing.confidence,
+                reason=(
+                    f"[{key}] Dropped — correlation dedup: "
+                    f"{sug.underlying} has higher score/edge "
+                    f"({sug.confidence.score}/{new_es:.1f} vs "
+                    f"{existing.confidence.score}/{old_es:.1f})"
+                ),
+            ))
             best_by_expiry_type[key] = sug
 
     persisted: List[Suggestion] = []

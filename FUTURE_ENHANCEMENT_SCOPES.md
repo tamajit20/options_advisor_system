@@ -72,6 +72,12 @@ Pick up from here in future development sessions.
 
 ## 🟡 Strategy & Regime Coverage
 
+### Same-direction concentration penalty across symbols
+**Files:** `lifecycle/suggestion_engine.py`, possibly new `lifecycle/portfolio_concentration.py`
+**Issue:** Two BULL_PUT_SPREAD suggestions on, say, NIFTY and BANKNIFTY (highly correlated) both fire on the same generation pass. The current cross-underlying dedup only collapses identical (expiry_type, strategy) keys, so correlated bets in the same direction can pile up in the portfolio with no penalty.
+**Fix:** After all underlyings are evaluated, score each surviving suggestion's directional exposure (BULL_*, BEAR_*, neutral). When two or more bullish (or two or more bearish) suggestions collide, demote the weaker (lower edge_score) to a NoSuggestion with reason "Concentration cap: already hold {primary_underlying} in same direction". Strategy isolation must be preserved — credit and debit verticals on the same direction should still both be allowed when they target different regimes.
+**Why deferred:** Requires re-architecting `_evaluate_underlying` to surface intermediate Suggestions to the orchestrator BEFORE persistence so the cross-symbol pass can run; current loop persists per-underlying inside the generator. Not safe for one commit alongside the per-strategy isolation work.
+
 ### Mid-IV (30–50) sideways regime — missed trades
 **Issue:** Mid-IV sideways currently results in a `StrategyVeto` ("no actionable edge"). Calendar spreads or short iron flies with tight wings could work here.  
 **Fix:** Evaluate once backtest data shows how often this regime occurs. If frequent, add Calendar Spread build to `leg_builder.py` and route to it from `strategy_selector.py`.
@@ -93,6 +99,12 @@ Pick up from here in future development sessions.
 ---
 
 ## 🟡 Data Quality
+
+### Expected-move calibration vs realised moves
+**Files:** `engine/indicators.py` (or new `engine/em_calibration.py`), `lifecycle/snapshot_orchestrator.py`
+**Issue:** `expected_move = spot × atm_iv × √(dte/365)` is the only check we do; we never verify that historic realised moves over comparable DTE windows actually lined up with the expected envelope. If realised |close-close| consistently exceeds (or undershoots) expected-move at 14 DTE for, say, BANKNIFTY, condor short strikes are systematically too narrow (or too wide). The IV/HV ratio catches the symmetric case but not the *path-skew* (e.g. fat lower tail).
+**Fix:** After every expiry settles, log `(underlying, dte_at_entry, expected_move, realised_move_at_close)` to a new `options_em_calibration` table. Run a weekly job that computes `realised/expected` quantiles per (underlying, dte_band); surface a warning chip "EM under-calibrated for BANKNIFTY @ 14DTE: realised 1.32× over last 8 expiries" on suggestions where the calibration coefficient deviates >25%. Optionally feed the coefficient back into a per-underlying expected-move multiplier.
+**Why deferred:** Needs a new table, a settle-time hook, and ≥4 weeks of post-expiry data before the calibration is statistically meaningful. Not implementable in a single commit alongside live engine tweaks.
 
 ### OI change (delta) not tracked
 **File:** `engine/indicators.py`  

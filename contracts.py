@@ -229,6 +229,12 @@ class SuggestionEconomics:
     probability_of_profit: float       # 0–100
     estimated_charges:     ChargeBreakdown
     estimated_net_pnl:     float       # max_profit − total charges (best-case net)
+    # Numeric edge score 0–100 (display + ranking only; never gates).
+    # Components keyed by weight name in STRATEGY_CONFIG["edge_score_weights"].
+    edge_score:            float = 0.0
+    edge_score_components: Optional[dict] = None
+    # Credit-to-width grade tag for credit strategies: "weak" | "good" | "strong" | None
+    credit_grade:          Optional[str] = None
 
 
 @dataclass

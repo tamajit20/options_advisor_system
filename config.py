@@ -331,8 +331,63 @@ STRATEGY_CONFIG = {
         "FINNIFTY":   65,
     },
 
-    # Net credit must be at least this fraction of spread width to be viable
+    # Net credit must be at least this fraction of spread width to be viable.
+    # Used as default fallback when a strategy is not in the per-strategy override.
     "min_credit_to_width_ratio": 0.20,   # 20% — e.g. ₹40 credit on ₹200-wide condor
+
+    # Per-strategy credit-to-width minimum — strategies absent from the map fall
+    # back to `min_credit_to_width_ratio`. Tightening one strategy here cannot
+    # affect any other strategy (strict isolation).
+    "strategy_min_credit_to_width_ratio": {
+        "IRON_CONDOR":      0.20,
+        "IRON_BUTTERFLY":   0.30,   # ATM butterfly demands richer credit
+        "BULL_PUT_SPREAD":  0.22,
+        "BEAR_CALL_SPREAD": 0.22,
+        "JADE_LIZARD":      0.25,
+    },
+
+    # Credit-to-width grading tiers (drive edge_score; do not gate).
+    # "weak" range is [hard_min, good); "good" is [good, strong); "strong" is ≥strong.
+    # Values below `min_credit_to_width_ratio` (or per-strategy override) are still
+    # rejected outright in strategy_selector — these tiers refine the GOOD trades.
+    "credit_to_width_grade_thresholds": {
+        "good":   0.25,    # 25–30% → solid premium
+        "strong": 0.30,    # ≥30%   → premium-rich, top tier
+    },
+
+    # ---------------------------------------------------------------
+    # Per-strategy "real edge" IV/HV threshold for BUYING regime.
+    # Mirrors `strategy_iv_premium_buy_max` but represents the *upper bound*
+    # for "real buying edge" (vs the regime-wide PASS threshold of 1.00).
+    # Used by edge_score AND as a soft veto in strategy_selector when
+    # iv_premium > buy_pass × (1 + iv_premium_buy_pass_tolerance) in the
+    # buying regime. Strategies absent from the map skip the veto.
+    # ---------------------------------------------------------------
+    "strategy_iv_premium_buy_pass": {
+        "LONG_STRADDLE":     0.85,   # IV ≤ 85% of HV → real edge for long premium
+        "LONG_STRANGLE":     0.85,
+        "LONG_CALL":         0.90,   # naked long single leg — slightly more lenient
+        "LONG_PUT":          0.90,
+        "BULL_CALL_SPREAD":  0.95,   # debit vertical — short leg offsets some IV
+        "BEAR_PUT_SPREAD":   0.95,
+    },
+    # Tolerance buffer above the per-strategy buy_pass threshold before vetoing.
+    # LONG_STRADDLE buy_pass=0.85 × (1 + 0.15) = 0.978× ceiling — keeps
+    # strategies near the edge alive while culling clearly marginal IV regimes.
+    # Strategy isolation: tightening this affects all per-strategy buy_pass
+    # users uniformly; per-strategy thresholds remain independent.
+    "iv_premium_buy_pass_tolerance": 0.15,
+
+    # ---------------------------------------------------------------
+    # Edge score — numeric quality score 0–100 (display + ranking only;
+    # never blocks a suggestion). Component weights MUST sum to ≤100.
+    # ---------------------------------------------------------------
+    "edge_score_weights": {
+        "pop":             40.0,   # PoP (probability of profit, 0–100)
+        "credit_or_debit": 25.0,   # credit-to-width grade (credit) OR debit-discount (debit)
+        "iv_alignment":    20.0,   # IV regime alignment (writing: IV/HV high; buying: IV/HV low)
+        "confidence":      15.0,   # soft-pass count above the strategy's required minimum
+    },
 
     # Take-profit threshold for exit engine (fraction of max profit)
     "take_profit_fraction": 0.80,   # default fallback when strategy not in override map
@@ -754,6 +809,13 @@ def _validate() -> None:
     assert 0.0 < STRATEGY_CONFIG["risk_free_rate"] < 1.0, "risk_free_rate out of range"
     assert STRATEGY_CONFIG["iv_rank_buying_max"] < STRATEGY_CONFIG["iv_rank_writing_min"], \
         "iv_rank gates overlap"
+    # Edge-score weights must sum to ≤100 (allows future components without overflow).
+    _w = STRATEGY_CONFIG.get("edge_score_weights", {}) or {}
+    assert sum(_w.values()) <= 100.0 + 1e-9, "edge_score_weights sum to >100"
+    # Credit-to-width grading tiers must be ordered.
+    _t = STRATEGY_CONFIG.get("credit_to_width_grade_thresholds", {}) or {}
+    if _t:
+        assert _t.get("good", 0) < _t.get("strong", 1), "credit_to_width grade tiers misordered"
     assert 0.0 <= ZERODHA_CONFIG["gst_pct"] < 1.0
     assert DASHBOARD_CONFIG["port"] != 5000, "5001 is the dedicated options port"
 
