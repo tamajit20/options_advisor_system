@@ -38,12 +38,14 @@ from lifecycle.download_orchestrator import (
 from lifecycle.events_seeder import run_events_seed
 from lifecycle.exit_orchestrator import run_exit_engine
 from lifecycle.iv_orchestrator import run_iv_calculation
+from lifecycle.event_eve_review import run_event_eve_review
+from lifecycle.zerodha_relogin_reminder import run_zerodha_relogin_reminder
 from lifecycle.snapshot_orchestrator import (
     run_drift_verifier,
     run_intraday_close_snapshot,
 )
 from lifecycle.intraday_validator import run_intraday_validator
-from lifecycle.suggestion_engine import run_suggestion_engine
+from lifecycle.suggestion_engine import run_live_suggestion_engine, run_suggestion_engine
 from simulation.simulator import run_simulation_update
 from utils import now_ist, today_ist
 
@@ -84,6 +86,19 @@ def _run_job(
     db = SQLServerConnection()
     try:
         db.connect()
+        # Phase 3 — #6: data-based freshness gate. Independent of the
+        # in-process `_LAST_STATUS` dict (which is empty after a process
+        # restart). For each upstream we run a registered probe against
+        # the DB; if the data isn't present yet we skip with a clear
+        # reason rather than running on stale inputs.
+        if requires:
+            stale = _check_data_freshness(db, requires)
+            if stale is not None:
+                _record_skipped_with_db(
+                    db, job_id, job_name,
+                    f"data not fresh for upstream {stale}",
+                )
+                return
         job_log = JobLogRepo(db)
         notif = NotificationRepo(db)
         job_log.start(job_id, job_name)
@@ -120,21 +135,90 @@ def _run_job(
 
 
 def _record_skipped(job_id: str, job_name: str, upstream: str) -> None:
+    """Open a fresh DB connection to record SKIPPED. Use when no
+    connection is available (e.g. early in `_run_job` before connect)."""
     db = SQLServerConnection()
     try:
         db.connect()
-        JobLogRepo(db).start(job_id, job_name)
-        JobLogRepo(db).finish(
-            job_id, "SKIPPED",
-            error_message=f"Upstream {upstream} failed",
+        _record_skipped_with_db(
+            db, job_id, job_name,
+            f"Upstream {upstream} failed",
         )
-        db.commit()
-        _LAST_STATUS[job_name] = "SKIPPED"
-        logger.warning("Job %s SKIPPED — upstream %s failed", job_id, upstream)
     except Exception:
         logger.exception("Failed to record skipped job %s", job_id)
     finally:
         db.close()
+
+
+def _record_skipped_with_db(
+    db: SQLServerConnection,
+    job_id: str,
+    job_name: str,
+    reason: str,
+) -> None:
+    """Record SKIPPED on an already-open connection. Used by data-freshness
+    gate so we don't open a second connection mid-run."""
+    try:
+        JobLogRepo(db).start(job_id, job_name)
+        JobLogRepo(db).finish(job_id, "SKIPPED", error_message=reason[:500])
+        db.commit()
+        _LAST_STATUS[job_name] = "SKIPPED"
+        logger.warning("Job %s SKIPPED — %s", job_id, reason)
+    except Exception:
+        logger.exception("Failed to record skipped job %s", job_id)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — #6: data-freshness probes
+# ---------------------------------------------------------------------------
+# Maps an upstream-job-name to a predicate that returns True iff that job's
+# output data is present and current (today's IST trade date). Survives
+# process restarts because it queries the DB rather than the in-memory
+# `_LAST_STATUS` dict. Probes are best-effort: a probe that raises is
+# treated as "data unavailable" and downstream is skipped with that reason.
+def _probe_fo_bhav(db: SQLServerConnection) -> bool:
+    from database.models import FoEodRepo
+    return FoEodRepo(db).latest_trade_date() == today_ist()
+
+
+def _probe_spot_bhav(db: SQLServerConnection) -> bool:
+    from database.models import SpotEodRepo
+    row = SpotEodRepo(db).latest("NIFTY") or {}
+    return row.get("trade_date") == today_ist()
+
+
+def _probe_iv_calculation(db: SQLServerConnection) -> bool:
+    from database.models import IvHistoryRepo
+    return IvHistoryRepo(db).latest_trade_date() == today_ist()
+
+
+_DATA_PROBES: dict[str, Callable[[SQLServerConnection], bool]] = {
+    "fo_bhav_download":   _probe_fo_bhav,
+    "spot_bhav_download": _probe_spot_bhav,
+    "iv_calculation":     _probe_iv_calculation,
+}
+
+
+def _check_data_freshness(
+    db: SQLServerConnection,
+    upstreams: list[str],
+) -> Optional[str]:
+    """Return the first upstream whose data is missing/stale, or None
+    if every probed upstream is fresh. Upstreams without a registered
+    probe are silently skipped (only the in-process status gate covers
+    them). Probe exceptions count as "stale"."""
+    for up in upstreams:
+        probe = _DATA_PROBES.get(up)
+        if probe is None:
+            continue
+        try:
+            ok = bool(probe(db))
+        except Exception:
+            logger.exception("data-freshness probe for %s raised", up)
+            ok = False
+        if not ok:
+            return up
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -150,10 +234,14 @@ def job_iv():         _run_job("iv_calculation",     run_iv_calculation,
                                requires=["fo_bhav_download", "spot_bhav_download"])
 def job_suggestion(): _run_job("suggestion_engine",  run_suggestion_engine,
                                requires=["iv_calculation"])
+def job_live_suggestion(): _run_job("live_suggestion_engine", run_live_suggestion_engine)
 def job_simulation(): _run_job("simulation_update",  run_simulation_update)
 def job_exit():       _run_job("exit_engine",        run_exit_engine,
                                requires=["fo_bhav_download"])
 def job_events_seed(): _run_job("events_seed",       run_events_seed)
+def job_event_eve_review(): _run_job("event_eve_review", run_event_eve_review)
+def job_zerodha_relogin_reminder():
+    _run_job("zerodha_relogin_reminder", run_zerodha_relogin_reminder)
 
 
 def job_intraday_close_snapshot():
@@ -203,10 +291,19 @@ JOB_FUNCS = {
     "vix_download":       job_vix,
     "fii_download":       job_fii,
     "iv_calculation":     job_iv,
-    "suggestion_engine":  job_suggestion,
-    "simulation_update":  job_simulation,
+    "suggestion_engine":       job_suggestion,
+    "live_suggestion_engine":  job_live_suggestion,
+    # Phase 3 — #1: extra intraday windows. All map to the same handler;
+    # config.py keys these separately so we can enable/disable each
+    # window and assign unique cron triggers.
+    "live_suggestion_engine_0945": job_live_suggestion,
+    "live_suggestion_engine_1300": job_live_suggestion,
+    "live_suggestion_engine_1430": job_live_suggestion,
+    "simulation_update":       job_simulation,
     "exit_engine":        job_exit,
     "events_seed":        job_events_seed,
+    "event_eve_review":   job_event_eve_review,
+    "zerodha_relogin_reminder": job_zerodha_relogin_reminder,
     "weekly_cleanup":     job_weekly_cleanup,
     "intraday_close_snapshot": job_intraday_close_snapshot,
     "drift_verifier":          job_drift_verifier,

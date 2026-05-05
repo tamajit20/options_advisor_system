@@ -58,10 +58,33 @@ def select_strategy(
     iv_naked_long_max = STRATEGY_CONFIG.get("iv_rank_naked_long_max", 20.0)
     pcr_bull = STRATEGY_CONFIG.get("pcr_strong_bullish_below", 0.55)
     pcr_bear = STRATEGY_CONFIG.get("pcr_strong_bearish_above", 1.55)
+    iv_traj_bias = STRATEGY_CONFIG.get("iv_traj_bias_slope_pct", 0.3)
 
     pcr = getattr(indicators, "pcr", 1.0)
     strong_bullish = pcr < pcr_bull
     strong_bearish = pcr > pcr_bear
+
+    # Trajectory bias (live-mode only — None in EOD mode).
+    # Sustained rising IV near the buying boundary → push into BUYING regime
+    # (debit spreads / longs). Sustained falling IV near the writing boundary →
+    # push into WRITING regime (credit spreads). Bias only applies when
+    # iv_rank is in the ambiguous mid-zone (within 5 points of either boundary)
+    # — well-classified rank values are not overridden.
+    iv_slope = getattr(indicators, "atm_iv_slope_5min", None)
+    iv_persist = getattr(indicators, "atm_iv_persistence", None)
+    if iv_slope is not None and iv_persist is not None and iv_persist >= 0.7:
+        # Near buying boundary, IV rising sustainedly → treat as buying regime.
+        if (
+            iv_slope > iv_traj_bias
+            and iv_buying_max <= iv_rank < iv_buying_max + 5
+        ):
+            iv_rank = iv_buying_max - 0.1   # nudge into buying
+        # Near writing boundary, IV falling sustainedly → treat as writing regime.
+        if (
+            iv_slope < -iv_traj_bias
+            and iv_writing_min - 5 < iv_rank <= iv_writing_min
+        ):
+            iv_rank = iv_writing_min + 0.1  # nudge into writing
 
     # ---------- WRITING regime (high IV) ----------
     if iv_rank > iv_writing_min:
@@ -172,6 +195,7 @@ def assemble_suggestion(
     spot_data_date: date | None = None,
     fii_data_date: date | None = None,
     vix_data_date: date | None = None,
+    oi_pcr_change: float | None = None,
 ) -> Suggestion:
     """Top-level: select strategy, build legs, compute economics, return Suggestion.
 
@@ -334,6 +358,7 @@ def assemble_suggestion(
         spot_data_date=spot_data_date,
         fii_data_date=fii_data_date,
         vix_data_date=vix_data_date,
+        oi_pcr_change=oi_pcr_change,
     )
 
 

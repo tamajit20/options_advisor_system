@@ -125,6 +125,34 @@ class MarketIndicators:
     adx_14:           Optional[float] = None  # ADX-14 trend strength; None = insufficient history
     sma20_slope_pct:  Optional[float] = None  # SMA20 5-day slope as % of price; None = insufficient history
     sma_diff_pct:     Optional[float] = None  # (SMA20 - SMA50) / SMA50 * 100; None = insufficient history
+    oi_pcr_change:    Optional[float] = None  # ΣΔPut OI / ΣΔCall OI — >1 puts building, <1 calls building; None = not available
+    # Trajectory fields (populated only in live mode when WS history is present).
+    # All None in EOD mode and when the 5-min table has < 3 samples for the underlying/expiry.
+    oi_pcr_slope_5min:    Optional[float] = None  # % per sample slope of oi_pcr_change over recent window
+    oi_pcr_persistence:   Optional[float] = None  # 0..1 directional persistence of OI PCR deltas
+    atm_iv_slope_5min:    Optional[float] = None  # % per sample slope of ATM IV
+    atm_iv_persistence:   Optional[float] = None  # 0..1 directional persistence of ATM IV
+    atm_call_spread_bps:  Optional[float] = None  # current ATM call bid-ask spread (bps of mid)
+    atm_put_spread_bps:   Optional[float] = None  # current ATM put bid-ask spread (bps of mid)
+    volume_burst_z:       Optional[float] = None  # z-score of last-bucket volume vs trailing window mean
+
+
+@dataclass
+class ChainTrajectory:
+    """Bundle of recent 5-min snapshots passed into `build_indicators` to
+    populate the live trajectory fields. Built by the live suggestion engine
+    from `ChainTimeseriesRepo` + `AtmIvTimeseriesRepo`.
+
+    Each list is in chronological order (oldest first). Lists may be empty
+    (no history yet) — callers should treat that as "no trajectory signal"
+    and leave the indicator fields at None.
+    """
+    oi_pcr_change_series:   List[Optional[float]] = field(default_factory=list)
+    atm_iv_series:          List[Optional[float]] = field(default_factory=list)
+    call_volume_series:     List[Optional[float]] = field(default_factory=list)
+    put_volume_series:      List[Optional[float]] = field(default_factory=list)
+    latest_call_spread_bps: Optional[float] = None
+    latest_put_spread_bps:  Optional[float] = None
 
 
 @dataclass
@@ -226,6 +254,7 @@ class Suggestion:
     spot_data_date:   Optional[date] = None  # actual trade_date of the spot row used
     fii_data_date:    Optional[date] = None  # actual trade_date of the FII row used
     vix_data_date:    Optional[date] = None  # trade_date of the most recent VIX row used
+    oi_pcr_change:    Optional[float] = None  # OI change momentum: ΣΔPut OI / ΣΔCall OI (EOD=day-over-day, LIVE=since open)
 
 
 @dataclass

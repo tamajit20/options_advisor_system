@@ -70,12 +70,14 @@ _VIX_SYMBOL = "VIX"
 # Trigger keys (used for dedup and rendering).
 _TRIGGER_VIX = "VIX_MOVE"
 _TRIGGER_SPOT = "SPOT_MOVE"
+_TRIGGER_IV = "IV_MOVE"
 
 
 @dataclass
 class _Baselines:
     """First observed tick per (symbol, ist_date). Cleared on day rollover."""
     spot:    Dict[Tuple[str, date], float] = field(default_factory=dict)
+    iv:      Dict[Tuple[str, date], float] = field(default_factory=dict)
     fired:   Set[Tuple[str, str, date]]    = field(default_factory=set)
     # ^ {(trigger_kind, symbol, ist_date)} — one alert per kind+symbol+day
     last_day: Optional[date] = None
@@ -107,6 +109,7 @@ class OpportunityRegenWatcher:
         event_bus: Optional[EventBus] = None,
         vix_threshold_pct: Optional[float] = None,
         spot_threshold_pct: Optional[float] = None,
+        iv_threshold_vol_points: Optional[float] = None,
         clock: Callable[[], datetime] = now_ist,
     ):
         self._notifier = notifier
@@ -122,8 +125,15 @@ class OpportunityRegenWatcher:
             if spot_threshold_pct is not None
             else STRATEGY_CONFIG.get("regen_spot_pct_threshold", 0.7)
         )
+        self._iv_threshold = float(
+            iv_threshold_vol_points
+            if iv_threshold_vol_points is not None
+            else STRATEGY_CONFIG.get("regen_iv_pct_threshold", 5.0)
+        )
         if self._vix_threshold <= 0 or self._spot_threshold <= 0:
             raise ValueError("thresholds must be positive percentages")
+        if self._iv_threshold <= 0:
+            raise ValueError("iv threshold must be positive")
         self._lock = threading.Lock()
         self._state = _Baselines()
         self._unsub: Optional[Callable[[], None]] = None
@@ -158,6 +168,66 @@ class OpportunityRegenWatcher:
             self._on_tick_locked(quote)
         except Exception:
             logger.exception("OpportunityRegenWatcher: on_tick swallowed exception")
+
+    # ------------------------------------------------------------------ IV path
+    def on_iv_observation(self, symbol: str, iv_pct: float) -> None:
+        """Phase 3 — #1: feed a fresh ATM-IV observation (in vol points,
+        e.g. 14.5 means 14.5%). When the day's |Δ IV| crosses
+        ``regen_iv_pct_threshold`` we fire ``OPPORTUNITY_REGEN_HINT`` once
+        per (symbol, day). Driver code (e.g. a 5-minute scheduler poll
+        reading ``options_atm_iv_5min``) should call this method on each
+        new observation. Must NEVER raise — fail-open like ``on_tick``."""
+        try:
+            self._on_iv_locked(symbol, float(iv_pct))
+        except Exception:
+            logger.exception(
+                "OpportunityRegenWatcher: on_iv_observation swallowed exception"
+            )
+
+    def _on_iv_locked(self, symbol: str, iv_pct: float) -> None:
+        if not symbol or iv_pct <= 0:
+            return
+        today = self._clock().date()
+        with self._lock:
+            self._roll_day_locked(today)
+            key = (symbol, today)
+            baseline = self._state.iv.get(key)
+            if baseline is None:
+                self._state.iv[key] = iv_pct
+                logger.debug(
+                    "OpportunityRegenWatcher: IV baseline %s = %.2f",
+                    symbol, iv_pct,
+                )
+                return
+            delta = iv_pct - baseline
+            if abs(delta) < self._iv_threshold:
+                return
+            dedup_key = (_TRIGGER_IV, symbol, today)
+            if dedup_key in self._state.fired:
+                return
+            self._state.fired.add(dedup_key)
+
+        # Outside the lock — slow notifier never blocks polling.
+        title = (
+            f"{symbol} ATM IV moved {delta:+.2f} vol pts — review opportunity"
+        )
+        body = (
+            f"{symbol} IV baseline={baseline:.2f}% current={iv_pct:.2f}% "
+            f"Δ={delta:+.2f} (threshold ±{self._iv_threshold:.2f} vol pts)\n"
+            f"Morning suggestions for {today} were priced at the baseline "
+            f"vol; consider re-running the suggestion engine."
+        )
+        try:
+            self._notifier.notify(
+                "OPPORTUNITY_REGEN_HINT",
+                "INFO",
+                title,
+                body,
+            )
+        except Exception:
+            logger.exception(
+                "OpportunityRegenWatcher: notifier raised on IV/%s", symbol,
+            )
 
     def _on_tick_locked(self, quote: LiveQuote) -> None:
         # Only spot/index ticks; option ticks have option_type set.
@@ -224,6 +294,7 @@ class OpportunityRegenWatcher:
             self._state.last_day, today,
         )
         self._state.spot.clear()
+        self._state.iv.clear()
         self._state.fired.clear()
         self._state.last_day = today
 

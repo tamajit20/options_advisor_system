@@ -454,12 +454,28 @@ function renderPlainEnglishStructured(s) {
   }
   if (s.trigger_type) {
     const label = s.trigger_type === 'EOD_RUN'              ? 'EOD'
+                : s.trigger_type === 'LIVE_RUN'             ? 'Live 10:30'
                 : s.trigger_type === 'INTRADAY_VALIDATOR'   ? '09:35 check'
                 : s.trigger_type === 'WS_REGEN'             ? 'Tick regen'
                 : s.trigger_type === 'MANUAL'               ? 'Manual'
                 : s.trigger_type;
     const tip = s.trigger_reason ? `Trigger: ${s.trigger_type}\n${s.trigger_reason}` : `Trigger: ${s.trigger_type}`;
     chips.push(`<span class="ctx-chip" title="${escapeHtml(tip)}">${escapeHtml(label)}</span>`);
+  }
+  // OI change momentum: ΣΔPut OI / ΣΔCall OI
+  // EOD = day-over-day change; Live = since market open today.
+  if (s.oi_pcr_change != null) {
+    const v = parseFloat(s.oi_pcr_change);
+    const label = v.toFixed(2);
+    const cls   = v > 1.2  ? 'ctx-chip ctx-fail'   // puts building → bearish pressure
+                : v < 0.8  ? 'ctx-chip ctx-pass'   // calls building → bullish positioning
+                :            'ctx-chip ctx-warn';   // balanced
+    const srcLabel = (s.trigger_type === 'LIVE_RUN') ? 'since open' : 'day-over-day';
+    const tip = `OI Change PCR (${srcLabel}): ${label}\n`
+              + `>1.2 → puts building faster (bearish hedge)\n`
+              + `0.8–1.2 → balanced OI addition\n`
+              + `<0.8 → calls building faster (bullish positioning)`;
+    chips.push(`<span class="${cls}" title="${escapeHtml(tip)}">OI\u0394 PCR ${escapeHtml(label)}</span>`);
   }
   if (s.confidence_score != null) {
     let _warnCount = 0, _errorCount = 0, _failCount = 0, _softFailCount = 0, _total = 7, _passCount = null;
@@ -1570,6 +1586,9 @@ async function loadTrades() {
       return;
     }
     c.className=''; c.innerHTML = data.trades.map(renderTrade).join('');
+    // Phase 3 — #3: open SSE stream once after each trades render so live
+    // MTM cells (.live-mtm[data-trade-id="..."]) update without polling.
+    ensureLiveMTMStream();
     bindConfChips();
     $$('.btn-resuggest').forEach(b => b.addEventListener('click', async e => {
       const id = e.target.dataset.tradeId;
@@ -2055,6 +2074,7 @@ function renderTrade(t) {
         ${hasPendingClose ? `<span class="tag tag-warn" title="Record exit prices to compute P&L">CLOSE PENDING</span>` : ''}
         <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
+        <span class="tag live-mtm" data-trade-id="${escapeHtml(t.trade_id)}" title="Live MTM (updates from broker WS)">\u2014</span>
       </div>
     </div>
     <div class="card-id-row">
@@ -2539,6 +2559,34 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
+}
+
+// ---------------- Phase 3 #3: Live MTM SSE consumer ----------------
+let _liveMTMSource = null;
+function ensureLiveMTMStream() {
+  if (_liveMTMSource && _liveMTMSource.readyState !== 2 /* CLOSED */) return;
+  try {
+    _liveMTMSource = new EventSource('/api/live/mtm');
+    _liveMTMSource.onmessage = (ev) => {
+      try {
+        const m = JSON.parse(ev.data);
+        document.querySelectorAll(
+          `.live-mtm[data-trade-id="${m.trade_id}"]`
+        ).forEach(el => {
+          el.textContent = '\u20b9' + Number(m.mtm).toLocaleString('en-IN');
+          el.classList.toggle('mtm-pos', m.mtm > 0);
+          el.classList.toggle('mtm-neg', m.mtm < 0);
+          if (m.as_of) el.title = 'as of ' + m.as_of;
+        });
+      } catch (_) { /* malformed event — ignore */ }
+    };
+    _liveMTMSource.onerror = () => {
+      // Browser auto-reconnects; just clear stale ref so next render reopens.
+      if (_liveMTMSource && _liveMTMSource.readyState === 2) {
+        _liveMTMSource = null;
+      }
+    };
+  } catch (_) { /* SSE unsupported — silently degrade */ }
 }
 
 // ---------------- Tab 6: Jobs (scheduler monitor + manual trigger) ----------------

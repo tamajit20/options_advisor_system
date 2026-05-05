@@ -253,3 +253,68 @@ def test_pcr_band_cross_triggers_regen_hint():
     chain OI on each SubscriptionManager reload (or a separate intraday
     chain-OI fetch job)."""
     pass
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — #1 IV-driven regen
+# ---------------------------------------------------------------------------
+class TestIVTrigger:
+    def test_first_observation_seeds_baseline_no_alert(self):
+        w, notif, _ = _make_watcher()
+        w.on_iv_observation("NIFTY", 14.0)
+        assert notif.events == []
+
+    def test_iv_jump_above_threshold_fires(self):
+        w, notif, _ = _make_watcher()
+        w.on_iv_observation("NIFTY", 14.0)
+        w.on_iv_observation("NIFTY", 19.5)  # +5.5 vol pts (default 5.0)
+        assert len(notif.events) == 1
+        e = notif.events[0]
+        assert e["type"] == "OPPORTUNITY_REGEN_HINT"
+        assert "NIFTY" in e["title"]
+        assert "vol pts" in e["title"]
+
+    def test_iv_drop_below_negative_threshold_fires(self):
+        w, notif, _ = _make_watcher()
+        w.on_iv_observation("BANKNIFTY", 22.0)
+        w.on_iv_observation("BANKNIFTY", 16.5)  # -5.5 vol pts
+        assert len(notif.events) == 1
+        assert "-5.50" in notif.events[0]["title"] or "BANKNIFTY" in notif.events[0]["title"]
+
+    def test_below_threshold_no_fire(self):
+        w, notif, _ = _make_watcher()
+        w.on_iv_observation("NIFTY", 14.0)
+        w.on_iv_observation("NIFTY", 18.0)  # +4.0 vol pts < 5.0
+        assert notif.events == []
+
+    def test_one_alert_per_symbol_per_day(self):
+        w, notif, _ = _make_watcher()
+        w.on_iv_observation("NIFTY", 14.0)
+        w.on_iv_observation("NIFTY", 20.0)  # +6 fires
+        w.on_iv_observation("NIFTY", 22.0)  # already fired, suppressed
+        assert len(notif.events) == 1
+
+    def test_independent_per_symbol(self):
+        w, notif, _ = _make_watcher()
+        w.on_iv_observation("NIFTY", 14.0)
+        w.on_iv_observation("BANKNIFTY", 22.0)
+        w.on_iv_observation("NIFTY", 20.0)       # +6 vol pts → fires
+        w.on_iv_observation("BANKNIFTY", 28.5)   # +6.5 → fires
+        assert len(notif.events) == 2
+
+    def test_invalid_inputs_swallowed(self):
+        w, notif, _ = _make_watcher()
+        w.on_iv_observation("", 14.0)
+        w.on_iv_observation("NIFTY", 0.0)
+        w.on_iv_observation("NIFTY", -1.0)
+        assert notif.events == []
+
+    def test_day_rollover_clears_iv_baseline(self):
+        w, notif, current = _make_watcher(day=date(2026, 5, 4))
+        w.on_iv_observation("NIFTY", 14.0)
+        current["day"] = date(2026, 5, 5)
+        w.on_iv_observation("NIFTY", 19.0)  # new day → re-baseline, no fire
+        assert notif.events == []
+        w.on_iv_observation("NIFTY", 25.0)  # +6 vs new baseline → fire
+        assert len(notif.events) == 1
+

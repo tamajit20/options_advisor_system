@@ -39,6 +39,11 @@ Pick up from here in future development sessions.
 **Issue:** No automated intraday monitoring. SL breaches can only be caught manually.  
 **Fix:** Add intraday scheduler job (09:30–15:00 IST, every 30 min) that fetches live NSE option chain JSON and alerts if MTM loss ≥ premium SL or spot crosses the SL level. NSE option chain is publicly accessible without auth (no broker API needed).
 
+### LiveRiskMonitor — per-leg sanity check on tick prices
+**File:** `lifecycle/live_risk_monitor.py`  
+**Issue:** A single fat-finger tick (10× normal price) can fire a spurious SL_TRIGGER. The monitor accepts whatever LTP the WebSocket delivers without sanity-checking against the prior tick or against a band around the leg's prior close.  
+**Fix:** Maintain a `prev_ltp` per leg; reject a tick if `abs(ltp - prev_ltp) / prev_ltp > 0.50` (configurable). Also reject ticks where ltp ≤ 0. Log rejections under counter `bad_ticks_skipped`. Add test for fat-finger rejection.
+
 ### No VIX regime / slope filter on Iron Condor entry
 **Files:** `engine/indicators.py`, `engine/strategy_selector.py`  
 **Issue:** High IV Rank during a VIX spike ≠ safe to sell premium — the market is pricing in *continued* large moves. Engine currently treats all high-IV-rank environments the same.  
@@ -47,6 +52,16 @@ Pick up from here in future development sessions.
 ### Greek drift tracking on open trades
 **Issue:** Greeks (vega/delta/theta) are computed at suggestion time but never tracked on open trades. A trade at 50% profit target but with exploding vega is risky to hold.  
 **Fix:** Add daily Greek recomputation stored against the trade record in `options_trades`.
+
+### Promote IV trajectory gate from SOFT_FAIL → hard FAIL
+**Files:** `engine/confidence.py` → `_iv_trajectory_gate`
+**Issue:** The intraday ATM IV trajectory gate currently emits SOFT_FAIL only (visible but does not block). After 2-3 weeks of accuracy review on production data, evaluate whether sustained rising IV ahead of trade entry is a strong enough signal to harden into a blocking FAIL.
+**Fix:** After review window, change `_FAIL_SOFT` → `_FAIL` in `_iv_trajectory_gate` and add the gate to the hard-fail counter slice so it blocks suggestions.
+
+### Promote OI PCR momentum gate from SOFT_FAIL → hard FAIL
+**Files:** `engine/confidence.py` → `_oi_momentum_gate`
+**Issue:** OI PCR momentum gate currently emits SOFT_FAIL. Same review-and-promote cadence as the IV trajectory gate.
+**Fix:** After 2-3 weeks of accuracy review, harden to `_FAIL` and include in the hard-fail counter slice.
 
 ### OpportunityRegenWatcher — PCR cross trigger
 **File:** `lifecycle/opportunity_regen_watcher.py`  
@@ -96,6 +111,11 @@ Pick up from here in future development sessions.
 ---
 
 ## 🟢 Simulation / Backtesting
+
+### Time-series replay simulator
+**Files:** New `simulation/timeseries_replay.py`
+**Issue:** The 5-min `options_chain_5min` / `options_atm_iv_5min` history enables intraday backtesting against the new trajectory gates, but no replay harness exists. Without it we cannot quantify how often each gate would have fired on historical data, nor whether enabling them as hard FAILs would have helped or hurt P&L.
+**Fix:** Build a replay runner that reconstructs `ChainTrajectory` snapshots at any past `snapshot_at`, feeds them through `engine.confidence.evaluate()`, and tabulates gate-firing frequencies and downstream P&L if those suggestions had been taken.
 
 ### Simulator ignores bid/ask slippage
 **File:** `simulation/simulator.py`  

@@ -173,12 +173,12 @@ class TestLotSizeRepo:
 # ---------------------------------------------------------------------------
 class TestSuggestionRepo:
     def test_next_suggestion_id_format(self, mock_db):
-        mock_db.fetch_one.return_value = {"n": 4}
+        mock_db.fetch_one.return_value = {"m": "SUG-20260430-004"}
         sid = SuggestionRepo(mock_db).next_suggestion_id(date(2026, 4, 30))
         assert sid == "SUG-20260430-005"
 
     def test_next_suggestion_id_starts_at_001_when_empty(self, mock_db):
-        mock_db.fetch_one.return_value = {"n": 0}
+        mock_db.fetch_one.return_value = {"m": None}
         sid = SuggestionRepo(mock_db).next_suggestion_id(date(2026, 4, 30))
         assert sid == "SUG-20260430-001"
 
@@ -186,6 +186,13 @@ class TestSuggestionRepo:
         mock_db.fetch_one.return_value = None
         sid = SuggestionRepo(mock_db).next_suggestion_id(date(2026, 4, 30))
         assert sid == "SUG-20260430-001"
+
+    def test_next_suggestion_id_skips_deleted_rows(self, mock_db):
+        # Regression: even if rows were deleted (count would drop), we must
+        # bump from MAX to avoid PK violation.
+        mock_db.fetch_one.return_value = {"m": "SUG-20260430-007"}
+        sid = SuggestionRepo(mock_db).next_suggestion_id(date(2026, 4, 30))
+        assert sid == "SUG-20260430-008"
 
     def test_has_suggestion_for_with_entry_date_uses_exact_match(self, mock_db):
         mock_db.scalar.return_value = 1
@@ -299,7 +306,7 @@ class TestSafeFloat:
 # ---------------------------------------------------------------------------
 class TestTradeRepo:
     def test_next_trade_id_format(self, mock_db):
-        mock_db.fetch_one.return_value = {"n": 0}
+        mock_db.fetch_one.return_value = {"m": None}
         tid = TradeRepo(mock_db).next_trade_id(date(2026, 4, 30))
         assert tid == "TRD-20260430-001"
 

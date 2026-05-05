@@ -46,7 +46,9 @@ logger = logging.getLogger(__name__)
 # to be dispatched. Keys are uppercase. A missing key means "no gate".
 _TYPE_TO_FLAG = {
     "SL_TRIGGER":             "sl_alerts",
+    "PRE_BREACH_WARNING":     "sl_alerts",
     "PERFECT_CLOSURE":        "closure_alerts",
+    "TARGET_HIT":             "closure_alerts",
     "PERFECT_ENTRY":          "opportunity_alerts",
     "OPPORTUNITY_REGEN_HINT": "opportunity_alerts",
     # 09:35 validator outputs are also gated by opportunity_alerts — they
@@ -62,6 +64,12 @@ _TYPE_TO_FLAG = {
     # Circuit-breaker is a hard system-wide alarm — always show, but it
     # uses sl_alerts as the operator-facing risk-flag bucket.
     "DAILY_PNL_BREACH":       "sl_alerts",
+    # Phase 3 — #5 event-eve pre-emptive review reminder. Risk-side flag.
+    "EVENT_AHEAD_REVIEW":     "sl_alerts",
+    # Phase 3 — #7 dead-man WS watchdog. Operator-critical, risk-side.
+    "WS_DEAD_MAN":            "sl_alerts",
+    # Daily Zerodha re-login reminder — operator-critical (blocks live data).
+    "ZERODHA_RELOGIN_REQUIRED": "sl_alerts",
 }
 
 

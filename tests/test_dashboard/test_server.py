@@ -76,7 +76,8 @@ class TestApiSuggestionToday:
         resp = client.get("/api/suggestion/today")
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data == {"suggestions": []}
+        assert data["suggestions"] == []
+        assert "freshness_minutes" in data
 
     def test_returns_suggestion_with_legs(self, client, mocker):
         sug_row = {

@@ -196,8 +196,9 @@ def _cmd_ws_runner() -> int:
     pushes the union of (active trade legs + today's pending suggestion
     legs + index spots + VIX) into the runner.
     """
-    from config import PROVIDERS_CONFIG, ZERODHA_API_CONFIG
+    from config import PROVIDERS_CONFIG, STRATEGY_CONFIG, ZERODHA_API_CONFIG
     from database.connection import SQLServerConnection
+    from database.models import EventCalendarRepo, TradeRepo
     from database.runtime_flags import FLAG_KILL_SWITCH, RuntimeFlagsRepo
     from lifecycle.intraday_monitor import (
         IntradayMonitor,
@@ -213,9 +214,16 @@ def _cmd_ws_runner() -> int:
     from providers.zerodha.subscription_manager import (
         SubscriptionManager,
         make_db_leg_loader,
+        make_watchlist_leg_loader,
+        merge_leg_loaders,
     )
     from providers.zerodha.ws_runner import KiteWSRunner
     from providers.ws_monitor import WSMonitor, default_snapshot_path
+    from lifecycle.chain_aggregator import ChainTickAggregator
+    from lifecycle.live_risk_monitor import (
+        LiveRiskMonitor,
+        make_db_snapshot_loader as make_db_risk_snapshot_loader,
+    )
 
     if (PROVIDERS_CONFIG.get("active") or "").strip().lower() != "zerodha":
         print("ERROR: --ws-runner requires OPT_PROVIDERS=zerodha")
@@ -249,14 +257,100 @@ def _cmd_ws_runner() -> int:
 
     flags_repo = RuntimeFlagsRepo(db)
 
+    # Shared latest-spot lookup for the watchlist loader. Populated by tick
+    # callbacks via the chain aggregator (see _on_tick → _spots) — but to
+    # avoid coupling, we do a lightweight independent capture here too.
+    _latest_spots: dict = {}
+
+    def _capture_spot(quote) -> None:
+        if quote is None or quote.option_type is not None:
+            return
+        try:
+            _latest_spots[quote.symbol] = float(quote.last_price)
+        except (TypeError, ValueError):
+            pass
+
+    bus.subscribe("tick", _capture_spot)
+
     sub_manager = SubscriptionManager(
         runner=runner,
         instrument_master=master,
-        leg_loader=make_db_leg_loader(db),
+        leg_loader=merge_leg_loaders(
+            make_db_leg_loader(db),
+            make_watchlist_leg_loader(
+                master,
+                underlyings=STRATEGY_CONFIG.get("underlyings", []),
+                spot_lookup=lambda s: _latest_spots.get(s),
+                band_pct=PROVIDERS_CONFIG.get("watchlist_band_pct", 0.05),
+                expiries_per_underlying=int(
+                    PROVIDERS_CONFIG.get("watchlist_expiries_per_underlying", 2)
+                ),
+            ),
+        ),
         interval_seconds=float(
             PROVIDERS_CONFIG.get("ws_subscription_interval_seconds", 60)
         ),
         kill_switch_fn=lambda: flags_repo.get_bool(FLAG_KILL_SWITCH, default=False),
+    )
+
+    # 5-min chain trajectory aggregator — subscribes to TOPIC_TICK, persists
+    # rolling aggregates to options_chain_5min + options_atm_iv_5min for the
+    # live suggestion engine to load as ChainTrajectory.
+    def _expiries_for(sym: str):
+        from datetime import date as _d
+        today = _d.today()
+        return [e for e in master.list_expiries(sym) if e >= today][:2]
+
+    chain_aggregator = ChainTickAggregator(
+        db=db,
+        expiry_provider=_expiries_for,
+        event_bus=bus,
+    )
+
+    # Phase 2c-i — live trade-level SL / target alerter.
+    # Recomputes whole-trade MTM (via engine.exit_engine.evaluate_exit) on
+    # every leg tick and fires SL_TRIGGER / TARGET_HIT through the Notifier.
+    # Never closes the trade automatically; the user closes manually. Once
+    # the trade leaves ACTIVE status the next reload drops it from the
+    # watchlist and alerts stop.
+    def _prime_legs(keys):
+        """Cold-start primer: convert LegKeys → Zerodha symbols → LTP via the
+        facade so the monitor doesn't have to wait for the slowest leg's first
+        tick before evaluating MTM."""
+        out = {}
+        sym_to_key = {}
+        for (underlying, expiry, strike, otype) in keys:
+            inst = master.get_option(underlying, expiry, float(strike), otype)
+            if inst is None:
+                continue
+            sym = f"{inst.exchange}:{inst.tradingsymbol}"
+            sym_to_key[sym] = (underlying, expiry, strike, otype)
+        if not sym_to_key:
+            return out
+        try:
+            quotes = facade.ltp(list(sym_to_key.keys())) or {}
+        except Exception:
+            return out
+        for sym, payload in quotes.items():
+            ltp = (payload or {}).get("last_price")
+            if ltp is None:
+                continue
+            key = sym_to_key.get(sym)
+            if key is not None:
+                out[key] = float(ltp)
+        return out
+
+    live_risk_monitor = LiveRiskMonitor(
+        notifier=build_notifier(db, provider="zerodha"),
+        snapshot_loader=make_db_risk_snapshot_loader(db),
+        prime_loader=_prime_legs,
+        event_bus=bus,
+        # Phase 3 #4 — persist trailing SL ratchets through DB UPDATEs so
+        # the floor survives process restart.
+        trailing_persister=lambda tid, floor, idx: TradeRepo(db).update_trailing(
+            tid, trailing_pnl_floor=floor, trailing_step_idx=idx),
+        # Phase 3 #5 — events_repo for event-eve tightening.
+        events_repo=EventCalendarRepo(db),
     )
 
     # Phase 2b-iii — instant alerts. Subscribes to TOPIC_TICK and dispatches
@@ -287,16 +381,31 @@ def _cmd_ws_runner() -> int:
         status_fn=runner.status,
     )
 
+    # Phase 3 — #7: dead-man watchdog. Polls ws_monitor.snapshot() and
+    # fires a CRITICAL WS_DEAD_MAN notification once per stale-incident.
+    from providers.ws_watchdog import WSWatchdog
+    ws_watchdog = WSWatchdog(
+        snapshot_fn=ws_monitor.snapshot,
+        notifier=build_notifier(db, provider="zerodha"),
+        event_bus=bus,
+    )
+
     print(f"Starting WS runner (user_id={session.user_id})")
     sub_manager.start()
     monitor.start()
     regen_watcher.start()
     ws_monitor.start()
+    ws_watchdog.start()
+    chain_aggregator.start()
+    live_risk_monitor.start()
     try:
         runner.start()
     except KeyboardInterrupt:
         runner.stop()
     finally:
+        live_risk_monitor.stop()
+        chain_aggregator.stop()
+        ws_watchdog.stop()
         ws_monitor.stop()
         regen_watcher.stop()
         monitor.stop()

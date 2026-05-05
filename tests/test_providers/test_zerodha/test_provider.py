@@ -186,9 +186,10 @@ def test_get_vix_historical_delegates(provider, facade_mock, eod_mock):
 # Option chain
 # ---------------------------------------------------------------------------
 def test_get_chain_today_uses_live(provider, facade_mock):
-    facade_mock.ltp.return_value = {
-        "NFO:NIFTY26MAY23000CE": {"last_price": 120.5},
-        "NFO:NIFTY26MAY23000PE": {"last_price": 95.5},
+    # quote() is tried first and returns last_price + oi.
+    facade_mock.quote.return_value = {
+        "NFO:NIFTY26MAY23000CE": {"last_price": 120.5, "oi": 500_000},
+        "NFO:NIFTY26MAY23000PE": {"last_price": 95.5,  "oi": 600_000},
     }
     rows = provider.get_chain("NIFTY", _today_ist(), date(2026, 5, 28))
     assert len(rows) == 2
@@ -199,10 +200,29 @@ def test_get_chain_today_uses_live(provider, facade_mock):
     by_type = {r["option_type"]: r for r in rows}
     assert by_type["CE"]["close_price"] == 120.5
     assert by_type["PE"]["close_price"] == 95.5
+    assert by_type["CE"]["open_interest"] == 500_000
+    assert by_type["PE"]["open_interest"] == 600_000
+    facade_mock.ltp.assert_not_called()  # quote() succeeded, ltp() not needed
+
+
+def test_get_chain_falls_back_to_ltp_when_quote_fails(provider, facade_mock, eod_mock):
+    """If quote() raises, get_chain retries with ltp() (OI will be None)."""
+    from exceptions import ProviderError
+    facade_mock.quote.side_effect = ProviderError("quota exceeded")
+    facade_mock.ltp.return_value = {
+        "NFO:NIFTY26MAY23000CE": {"last_price": 120.5},
+        "NFO:NIFTY26MAY23000PE": {"last_price": 95.5},
+    }
+    rows = provider.get_chain("NIFTY", _today_ist(), date(2026, 5, 28))
+    assert len(rows) == 2
+    assert all(r["open_interest"] is None for r in rows)
+    facade_mock.ltp.assert_called_once()
+    eod_mock.get_chain.assert_not_called()
 
 
 def test_get_chain_historical_delegates(provider, facade_mock, eod_mock):
     provider.get_chain("NIFTY", date(2025, 1, 1), date(2025, 1, 30))
+    facade_mock.quote.assert_not_called()
     facade_mock.ltp.assert_not_called()
     eod_mock.get_chain.assert_called_once_with("NIFTY", date(2025, 1, 1), date(2025, 1, 30))
 
@@ -214,14 +234,78 @@ def test_get_chain_no_instruments_falls_back(provider, eod_mock):
 
 
 def test_get_chain_caches(provider, facade_mock):
-    facade_mock.ltp.return_value = {
-        "NFO:NIFTY26MAY23000CE": {"last_price": 120.5},
-        "NFO:NIFTY26MAY23000PE": {"last_price": 95.5},
+    facade_mock.quote.return_value = {
+        "NFO:NIFTY26MAY23000CE": {"last_price": 120.5, "oi": 500_000},
+        "NFO:NIFTY26MAY23000PE": {"last_price": 95.5,  "oi": 600_000},
     }
     today = _today_ist()
     provider.get_chain("NIFTY", today, date(2026, 5, 28))
     provider.get_chain("NIFTY", today, date(2026, 5, 28))
-    assert facade_mock.ltp.call_count == 1
+    assert facade_mock.quote.call_count == 1  # second call served from cache
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 #8 — NSE live failsafe path
+# ---------------------------------------------------------------------------
+def _make_provider_with_live(eod_mock, facade_mock, im_mock, live_mock):
+    return ZerodhaProvider(
+        eod_fallback=eod_mock,
+        facade=facade_mock,
+        instrument_master=im_mock,
+        cache=TTLCache(default_ttl_seconds=5.0),
+        live_fallback=live_mock,
+    )
+
+
+def test_get_chain_uses_live_failsafe_before_eod_when_quote_and_ltp_fail(
+    eod_mock, facade_mock, im_mock,
+):
+    live_mock = MagicMock(name="nse_live")
+    live_mock.get_chain.return_value = [
+        {"strike": 23000.0, "option_type": "CE", "last_price": 110.0,
+         "settle_price": 110.0, "_source": "live", "_provider": "nse_live"},
+    ]
+    p = _make_provider_with_live(eod_mock, facade_mock, im_mock, live_mock)
+    facade_mock.quote.return_value = {}  # no data
+    facade_mock.ltp.return_value = {}    # no data
+    rows = p.get_chain("NIFTY", _today_ist(), date(2026, 5, 28))
+    live_mock.get_chain.assert_called_once()
+    eod_mock.get_chain.assert_not_called()
+    assert rows[0]["_provider"] == "nse_live"
+
+
+def test_get_chain_falls_through_to_eod_when_live_failsafe_returns_empty(
+    eod_mock, facade_mock, im_mock,
+):
+    live_mock = MagicMock(name="nse_live")
+    live_mock.get_chain.return_value = []
+    p = _make_provider_with_live(eod_mock, facade_mock, im_mock, live_mock)
+    facade_mock.quote.return_value = {}
+    facade_mock.ltp.return_value = {}
+    p.get_chain("NIFTY", _today_ist(), date(2026, 5, 28))
+    live_mock.get_chain.assert_called_once()
+    eod_mock.get_chain.assert_called_once()
+
+
+def test_get_chain_falls_through_to_eod_when_live_failsafe_raises(
+    eod_mock, facade_mock, im_mock,
+):
+    live_mock = MagicMock(name="nse_live")
+    live_mock.get_chain.side_effect = RuntimeError("NSE down")
+    p = _make_provider_with_live(eod_mock, facade_mock, im_mock, live_mock)
+    facade_mock.quote.return_value = {}
+    facade_mock.ltp.return_value = {}
+    p.get_chain("NIFTY", _today_ist(), date(2026, 5, 28))
+    eod_mock.get_chain.assert_called_once()
+
+
+def test_get_chain_no_live_fallback_still_uses_eod(provider, eod_mock, facade_mock):
+    """Backwards-compat: provider built without `live_fallback` still falls
+    back directly to EOD."""
+    facade_mock.quote.return_value = {}
+    facade_mock.ltp.return_value = {}
+    provider.get_chain("NIFTY", _today_ist(), date(2026, 5, 28))
+    eod_mock.get_chain.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

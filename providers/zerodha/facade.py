@@ -92,6 +92,12 @@ class KiteFacade:
         keys. The single live-market call we issue."""
         return self._kite.ltp(list(keys))
 
+    def quote(self, keys: Iterable[str]) -> dict:
+        """Return full market quote (including `oi`) for a list of
+        `EXCHANGE:TRADINGSYMBOL` keys.  Kite rate-limit: 1 req/sec.
+        Superset of `ltp` — use this when open_interest is needed."""
+        return self._kite.quote(list(keys))
+
     # ------------------------------------------------------------------
     # Read-only metadata
     # ------------------------------------------------------------------

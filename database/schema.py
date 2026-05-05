@@ -605,6 +605,29 @@ _TABLE_DDL: List[str] = [
     ALTER TABLE options_trades ADD time_from_suggestion_sec INT NULL
     """,
 
+    # Live risk monitor — per-trade alert silencing. When set in the future,
+    # the live SL/Target alerter suppresses notifications for this trade
+    # until the timestamp passes (e.g. user wants to ride out an SL).
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'alerts_silenced_until')
+    ALTER TABLE options_trades ADD alerts_silenced_until DATETIME2(0) NULL
+    """,
+
+    # Phase 3 — Trailing SL (#4). Persisted PnL floor that ratchets up as
+    # the trade reaches profit milestones. NULL = no trailing floor active;
+    # NOT NULL = if current_pnl drops below this rupee value, fire SL_TRIGGER.
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'trailing_pnl_floor')
+    ALTER TABLE options_trades ADD trailing_pnl_floor DECIMAL(18,4) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'trailing_step_idx')
+    ALTER TABLE options_trades ADD trailing_step_idx INT NOT NULL DEFAULT 0
+    """,
+
     # Notification provenance — links each alert back to its tick / cycle
     """
     IF NOT EXISTS (SELECT 1 FROM sys.columns
@@ -626,6 +649,69 @@ _TABLE_DDL: List[str] = [
         WHERE object_id = OBJECT_ID('options_notifications') AND name = 'flag_state_at_dispatch')
     ALTER TABLE options_notifications ADD flag_state_at_dispatch NVARCHAR(MAX) NULL
     """,
+
+    # OI change momentum signal — Σ(ΔPut OI) / Σ(ΔCall OI).
+    # EOD mode: day-over-day from bhav change_in_oi.
+    # Live mode: live_oi − eod_oi per strike computed at suggestion time.
+    # NULL for legacy rows (pre-implementation) and when data is unavailable.
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'oi_pcr_change')
+    ALTER TABLE options_suggestions ADD oi_pcr_change FLOAT NULL
+    """,
+
+    # ---------------- Time-series chain aggregate (5-min) ----------------
+    # Boundary-aligned 5-min snapshots produced by lifecycle.chain_aggregator
+    # from the Zerodha WebSocket tick stream. Used at live-suggestion time to
+    # compute trajectory metrics (slope/persistence/acceleration) on OI PCR,
+    # ATM bid-ask spread, and volume.
+    # Idempotent on (snapshot_at, symbol, expiry_date).
+    """
+    IF OBJECT_ID('options_chain_5min', 'U') IS NULL
+    CREATE TABLE options_chain_5min (
+        id                    BIGINT IDENTITY(1,1) PRIMARY KEY,
+        snapshot_at           DATETIME2(0)  NOT NULL,
+        symbol                NVARCHAR(50)  NOT NULL,
+        expiry_date           DATE          NOT NULL,
+        spot                  DECIMAL(18,4) NULL,
+        atm_strike            DECIMAL(18,4) NULL,
+        sum_call_oi           BIGINT        NULL,
+        sum_put_oi            BIGINT        NULL,
+        sum_call_oi_delta     BIGINT        NULL,
+        sum_put_oi_delta      BIGINT        NULL,
+        sum_call_volume       BIGINT        NULL,
+        sum_put_volume        BIGINT        NULL,
+        atm_call_mid          DECIMAL(18,4) NULL,
+        atm_put_mid           DECIMAL(18,4) NULL,
+        atm_call_spread_bps   DECIMAL(18,4) NULL,
+        atm_put_spread_bps    DECIMAL(18,4) NULL,
+        sample_count          INT           NULL,
+        created_at            DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        CONSTRAINT UX_options_chain_5min UNIQUE (snapshot_at, symbol, expiry_date)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_chain_5min_sym_exp ON options_chain_5min (symbol, expiry_date, snapshot_at)",
+
+    # ---------------- Time-series ATM IV (5-min) ----------------
+    # Per (symbol, expiry) ATM IV computed from the WS tick stream's ATM
+    # call/put mids at each 5-min boundary. Source for atm_iv_slope_5min
+    # and atm_iv_persistence trajectory fields.
+    """
+    IF OBJECT_ID('options_atm_iv_5min', 'U') IS NULL
+    CREATE TABLE options_atm_iv_5min (
+        id            BIGINT IDENTITY(1,1) PRIMARY KEY,
+        snapshot_at   DATETIME2(0)  NOT NULL,
+        symbol        NVARCHAR(50)  NOT NULL,
+        expiry_date   DATE          NOT NULL,
+        atm_strike    DECIMAL(18,4) NULL,
+        spot          DECIMAL(18,4) NULL,
+        dte           INT           NULL,
+        atm_iv        DECIMAL(18,6) NULL,
+        created_at    DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        CONSTRAINT UX_options_atm_iv_5min UNIQUE (snapshot_at, symbol, expiry_date)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_atm_iv_5min_sym_exp ON options_atm_iv_5min (symbol, expiry_date, snapshot_at)",
 ]
 
 

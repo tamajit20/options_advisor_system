@@ -112,3 +112,68 @@ def test_reset_registry_forces_rebuild():
         registry.reset_registry()
         registry.get_market_data()
     assert builder.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 #8 \u2014 NSE live failsafe wiring
+# ---------------------------------------------------------------------------
+def _fake_live():
+    fake = MagicMock(name="nse_live_provider")
+    fake.name = "nse_live"
+    fake.health.return_value = base.ProviderHealth(
+        name="nse_live", healthy=True, detail="ok",
+    )
+    return fake
+
+
+def test_get_live_failsafe_returns_nse_live_when_built():
+    eod = _fake_eod()
+    live = _fake_live()
+    with patch.dict(registry.PROVIDERS_CONFIG, {"active": ""}, clear=False), \
+         patch("providers.registry._build_nse_eod", return_value=eod), \
+         patch("providers.registry._build_nse_live", return_value=live):
+        assert registry.get_live_failsafe_provider() is live
+
+
+def test_get_live_failsafe_returns_none_when_build_fails():
+    eod = _fake_eod()
+    with patch.dict(registry.PROVIDERS_CONFIG, {"active": ""}, clear=False), \
+         patch("providers.registry._build_nse_eod", return_value=eod), \
+         patch("providers.registry._build_nse_live", return_value=None):
+        assert registry.get_live_failsafe_provider() is None
+
+
+def test_zerodha_mode_passes_live_failsafe_to_adapter():
+    """Mode B: Zerodha provider must be constructed with the NSE-live failsafe."""
+    eod = _fake_eod()
+    live = _fake_live()
+    captured = {}
+
+    def fake_zerodha(eod_fallback, live_fallback=None):
+        captured["eod"] = eod_fallback
+        captured["live"] = live_fallback
+        m = MagicMock(name="zerodha_provider")
+        m.name = "zerodha"
+        m.health.return_value = base.ProviderHealth(name="zerodha", healthy=True, detail="ok")
+        return m
+
+    with patch.dict(registry.PROVIDERS_CONFIG, {"active": "zerodha"}, clear=False), \
+         patch("providers.registry._build_nse_eod", return_value=eod), \
+         patch("providers.registry._build_nse_live", return_value=live), \
+         patch("providers.registry._build_zerodha", side_effect=fake_zerodha):
+        registry.get_market_data()
+
+    assert captured["eod"] is eod
+    assert captured["live"] is live
+
+
+def test_list_active_providers_includes_failsafe():
+    eod = _fake_eod()
+    live = _fake_live()
+    with patch.dict(registry.PROVIDERS_CONFIG, {"active": ""}, clear=False), \
+         patch("providers.registry._build_nse_eod", return_value=eod), \
+         patch("providers.registry._build_nse_live", return_value=live):
+        out = registry.list_active_providers()
+    names = {h.name for h in out}
+    assert "nse_eod" in names
+    assert "nse_live" in names

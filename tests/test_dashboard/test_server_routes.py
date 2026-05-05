@@ -397,3 +397,76 @@ class TestSummarizeCron:
     def test_with_day_of_week(self):
         out = server._summarize_cron({"hour": 9, "minute": 30, "day_of_week": "mon,fri"})
         assert "Mon" in out and "Fri" in out
+
+
+class TestSystemStatusFull:
+    """Phase 3 — #9 comprehensive /api/system/status aggregator."""
+
+    def test_returns_all_top_level_sections(self, client, mocker):
+        mocker.patch("database.runtime_flags.RuntimeFlagsRepo.get_bool",
+                     return_value=False)
+        mocker.patch("database.log_repo.JobLogRepo.latest_status_per_job",
+                     return_value=[])
+        mocker.patch("database.models.FoEodRepo.latest_trade_date",
+                     return_value=date(2026, 5, 4))
+        mocker.patch("database.models.IvHistoryRepo.latest_trade_date",
+                     return_value=date(2026, 5, 4))
+        mocker.patch("database.models.SpotEodRepo.latest",
+                     return_value={"trade_date": date(2026, 5, 4)})
+        mocker.patch("database.models.VixRepo.latest",
+                     return_value={"trade_date": date(2026, 5, 4)})
+        mocker.patch("database.models.SuggestionRepo.active_pending",
+                     return_value=[])
+        mocker.patch("database.models.TradeRepo.open_trades",
+                     return_value=[])
+        resp = client.get("/api/system/status")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        for k in ("as_of", "today", "runtime_flags", "scheduler",
+                  "jobs_last_status", "data_freshness", "counts",
+                  "websocket"):
+            assert k in data, f"missing {k}"
+        assert data["runtime_flags"]["circuit_breaker_active"] is False
+        assert data["counts"]["open_trades"] == 0
+
+    def test_endpoint_never_500s_on_internal_failures(self, client, mocker):
+        mocker.patch("database.runtime_flags.RuntimeFlagsRepo.get_bool",
+                     side_effect=RuntimeError("boom"))
+        mocker.patch("database.log_repo.JobLogRepo.latest_status_per_job",
+                     side_effect=RuntimeError("boom"))
+        mocker.patch("database.models.FoEodRepo.latest_trade_date",
+                     side_effect=RuntimeError("boom"))
+        mocker.patch("database.models.SuggestionRepo.active_pending",
+                     side_effect=RuntimeError("boom"))
+        resp = client.get("/api/system/status")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        for section in ("runtime_flags", "data_freshness", "counts"):
+            v = data[section]
+            if isinstance(v, dict):
+                assert v.get("available") is False or "reason" in v
+
+
+class TestLiveMTMStream:
+    """Phase 3 — #3 Live MTM SSE endpoint."""
+
+    def test_endpoint_returns_event_stream_mime(self, client):
+        resp = client.get("/api/live/mtm", buffered=False)
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/event-stream"
+        # Read just the initial connect comment so the generator emits at
+        # least one chunk; close immediately to avoid blocking on heartbeat.
+        first = next(resp.response)
+        assert b"connected" in first
+        resp.close()
+
+    def test_publish_propagates_to_client(self, client):
+        from providers.event_bus import TOPIC_TRADE_MTM, get_event_bus
+        resp = client.get("/api/live/mtm", buffered=False)
+        # Drain the connect comment.
+        next(resp.response)
+        get_event_bus().publish(TOPIC_TRADE_MTM,
+            {"trade_id": "T-001", "mtm": 1234.0, "dte": 5})
+        chunk = next(resp.response)
+        assert b"T-001" in chunk and b"1234" in chunk
+        resp.close()

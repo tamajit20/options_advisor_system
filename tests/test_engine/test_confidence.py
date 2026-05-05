@@ -20,8 +20,10 @@ class TestEvaluate:
             events_calendar_row_count=10,
         )
         assert result.all_passed is True
-        # 7 soft + event + DTE = 9 gates total
-        assert result.total == 9
+        # 7 soft + event + DTE + 3 trajectory gates = 12 total.
+        # Trajectory gates are PASS_WARN when indicator fields are None
+        # (default sample_indicators has no live trajectory).
+        assert result.total == 12
         assert result.score >= 8
 
     def test_dte_below_band_hard_fails(self, sample_indicators):
@@ -33,9 +35,8 @@ class TestEvaluate:
             events_calendar_row_count=10,
         )
         assert result.all_passed is False
-        # DTE check (last) must be FAIL
-        dte_check = result.checks[-1]
-        assert dte_check.label == "DTE within target band"
+        # DTE check is now in the middle (followed by trajectory gates).
+        dte_check = next(c for c in result.checks if c.label == "DTE within target band")
         assert dte_check.status == "FAIL"
 
     def test_dte_above_band_hard_fails(self, sample_indicators):
@@ -205,3 +206,93 @@ class TestIvHvTieredGate:
         )
         check = self._iv_check(result)
         assert check.status == "SOFT_FAIL"
+
+
+class TestTrajectoryGates:
+    """New trajectory-driven gates: IV traj (SOFT_FAIL), OI momentum (SOFT_FAIL),
+    spread quality (hard FAIL). All emit PASS_WARN when fields are None."""
+
+    def _find(self, result, label):
+        return next(c for c in result.checks if c.label == label)
+
+    def test_all_traj_gates_pass_warn_when_no_data(self, sample_indicators):
+        # Default sample_indicators has no trajectory fields populated -> all PASS_WARN.
+        result = evaluate(
+            iv_rank=60.0,
+            indicators=sample_indicators,
+            dte=14,
+            has_high_impact_event_this_week=False,
+            events_calendar_row_count=10,
+        )
+        assert self._find(result, "ATM IV trajectory benign").status == "PASS_WARN"
+        assert self._find(result, "OI PCR momentum neutral").status == "PASS_WARN"
+        assert self._find(result, "ATM strikes liquid (spread within budget)").status == "PASS_WARN"
+        # Suggestion should still be all-pass (PASS_WARN doesn't fail anything).
+        assert result.all_passed is True
+
+    def test_iv_traj_soft_fails_on_sustained_rise(self, sample_indicators):
+        from dataclasses import replace
+        ind = replace(sample_indicators, atm_iv_slope_5min=1.5, atm_iv_persistence=0.85)
+        result = evaluate(
+            iv_rank=60.0, indicators=ind, dte=14,
+            has_high_impact_event_this_week=False, events_calendar_row_count=10,
+        )
+        assert self._find(result, "ATM IV trajectory benign").status == "SOFT_FAIL"
+        # SOFT_FAIL on a non-counted gate -> still all_passed True.
+        assert result.all_passed is True
+
+    def test_iv_traj_pass_when_persistence_low(self, sample_indicators):
+        from dataclasses import replace
+        ind = replace(sample_indicators, atm_iv_slope_5min=1.5, atm_iv_persistence=0.4)
+        result = evaluate(
+            iv_rank=60.0, indicators=ind, dte=14,
+            has_high_impact_event_this_week=False, events_calendar_row_count=10,
+        )
+        assert self._find(result, "ATM IV trajectory benign").status == "PASS"
+
+    def test_oi_momentum_soft_fails_on_sustained_drift(self, sample_indicators):
+        from dataclasses import replace
+        ind = replace(sample_indicators, oi_pcr_slope_5min=-2.5, oi_pcr_persistence=0.8)
+        result = evaluate(
+            iv_rank=60.0, indicators=ind, dte=14,
+            has_high_impact_event_this_week=False, events_calendar_row_count=10,
+        )
+        assert self._find(result, "OI PCR momentum neutral").status == "SOFT_FAIL"
+        assert result.all_passed is True
+
+    def test_spread_quality_hard_fails_when_too_wide(self, sample_indicators):
+        from dataclasses import replace
+        ind = replace(sample_indicators, atm_call_spread_bps=40.0, atm_put_spread_bps=40.0)
+        result = evaluate(
+            iv_rank=60.0, indicators=ind, dte=14,
+            has_high_impact_event_this_week=False, events_calendar_row_count=10,
+        )
+        check = self._find(result, "ATM strikes liquid (spread within budget)")
+        assert check.status == "FAIL"
+        # Hard fail -> all_passed False.
+        assert result.all_passed is False
+
+    def test_spread_quality_pass_when_within_budget(self, sample_indicators):
+        from dataclasses import replace
+        ind = replace(sample_indicators, atm_call_spread_bps=15.0, atm_put_spread_bps=20.0)
+        result = evaluate(
+            iv_rank=60.0, indicators=ind, dte=14,
+            has_high_impact_event_this_week=False, events_calendar_row_count=10,
+        )
+        assert self._find(result, "ATM strikes liquid (spread within budget)").status == "PASS"
+        assert result.all_passed is True
+
+
+@pytest.mark.future
+@pytest.mark.skip(reason="future: promote IV trajectory gate SOFT_FAIL -> FAIL after 2-3 weeks accuracy review (FUTURE_ENHANCEMENT_SCOPES.md -> Risk & Monitoring)")
+def test_iv_trajectory_gate_hardens_to_fail():
+    """After review window, sustained rising IV (slope>0.5%/5min, persist>=0.7) should
+    HARD-FAIL the suggestion (all_passed False, hard_failed >=1)."""
+    pass
+
+
+@pytest.mark.future
+@pytest.mark.skip(reason="future: promote OI PCR momentum gate SOFT_FAIL -> FAIL after accuracy review (FUTURE_ENHANCEMENT_SCOPES.md -> Risk & Monitoring)")
+def test_oi_momentum_gate_hardens_to_fail():
+    """After review window, sustained directional OI PCR drift should HARD-FAIL."""
+    pass

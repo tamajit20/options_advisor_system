@@ -116,7 +116,7 @@ def test_underlying_kite_client_not_exposed(facade):
     public attribute — otherwise callers could escape the facade."""
     public_attrs = [a for a in dir(facade) if not a.startswith("_")]
     # Whitelist the entire surface — anything new must be added explicitly.
-    assert set(public_attrs) == {"api_key", "instruments", "ltp", "set_access_token"}
+    assert set(public_attrs) == {"api_key", "instruments", "ltp", "quote", "set_access_token"}
 
 
 def test_place_order_call_never_reaches_underlying(facade, kite_mock):

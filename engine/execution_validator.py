@@ -179,6 +179,25 @@ def validate_execution(
     else:
         warnings.append("data_as_of is missing — freshness not checked")
 
+    # 4b. Suggestion freshness (Phase 3 — #2). Hard cap on how stale a
+    # PENDING suggestion can be at the moment of execution. Independent of
+    # data_as_of (which is the underlying market-data clock); this gates
+    # on `generated_on` (the engine clock that priced the legs) so a user
+    # can't click through a 09:30 suggestion at 14:55 with completely
+    # different premiums.
+    fresh_min = float(
+        STRATEGY_CONFIG.get("suggestion_freshness_minutes", 30)
+    )
+    gen_on = _as_datetime(suggestion.get("generated_on"))
+    if gen_on is not None and fresh_min > 0:
+        age_min = (now - gen_on).total_seconds() / 60.0
+        details["suggestion_age_minutes"] = round(age_min, 1)
+        if age_min > fresh_min:
+            vetoes.append(
+                f"suggestion generated {age_min:.0f}m ago "
+                f"(max {fresh_min:.0f}m); re-validate or regenerate"
+            )
+
     # 5. Strike-distance ----------------------------------------------------
     buf_pct = float(
         STRATEGY_CONFIG.get("min_short_strike_buffer_pct", 1.5)

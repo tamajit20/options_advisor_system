@@ -46,9 +46,12 @@ from database.models import (
 )
 from engine.confidence import evaluate as evaluate_confidence
 from engine.indicators import build_indicators
+from engine.iv_calculator import implied_vol
+from engine.iv_rank import iv_rank as compute_iv_rank, pick_atm_iv
 from engine.strategy_selector import assemble_suggestion
 from exceptions import StrategyVeto
-from utils import days_between, now_ist
+from lifecycle.chain_aggregator import load_trajectory
+from utils import days_between, now_ist, today_ist
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +145,8 @@ def _is_monthly_expiry(expiry: date) -> bool:
 
 
 def _pick_expiries_in_band(
-    fo: FoEodRepo, symbol: str, trade_date: date
+    fo: FoEodRepo, symbol: str, trade_date: date,
+    *, entry_day: Optional[date] = None,
 ) -> list[tuple[date, str]]:
     """Return [(expiry, expiry_type), ...] for the DTE band — at most one Weekly and one Monthly.
 
@@ -155,8 +159,12 @@ def _pick_expiries_in_band(
     DTE is measured from the ENTRY day (next trading day after generation),
     not the generation day.  Mon-Thu: entry is next calendar day (+1).
     Friday: entry is Monday (+3 calendar days).
+
+    entry_day: when provided (live mode), use it directly instead of computing
+    _next_trading_day(trade_date).
     """
-    entry_day = _next_trading_day(trade_date)
+    if entry_day is None:
+        entry_day = _next_trading_day(trade_date)
     expiries = fo.expiries_for(symbol, trade_date)
     dte_min = STRATEGY_CONFIG["dte_min"]
     dte_max = STRATEGY_CONFIG["dte_max"]
@@ -180,17 +188,74 @@ def _pick_expiries_in_band(
     return result
 
 
+def _compute_live_atm_iv_rank(
+    chain_rows: list[dict],
+    spot: float,
+    dte: int,
+    iv_repo: IvHistoryRepo,
+    symbol: str,
+    today: date,
+) -> tuple[float, Optional[float]]:
+    """Compute ATM IV from live chain premiums and IV rank from historical series.
+
+    Returns (atm_iv, iv_rank) where iv_rank is None if history is unavailable.
+    Uses Black-Scholes bisection on each option leg then averages the two ATM
+    strikes' IVs (same as the IV orchestrator does for settled data).
+    """
+    triplets: list[tuple[float, str, float]] = []
+    for r in chain_rows:
+        try:
+            strike = float(r.get("strike") or 0)
+            opt_type = str(r.get("option_type") or "").upper()
+            # Live chain rows use last_price / close_price / settle_price
+            market_price = float(
+                r.get("last_price") or r.get("close_price") or r.get("settle_price") or 0
+            )
+        except (TypeError, ValueError):
+            continue
+        if strike <= 0 or market_price <= 0 or opt_type not in ("CE", "PE"):
+            continue
+        iv_val, _ = implied_vol(
+            market_price=market_price,
+            spot=spot,
+            strike=strike,
+            days_to_expiry=dte,
+            option_type=opt_type,
+        )
+        if iv_val > 0:
+            triplets.append((strike, opt_type, iv_val))
+
+    atm_iv = pick_atm_iv(triplets, spot) or 0.0
+
+    # IV rank — compare live ATM IV against the historical series from DB
+    since = today - timedelta(days=365)
+    hist = iv_repo.atm_iv_history(symbol, since)
+    iv_series = [float(r["atm_iv"]) for r in hist if r.get("atm_iv")]
+    iv_rank_val: Optional[float] = (
+        compute_iv_rank(atm_iv, iv_series) if iv_series else None
+    )
+    return atm_iv, iv_rank_val
+
+
 def _evaluate_underlying(
     db: SQLServerConnection,
     symbol: str,
     trade_date: date,
     entry_day: date,
     execution_window: str,
+    *,
+    chain_provider=None,
+    live_today: Optional[date] = None,
 ) -> tuple[list[Suggestion], list[NoSuggestion]]:
     """Evaluate one underlying for all expiry types in the DTE band.
 
     Returns (suggestions, no_suggestions) — may have up to 2 suggestions
     (one Monthly + one Weekly) or multiple NoSuggestion records.
+
+    chain_provider: when given (live mode), option chain and spot price are
+    fetched from this provider instead of the FO/Spot EOD repos.  ATM IV is
+    computed on-the-fly from live premiums; IV rank is still derived from the
+    historical series in the DB.  live_today must also be provided in this mode.
     """
     fo = FoEodRepo(db)
     sp = SpotEodRepo(db)
@@ -199,14 +264,24 @@ def _evaluate_underlying(
     lot_repo = LotSizeRepo(db)
     event_repo = EventCalendarRepo(db)
 
-    spot_row = sp.for_date(symbol, trade_date)
+    _live_mode = chain_provider is not None
+    _chain_date = live_today if _live_mode else trade_date  # date for chain queries
+
+    if _live_mode:
+        spot_row = chain_provider.get_spot(symbol)
+    else:
+        spot_row = sp.for_date(symbol, trade_date)
     if not spot_row:
-        logger.warning("Suggestion: no spot for %s on or before %s", symbol, trade_date)
+        logger.warning("Suggestion: no spot for %s (%s mode)", symbol,
+                       "live" if _live_mode else f"EOD {trade_date}")
         return [], []
     spot = float(spot_row["close_price"])
     actual_spot_date: Optional[date] = spot_row.get("trade_date")
 
-    expiry_candidates = _pick_expiries_in_band(fo, symbol, trade_date)
+    expiry_candidates = _pick_expiries_in_band(
+        fo, symbol, trade_date,
+        entry_day=entry_day if _live_mode else None,
+    )
     if not expiry_candidates:
         return [], []
 
@@ -258,17 +333,68 @@ def _evaluate_underlying(
         # Mon-Thu generated → entered next day (+1); Fri generated → entered Monday (+3).
         entry_dte = max(days_between(entry_day, expiry), 0)
 
-        chain = fo.get_chain(symbol, trade_date, expiry)
+        if _live_mode:
+            chain = chain_provider.get_chain(symbol, _chain_date, expiry)
+            # Always fetch EOD chain in live mode: needed for both (a) absolute OI
+            # levels when quote() fell back to ltp(), and (b) computing the intraday
+            # OI delta (live_oi - eod_oi) for the momentum signal.
+            eod_chain = fo.get_chain(symbol, trade_date, expiry)
+            _has_live_oi = any((r.get("open_interest") or 0) > 0 for r in chain)
+
+            if _has_live_oi and eod_chain:
+                # Build per-strike OI delta rows for the momentum signal.
+                # These are lightweight dicts — only strike, option_type, change_in_oi.
+                # The live chain and EOD chain are never mutated.
+                _eod_oi_idx = {
+                    (float(r["strike"]), str(r["option_type"]).upper()):
+                    (r.get("open_interest") or 0)
+                    for r in eod_chain
+                }
+                oi_change_rows: Optional[list] = [
+                    {
+                        "strike": float(r["strike"]),
+                        "option_type": str(r["option_type"]).upper(),
+                        "change_in_oi": (r.get("open_interest") or 0)
+                            - _eod_oi_idx.get(
+                                (float(r["strike"]), str(r["option_type"]).upper()), 0
+                            ),
+                    }
+                    for r in chain
+                ]
+                oi_abs_rows: Optional[list] = None     # live chain has OI → use directly
+            else:
+                # quote() fell back to ltp(): no live OI.
+                # Use EOD chain for both absolute levels and day-over-day change.
+                oi_change_rows = None   # eod_chain.change_in_oi = day-over-day (fallback)
+                oi_abs_rows = eod_chain # absolute OI levels from yesterday's bhav
+        else:
+            chain = fo.get_chain(symbol, trade_date, expiry)
+            # EOD mode: chain_rows already carry open_interest + change_in_oi from bhav.
+            # build_indicators defaults both oi_chain_rows and oi_change_rows to chain_rows.
+            eod_chain = None
+            oi_change_rows = None
+            oi_abs_rows = None
         if not chain:
             continue
 
-        iv_for_expiry = [r for r in iv_rows if r.get("expiry_date") == expiry]
-        if not iv_for_expiry:
-            logger.warning("Suggestion: no IV rows for %s exp=%s (%s)", symbol, expiry, expiry_type)
-            continue
-        atm_iv = float(iv_for_expiry[0].get("atm_iv") or 0.0)
-        _raw_iv_rank = iv_for_expiry[0].get("iv_rank")
-        iv_rank: Optional[float] = float(_raw_iv_rank) if _raw_iv_rank is not None else None
+        if _live_mode:
+            atm_iv, iv_rank = _compute_live_atm_iv_rank(
+                chain, spot, entry_dte, iv_repo, symbol, live_today
+            )
+            if atm_iv <= 0:
+                logger.warning(
+                    "Live suggestion: could not compute ATM IV for %s exp=%s — skipping",
+                    symbol, expiry,
+                )
+                continue
+        else:
+            iv_for_expiry = [r for r in iv_rows if r.get("expiry_date") == expiry]
+            if not iv_for_expiry:
+                logger.warning("Suggestion: no IV rows for %s exp=%s (%s)", symbol, expiry, expiry_type)
+                continue
+            atm_iv = float(iv_for_expiry[0].get("atm_iv") or 0.0)
+            _raw_iv_rank = iv_for_expiry[0].get("iv_rank")
+            iv_rank: Optional[float] = float(_raw_iv_rank) if _raw_iv_rank is not None else None
 
         indicators = build_indicators(
             symbol=symbol,
@@ -280,6 +406,9 @@ def _evaluate_underlying(
             atm_iv=atm_iv,
             dte=entry_dte,
             fii_net_futures=fii_net_futures,
+            oi_chain_rows=oi_abs_rows,
+            oi_change_rows=oi_change_rows,
+            trajectory=load_trajectory(db, symbol=symbol, expiry=expiry) if _live_mode else None,
         )
 
         confidence = evaluate_confidence(
@@ -326,6 +455,7 @@ def _evaluate_underlying(
                 spot_data_date=actual_spot_date,
                 fii_data_date=actual_fii_date,
                 vix_data_date=actual_vix_date,
+                oi_pcr_change=indicators.oi_pcr_change,
             )
             suggestions.append(primary_suggestion)
             existing_names.append(primary_suggestion.trade_name)
@@ -377,6 +507,7 @@ def _evaluate_underlying(
                         spot_data_date=actual_spot_date,
                         fii_data_date=actual_fii_date,
                         vix_data_date=actual_vix_date,
+                        oi_pcr_change=indicators.oi_pcr_change,
                     )
                     suggestions.append(comp)
                     existing_names.append(comp.trade_name)
@@ -389,59 +520,32 @@ def _evaluate_underlying(
     return suggestions, no_suggestions  # always returns tuple — never None
 
 
-def run_suggestion_engine(
+# ---------------------------------------------------------------------------
+# Shared persistence / notification helper
+# ---------------------------------------------------------------------------
+def _persist_and_notify(
     db: SQLServerConnection,
-    trade_date: date | None = None,
+    all_candidates: List[Suggestion],
+    no_suggestions: List[NoSuggestion],
+    *,
+    trade_date: date,
+    entry_day: date,
+    data_source: str = "EOD",
+    provider_name: str = "nse_eod",
+    trigger_type: str = "EOD_RUN",
+    force_replace: bool = False,
 ) -> int:
-    """Evaluate all configured underlyings and persist every one that passes
-    all confidence checks (one suggestion per underlying per day). Underlyings
-    that already have a suggestion for today are skipped so re-runs are safe.
+    """Dedup candidates cross-underlying, persist accepted suggestions and
+    NoSuggestion records, fire notifications.
 
-    trade_date: the NSE bhav date to use for all data lookups.  When omitted
-    the engine auto-detects the latest date for which both FO bhav AND IV
-    have been computed (they must be consistent).  Pass an explicit date to
-    re-run for a missed day or to back-test.
-
-    Returns number of new suggestions persisted.
+    force_replace: when True (live mode), expire ALL PENDING suggestions for
+    the same underlying+expiry_type+strategy slot — including those with
+    entry_date == entry_day — before inserting the live replacement.
     """
-    if trade_date is None:
-        trade_date = _resolve_data_date(db)
-        if trade_date is None:
-            logger.warning("Suggestion engine: no consistent FO+IV data found — aborting")
-            return 0
-        logger.info("Suggestion engine: auto-resolved data date → %s", trade_date)
-    else:
-        logger.info("Suggestion engine: using explicit trade_date=%s", trade_date)
-
-    # Execution window: when/how to enter this trade.
-    # Use max(trade_date, today) so that a weekend/late run with stale data
-    # still produces an entry_day in the future (e.g. Sun run with Thu data
-    # → entry_day = Monday, not the already-passed Friday).
-    _today = now_ist().date()
-    entry_day = _next_trading_day(max(trade_date, _today))
-    exec_window = _execution_window(entry_day, now_ist())
     sug_repo = SuggestionRepo(db)
     notif_repo = NotificationRepo(db)
 
-    # Collect all candidates across all underlyings first, then apply
-    # cross-underlying dedup before persisting.
-    all_candidates: List[Suggestion] = []
-    no_suggestions: List[NoSuggestion] = []
-
-    for symbol in STRATEGY_CONFIG["underlyings"]:
-        try:
-            sugs, nss = _evaluate_underlying(db, symbol, trade_date, entry_day, exec_window)
-        except Exception:
-            logger.exception("Suggestion eval failed for %s", symbol)
-            continue
-        all_candidates.extend(sugs)
-        no_suggestions.extend(nss)
-
     # ── Cross-underlying dedup ─────────────────────────────────────────────
-    # NIFTY, BANKNIFTY, FINNIFTY are 85–95% correlated; three simultaneous
-    # suggestions of the same expiry type + strategy is one concentrated bet.
-    # Keep only the highest-confidence suggestion per (expiry_type, strategy) group.
-    # Companion spreads (BPS, BCS) are keyed separately so IC + BPS can coexist.
     best_by_expiry_type: dict[str, Suggestion] = {}
     for sug in all_candidates:
         key = f"{sug.expiry_type}:{sug.strategy}"
@@ -476,20 +580,24 @@ def run_suggestion_engine(
     persisted: List[Suggestion] = []
 
     for sug in best_by_expiry_type.values():
-        # Retire any PENDING suggestion for the same slot with an older entry_date.
-        # This covers the case where data_date is unchanged (e.g. weekend re-run)
-        # but entry_day has moved forward (Fri→Mon becomes the new execution day).
-        expired = sug_repo.expire_stale_pending(
-            sug.underlying, sug.expiry_type, sug.strategy, entry_day
-        )
-        if expired:
-            logger.info(
-                "Expired %d stale PENDING suggestion(s) for %s %s — new entry day is %s",
-                expired, sug.underlying, sug.expiry_type, entry_day,
+        if force_replace:
+            # Live mode: retire even same-entry-date PENDING suggestions so
+            # the dashboard shows the freshest data.
+            sug_repo.expire_stale_pending(
+                sug.underlying, sug.expiry_type, sug.strategy,
+                entry_day + timedelta(days=1),   # retires entry_date <= entry_day
             )
+        else:
+            expired = sug_repo.expire_stale_pending(
+                sug.underlying, sug.expiry_type, sug.strategy, entry_day
+            )
+            if expired:
+                logger.info(
+                    "Expired %d stale PENDING suggestion(s) for %s %s — new entry day is %s",
+                    expired, sug.underlying, sug.expiry_type, entry_day,
+                )
 
-        # Dedup: skip only if a suggestion for this EXACT entry_date already exists
-        if sug_repo.has_suggestion_for(
+        if not force_replace and sug_repo.has_suggestion_for(
             sug.underlying, trade_date, sug.expiry_type, sug.strategy,
             entry_date=entry_day,
         ):
@@ -498,20 +606,19 @@ def run_suggestion_engine(
                 sug.underlying, sug.expiry_type, entry_day,
             )
             continue
+
         sug_repo.insert(sug)
         sug_repo.insert_legs(sug.suggestion_id, sug.legs)
-        # Phase 2c: stamp provenance (best-effort \u2014 swallow failures so a
-        # not-yet-migrated DB doesn't break suggestion generation).
         try:
             from utils import ENGINE_VERSION, market_state_at
             sug_repo.write_provenance(
                 sug.suggestion_id,
-                data_source="EOD",
-                provider="nse_eod",
+                data_source=data_source,
+                provider=provider_name,
                 data_as_of=datetime.combine(
                     sug.data_date, datetime.min.time()
                 ) if sug.data_date else None,
-                trigger_type="EOD_RUN",
+                trigger_type=trigger_type,
                 market_state_at_gen=market_state_at(now_ist()),
                 engine_version=ENGINE_VERSION,
             )
@@ -566,3 +673,133 @@ def run_suggestion_engine(
         len(persisted), len(no_suggestions),
     )
     return len(persisted)
+
+
+def run_suggestion_engine(
+    db: SQLServerConnection,
+    trade_date: date | None = None,
+) -> int:
+    """Evaluate all configured underlyings and persist every one that passes
+    all confidence checks (one suggestion per underlying per day). Underlyings
+    that already have a suggestion for today are skipped so re-runs are safe.
+
+    trade_date: the NSE bhav date to use for all data lookups.  When omitted
+    the engine auto-detects the latest date for which both FO bhav AND IV
+    have been computed (they must be consistent).  Pass an explicit date to
+    re-run for a missed day or to back-test.
+
+    Returns number of new suggestions persisted.
+    """
+    if trade_date is None:
+        trade_date = _resolve_data_date(db)
+        if trade_date is None:
+            logger.warning("Suggestion engine: no consistent FO+IV data found — aborting")
+            return 0
+        logger.info("Suggestion engine: auto-resolved data date → %s", trade_date)
+    else:
+        logger.info("Suggestion engine: using explicit trade_date=%s", trade_date)
+
+    # Execution window: when/how to enter this trade.
+    # Use max(trade_date, today) so that a weekend/late run with stale data
+    # still produces an entry_day in the future (e.g. Sun run with Thu data
+    # → entry_day = Monday, not the already-passed Friday).
+    _today = now_ist().date()
+    entry_day = _next_trading_day(max(trade_date, _today))
+    exec_window = _execution_window(entry_day, now_ist())
+
+    # Collect all candidates across all underlyings first, then apply
+    # cross-underlying dedup before persisting.
+    all_candidates: List[Suggestion] = []
+    no_suggestions: List[NoSuggestion] = []
+
+    for symbol in STRATEGY_CONFIG["underlyings"]:
+        try:
+            sugs, nss = _evaluate_underlying(db, symbol, trade_date, entry_day, exec_window)
+        except Exception:
+            logger.exception("Suggestion eval failed for %s", symbol)
+            continue
+        all_candidates.extend(sugs)
+        no_suggestions.extend(nss)
+
+    return _persist_and_notify(
+        db, all_candidates, no_suggestions,
+        trade_date=trade_date,
+        entry_day=entry_day,
+        data_source="EOD",
+        provider_name="nse_eod",
+        trigger_type="EOD_RUN",
+    )
+
+
+def run_live_suggestion_engine(
+    db: SQLServerConnection,
+    *,
+    provider=None,
+) -> int:
+    """Generate suggestions from live market data during market hours.
+
+    Uses the Zerodha (or other live) provider for option chain and spot price.
+    ATM IV is computed on-the-fly from live premiums.  IV rank is still
+    derived from the historical series stored in the DB.  Historical spot data
+    (for trend / HV-20) is also read from the DB.
+
+    Requires OPT_PROVIDERS=zerodha and a valid Kite access token.  Falls back
+    gracefully when the provider reports no live-quote capability.
+
+    Only runs on weekdays.  Suggestions are tagged data_source=LIVE and
+    replace any stale EOD PENDING suggestion for the same slot so the
+    dashboard always shows the freshest data.
+
+    Returns number of new suggestions persisted.
+    """
+    from providers.registry import get_market_data
+
+    p = provider or get_market_data()
+    if not p.capabilities().supports_live_quotes:
+        logger.info(
+            "Live suggestion engine: provider '%s' has no live quotes — skipping",
+            p.name,
+        )
+        return 0
+
+    live_today = today_ist()
+    if live_today.weekday() >= 5:   # Saturday=5, Sunday=6
+        logger.info("Live suggestion engine: not a trading day (%s) — skipping", live_today)
+        return 0
+
+    # Use the latest available FO date for structural queries (expiry list,
+    # spot history, FII, lot sizes).  Today's bhav isn't available yet during
+    # market hours.
+    fo_trade_date = FoEodRepo(db).latest_trade_date()
+    if fo_trade_date is None:
+        logger.warning("Live suggestion engine: no FO data in DB — aborting")
+        return 0
+
+    entry_day = live_today   # market is open — entry is today
+    exec_window = "Market is open — execute now at current market price"
+
+    all_candidates: List[Suggestion] = []
+    no_suggestions: List[NoSuggestion] = []
+
+    for symbol in STRATEGY_CONFIG["underlyings"]:
+        try:
+            sugs, nss = _evaluate_underlying(
+                db, symbol, fo_trade_date, entry_day, exec_window,
+                chain_provider=p,
+                live_today=live_today,
+            )
+        except Exception:
+            logger.exception("Live suggestion eval failed for %s", symbol)
+            continue
+        all_candidates.extend(sugs)
+        no_suggestions.extend(nss)
+
+    return _persist_and_notify(
+        db, all_candidates, no_suggestions,
+        trade_date=live_today,
+        entry_day=entry_day,
+        data_source="LIVE",
+        provider_name=p.name,
+        trigger_type="LIVE_RUN",
+        force_replace=True,
+    )

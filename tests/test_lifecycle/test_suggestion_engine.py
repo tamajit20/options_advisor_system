@@ -254,3 +254,126 @@ class TestEvaluateUnderlying:
             mock_db, "NIFTY", date(2026, 4, 30), date(2026, 5, 1), "x"
         )
         assert sugs == [] and ns == []
+
+
+# ---------------------------------------------------------------------------
+class TestPickExpiriesInBandEntryDay:
+    """_pick_expiries_in_band respects an explicit entry_day (live mode)."""
+
+    def test_entry_day_overrides_next_trading_day(self):
+        fo = MagicMock()
+        td = date(2026, 5, 5)       # Tuesday
+        live_entry = date(2026, 5, 5)   # today (market open)
+        # Expiry 10 days from today should be inside [7, 21] band
+        fo.expiries_for.return_value = [date(2026, 5, 15)]   # 10 DTE from May 5
+        result = se._pick_expiries_in_band(fo, "NIFTY", td, entry_day=live_entry)
+        # With entry_day=today, 10 DTE is in band → returned
+        assert len(result) == 1
+        assert result[0][0] == date(2026, 5, 15)
+
+    def test_no_entry_day_uses_next_trading_day(self):
+        fo = MagicMock()
+        td = date(2026, 5, 5)
+        fo.expiries_for.return_value = [date(2026, 5, 12)]   # 7 DTE from May 5, 6 DTE from May 6
+        # Without override, entry_day = next trading day = May 6 → DTE = 6 (below 7 min)
+        result_no_override = se._pick_expiries_in_band(fo, "NIFTY", td)
+        # With override entry_day=May 5 → DTE = 7 (exactly at min) → in band
+        result_with_override = se._pick_expiries_in_band(fo, "NIFTY", td, entry_day=td)
+        assert len(result_no_override) == 0
+        assert len(result_with_override) == 1
+
+
+# ---------------------------------------------------------------------------
+class TestComputeLiveAtmIvRank:
+    """_compute_live_atm_iv_rank returns (atm_iv, iv_rank) from live chain rows."""
+
+    def _make_chain_row(self, strike, opt_type, price):
+        return {
+            "strike": strike, "option_type": opt_type,
+            "close_price": price, "last_price": price, "settle_price": price,
+        }
+
+    def test_returns_positive_atm_iv(self, mock_db, mocker):
+        iv_repo = MagicMock()
+        iv_repo.atm_iv_history.return_value = [
+            {"atm_iv": 0.15}, {"atm_iv": 0.20}, {"atm_iv": 0.25},
+        ]
+        # ATM = 23000, spot = 23000, CE=PE premium ~200 → IV ~15-25%
+        chain = [
+            self._make_chain_row(23000, "CE", 200.0),
+            self._make_chain_row(23000, "PE", 200.0),
+        ]
+        atm_iv, iv_rank = se._compute_live_atm_iv_rank(
+            chain, spot=23000.0, dte=14, iv_repo=iv_repo,
+            symbol="NIFTY", today=date(2026, 5, 5),
+        )
+        assert atm_iv > 0
+        assert iv_rank is not None
+        assert 0.0 <= iv_rank <= 100.0
+
+    def test_returns_zero_iv_for_empty_chain(self, mock_db, mocker):
+        iv_repo = MagicMock()
+        iv_repo.atm_iv_history.return_value = []
+        atm_iv, iv_rank = se._compute_live_atm_iv_rank(
+            [], spot=23000.0, dte=14, iv_repo=iv_repo,
+            symbol="NIFTY", today=date(2026, 5, 5),
+        )
+        assert atm_iv == 0.0
+        assert iv_rank is None
+
+    def test_iv_rank_none_when_no_history(self, mock_db, mocker):
+        iv_repo = MagicMock()
+        iv_repo.atm_iv_history.return_value = []
+        chain = [
+            self._make_chain_row(23000, "CE", 200.0),
+            self._make_chain_row(23000, "PE", 200.0),
+        ]
+        _, iv_rank = se._compute_live_atm_iv_rank(
+            chain, spot=23000.0, dte=14, iv_repo=iv_repo,
+            symbol="NIFTY", today=date(2026, 5, 5),
+        )
+        assert iv_rank is None
+
+
+# ---------------------------------------------------------------------------
+class TestRunLiveSuggestionEngine:
+    """run_live_suggestion_engine skips correctly when provider has no live quotes."""
+
+    def _make_provider(self, supports_live=True):
+        p = MagicMock()
+        caps = MagicMock()
+        caps.supports_live_quotes = supports_live
+        caps.name = "zerodha"
+        p.capabilities.return_value = caps
+        p.name = "zerodha"
+        return p
+
+    def test_skips_when_no_live_quotes(self, mock_db, mocker):
+        p = self._make_provider(supports_live=False)
+        assert se.run_live_suggestion_engine(mock_db, provider=p) == 0
+
+    def test_skips_on_weekend(self, mock_db, mocker):
+        p = self._make_provider(supports_live=True)
+        # 2 May 2026 is Saturday
+        mocker.patch("lifecycle.suggestion_engine.today_ist",
+                     return_value=date(2026, 5, 2))
+        assert se.run_live_suggestion_engine(mock_db, provider=p) == 0
+
+    def test_aborts_when_no_fo_data(self, mock_db, mocker):
+        p = self._make_provider(supports_live=True)
+        mocker.patch("lifecycle.suggestion_engine.today_ist",
+                     return_value=date(2026, 5, 5))
+        mocker.patch("lifecycle.suggestion_engine.FoEodRepo.latest_trade_date",
+                     return_value=None)
+        assert se.run_live_suggestion_engine(mock_db, provider=p) == 0
+
+    def test_eval_exception_per_symbol_is_swallowed(self, mock_db, mocker):
+        p = self._make_provider(supports_live=True)
+        mocker.patch("lifecycle.suggestion_engine.today_ist",
+                     return_value=date(2026, 5, 5))
+        mocker.patch("lifecycle.suggestion_engine.FoEodRepo.latest_trade_date",
+                     return_value=date(2026, 5, 2))
+        mocker.patch("lifecycle.suggestion_engine._evaluate_underlying",
+                     side_effect=RuntimeError("provider down"))
+        # Should not raise; returns 0
+        assert se.run_live_suggestion_engine(mock_db, provider=p) == 0

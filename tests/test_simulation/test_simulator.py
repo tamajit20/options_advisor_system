@@ -185,3 +185,12 @@ def test_simulation_includes_charges_in_net_pnl():
     """Currently sim_charges is hardcoded 0.0. Should compute estimated charges
     using engine.charges.estimate_charges and subtract from gross."""
     pass
+
+
+@pytest.mark.future
+@pytest.mark.skip(reason="future: time-series replay simulator over 5-min chain history (FUTURE_ENHANCEMENT_SCOPES.md -> Simulation / Backtesting)")
+def test_timeseries_replay_runner_reconstructs_trajectory():
+    """simulation/timeseries_replay.py should reconstruct ChainTrajectory from
+    options_chain_5min/options_atm_iv_5min at any past snapshot_at and feed it
+    through engine.confidence.evaluate() to tabulate gate-firing frequencies."""
+    pass

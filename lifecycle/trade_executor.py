@@ -196,6 +196,13 @@ def mark_executed(
         )
     db.commit()
     logger.info("Trade %s created: %s (%s)", trade_id, position_type, state)
+    # Notify the live risk monitor (and any other listener) that a trade
+    # was opened so it can refresh its watchlist immediately.
+    try:
+        from providers.event_bus import TOPIC_TRADE_OPENED, get_event_bus
+        get_event_bus().publish(TOPIC_TRADE_OPENED, {"trade_id": trade_id})
+    except Exception:
+        logger.exception("trade_executor: TOPIC_TRADE_OPENED publish failed")
     return trade_id
 
 

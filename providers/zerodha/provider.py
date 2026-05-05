@@ -112,10 +112,15 @@ class ZerodhaProvider:
         facade: Optional[KiteFacade] = None,
         instrument_master: Optional[InstrumentMaster] = None,
         cache: Optional[TTLCache] = None,
+        live_fallback: Optional[MarketDataProvider] = None,
     ):
         if eod_fallback is None:
             raise ValueError("eod_fallback is required (cannot run Zerodha without EOD safety net)")
         self._eod = eod_fallback
+        # Phase 3 #8: optional intraday failsafe (e.g. NSE public option-chain
+        # JSON). Tried for today's chain when the Kite path fails, before
+        # falling back to settled EOD values.
+        self._live_fallback = live_fallback
         self._facade = facade
         self._instruments = instrument_master
         self._cache = cache or TTLCache(
@@ -299,6 +304,22 @@ class ZerodhaProvider:
         }
 
     # ----- option chain -----
+    def _live_then_eod(self, symbol: str, trade_date: date, expiry: date) -> List[dict]:
+        """Phase 3 #8: try the NSE-public-JSON failsafe before EOD when we
+        need today's chain but the primary live path failed."""
+        if self._live_fallback is not None:
+            try:
+                rows = self._live_fallback.get_chain(symbol, trade_date, expiry)
+                if rows:
+                    logger.info(
+                        "zerodha: using nse_live failsafe for %s %s (%d rows)",
+                        symbol, expiry, len(rows),
+                    )
+                    return rows
+            except Exception:
+                logger.warning("nse_live failsafe raised; falling back to EOD", exc_info=True)
+        return self._eod.get_chain(symbol, trade_date, expiry)
+
     def get_chain(self, symbol: str, trade_date: date, expiry: date) -> List[dict]:
         # Historical chains always go through EOD — settled values only.
         if trade_date != _today_ist():
@@ -308,28 +329,44 @@ class ZerodhaProvider:
             insts = self._ensure_instruments()
             options = insts.list_options(symbol.upper(), expiry)
         except (TokenExpiredError, ProviderError) as exc:
-            logger.warning("zerodha get_chain falling back to EOD: %s", exc)
-            return self._eod.get_chain(symbol, trade_date, expiry)
+            logger.warning("zerodha get_chain falling back: %s", exc)
+            return self._live_then_eod(symbol, trade_date, expiry)
         if not options:
-            logger.info("zerodha: no instruments for %s %s; using EOD", symbol, expiry)
-            return self._eod.get_chain(symbol, trade_date, expiry)
+            logger.info("zerodha: no instruments for %s %s; using failsafe", symbol, expiry)
+            return self._live_then_eod(symbol, trade_date, expiry)
 
-        # Kite ltp accepts up to 1000 instruments per call, 10 req/sec.
+        # Prefer quote() over ltp() because it includes open_interest (oi).
+        # quote() is rate-limited to 1 req/sec; ltp() to 10 req/sec.
+        # Fall back chain: quote() → ltp() (no OI) → EOD.
         kite_keys = [f"NFO:{i.tradingsymbol}" for i in options]
         cache_key = ("chain", symbol.upper(), expiry)
         cached, age = self._cache.get_with_age(cache_key)
         if cached is not None:
             return self._build_chain_rows(options, cached, expiry, age)
 
-        self._rl_ltp.acquire()
+        data: Optional[dict] = None
+        # Try quote() first — returns oi alongside last_price.
         try:
-            data = self._wrap_call(lambda: self._facade.ltp(kite_keys), "ltp(chain)")  # type: ignore[union-attr]
+            self._rl_quote.acquire()
+            data = self._wrap_call(
+                lambda: self._facade.quote(kite_keys), "quote(chain)"  # type: ignore[union-attr]
+            )
         except (TokenExpiredError, ProviderError) as exc:
-            logger.warning("zerodha get_chain falling back to EOD: %s", exc)
-            return self._eod.get_chain(symbol, trade_date, expiry)
+            logger.warning("zerodha quote(chain) failed, trying ltp: %s", exc)
+
+        # If quote() failed or returned nothing, try ltp() (no OI).
+        if not isinstance(data, dict) or not data:
+            try:
+                self._rl_ltp.acquire()
+                data = self._wrap_call(
+                    lambda: self._facade.ltp(kite_keys), "ltp(chain)"  # type: ignore[union-attr]
+                )
+            except (TokenExpiredError, ProviderError) as exc:
+                logger.warning("zerodha get_chain falling back: %s", exc)
+                return self._live_then_eod(symbol, trade_date, expiry)
 
         if not isinstance(data, dict) or not data:
-            return self._eod.get_chain(symbol, trade_date, expiry)
+            return self._live_then_eod(symbol, trade_date, expiry)
         self._cache.set(cache_key, data)
         return self._build_chain_rows(options, data, expiry, 0.0)
 
@@ -351,6 +388,9 @@ class ZerodhaProvider:
                 lp = float(entry["last_price"])
             except (KeyError, TypeError, ValueError):
                 continue
+            # quote() response has last_price + oi; ltp() has last_price only.
+            raw_oi = entry.get("oi")          # present in quote(), absent in ltp()
+            live_oi = int(raw_oi) if raw_oi else None
             rows.append({
                 "trade_date":     _today_ist(),
                 "symbol":         inst.name,
@@ -364,7 +404,7 @@ class ZerodhaProvider:
                 "close_price":    lp,
                 "settle_price":   lp,
                 "contracts":      None,
-                "open_interest":  None,
+                "open_interest":  live_oi,
                 "change_in_oi":   None,
                 "_source":        DataSource.LIVE.value,
                 "_provider":      self.name,

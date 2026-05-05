@@ -275,15 +275,85 @@ def evaluate(
     checks.append(_gate("DTE within target band", _dte_gate))
 
     # ══════════════════════════════════════════════════════════════
+    # TRAJECTORY GATES — populated only in live mode (WS history present).
+    # These appear as visible diagnostics on the dashboard but two are
+    # advisory-only (SOFT_FAIL, not counted toward soft-pass min). The
+    # spread-quality gate is a hard FAIL (illiquid strikes are unfillable).
+    # All emit PASS_WARN when the underlying field is None (EOD mode or
+    # insufficient WS history) — no behaviour change vs today.
+    # ══════════════════════════════════════════════════════════════
+
+    # 10. IV trajectory — sustainedly rising IV warns credit/writing strategies
+    iv_slope_warn = STRATEGY_CONFIG.get("iv_traj_slope_warn_pct", 0.5)
+    iv_persist_warn = STRATEGY_CONFIG.get("iv_traj_persistence_warn", 0.7)
+
+    def _iv_traj_gate():
+        s = indicators.atm_iv_slope_5min
+        p = indicators.atm_iv_persistence
+        if s is None or p is None:
+            return _PASS_WARN, "ATM IV trajectory unavailable (no live history)"
+        rising_sustained = (s > iv_slope_warn) and (p >= iv_persist_warn)
+        if rising_sustained:
+            return (
+                _SOFT_FAIL,
+                f"ATM IV rising {s:+.2f}%/5min sustained {p*100:.0f}% — "
+                f"vol expansion regime, credit strategies at risk",
+            )
+        return _PASS, f"ATM IV slope {s:+.2f}%/5min · persistence {p*100:.0f}%"
+
+    checks.append(_gate("ATM IV trajectory benign", _iv_traj_gate))
+
+    # 11. OI momentum — sustained directional OI build warns sideways strategies
+    oi_slope_warn = STRATEGY_CONFIG.get("oi_pcr_traj_slope_warn_pct", 1.0)
+    oi_persist_warn = STRATEGY_CONFIG.get("oi_pcr_traj_persistence_warn", 0.7)
+
+    def _oi_traj_gate():
+        s = indicators.oi_pcr_slope_5min
+        p = indicators.oi_pcr_persistence
+        if s is None or p is None:
+            return _PASS_WARN, "OI PCR trajectory unavailable (no live history)"
+        directional_sustained = (abs(s) > oi_slope_warn) and (p >= oi_persist_warn)
+        if directional_sustained:
+            return (
+                _SOFT_FAIL,
+                f"OI PCR slope {s:+.2f}%/5min sustained {p*100:.0f}% — "
+                f"directional pressure, regime not sideways",
+            )
+        return _PASS, f"OI PCR slope {s:+.2f}%/5min · persistence {p*100:.0f}%"
+
+    checks.append(_gate("OI PCR momentum neutral", _oi_traj_gate))
+
+    # 12. Spread quality — wide ATM bid-ask = unfillable suggestion
+    spread_max = STRATEGY_CONFIG.get("spread_quality_max_total_bps", 60.0)
+
+    def _spread_gate():
+        c = indicators.atm_call_spread_bps
+        p = indicators.atm_put_spread_bps
+        if c is None or p is None:
+            return _PASS_WARN, "ATM bid-ask spread unavailable (no live depth)"
+        total = c + p
+        ok = total <= spread_max
+        return (
+            _PASS if ok else _FAIL,
+            f"ATM call+put spread {total:.0f} bps "
+            f"(call {c:.0f} · put {p:.0f}; max {spread_max:.0f})",
+        )
+
+    checks.append(_gate("ATM strikes liquid (spread within budget)", _spread_gate))
+
+    # ══════════════════════════════════════════════════════════════
     # Score + all_passed
     # ══════════════════════════════════════════════════════════════
     # Soft gates: checks[0..6] = 7 gates (original 5 + IV premium + FII)
     # Event warning: checks[7] — SOFT_FAIL but excluded from hard_failed count
     # Hard gate: checks[8] — DTE
+    # Trajectory gates: checks[9..11] — IV traj, OI traj (advisory SOFT_FAIL,
+    #   visible but NOT counted in soft_failed), spread quality (hard FAIL).
     soft_min   = STRATEGY_CONFIG["soft_gate_min_pass"]   # default 5 (of 7)
     soft_total = 7  # gates 1–7
 
-    hard_failed = sum(1 for c in checks[8:] if c.status == _FAIL)
+    # Count any hard FAIL anywhere (DTE + spread quality both qualify).
+    hard_failed = sum(1 for c in checks if c.status == _FAIL)
     soft_failed = sum(1 for c in checks[:7] if c.status == _SOFT_FAIL)
 
     all_passed = hard_failed == 0 and soft_failed <= (soft_total - soft_min)

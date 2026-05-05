@@ -77,6 +77,36 @@ SCHEDULER_CONFIG = {
         "iv_calculation":     {"hour": 19, "minute":  0, "enabled": True},
         # Suggestions + lifecycle
         "suggestion_engine":  {"hour": 19, "minute": 30, "enabled": True},
+        # Live suggestion: re-evaluate with live Zerodha chain during market hours.
+        # Requires OPT_PROVIDERS=zerodha.  Runs at 11:00 IST — gives the WS
+        # 5-min aggregator ~20 samples (90 min from 09:30 open) for slope
+        # estimation while still leaving plenty of session for execution.
+        # Retires the stale EOD suggestion and replaces it with a fresh
+        # suggestion based on current spot, chain, IV, and trajectory metrics.
+        # No-op (logged + skipped) when Zerodha is unavailable.
+        "live_suggestion_engine": {
+            "day_of_week": "mon-fri", "hour": 11, "minute": 0, "enabled": True,
+        },
+        # Phase 3 — #1 / #13. Additional live-suggest windows so users get
+        # multiple refreshed suggestions per session instead of one fixed
+        # 11:00 run. Each entry registers as its own scheduled job.
+        # Set "enabled": False on any window to skip.
+        "live_suggestion_engine_0945": {
+            "day_of_week": "mon-fri", "hour": 9, "minute": 45, "enabled": True,
+        },
+        "live_suggestion_engine_1300": {
+            "day_of_week": "mon-fri", "hour": 13, "minute": 0, "enabled": True,
+        },
+        "live_suggestion_engine_1430": {
+            "day_of_week": "mon-fri", "hour": 14, "minute": 30, "enabled": True,
+        },
+        # Phase 3 — #5. Event-eve review: at 14:30 IST, if there is a HIGH-impact
+        # event scheduled for tomorrow (or today afternoon), post one
+        # EVENT_AHEAD_REVIEW notification per ACTIVE trade so the user
+        # decides whether to close before the event.
+        "event_eve_review": {
+            "day_of_week": "mon-fri", "hour": 14, "minute": 30, "enabled": True,
+        },
         "simulation_update":  {"hour": 19, "minute": 45, "enabled": True},
         "exit_engine":        {"hour": 19, "minute": 50, "enabled": True},
         # Phase 2b.1 — live-vs-settled drift detection
@@ -100,6 +130,15 @@ SCHEDULER_CONFIG = {
         "weekly_cleanup":     {"day_of_week": "sun", "hour": 2,  "minute":  0, "enabled": True},
         # Events calendar sync — Monday 07:00 before market open
         "events_seed":        {"day_of_week": "mon", "hour": 7,  "minute":  0, "enabled": True},
+        # Zerodha access tokens expire daily at ~06:00 IST. This job runs
+        # at 06:05 IST Mon-Fri, checks data/zerodha_session.json, and if
+        # the token is missing/expired posts a CRITICAL notification with
+        # the steps to run --zerodha-login. No-op when OPT_PROVIDERS!=zerodha
+        # or OPT_ZERODHA_ENABLED=false. Cannot auto-login (Kite OAuth
+        # requires interactive request_token paste).
+        "zerodha_relogin_reminder": {
+            "day_of_week": "mon-fri", "hour": 6, "minute": 5, "enabled": True,
+        },
     },
     # Each job also gets a max wallclock budget (seconds) — enforced by orchestrator
     "job_timeout_seconds": {
@@ -131,6 +170,8 @@ NSE_CONFIG = {
     "vix_archive_url": "https://www.niftyindices.com/IndexConstituent/IndiaVIX_Historical_Data.csv",
     # NSE participant-wise OI (yyyymmdd)
     "fii_oi_url":      "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_{ddmmyyyy}.csv",
+    # Live option chain JSON (intraday) — Phase 3 #8 failsafe provider
+    "option_chain_url": "https://www.nseindia.com/api/option-chain-indices?symbol={symbol}",
     # Warm-up endpoint to obtain cookies before downloading archives
     "warmup_url":      "https://www.nseindia.com",
     "request_timeout": 30,
@@ -261,6 +302,28 @@ STRATEGY_CONFIG = {
     # FII position beyond this magnitude against the trend triggers a soft-fail.
     "fii_net_futures_threshold": 50_000,
 
+    # ── Trajectory thresholds (5-min WS aggregator → confidence gates) ──
+    # Window of recent 5-min samples loaded for slope/persistence.
+    # 12 samples = 60 minutes of trajectory.
+    "trajectory_window_samples":      12,
+    # Min samples required before trajectory metrics are emitted at all.
+    "trajectory_min_samples":         3,
+    # _iv_trajectory_gate: SOFT_FAIL credit strategies when ATM IV is rising
+    # sustainedly (slope_pct > min and persistence > min).
+    "iv_traj_slope_warn_pct":         0.5,   # % per 5-min sample
+    "iv_traj_persistence_warn":       0.7,   # 70% of deltas same sign
+    # _oi_momentum_gate: SOFT_FAIL Iron Condor / Iron Butterfly when OI PCR
+    # shows sustained directional drift (regime not actually sideways).
+    "oi_pcr_traj_slope_warn_pct":     1.0,   # % per 5-min sample
+    "oi_pcr_traj_persistence_warn":   0.7,
+    # _spread_quality_gate: hard FAIL when ATM bid-ask spread sum exceeds budget.
+    # bps of mid; index ATM spreads typically run 5-30 bps; >60 bps = illiquid.
+    "spread_quality_max_total_bps":   60.0,
+    # IV slope magnitude that biases select_strategy toward writing (negative
+    # = falling IV) or buying (positive = rising IV). Smaller than the gate
+    # threshold above so bias kicks in before veto.
+    "iv_traj_bias_slope_pct":         0.3,
+
     # IV calc bisection params
     "iv_bisection_low":  0.001,
     "iv_bisection_high": 5.0,
@@ -314,6 +377,94 @@ STRATEGY_CONFIG = {
     # When a SHORT leg's live LTP rises above fill_price * intraday_sl_multiplier
     # we fire a CRITICAL SL_TRIGGER notification (once per leg per day).
     "intraday_sl_multiplier": 2.0,
+
+    # Live trade-level risk monitor (lifecycle/live_risk_monitor.py)
+    # On every WS tick that updates a leg of an ACTIVE trade we recompute the
+    # whole-trade MTM via engine.exit_engine.evaluate_exit() and emit:
+    #   * SL_TRIGGER  — when current_pnl <= -(stop_loss_fraction * max_loss)
+    #   * TARGET_HIT  — when current_pnl >= live_target_fraction * max_profit
+    # Stricter than EOD take-profit (0.5) because intraday wiggle can briefly
+    # cross 0.5 and reverse; 0.7 leaves room before alerting the user.
+    # Re-fires every cooldown_minutes while the trade remains in breach so
+    # the user keeps getting reminded; alerts stop the moment the trade
+    # leaves ACTIVE status (user closed it).
+    "live_risk_monitor": {
+        "enabled":             True,
+        "live_target_fraction": 0.70,
+        "cooldown_minutes":    15,
+        "reload_interval_sec": 60,
+        # Only run during NSE cash session (09:15 – 15:30 IST).
+        # All times are interpreted as Asia/Kolkata local time (utils.now_ist()).
+        "session_start": "09:15",
+        "session_end":   "15:30",
+        # Stale-data guard: any leg whose last tick is older than this is
+        # treated as "no fresh price"; trade evaluation is skipped until it
+        # ticks again. Prevents false alerts on illiquid legs.
+        "stale_leg_seconds": 30,
+        # Pre-breach soft warning: emit PRE_BREACH_WARNING once when current
+        # loss first crosses this fraction of max loss (default 30%).
+        # Gives the user lead time before the hard SL_TRIGGER (50%).
+        "pre_breach_fraction": 0.30,
+        # DTE-aware target tightening: at low DTE we tighten the target so
+        # we don't sit through gamma; at high DTE we let theta run.
+        # Linear interpolation between the two endpoints (clamped).
+        "target_fraction_at_min_dte": 0.50,   # at DTE <= target_min_dte
+        "target_fraction_at_max_dte": 0.80,   # at DTE >= target_max_dte
+        "target_min_dte": 3,
+        "target_max_dte": 15,
+        # Spot-based SL: when the underlying spot crosses
+        # `actual_stop_loss_level` for an ACTIVE trade, fire SL_TRIGGER.
+        # Independent of premium-based SL (loss >= stop_loss_fraction × max_loss).
+        "spot_sl_enabled": True,
+        # Optional dashboard URL prefix for action links in alerts.
+        # When set, notification body will include
+        # `<dashboard_url>/#/trade/<trade_id>`. Leave None / empty to disable.
+        "dashboard_url": None,
+        # Status JSON snapshot path (counters for ticks/alerts). Written every
+        # `status_write_interval_sec`. Set to None to disable.
+        "status_path": "data/live_risk_status.json",
+        "status_write_interval_sec": 30,
+        # Trailing SL on profit (Phase 3 — #4).
+        # Each step is (profit_fraction_trigger, lock_floor_fraction_of_max_profit).
+        # When current_pnl crosses trigger, the trade's PnL floor is set to
+        # lock × max_profit; if PnL ever drops below the floor, fire SL_TRIGGER.
+        # Steps must be sorted by ascending trigger.
+        # Example: at 50% of target, lock breakeven (0.0); at 80% lock 40%.
+        "trailing_sl_steps": [
+            [0.50, 0.0],
+            [0.80, 0.40],
+        ],
+        # Live MTM streaming (Phase 3 — #3).
+        # Throttle TOPIC_TRADE_MTM publishes to this many seconds per trade
+        # so the SSE stream stays cheap on fast-ticking trades.
+        "mtm_publish_interval_sec": 1.0,
+        # Event-eve tightening (Phase 3 — #5).
+        # When events_repo reports a HIGH-impact event for tomorrow, the live
+        # monitor uses this tighter pre-breach fraction (default 0.20)
+        # instead of `pre_breach_fraction` (default 0.30) so the user gets
+        # earlier warnings on event-eve.
+        "event_eve_pre_breach_fraction": 0.20,
+    },
+
+    # Suggestion freshness (Phase 3 — #2).
+    # A PENDING suggestion older than this many minutes is considered STALE.
+    # The execution validator (and dashboard badge) gates executions of stale
+    # rows unless the user explicitly bypasses with `force=True`.
+    # 30 min covers normal click-latency without letting a 09:30 suggestion
+    # be acted on at 14:55 with completely different premiums.
+    "suggestion_freshness_minutes": 30,
+
+    # Phase 3 — #7: dead-man WebSocket watchdog. During market hours, if
+    # the WS runner has not seen any tick within `stale_threshold_sec`,
+    # fire ONE WS_DEAD_MAN notification (re-arms only after recovery).
+    # Cheap loop runs at `check_interval_sec` cadence.
+    "ws_watchdog": {
+        "enabled":             True,
+        "stale_threshold_sec": 60,
+        "check_interval_sec":  30,
+        "session_start":       "09:15",
+        "session_end":         "15:30",
+    },
 
     # Phase 2b.1 — drift verifier threshold (%)
     # The 19:35 drift verifier compares each 15:35 live LTP capture to the
@@ -372,6 +523,11 @@ STRATEGY_CONFIG = {
     # without flagging routine chop.
     "regen_vix_pct_threshold":  5.0,
     "regen_spot_pct_threshold": 0.7,
+    # ATM IV move threshold (vol points) — when ATM IV (per-underlying)
+    # moves more than this from the day's first observed value the
+    # OpportunityRegenWatcher fires an OPPORTUNITY_REGEN_HINT. Values are
+    # absolute IV deltas (e.g. 12.0 → 17.0 = 5.0).
+    "regen_iv_pct_threshold": 5.0,
 
     # VIX regime thresholds (% change vs prior close)
     "vix_rising_threshold":  5.0,
@@ -539,6 +695,10 @@ RETENTION_CONFIG = {
     "system_logs_keep_days":      90,
     "job_log_keep_days":          90,
     "notifications_keep_days":    180,
+    # 5-min chain trajectory tables (Zerodha WS aggregator).
+    # ~330 rows/day total across both tables; 30 days = ~10K rows.
+    "chain_5min_keep_days":       30,
+    "atm_iv_5min_keep_days":      30,
 }
 
 

@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 TOPIC_TICK = "tick"                          # payload: LiveQuote
 TOPIC_CONNECTION_STATE = "connection_state"  # payload: {"provider": str, "state": "connected"/"disconnected"/"degraded", "detail": str}
 TOPIC_TOKEN_EXPIRED = "token_expired"        # payload: {"provider": str}
+TOPIC_TRADE_OPENED = "trade_opened"          # payload: {"trade_id": str}
+TOPIC_TRADE_CLOSED = "trade_closed"          # payload: {"trade_id": str}
+TOPIC_TRADE_MTM = "trade_mtm"                # payload: {"trade_id": str, "mtm": float, "dte": int, "breach_state": str|None, "as_of": "iso"}
 
 
 Handler = Callable[[Any], None]

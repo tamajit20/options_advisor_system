@@ -129,6 +129,35 @@ class TestFreshness:
         assert any("data_as_of" in w for w in r.warnings)
 
 
+class TestSuggestionFreshness:
+    """Phase 3 — #2 hard cap on `generated_on` age at execution time."""
+
+    def test_recent_generated_passes(self):
+        r = validate_execution(
+            _sug(generated_on=_NOW - timedelta(minutes=10)),
+            _legs_iron_condor(), now=_NOW, today=_TODAY,
+        )
+        assert r.ok
+        assert r.details.get("suggestion_age_minutes") == 10.0
+
+    def test_stale_generated_blocks(self):
+        r = validate_execution(
+            _sug(generated_on=_NOW - timedelta(minutes=120)),
+            _legs_iron_condor(), now=_NOW, today=_TODAY,
+        )
+        assert not r.ok
+        assert any("re-validate" in v for v in r.vetoes)
+
+    def test_missing_generated_on_does_not_block(self):
+        r = validate_execution(
+            _sug(generated_on=None),
+            _legs_iron_condor(), now=_NOW, today=_TODAY,
+        )
+        # No generated_on → no age check; freshness rule is skipped.
+        assert r.ok
+        assert "suggestion_age_minutes" not in r.details
+
+
 # ---------------------------------------------------------------------------
 class TestStrikeDistance:
     def test_short_pe_too_close_to_spot_blocks(self):

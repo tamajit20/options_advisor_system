@@ -544,10 +544,11 @@ class SuggestionRepo:
                upper_breakeven, lower_breakeven, stop_loss_level,
                probability_of_profit, estimated_charges_total, estimated_net_pnl,
                execution_window, plain_english,
-               data_date, entry_date, spot_data_date, fii_data_date, vix_data_date)
+               data_date, entry_date, spot_data_date, fii_data_date, vix_data_date,
+               oi_pcr_change)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING',
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?)
             """,
             [
                 s.suggestion_id, s.trade_name, s.generated_on, s.strategy, s.strategy_type,
@@ -558,6 +559,7 @@ class SuggestionRepo:
                 _safe_float(s.economics.probability_of_profit), _safe_float(s.economics.estimated_charges.total), _safe_float(s.economics.estimated_net_pnl),
                 s.execution_window, s.plain_english,
                 s.data_date, s.entry_date, s.spot_data_date, s.fii_data_date, s.vix_data_date,
+                _safe_float(s.oi_pcr_change),
             ],
         ).close()
 
@@ -599,12 +601,21 @@ class SuggestionRepo:
         ).close()
 
     def next_suggestion_id(self, today: date) -> str:
+        # Use MAX(seq), not COUNT(*) — when an old suggestion is deleted the
+        # row count drops and we'd hand out an ID that already exists,
+        # producing a PK violation on insert.  Parse the trailing 3-digit
+        # sequence and bump it.
         prefix = f"SUG-{today.strftime('%Y%m%d')}-"
         row = self.db.fetch_one(
-            "SELECT COUNT(*) AS n FROM options_suggestions WHERE suggestion_id LIKE ?",
+            "SELECT MAX(suggestion_id) AS m FROM options_suggestions "
+            "WHERE suggestion_id LIKE ?",
             [prefix + "%"],
         )
-        n = (row["n"] if row else 0) + 1
+        last = (row or {}).get("m")
+        try:
+            n = (int(str(last).rsplit("-", 1)[-1]) if last else 0) + 1
+        except (ValueError, AttributeError):
+            n = 1
         return f"{prefix}{n:03d}"
 
     def has_suggestion_for(self, underlying: str, day: date, expiry_type: str = "",
@@ -913,6 +924,32 @@ class TradeRepo:
             [sl_level, spot_at_execution, trade_id],
         ).close()
 
+    def silence_alerts_until(self, trade_id: str, until: Optional[datetime]) -> None:
+        """Suppress live SL/target alerts for this trade until ``until``.
+        Pass ``None`` to clear the silence."""
+        self.db.execute(
+            "UPDATE options_trades SET alerts_silenced_until = ? WHERE trade_id = ?",
+            [until, trade_id],
+        ).close()
+
+    def update_trailing(
+        self,
+        trade_id: str,
+        *,
+        trailing_pnl_floor: Optional[float],
+        trailing_step_idx: int,
+    ) -> None:
+        """Phase 3 (#4) \u2014 persist the trailing SL state after a step trigger.
+
+        ``trailing_pnl_floor`` is the live PnL value (rupees) below which we
+        fire SL_TRIGGER. ``trailing_step_idx`` is the next step to consider
+        (0 = no step armed yet, len(steps) = all steps consumed)."""
+        self.db.execute(
+            "UPDATE options_trades SET trailing_pnl_floor = ?, "
+            "trailing_step_idx = ? WHERE trade_id = ?",
+            [trailing_pnl_floor, int(trailing_step_idx), trade_id],
+        ).close()
+
     def update_status(self, trade_id: str, status: str, daily_status: Optional[str] = None,
                       exit_instruction: Optional[str] = None) -> None:
         self.db.execute(
@@ -969,14 +1006,27 @@ class TradeRepo:
             "gross_pnl = ?, total_charges = ?, net_pnl = ? WHERE trade_id = ?",
             [now_ist(), gross, charges, net, trade_id],
         ).close()
+        # Best-effort: notify listeners (live risk monitor) that the watchlist
+        # needs refreshing. Failure to publish must never break trade closure.
+        try:
+            from providers.event_bus import TOPIC_TRADE_CLOSED, get_event_bus
+            get_event_bus().publish(TOPIC_TRADE_CLOSED, {"trade_id": trade_id})
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     def next_trade_id(self, today: date) -> str:
+        # Use MAX(seq), not COUNT(*) — see next_suggestion_id for rationale.
         prefix = f"TRD-{today.strftime('%Y%m%d')}-"
         row = self.db.fetch_one(
-            "SELECT COUNT(*) AS n FROM options_trades WHERE trade_id LIKE ?",
+            "SELECT MAX(trade_id) AS m FROM options_trades "
+            "WHERE trade_id LIKE ?",
             [prefix + "%"],
         )
-        n = (row["n"] if row else 0) + 1
+        last = (row or {}).get("m")
+        try:
+            n = (int(str(last).rsplit("-", 1)[-1]) if last else 0) + 1
+        except (ValueError, AttributeError):
+            n = 1
         return f"{prefix}{n:03d}"
 
     def by_date(self, day: date) -> List[dict]:
@@ -1314,3 +1364,129 @@ class IntradayCloseSnapshotRepo:
         n = cur.rowcount or 0
         cur.close()
         return n
+
+
+# ---------------------------------------------------------------------------
+# 5-min chain aggregate timeseries (Zerodha WS)
+# ---------------------------------------------------------------------------
+class ChainTimeseriesRepo:
+    """Persistence for 5-min chain aggregates produced by the WS aggregator.
+
+    See `lifecycle/chain_aggregator.py`. Idempotent on
+    (snapshot_at, symbol, expiry_date) — re-running the same flush replaces
+    existing rows for that key.
+    """
+
+    def __init__(self, db: SQLServerConnection):
+        self.db = db
+
+    def insert_many(self, rows: List[dict]) -> int:
+        if not rows:
+            return 0
+        keys = {(r["snapshot_at"], r["symbol"], r["expiry_date"]) for r in rows}
+        for snap_at, sym, exp in keys:
+            self.db.execute(
+                "DELETE FROM options_chain_5min "
+                "WHERE snapshot_at = ? AND symbol = ? AND expiry_date = ?",
+                [snap_at, sym, exp],
+            ).close()
+        for r in rows:
+            self.db.execute(
+                "INSERT INTO options_chain_5min "
+                "(snapshot_at, symbol, expiry_date, spot, atm_strike, "
+                " sum_call_oi, sum_put_oi, sum_call_oi_delta, sum_put_oi_delta, "
+                " sum_call_volume, sum_put_volume, atm_call_mid, atm_put_mid, "
+                " atm_call_spread_bps, atm_put_spread_bps, sample_count) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    r["snapshot_at"], r["symbol"], r["expiry_date"],
+                    r.get("spot"), r.get("atm_strike"),
+                    r.get("sum_call_oi"), r.get("sum_put_oi"),
+                    r.get("sum_call_oi_delta"), r.get("sum_put_oi_delta"),
+                    r.get("sum_call_volume"), r.get("sum_put_volume"),
+                    r.get("atm_call_mid"), r.get("atm_put_mid"),
+                    r.get("atm_call_spread_bps"), r.get("atm_put_spread_bps"),
+                    r.get("sample_count"),
+                ],
+            ).close()
+        return len(rows)
+
+    def recent_window(
+        self, symbol: str, expiry: date, since: datetime, limit: int = 24
+    ) -> List[dict]:
+        """Return up to `limit` most-recent rows for (symbol, expiry) at-or-after
+        `since`, ordered ascending by snapshot_at."""
+        rows = self.db.fetch_all(
+            "SELECT TOP (?) * FROM options_chain_5min "
+            "WHERE symbol = ? AND expiry_date = ? AND snapshot_at >= ? "
+            "ORDER BY snapshot_at DESC",
+            [int(limit), symbol, expiry, since],
+        )
+        return list(reversed(rows))
+
+    def delete_older_than(self, cutoff: date) -> int:
+        cur = self.db.execute(
+            "DELETE FROM options_chain_5min WHERE snapshot_at < ?",
+            [datetime.combine(cutoff, datetime.min.time())],
+        )
+        n = cur.rowcount or 0
+        cur.close()
+        return n
+
+
+# ---------------------------------------------------------------------------
+# 5-min ATM IV timeseries (Zerodha WS)
+# ---------------------------------------------------------------------------
+class AtmIvTimeseriesRepo:
+    """Persistence for 5-min ATM IV samples computed from WS ticks.
+
+    Mirrors `ChainTimeseriesRepo` lifecycle. Idempotent on
+    (snapshot_at, symbol, expiry_date).
+    """
+
+    def __init__(self, db: SQLServerConnection):
+        self.db = db
+
+    def insert_many(self, rows: List[dict]) -> int:
+        if not rows:
+            return 0
+        keys = {(r["snapshot_at"], r["symbol"], r["expiry_date"]) for r in rows}
+        for snap_at, sym, exp in keys:
+            self.db.execute(
+                "DELETE FROM options_atm_iv_5min "
+                "WHERE snapshot_at = ? AND symbol = ? AND expiry_date = ?",
+                [snap_at, sym, exp],
+            ).close()
+        for r in rows:
+            self.db.execute(
+                "INSERT INTO options_atm_iv_5min "
+                "(snapshot_at, symbol, expiry_date, atm_strike, spot, dte, atm_iv) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    r["snapshot_at"], r["symbol"], r["expiry_date"],
+                    r.get("atm_strike"), r.get("spot"),
+                    r.get("dte"), r.get("atm_iv"),
+                ],
+            ).close()
+        return len(rows)
+
+    def recent_window(
+        self, symbol: str, expiry: date, since: datetime, limit: int = 24
+    ) -> List[dict]:
+        rows = self.db.fetch_all(
+            "SELECT TOP (?) * FROM options_atm_iv_5min "
+            "WHERE symbol = ? AND expiry_date = ? AND snapshot_at >= ? "
+            "ORDER BY snapshot_at DESC",
+            [int(limit), symbol, expiry, since],
+        )
+        return list(reversed(rows))
+
+    def delete_older_than(self, cutoff: date) -> int:
+        cur = self.db.execute(
+            "DELETE FROM options_atm_iv_5min WHERE snapshot_at < ?",
+            [datetime.combine(cutoff, datetime.min.time())],
+        )
+        n = cur.rowcount or 0
+        cur.close()
+        return n
+

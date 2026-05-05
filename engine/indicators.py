@@ -17,7 +17,8 @@ from datetime import date
 from typing import List, Optional, Sequence, Tuple
 
 from config import STRATEGY_CONFIG
-from contracts import MarketIndicators
+from contracts import ChainTrajectory, MarketIndicators
+from engine import trajectory as _traj
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +33,31 @@ def pcr(chain_rows: Sequence[dict]) -> Optional[float]:
     if call_oi <= 0:
         return None
     return put_oi / call_oi
+
+
+def oi_change_pcr(chain_rows: Sequence[dict]) -> Optional[float]:
+    """Put/Call ratio of OI *change* (ΣΔPut OI / ΣΔCall OI).
+
+    Uses the `change_in_oi` field on each row, which is populated as:
+    - EOD mode : day-over-day change from the NSE bhav copy (already in the data)
+    - Live mode: live_oi − eod_oi computed per strike before calling build_indicators
+
+    Interpretation:
+      > 1.2  → puts building faster than calls (bearish pressure, hedging or IV demand)
+      0.8–1.2 → balanced OI addition
+      < 0.8  → calls building faster (bullish positioning or call writing)
+      None   → change_in_oi absent or call delta ≤ 0 (cannot compute ratio)
+    """
+    rows_with_change = [r for r in chain_rows if r.get("change_in_oi") is not None]
+    if not rows_with_change:
+        return None
+    call_delta = sum((r.get("change_in_oi") or 0) for r in rows_with_change
+                     if r.get("option_type") == "CE")
+    put_delta  = sum((r.get("change_in_oi") or 0) for r in rows_with_change
+                     if r.get("option_type") == "PE")
+    if call_delta <= 0:
+        return None
+    return put_delta / call_delta
 
 
 def max_pain(chain_rows: Sequence[dict]) -> float:
@@ -294,8 +320,21 @@ def build_indicators(
     atm_iv: float,
     dte: int,
     fii_net_futures: Optional[float] = None,
+    oi_chain_rows: Optional[Sequence[dict]] = None,
+    oi_change_rows: Optional[Sequence[dict]] = None,
+    trajectory: Optional[ChainTrajectory] = None,
 ) -> MarketIndicators:
-    cw, pw = oi_walls(chain_rows)
+    # oi_chain_rows: rows to use for absolute OI levels (PCR, max_pain, OI walls).
+    # Callers supply yesterday's bhav chain when chain_rows lack open_interest
+    # (e.g. Zerodha live-mode falling back to ltp()). chain_rows is never mutated.
+    _oi_rows = oi_chain_rows if oi_chain_rows is not None else chain_rows
+
+    # oi_change_rows: rows with change_in_oi for OI momentum (PCR of changes).
+    # EOD mode : None → fall back to chain_rows which has change_in_oi from bhav.
+    # Live mode: caller supplies pre-computed delta rows (live_oi − eod_oi/strike).
+    _change_rows = oi_change_rows if oi_change_rows is not None else chain_rows
+
+    cw, pw = oi_walls(_oi_rows)
     hv = hv_20(spot_history)
     iv_prem = (atm_iv / hv) if (hv is not None and hv > 0) else None
 
@@ -310,12 +349,49 @@ def build_indicators(
     slope_v = _sma20_slope_pct(closes)
     adx_v   = adx(spot_history, 14)
 
+    # ── Trajectory-derived fields (live mode only) ────────────────────────
+    # All None unless a ChainTrajectory bundle is supplied with enough samples.
+    oi_pcr_slope = oi_pcr_persist = None
+    iv_slope = iv_persist = None
+    call_spr_bps = put_spr_bps = None
+    vol_burst = None
+    if trajectory is not None:
+        min_n = STRATEGY_CONFIG.get("trajectory_min_samples", 3)
+        if len(_traj._clean(trajectory.oi_pcr_change_series)) >= min_n:
+            oi_pcr_slope   = _traj.slope_pct(trajectory.oi_pcr_change_series)
+            oi_pcr_persist = _traj.persistence(trajectory.oi_pcr_change_series)
+        if len(_traj._clean(trajectory.atm_iv_series)) >= min_n:
+            iv_slope   = _traj.slope_pct(trajectory.atm_iv_series)
+            iv_persist = _traj.persistence(trajectory.atm_iv_series)
+        call_spr_bps = trajectory.latest_call_spread_bps
+        put_spr_bps  = trajectory.latest_put_spread_bps
+        # Volume burst z-score: last bucket vs trailing mean (call+put combined).
+        combined_vol: List[Optional[float]] = []
+        cv = trajectory.call_volume_series or []
+        pv = trajectory.put_volume_series or []
+        for i in range(max(len(cv), len(pv))):
+            c = cv[i] if i < len(cv) else None
+            p = pv[i] if i < len(pv) else None
+            if c is None and p is None:
+                combined_vol.append(None)
+            else:
+                combined_vol.append((c or 0.0) + (p or 0.0))
+        cleaned = _traj._clean(combined_vol)
+        if len(cleaned) >= 4:
+            last = cleaned[-1]
+            prior = cleaned[:-1]
+            mean = sum(prior) / len(prior)
+            var = sum((x - mean) ** 2 for x in prior) / len(prior)
+            std = math.sqrt(var) if var > 0 else 0.0
+            if std > 0:
+                vol_burst = (last - mean) / std
+
     return MarketIndicators(
         symbol           = symbol,
         as_of            = as_of,
         spot             = spot,
-        pcr              = pcr(chain_rows),
-        max_pain         = max_pain(chain_rows),
+        pcr              = pcr(_oi_rows),
+        max_pain         = max_pain(_oi_rows),
         atr_14           = atr(spot_history, 14),
         trend            = trend(spot_history),
         vix_close        = float(vix_history[-1]["close_price"]) if vix_history else None,
@@ -329,4 +405,12 @@ def build_indicators(
         adx_14           = adx_v,
         sma20_slope_pct  = slope_v,
         sma_diff_pct     = sma_diff,
+        oi_pcr_change    = oi_change_pcr(_change_rows),
+        oi_pcr_slope_5min   = oi_pcr_slope,
+        oi_pcr_persistence  = oi_pcr_persist,
+        atm_iv_slope_5min   = iv_slope,
+        atm_iv_persistence  = iv_persist,
+        atm_call_spread_bps = call_spr_bps,
+        atm_put_spread_bps  = put_spr_bps,
+        volume_burst_z      = vol_burst,
     )

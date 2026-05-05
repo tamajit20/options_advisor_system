@@ -179,14 +179,29 @@ def create_app() -> Flask:
         # After 15:30 on the entry day the suggestion disappears automatically.
         # Falls back to legacy PENDING rows that pre-date the entry_date column.
         rows = sug.active_pending()
+        # Phase 3 — #2: surface staleness so the UI can grey out / badge rows
+        # whose `generated_on` is older than `suggestion_freshness_minutes`.
+        from utils import now_ist as _now
+        fresh_min = float(
+            STRATEGY_CONFIG.get("suggestion_freshness_minutes", 30)
+        )
+        now = _now()
         out = []
         for r in rows:
             r_out = _row(r)
             if "net_credit_suggested" in r_out:
                 r_out["net_credit"] = r_out.pop("net_credit_suggested")
             r_out["legs"] = [_row(l) for l in sug.legs(r["suggestion_id"])]
+            gen_on = r.get("generated_on")
+            if isinstance(gen_on, datetime) and fresh_min > 0:
+                age_min = (now - gen_on).total_seconds() / 60.0
+                r_out["age_minutes"] = round(age_min, 1)
+                r_out["is_stale"] = age_min > fresh_min
+            else:
+                r_out["age_minutes"] = None
+                r_out["is_stale"] = False
             out.append(r_out)
-        return jsonify({"suggestions": out})
+        return jsonify({"suggestions": out, "freshness_minutes": fresh_min})
 
     @app.route("/api/suggestion/<sid>/mark-executed", methods=["POST"])
     @_with_db
@@ -947,6 +962,186 @@ def create_app() -> Flask:
             "trade_execution_enabled": trade_exec_enabled,
             "scheduler_running":       sch_running,
         })
+
+    # ---------- Phase 3 — #9 Comprehensive system status JSON -----------
+    # One-stop health snapshot for external monitors / on-call dashboards.
+    # All probes are best-effort; on failure each section returns a stub
+    # `{"available": False, "reason": ...}` so the endpoint never 500s.
+    @app.route("/api/system/status")
+    @_with_db
+    def api_system_status_full(db: SQLServerConnection):
+        from utils import now_ist as _now, today_ist as _today
+        out: dict = {
+            "as_of":   _now().isoformat(),
+            "today":   _today().isoformat(),
+        }
+
+        # ---- runtime flags -------------------------------------------
+        try:
+            from database.runtime_flags import (
+                FLAG_CIRCUIT_BREAKER_ACTIVE,
+                FLAG_KILL_SWITCH,
+                FLAG_TRADE_EXECUTION_ENABLED,
+                RuntimeFlagsRepo,
+            )
+            r = RuntimeFlagsRepo(db, cache_ttl_seconds=0)
+            out["runtime_flags"] = {
+                "circuit_breaker_active": r.get_bool(FLAG_CIRCUIT_BREAKER_ACTIVE, default=False),
+                "kill_switch":             r.get_bool(FLAG_KILL_SWITCH, default=False),
+                "trade_execution_enabled": r.get_bool(FLAG_TRADE_EXECUTION_ENABLED, default=True),
+            }
+        except Exception as exc:  # pragma: no cover
+            out["runtime_flags"] = {"available": False, "reason": str(exc)}
+
+        # ---- scheduler ----------------------------------------------
+        try:
+            from scheduler.scheduler import get_scheduler
+            sch = get_scheduler()
+            out["scheduler"] = {
+                "running":  bool(sch and sch.running),
+                "job_count": len(sch.get_jobs()) if sch else 0,
+            }
+        except Exception as exc:
+            out["scheduler"] = {"available": False, "reason": str(exc)}
+
+        # ---- last-status per job -------------------------------------
+        try:
+            from database.log_repo import JobLogRepo
+            jobs = JobLogRepo(db).latest_status_per_job()
+            out["jobs_last_status"] = [
+                {
+                    "job_name":    j["job_name"],
+                    "status":      j["status"],
+                    "started_at":  j["started_at"].isoformat() if j.get("started_at") else None,
+                    "finished_at": j["finished_at"].isoformat() if j.get("finished_at") else None,
+                    "error":       (j.get("error_message") or "")[:200] or None,
+                }
+                for j in jobs
+            ]
+        except Exception as exc:
+            out["jobs_last_status"] = {"available": False, "reason": str(exc)}
+
+        # ---- data freshness -----------------------------------------
+        today = _today()
+        freshness: dict = {}
+        def _age(d) -> dict:
+            if d is None:
+                return {"latest_date": None, "age_days": None}
+            try:
+                age = (today - d).days
+            except Exception:
+                age = None
+            return {"latest_date": d.isoformat(), "age_days": age}
+        try:
+            from database.models import (
+                FoEodRepo, SpotEodRepo, VixRepo, IvHistoryRepo,
+            )
+            freshness["fo_eod"]      = _age(FoEodRepo(db).latest_trade_date())
+            freshness["iv_history"]  = _age(IvHistoryRepo(db).latest_trade_date())
+            spot = SpotEodRepo(db).latest("NIFTY") or {}
+            freshness["spot_nifty"]  = _age(spot.get("trade_date"))
+            vix  = VixRepo(db).latest() or {}
+            freshness["vix"]         = _age(vix.get("trade_date"))
+        except Exception as exc:
+            freshness = {"available": False, "reason": str(exc)}
+        out["data_freshness"] = freshness
+
+        # ---- counts -------------------------------------------------
+        try:
+            from database.models import SuggestionRepo, TradeRepo
+            out["counts"] = {
+                "open_trades":      len(TradeRepo(db).open_trades()),
+                "pending_suggestions": len(SuggestionRepo(db).active_pending()),
+            }
+        except Exception as exc:
+            out["counts"] = {"available": False, "reason": str(exc)}
+
+        # ---- websocket ---------------------------------------------
+        try:
+            from providers.ws_monitor import default_snapshot_path
+            path = default_snapshot_path()
+            if path.exists():
+                with path.open("r", encoding="utf-8") as f:
+                    snap = json.load(f)
+                last_tick_at = snap.get("last_tick_at")
+                age_sec: Optional[float] = None
+                if last_tick_at:
+                    try:
+                        last_dt = datetime.fromisoformat(last_tick_at)
+                        if last_dt.tzinfo is None:
+                            last_dt = last_dt.replace(tzinfo=_now().tzinfo)
+                        age_sec = max(0.0, (_now() - last_dt).total_seconds())
+                    except (TypeError, ValueError):
+                        pass
+                out["websocket"] = {
+                    "available":         True,
+                    "connection_state":  snap.get("connection_state"),
+                    "last_tick_at":      last_tick_at,
+                    "last_tick_age_sec": age_sec,
+                    "subscribed_count":  snap.get("subscribed_count"),
+                    "tick_count":        snap.get("tick_count"),
+                }
+            else:
+                out["websocket"] = {
+                    "available": False,
+                    "reason":    "ws_status.json not found",
+                }
+        except Exception as exc:
+            out["websocket"] = {"available": False, "reason": str(exc)}
+
+        return jsonify(out)
+
+    # ---------- Phase 3 — #3 Live MTM streaming via SSE -----------------
+    # Subscribes to TOPIC_TRADE_MTM on the in-process EventBus and pushes
+    # JSON-encoded events over text/event-stream so the dashboard can show
+    # a live MTM ticker without polling. Each browser tab gets its own
+    # bounded queue; if a client falls more than 100 events behind we drop
+    # the oldest to avoid unbounded memory growth.
+    @app.route("/api/live/mtm")
+    def api_live_mtm():
+        from queue import Empty, Queue
+        from flask import Response, stream_with_context
+        from providers.event_bus import TOPIC_TRADE_MTM, get_event_bus
+
+        client_q: Queue = Queue(maxsize=200)
+        bus = get_event_bus()
+
+        def _on_mtm(payload):
+            try:
+                client_q.put_nowait(payload)
+            except Exception:
+                # Queue full — drop the oldest, keep the newest.
+                try:
+                    client_q.get_nowait()
+                    client_q.put_nowait(payload)
+                except Exception:
+                    pass
+
+        unsub = bus.subscribe(TOPIC_TRADE_MTM, _on_mtm)
+
+        @stream_with_context
+        def _gen():
+            try:
+                # Initial comment so the browser confirms the connection.
+                yield ": connected\n\n"
+                while True:
+                    try:
+                        ev = client_q.get(timeout=15.0)
+                    except Empty:
+                        # Heartbeat to keep the connection alive through
+                        # proxies that idle-timeout at 30-60s.
+                        yield ": ping\n\n"
+                        continue
+                    yield f"data: {json.dumps(ev, default=_json_default)}\n\n"
+            finally:
+                try:
+                    unsub()
+                except Exception:
+                    pass
+
+        return Response(_gen(), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache",
+                                 "X-Accel-Buffering": "no"})
 
     return app
 

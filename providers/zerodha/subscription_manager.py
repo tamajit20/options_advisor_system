@@ -396,3 +396,67 @@ def make_static_leg_loader(legs: Iterable[OptionLegKey]) -> LegLoader:
     """Trivial loader for tests / smoke runs."""
     snapshot: List[OptionLegKey] = list(legs)
     return lambda: list(snapshot)
+
+
+# ---------------------------------------------------------------------------
+# Watchlist loader — for the 5-min chain aggregator
+# ---------------------------------------------------------------------------
+def make_watchlist_leg_loader(
+    instrument_master: InstrumentMaster,
+    *,
+    underlyings: Iterable[str],
+    spot_lookup: Callable[[str], Optional[float]],
+    band_pct: float = 0.05,
+    expiries_per_underlying: int = 2,
+) -> LegLoader:
+    """Return a loader that yields option legs for the suggestion-engine watchlist.
+
+    For each underlying it picks the next `expiries_per_underlying` upcoming
+    expiries from `instrument_master`, then takes every CE/PE strike within
+    ±`band_pct` of the current spot (resolved via `spot_lookup`). Used by
+    `lifecycle/chain_aggregator.py` to build a chain trajectory without
+    requiring an open trade or pending suggestion on each underlying.
+
+    `spot_lookup(symbol)` returns the latest spot for the underlying, or
+    None if not yet known. When None, the loader skips that underlying for
+    this cycle (the next reconcile will pick it up once spot ticks arrive).
+    """
+    underlying_names: List[str] = [str(u).upper() for u in underlyings]
+
+    def _loader() -> Iterator[OptionLegKey]:
+        today = date.today()
+        for sym in underlying_names:
+            spot = spot_lookup(sym)
+            if spot is None or spot <= 0:
+                continue
+            expiries = [
+                e for e in instrument_master.list_expiries(sym) if e >= today
+            ][:expiries_per_underlying]
+            lo = spot * (1.0 - band_pct)
+            hi = spot * (1.0 + band_pct)
+            for exp in expiries:
+                seen: set = set()
+                for inst in instrument_master.list_options(sym, exp):
+                    if inst.instrument_type not in ("CE", "PE"):
+                        continue
+                    if inst.strike < lo or inst.strike > hi:
+                        continue
+                    k = (sym, exp, float(inst.strike), inst.instrument_type)
+                    if k in seen:
+                        continue
+                    seen.add(k)
+                    yield k
+
+    return _loader
+
+
+def merge_leg_loaders(*loaders: LegLoader) -> LegLoader:
+    """Concatenate multiple leg loaders into one. Order preserved; the
+    SubscriptionManager dedupes via a set so duplicate keys are harmless."""
+    snap: Tuple[LegLoader, ...] = tuple(loaders)
+
+    def _loader() -> Iterator[OptionLegKey]:
+        for ld in snap:
+            yield from ld()
+
+    return _loader
