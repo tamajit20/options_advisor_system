@@ -125,6 +125,16 @@ def _run_with_timeout(job_name, fn, db):
             "Job %s exceeded %ds wall-clock budget; closing DB to release locks",
             job_name, timeout_s,
         )
+        # Dump the worker thread's stack so we can see exactly where
+        # it was blocked. Critical for diagnosing future hangs.
+        try:
+            import sys, traceback
+            frame = sys._current_frames().get(t.ident)
+            if frame is not None:
+                stack = "".join(traceback.format_stack(frame))
+                logger.error("Job %s worker stack at timeout:\n%s", job_name, stack)
+        except Exception:  # noqa: BLE001
+            logger.warning("Watchdog: stack dump failed", exc_info=True)
         try:
             db.close()
         except Exception:  # noqa: BLE001

@@ -131,7 +131,11 @@ class ZerodhaProvider:
         self._rl_quote = TokenBucket(rate_per_sec=1.0)
         self._rl_ltp = TokenBucket(rate_per_sec=10.0)
 
-        self._init_lock = threading.Lock()
+        # RLock (not Lock!) because `_ensure_instruments` acquires this
+        # lock and then calls `_ensure_facade`, which acquires it again.
+        # A plain Lock self-deadlocks the whole live-suggestion pipeline
+        # on first chain fetch.
+        self._init_lock = threading.RLock()
         self._last_error: Optional[str] = None
         self._token_expired = False
 
