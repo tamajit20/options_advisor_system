@@ -275,6 +275,9 @@ def create_app() -> Flask:
             if "net_credit_suggested" in r_out:
                 r_out["net_credit"] = r_out.pop("net_credit_suggested")
             r_out["legs"] = [_row(l) for l in sug.legs(r["suggestion_id"])]
+            # Add data_as_of from provenance if available
+            prov = db.fetch_one("SELECT data_as_of FROM options_suggestions WHERE suggestion_id = ?", [r["suggestion_id"]])
+            r_out["data_as_of"] = prov["data_as_of"] if prov and prov.get("data_as_of") else None
             gen_on = r.get("generated_on")
             if isinstance(gen_on, datetime) and fresh_min > 0:
                 age_min = (now - gen_on).total_seconds() / 60.0

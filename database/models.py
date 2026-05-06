@@ -802,8 +802,11 @@ class SuggestionRepo:
         """Return suggestions that are still relevant on the Suggestions page.
 
         Display rules by status:
-          PENDING  — shown while the execution window is open:
-                     entry_date >= today (before 09:45) or entry_date > today (after 09:45)
+          PENDING  — shown while the entry window is still open on the entry
+                     day (until 15:30 IST market close), or any time before
+                     entry_date. The live suggestion engine can emit fresh
+                     intraday PENDING rows with entry_date=today right up to
+                     15:30, so we keep showing them until the close.
           EXECUTED — always shown for entry_date >= today so the user can see
                      what trade was placed, regardless of the time of day.
           IGNORED  — never shown (superseded; a fresh PENDING row exists instead).
@@ -814,10 +817,10 @@ class SuggestionRepo:
         now = now_ist()
         today = now.date()
         from datetime import time as _time
-        exec_window_close = _time(9, 45)
+        visible_until = _time(19, 0)  # 7pm IST
 
-        if now.time() <= exec_window_close:
-            # Within execution window: PENDING and EXECUTED for today and future
+        if now.time() <= visible_until:
+            # Still within visibility window: show PENDING and EXECUTED for today and future.
             rows = self.db.fetch_all(
                 "SELECT * FROM options_suggestions "
                 "WHERE status IN ('PENDING', 'EXECUTED') "
@@ -826,8 +829,7 @@ class SuggestionRepo:
                 [today],
             )
         else:
-            # After execution window: PENDING only for future days,
-            # but EXECUTED still visible for today (already acted on) and future.
+            # After 7pm: only future PENDING, but EXECUTED for today still visible.
             rows = self.db.fetch_all(
                 "SELECT * FROM options_suggestions "
                 "WHERE (status = 'PENDING' AND entry_date > ?) "
