@@ -95,6 +95,25 @@ class SQLServerConnection:
         cs = self._build_connection_string(override_database=override_database)
         self._connection_string = cs
         self.connection = pyodbc.connect(cs, timeout=self.timeout, autocommit=False)
+        # Apply session-level lock + query timeouts so a single hung
+        # writer cannot freeze the whole DB. LOCK_TIMEOUT is in ms;
+        # query timeout is set on the pyodbc connection (seconds).
+        # `SET LOCK_TIMEOUT` is a session option, not a DML statement,
+        # so no commit/rollback is required.
+        try:
+            lock_ms = int(DATABASE_CONFIG.get("lock_timeout_ms", 30_000))
+            if lock_ms >= 0:
+                cur = self.connection.cursor()
+                cur.execute(f"SET LOCK_TIMEOUT {lock_ms}")
+                cur.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not set LOCK_TIMEOUT: %s", exc)
+        try:
+            qt = int(DATABASE_CONFIG.get("query_timeout", 60))
+            if qt > 0:
+                self.connection.timeout = qt
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not set query timeout: %s", exc)
         logger.info(
             "DB connected: server=%s database=%s auth=%s",
             self.server,

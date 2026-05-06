@@ -57,6 +57,14 @@ DATABASE_CONFIG = {
     "username":           _env("OPT_DB_USER",   ""),     # blank → Windows auth
     "password":           _env("OPT_DB_PASSWORD", ""),
     "connection_timeout": _env_int("OPT_DB_TIMEOUT", 30),
+    # SQL Server SET LOCK_TIMEOUT (ms). Any statement that would wait
+    # for a lock longer than this fails fast with error 1222 instead of
+    # blocking forever -- protects us from a single hung writer holding
+    # X-locks indefinitely. -1 = wait forever (SQL Server default).
+    "lock_timeout_ms":    _env_int("OPT_DB_LOCK_TIMEOUT_MS", 30_000),
+    # Per-statement query timeout (s). Belt-and-braces alongside
+    # lock_timeout: catches genuinely long-running queries too.
+    "query_timeout":      _env_int("OPT_DB_QUERY_TIMEOUT", 60),
     # If True, `python main.py --init-db` issues `CREATE DATABASE` if missing.
     "create_if_missing":  _env_bool("OPT_DB_CREATE_IF_MISSING", True),
 }
@@ -131,7 +139,9 @@ SCHEDULER_CONFIG = {
         # Events calendar sync — Monday 07:00 before market open
         "events_seed":        {"day_of_week": "mon", "hour": 7,  "minute":  0, "enabled": True},
     },
-    # Each job also gets a max wallclock budget (seconds) — enforced by orchestrator
+    # Each job also gets a max wallclock budget (seconds) — enforced by
+    # `_run_job` via a watchdog thread that closes the DB connection on
+    # expiry (severs SQL Server locks) and marks the row FAILED.
     "job_timeout_seconds": {
         "fo_bhav_download":   600,
         "spot_bhav_download": 300,
@@ -139,13 +149,24 @@ SCHEDULER_CONFIG = {
         "fii_download":       300,
         "iv_calculation":     900,
         "suggestion_engine":  600,
+        # Live-suggestion windows: short timeout because they fan out
+        # to several HTTP fetches; if any one stalls we want the row
+        # to FAIL fast so the next window isn't blocked.
+        "live_suggestion_engine":      300,
+        "live_suggestion_engine_0945": 300,
+        "live_suggestion_engine_1300": 300,
+        "live_suggestion_engine_1430": 300,
         "simulation_update":  600,
         "exit_engine":        300,
+        "events_seed":        300,
+        "event_eve_review":   180,
         "weekly_cleanup":     1800,
         "intraday_close_snapshot": 300,
         "drift_verifier":          120,
         "intraday_validator":      180,
     },
+    # Default for jobs not listed above.
+    "default_job_timeout_seconds": 600,
 }
 
 

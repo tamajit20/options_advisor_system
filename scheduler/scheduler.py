@@ -19,6 +19,7 @@ to keep transaction scope tight.
 from __future__ import annotations
 
 import logging
+import threading
 import traceback
 from datetime import date, datetime
 from typing import Callable, Optional
@@ -63,6 +64,77 @@ _LAST_STATUS: dict[str, str] = {}
 
 def _make_job_id(name: str) -> str:
     return f"{name}-{today_ist().strftime('%Y%m%d')}"
+
+
+class JobTimeoutError(Exception):
+    """Raised when a job exceeds its configured wall-clock budget."""
+
+
+def _job_timeout_seconds(job_name: str) -> int:
+    timeouts = SCHEDULER_CONFIG.get("job_timeout_seconds", {}) or {}
+    default = int(SCHEDULER_CONFIG.get("default_job_timeout_seconds", 600))
+    return int(timeouts.get(job_name, default))
+
+
+def _run_with_timeout(job_name, fn, db):
+    """Run `fn(db)` with a watchdog that aborts on timeout.
+
+    On expiry the watchdog closes the DB connection from a separate
+    thread -- this severs the TCP session, SQL Server kills the SPID,
+    and any locks held by uncommitted transactions are released
+    immediately. The worker thread will surface a connection-dropped
+    error which we re-raise as JobTimeoutError so `_run_job` records
+    the row as FAILED.
+
+    A one-off `_run_job_timeout` override (set on the function) allows
+    manual triggers / tests to override the configured timeout.
+    """
+    timeout_s = fn.__dict__.get("_run_job_timeout") if hasattr(fn, "__dict__") else None
+    if timeout_s is None:
+        timeout_s = _job_timeout_seconds(job_name)
+    try:
+        timeout_s = float(timeout_s)
+    except (TypeError, ValueError):
+        timeout_s = float(_job_timeout_seconds(job_name))
+    if timeout_s <= 0:
+        return fn(db)
+
+    result: dict = {"value": None, "error": None}
+    done = threading.Event()
+
+    def _worker():
+        try:
+            result["value"] = fn(db)
+        except BaseException as exc:  # noqa: BLE001
+            result["error"] = exc
+        finally:
+            done.set()
+
+    t = threading.Thread(
+        target=_worker,
+        name=f"job-{job_name}",
+        daemon=True,
+    )
+    t.start()
+    finished = done.wait(timeout_s)
+    if not finished:
+        # Force-close the DB connection from this thread to release
+        # SQL Server locks. The worker will get an exception on its
+        # next pyodbc call but we no longer care -- we raise our own.
+        logger.error(
+            "Job %s exceeded %ds wall-clock budget; closing DB to release locks",
+            job_name, timeout_s,
+        )
+        try:
+            db.close()
+        except Exception:  # noqa: BLE001
+            logger.warning("Watchdog: db.close() raised", exc_info=True)
+        raise JobTimeoutError(
+            f"job '{job_name}' exceeded {timeout_s}s timeout"
+        )
+    if result["error"] is not None:
+        raise result["error"]
+    return result["value"]
 
 
 def _run_job(
@@ -116,7 +188,7 @@ def _run_job(
         db.commit()
 
         try:
-            rows = fn(db) or 0
+            rows = _run_with_timeout(job_name, fn, db) or 0
             job_log.finish(job_id, "SUCCESS", rows_processed=int(rows))
             db.commit()
             _LAST_STATUS[job_name] = "SUCCESS"
@@ -129,6 +201,11 @@ def _run_job(
             except Exception:
                 pass
             try:
+                # If the watchdog severed the original connection, open a
+                # fresh one to record the failure. The closed connection
+                # will fail on `cursor()` so re-init only when needed.
+                if db.connection is None:
+                    db.connect()
                 JobLogRepo(db).finish(job_id, "FAILED", error_message=err[:1900])
                 NotificationRepo(db).insert(Notification(
                     created_at=now_ist(),
@@ -425,8 +502,42 @@ def trigger_job_now(job_name: str, trade_date: str | None = None) -> bool:
     return True
 
 
+def _sweep_orphan_running_jobs() -> int:
+    """Mark any RUNNING rows older than ~30 min as FAILED on startup.
+
+    Protects against the case where the scheduler process was killed
+    mid-job (container restart, OOM, hung worker thread). Without this
+    sweep the dashboard shows a perpetual `RUNNING` and -- if the
+    underlying transaction was uncommitted -- SQL Server holds locks
+    indefinitely. Threshold is conservative (30 min) so we don't
+    clobber legit in-flight runs from a fast restart.
+    """
+    db = SQLServerConnection()
+    try:
+        db.connect()
+        cur = db.execute(
+            "UPDATE options_job_log "
+            "SET status='FAILED', "
+            "    finished_at=COALESCE(finished_at, started_at), "
+            "    error_message=COALESCE(error_message, 'orphan-cleanup: scheduler restart') "
+            "WHERE status='RUNNING' "
+            "  AND started_at < DATEADD(MINUTE, -30, SYSUTCDATETIME())"
+        )
+        n = cur.rowcount or 0
+        db.commit()
+        if n:
+            logger.warning("Cleared %d orphan RUNNING job_log row(s) on startup", n)
+        return int(n)
+    except Exception:
+        logger.exception("Orphan-RUNNING sweep failed")
+        return 0
+    finally:
+        db.close()
+
+
 def start_scheduler() -> BackgroundScheduler:
     global _SCHEDULER
+    _sweep_orphan_running_jobs()
     sch = build_scheduler()
     sch.start()
     _SCHEDULER = sch
