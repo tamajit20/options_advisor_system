@@ -2122,6 +2122,26 @@ function renderTrade(t) {
     <div class="card-head">
       <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        ${(() => {
+          // Live risk-monitor verdict (refreshed on every leg tick during
+          // market hours). Shown ahead of the daily-status tag so the
+          // operator can't miss a TARGET / SL event.
+          const ra = t.risk_alert;
+          if (!ra || !ra.notif_type) return '';
+          const cls =
+            ra.notif_type === 'TARGET_HIT'         ? 'tag tag-ok'   :
+            ra.notif_type === 'TARGET_LOCKED'      ? 'tag tag-ok'   :
+            ra.notif_type === 'SL_TRIGGER'         ? 'tag tag-err'  :
+            ra.notif_type === 'PRE_BREACH_WARNING' ? 'tag tag-warn' : 'tag';
+          const icon =
+            ra.notif_type === 'TARGET_HIT'         ? '\u2705 '  :
+            ra.notif_type === 'TARGET_LOCKED'      ? '\ud83d\udd12 ' :
+            ra.notif_type === 'SL_TRIGGER'         ? '\ud83d\uded1 ' :
+            ra.notif_type === 'PRE_BREACH_WARNING' ? '\u26a0\ufe0f ' : '';
+          const tip = (ra.title || ra.notif_type) +
+                      (ra.body ? ` — ${ra.body}` : '');
+          return `<span class="${cls}" title="${escapeHtml(tip)}">${icon}${escapeHtml(ra.notif_type.replace(/_/g, ' '))}</span>`;
+        })()}
         ${hasPendingClose ? `<span class="tag tag-warn" title="Record exit prices to compute P&L">CLOSE PENDING</span>` : ''}
         <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
@@ -2836,7 +2856,7 @@ function _wsmonStateClass(state) {
   if (s === 'connected')                       return 'wsmon-state-ok';
   if (s === 'connecting' || s === 'unknown')   return 'wsmon-state-warn';
   if (s === 'degraded')                        return 'wsmon-state-warn';
-  if (s === 'token_expired' || s === 'disconnected' || s === 'stopped') return 'wsmon-state-err';
+  if (s === 'stale' || s === 'token_expired' || s === 'disconnected' || s === 'stopped') return 'wsmon-state-err';
   return 'wsmon-state-warn';
 }
 

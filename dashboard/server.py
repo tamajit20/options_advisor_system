@@ -114,6 +114,14 @@ _JOB_META: Dict[str, Dict[str, str]] = {
                             "description": "Computes IV / IV-rank / IV-percentile from F&O + spot data."},
     "suggestion_engine":  {"icon": "💡", "name": "Suggestion Engine",
                             "description": "Generates today's options trade suggestion across all enabled strategies."},
+    "live_suggestion_engine":      {"icon": "💡", "name": "Live Suggestion Engine 1100",
+                            "description": "Re-runs the suggestion engine at 11:00 IST against the live Zerodha chain."},
+    "live_suggestion_engine_0945": {"icon": "💡", "name": "Live Suggestion Engine 0945",
+                            "description": "Early-session live re-run shortly after open."},
+    "live_suggestion_engine_1300": {"icon": "💡", "name": "Live Suggestion Engine 1300",
+                            "description": "Midday live re-run with a mature WS slope window."},
+    "live_suggestion_engine_1430": {"icon": "💡", "name": "Live Suggestion Engine 1430",
+                            "description": "Late-session live re-run with the full intraday context."},
     "simulation_update":  {"icon": "🎯", "name": "Simulation Update",
                             "description": "Updates daily P/L simulation for past suggestions."},
     "exit_engine":        {"icon": "🚪", "name": "Exit Engine",
@@ -311,11 +319,17 @@ def create_app() -> Flask:
     def api_trades_open(db: SQLServerConnection):
         trd = TradeRepo(db)
         sug = SuggestionRepo(db)
+        notif = NotificationRepo(db)
         rows = trd.open_trades()
         out = []
         for r in rows:
             r_out = _row(r)
             r_out["legs"] = [_row(l) for l in trd.legs_with_suggestion_info(r["trade_id"])]
+            # Live risk alert (TARGET_HIT / SL_TRIGGER / PRE_BREACH_WARNING /
+            # TARGET_LOCKED) so the card can render a prominent badge instead
+            # of relying solely on the notification bar.
+            ra = notif.latest_risk_alert_for_trade(r["trade_id"])
+            r_out["risk_alert"] = _row(ra) if ra else None
             # Attach the original suggestion so the UI can show its rationale
             if r.get("suggestion_id"):
                 sug_row = sug.get(r["suggestion_id"])
@@ -987,6 +1001,41 @@ def create_app() -> Flask:
         events = list(reversed(events))[:max(0, limit)]
         snap["recent_events"] = events
         snap["available"] = True
+
+        # Derive a stale-state override: the WS runner can keep reporting
+        # `connection_state=connected` even after the broker silently drops
+        # the session (no ticks flowing). When the last tick is older than
+        # a threshold during market hours, downgrade the displayed state to
+        # `stale` so the UI badge turns red. Preserves the raw value as
+        # `raw_connection_state` for diagnostics.
+        try:
+            from datetime import datetime as _dt, timezone as _tz, time as _time
+            from zoneinfo import ZoneInfo as _Z
+            raw_state = snap.get("connection_state")
+            last_tick = snap.get("last_tick_at")
+            if raw_state == "connected" and last_tick:
+                last_dt = _dt.fromisoformat(str(last_tick).replace("Z", "+00:00"))
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=_tz.utc)
+                age_s = (_dt.now(_tz.utc) - last_dt).total_seconds()
+                # In market hours (09:15-15:30 IST on weekdays), 90s
+                # without a tick means the feed is stale.
+                ist_now = _dt.now(_Z("Asia/Kolkata"))
+                in_market = (
+                    ist_now.weekday() < 5
+                    and _time(9, 15) <= ist_now.time() <= _time(15, 30)
+                )
+                threshold = 90.0 if in_market else 1800.0
+                if age_s > threshold:
+                    snap["raw_connection_state"] = raw_state
+                    snap["connection_state"] = "stale"
+                    snap["stale_reason"] = (
+                        f"no ticks for {int(age_s)}s "
+                        f"(threshold {int(threshold)}s)"
+                    )
+        except Exception:
+            pass
+
         return jsonify(snap)
 
     # ---------- Health ----------

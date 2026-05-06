@@ -1318,6 +1318,27 @@ class NotificationRepo:
         cur.close()
         return n
 
+    def latest_risk_alert_for_trade(self, trade_id: str) -> Optional[dict]:
+        """Return the most recent risk-monitor alert for ``trade_id`` from the
+        current IST trading day, or ``None``.
+
+        Used by the My Trades dashboard to surface a prominent
+        ``TARGET_HIT`` / ``SL_TRIGGER`` / ``PRE_BREACH_WARNING`` /
+        ``TARGET_LOCKED`` badge on the open-trade card so the operator
+        doesn't rely solely on the notification bar.
+        """
+        today_start = datetime.combine(now_ist().date(), datetime.min.time())
+        return self.db.fetch_one(
+            "SELECT TOP 1 notif_type, severity, title, body, created_at "
+            "  FROM options_notifications "
+            " WHERE related_trade_id = ? "
+            "   AND created_at >= ? "
+            "   AND notif_type IN ('TARGET_HIT', 'SL_TRIGGER', "
+            "                      'PRE_BREACH_WARNING', 'TARGET_LOCKED') "
+            " ORDER BY created_at DESC",
+            [trade_id, today_start],
+        )
+
 
 # ---------------------------------------------------------------------------
 # IntradayCloseSnapshotRepo (Phase 2b.1)

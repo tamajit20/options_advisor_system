@@ -97,15 +97,24 @@ class TestJobFuncsRegistry:
 
 def test_multi_window_live_suggestion_jobs_registered():
     """Phase 3 â€” #1: extra intraday windows (09:45, 13:00, 14:30) must
-    all register and dispatch to ``job_live_suggestion``."""
+    all register and dispatch the live-suggestion engine. Each variant
+    has its own thin wrapper so the DB job-log row uses a distinct
+    job_name (otherwise all four dashboard cards share the same row)."""
     keys = {
         "live_suggestion_engine_0945",
         "live_suggestion_engine_1300",
         "live_suggestion_engine_1430",
     }
     assert keys.issubset(set(sched.JOB_FUNCS.keys()))
+    # Each variant must be a *distinct* callable wired to its own
+    # _run_job(name=...) so it logs under its own job_id.
     for k in keys:
-        assert sched.JOB_FUNCS[k] is sched.job_live_suggestion
+        assert sched.JOB_FUNCS[k] is not sched.job_live_suggestion
+        assert callable(sched.JOB_FUNCS[k])
+    # And the four entries must all be unique to one another.
+    callables = {sched.JOB_FUNCS[k] for k in keys}
+    callables.add(sched.job_live_suggestion)
+    assert len(callables) == 4
 
 
 def test_event_eve_review_job_registered():
@@ -176,3 +185,25 @@ class TestDataProbes:
                             side_effect=RuntimeError("DB down"))
         result = sched._check_data_freshness(mock_db, ["fo_bhav_download"])
         assert result == "fo_bhav_download"
+
+
+# ---------------------------------------------------------------------------
+# Future scope — orphan recovery + live-engine watchdog
+# (see FUTURE_ENHANCEMENT_SCOPES.md ? Risk & Monitoring)
+# ---------------------------------------------------------------------------
+@pytest.mark.future
+@pytest.mark.skip(reason="future: sweep stuck RUNNING rows on scheduler start (FUTURE_ENHANCEMENT_SCOPES.md -> Risk & Monitoring)")
+def test_scheduler_startup_clears_orphan_running_rows():
+    """On `start()`, any options_job_log row in RUNNING state older than
+    the configured threshold should be flipped to FAILED with
+    error_message='orphan-cleanup'. Younger RUNNING rows must remain."""
+    pass
+
+
+@pytest.mark.future
+@pytest.mark.skip(reason="future: hard timeout wrapping live_suggestion_engine (FUTURE_ENHANCEMENT_SCOPES.md -> Risk & Monitoring)")
+def test_live_suggestion_engine_hard_timeout():
+    """If the live-suggestion run exceeds the configured wall-clock
+    timeout, _run_job must record a FAILED row and free the slot for
+    the next cron window instead of leaving status=RUNNING forever."""
+    pass

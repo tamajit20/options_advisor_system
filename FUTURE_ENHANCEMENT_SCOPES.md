@@ -28,6 +28,16 @@ Pick up from here in future development sessions.
 
 ## 🔴 Risk & Monitoring (Genuine Loss Risk)
 
+### Orphan-RUNNING job recovery on startup
+**Files:** `scheduler/scheduler.py` (or `main.py` boot path), `database/log_repo.py`  
+**Issue:** If a job hangs (e.g. live_suggestion stalled when Zerodha access_token expired and a downstream call had no timeout) and the container is restarted, its `options_job_log` row stays `RUNNING` forever. The dashboard displays a perpetual "Last run … RUNNING" with a growing duration, and the dashboard card for a same-day cron variant gets stuck.  
+**Fix:** On scheduler startup, sweep `options_job_log` for rows older than N minutes still in `RUNNING` and mark them `FAILED` with `error_message='orphan-cleanup'`. Make threshold conservative (e.g. 30 min) to avoid clobbering legit in-flight jobs.
+
+### Hard timeout / watchdog for live_suggestion_engine
+**Files:** `lifecycle/suggestion_engine.py`, `scheduler/scheduler.py`  
+**Issue:** A 09:45 IST live-suggestion run hung indefinitely after Zerodha access_token expired and a downstream call (likely live spot/chain fetch) blocked without timeout. The job stayed `RUNNING` for the rest of the session, blocking same-day reruns and showing a stale state in the dashboard.  
+**Fix:** Wrap the live-suggestion entry point in a thread or `concurrent.futures` with a hard wall-clock timeout (e.g. 5 min). On timeout, raise `JobFailure("live engine timeout")` so `_run_job` writes FAILED and the next window can proceed. Also audit all HTTP/broker calls in the live path to ensure each has an explicit timeout.
+
 ### Overnight gap risk ⚠️
 **Issue:** The 1.5× credit SL is intraday only. A surprise overnight gap (RBI decision, global shock, earnings) can put short options deep ITM before the exit engine runs. This is inherent to short-premium strategies but can be partially mitigated:
 1. **Event-aware forced early exit** — if `event_repo.has_high_impact(tomorrow, tomorrow+1)` is True, flag the trade for evening close (add `PRE_EVENT_EXIT` alert in `lifecycle/exit_orchestrator.py`)
