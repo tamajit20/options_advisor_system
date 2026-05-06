@@ -28,15 +28,7 @@ Pick up from here in future development sessions.
 
 ## 🔴 Risk & Monitoring (Genuine Loss Risk)
 
-### WS runner does not pick up refreshed Zerodha access_token
-**Files:** `providers/zerodha/ws_runner.py`, `providers/zerodha/session.py`, `main.py`  
-**Issue:** `KiteWSRunner` stores `self._access_token` at construction time. When the daily access_token expires intraday and the user re-logs in via the dashboard, the new token is written to disk but the running ws_runner container keeps using the old expired token — every reconnect attempt fails. Workaround today is a manual `docker compose up -d` restart. Symptoms: WS Monitor stuck at `disconnected` for the rest of the session even though the dashboard shows Zerodha as logged-in.  
-**Fix options:**
-1. Watch the token file (mtime) and re-instantiate the ticker when it changes.
-2. Subscribe to a `TOPIC_TOKEN_REFRESHED` event from the dashboard process via the cross-container event bus and force a reconnect.
-3. Auto-restart the `stock_ws_runner` container as a docker healthcheck side-effect when the token changes (operationally simpler).
-
-
+### Orphan-RUNNING job recovery on startup
 **Files:** `scheduler/scheduler.py` (or `main.py` boot path), `database/log_repo.py`  
 **Issue:** If a job hangs (e.g. live_suggestion stalled when Zerodha access_token expired and a downstream call had no timeout) and the container is restarted, its `options_job_log` row stays `RUNNING` forever. The dashboard displays a perpetual "Last run … RUNNING" with a growing duration, and the dashboard card for a same-day cron variant gets stuck.  
 **Fix:** On scheduler startup, sweep `options_job_log` for rows older than N minutes still in `RUNNING` and mark them `FAILED` with `error_message='orphan-cleanup'`. Make threshold conservative (e.g. 30 min) to avoid clobbering legit in-flight jobs.

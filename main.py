@@ -392,11 +392,17 @@ def _cmd_ws_runner() -> int:
     # Session-revocation watcher — polls data/zerodha_session.json every 5s
     # and gracefully stops the runner if the file is deleted (dashboard logout)
     # or rewritten with a token whose access_token differs from ours
-    # (user re-logged in elsewhere). Exits with code 0 so the on-failure
-    # restart policy does NOT bring the runner back up — that's the point
-    # of a logout.
+    # (user re-logged in via the dashboard). For a logout, we exit 0 so the
+    # `on-failure` restart policy keeps the runner down. For a token
+    # rotation we exit non-zero so docker restarts the container — the
+    # fresh process then reads the new token from disk and reconnects
+    # automatically (no manual `docker compose up -d` needed).
     import threading as _threading
     from providers.zerodha.session import load_session as _load_sess
+
+    # Sentinel set by the watcher so the outer return path can pick the
+    # right exit code without restructuring the existing flow.
+    _exit_reason = {"reason": None}  # "logout" | "token_rotated" | None
 
     def _watch_session():
         my_token = session.access_token
@@ -405,10 +411,12 @@ def _cmd_ws_runner() -> int:
                 cur = _load_sess()
                 if cur is None:
                     print("Session file removed — stopping WS runner (logout).")
+                    _exit_reason["reason"] = "logout"
                     runner.stop()
                     return
                 if cur.access_token != my_token:
                     print("Session token rotated — stopping WS runner so it picks up new token.")
+                    _exit_reason["reason"] = "token_rotated"
                     runner.stop()
                     return
             except Exception:
@@ -439,6 +447,12 @@ def _cmd_ws_runner() -> int:
     print(f"WS runner exited — final state={status.state.value}, last_error={status.last_error}")
     if status.state.value == "token_expired":
         return 2
+    # Token rotation requires the on-failure restart policy to bring the
+    # runner back up so it loads the fresh token. Exit non-zero (75 = a
+    # distinct sentinel for ops triage) to trigger that.
+    if _exit_reason["reason"] == "token_rotated":
+        print("Exiting with code 75 to trigger docker restart (token rotated).")
+        return 75
     return 0
 
 

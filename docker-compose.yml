@@ -52,7 +52,7 @@ services:
     container_name: stock_ws_runner
     image: stock_options_advisor:latest
     command: ["python", "main.py", "--ws-runner"]
-    restart: on-failure:5
+    restart: on-failure:20
     stop_grace_period: 15s
     environment:
       - TZ=Asia/Kolkata

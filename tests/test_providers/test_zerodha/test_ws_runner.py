@@ -408,18 +408,3 @@ def test_record_failure_starts_failure_window(runner: KiteWSRunner):
     assert "RuntimeError" in (s.last_error or "")
 
 
-# ---------------------------------------------------------------------------
-# Future scope — pick up refreshed access_token without container restart
-# (see FUTURE_ENHANCEMENT_SCOPES.md -> Risk & Monitoring)
-# ---------------------------------------------------------------------------
-import pytest
-
-
-@pytest.mark.future
-@pytest.mark.skip(reason="future: ws_runner must reload Zerodha access_token after dashboard re-login (FUTURE_ENHANCEMENT_SCOPES.md -> Risk & Monitoring)")
-def test_ws_runner_reloads_access_token_after_refresh():
-    """When the persisted Zerodha access_token changes (user re-logs in
-    on the dashboard), the running ws_runner must detect the change and
-    reconnect using the new token. Today the runner caches the token at
-    construction and stays disconnected for the rest of the session."""
-    pass
