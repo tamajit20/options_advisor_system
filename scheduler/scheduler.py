@@ -516,32 +516,27 @@ def trigger_job_now(job_name: str, trade_date: str | None = None) -> bool:
 
 
 def _sweep_orphan_running_jobs() -> int:
-    """Mark any RUNNING rows older than ~30 min as FAILED on startup.
+    """Mark all RUNNING rows as FAILED on startup.
 
-    Protects against the case where the scheduler process was killed
-    mid-job (container restart, OOM, hung worker thread). Without this
-    sweep the dashboard shows a perpetual `RUNNING` and -- if the
-    underlying transaction was uncommitted -- SQL Server holds locks
-    indefinitely. Threshold is conservative (30 min) so we don't
-    clobber legit in-flight runs from a fast restart.
+    Any row in RUNNING state when the scheduler process boots is by
+    definition orphaned: the new process didn't start it, so the
+    previous incarnation either crashed, was killed mid-job, or had a
+    hung worker thread. We sweep BEFORE `sch.start()` so there's no
+    race with a legit in-flight run.
+
+    Without this sweep the dashboard shows a perpetual `RUNNING` and
+    -- if the underlying transaction was uncommitted -- SQL Server
+    holds locks indefinitely.
     """
     db = SQLServerConnection()
     try:
         db.connect()
-        # Compute the cutoff in Python (IST) so it matches how
-        # `JobLogRepo.start()` writes `started_at = now_ist()`. Using
-        # SQL-side SYSUTCDATETIME() / GETDATE() would either be off by
-        # the IST offset or by the SQL Server host's timezone.
-        from datetime import timedelta
-        cutoff = now_ist().replace(tzinfo=None) - timedelta(minutes=30)
         cur = db.execute(
             "UPDATE options_job_log "
             "SET status='FAILED', "
             "    finished_at=COALESCE(finished_at, started_at), "
             "    error_message=COALESCE(error_message, 'orphan-cleanup: scheduler restart') "
-            "WHERE status='RUNNING' "
-            "  AND started_at < ?",
-            [cutoff],
+            "WHERE status='RUNNING'"
         )
         n = cur.rowcount or 0
         db.commit()
