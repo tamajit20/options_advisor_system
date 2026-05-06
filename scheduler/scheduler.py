@@ -355,6 +355,7 @@ def job_weekly_cleanup():
         from database.models import (
             FoEodRepo, SpotEodRepo, VixRepo, FiiRepo, IvHistoryRepo,
             SuggestionRepo, NotificationRepo,
+            ChainTimeseriesRepo, AtmIvTimeseriesRepo,
         )
         today = today_ist()
         n = 0
@@ -365,6 +366,8 @@ def job_weekly_cleanup():
         n += IvHistoryRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["iv_history_keep_days"]))
         n += SuggestionRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["suggestions_keep_days"]))
         n += NotificationRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["notifications_keep_days"]))
+        n += ChainTimeseriesRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["chain_5min_keep_days"]))
+        n += AtmIvTimeseriesRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["atm_iv_5min_keep_days"]))
         return n
 
     _run_job("weekly_cleanup", _cleanup)
@@ -515,13 +518,20 @@ def _sweep_orphan_running_jobs() -> int:
     db = SQLServerConnection()
     try:
         db.connect()
+        # Compute the cutoff in Python (IST) so it matches how
+        # `JobLogRepo.start()` writes `started_at = now_ist()`. Using
+        # SQL-side SYSUTCDATETIME() / GETDATE() would either be off by
+        # the IST offset or by the SQL Server host's timezone.
+        from datetime import timedelta
+        cutoff = now_ist().replace(tzinfo=None) - timedelta(minutes=30)
         cur = db.execute(
             "UPDATE options_job_log "
             "SET status='FAILED', "
             "    finished_at=COALESCE(finished_at, started_at), "
             "    error_message=COALESCE(error_message, 'orphan-cleanup: scheduler restart') "
             "WHERE status='RUNNING' "
-            "  AND started_at < DATEADD(MINUTE, -30, SYSUTCDATETIME())"
+            "  AND started_at < ?",
+            [cutoff],
         )
         n = cur.rowcount or 0
         db.commit()

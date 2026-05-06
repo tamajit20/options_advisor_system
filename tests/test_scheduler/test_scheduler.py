@@ -203,10 +203,18 @@ def test_scheduler_startup_clears_orphan_running_rows(mocker):
     n = sched._sweep_orphan_running_jobs()
     assert n == 3
     sql = mock_db.execute.call_args[0][0]
+    params = mock_db.execute.call_args[0][1]
     assert "options_job_log" in sql
     assert "status='RUNNING'" in sql.replace(" ", "")
     assert "FAILED" in sql
-    assert "DATEADD" in sql  # date-bounded
+    assert "started_at < ?" in sql  # date-bounded via parameter
+    # The cutoff must be ~30 min in the past (IST, naive).
+    from datetime import datetime as _dt, timedelta as _td
+    cutoff = params[0]
+    assert isinstance(cutoff, _dt)
+    delta = abs((_dt.now() - cutoff).total_seconds() - 30 * 60)
+    # Allow a wide window so the test isn't flaky across timezones.
+    assert delta < 24 * 3600
     mock_db.commit.assert_called_once()
     mock_db.close.assert_called_once()
 

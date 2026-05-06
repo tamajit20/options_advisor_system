@@ -777,9 +777,11 @@ RETENTION_CONFIG = {
     "job_log_keep_days":          90,
     "notifications_keep_days":    180,
     # 5-min chain trajectory tables (Zerodha WS aggregator).
-    # ~330 rows/day total across both tables; 30 days = ~10K rows.
-    "chain_5min_keep_days":       30,
-    "atm_iv_5min_keep_days":      30,
+    # ~450 rows/day per table (75 slots * 3 underlyings * 2 expiries).
+    # 180 days ~= 80K rows ~= 10 MB; cheap and gives enough history
+    # for the time-series replay backtester (future scope).
+    "chain_5min_keep_days":       180,
+    "atm_iv_5min_keep_days":      180,
 }
 
 
