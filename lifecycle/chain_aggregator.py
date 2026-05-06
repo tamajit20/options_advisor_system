@@ -329,6 +329,15 @@ class ChainTickAggregator:
                 self._iv_repo.insert_many(iv_rows)
             except Exception:
                 logger.exception("ChainTickAggregator: ATM IV insert failed")
+        # Commit so rows survive a process/container restart. Without this
+        # every flush rides on one ever-growing transaction that SQL Server
+        # rolls back when the connection drops, leaving the 5-min tables
+        # mysteriously empty after every redeploy.
+        if chain_rows or iv_rows:
+            try:
+                self._db.commit()
+            except Exception:
+                logger.exception("ChainTickAggregator: commit failed")
 
         # Re-baseline bucket window-start counters so the next window's deltas
         # are relative to the boundary we just flushed, not session open.

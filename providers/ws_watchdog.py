@@ -149,9 +149,13 @@ class WSWatchdog:
         last_tick_iso = snap.get("last_tick_at")
         last_tick_dt = _parse_iso(last_tick_iso) if last_tick_iso else None
 
-        # Normalise tz so the subtraction never raises.
-        if last_tick_dt is not None and last_tick_dt.tzinfo is None and now.tzinfo is not None:
-            last_tick_dt = last_tick_dt.replace(tzinfo=now.tzinfo)
+        # Normalise tz so the subtraction never raises. Either side may
+        # be naive depending on how the snapshot was written.
+        if last_tick_dt is not None:
+            if last_tick_dt.tzinfo is None and now.tzinfo is not None:
+                last_tick_dt = last_tick_dt.replace(tzinfo=now.tzinfo)
+            elif last_tick_dt.tzinfo is not None and now.tzinfo is None:
+                now = now.replace(tzinfo=last_tick_dt.tzinfo)
 
         if last_tick_dt is None:
             age = float("inf")
