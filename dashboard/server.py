@@ -1004,35 +1004,63 @@ def create_app() -> Flask:
 
         # Derive a stale-state override: the WS runner can keep reporting
         # `connection_state=connected` even after the broker silently drops
-        # the session (no ticks flowing). When the last tick is older than
-        # a threshold during market hours, downgrade the displayed state to
-        # `stale` so the UI badge turns red. Preserves the raw value as
-        # `raw_connection_state` for diagnostics.
+        # the session (no ticks flowing, or zero subscribed tokens). The
+        # raw value is preserved as `raw_connection_state` for diagnostics.
         try:
             from datetime import datetime as _dt, timezone as _tz, time as _time
             from zoneinfo import ZoneInfo as _Z
             raw_state = snap.get("connection_state")
-            last_tick = snap.get("last_tick_at")
-            if raw_state == "connected" and last_tick:
-                last_dt = _dt.fromisoformat(str(last_tick).replace("Z", "+00:00"))
-                if last_dt.tzinfo is None:
-                    last_dt = last_dt.replace(tzinfo=_tz.utc)
-                age_s = (_dt.now(_tz.utc) - last_dt).total_seconds()
-                # In market hours (09:15-15:30 IST on weekdays), 90s
-                # without a tick means the feed is stale.
+            if raw_state == "connected":
                 ist_now = _dt.now(_Z("Asia/Kolkata"))
                 in_market = (
                     ist_now.weekday() < 5
                     and _time(9, 15) <= ist_now.time() <= _time(15, 30)
                 )
                 threshold = 90.0 if in_market else 1800.0
-                if age_s > threshold:
+                stale_reason: str | None = None
+
+                # (a) zero subscribed tokens during market hours = dead feed
+                subs = snap.get("subscribed_tokens")
+                if in_market and subs is not None and int(subs) == 0:
+                    stale_reason = "0 subscribed tokens during market hours"
+
+                # (b) last_tick is too old
+                if stale_reason is None:
+                    last_tick = snap.get("last_tick_at")
+                    if last_tick:
+                        last_dt = _dt.fromisoformat(
+                            str(last_tick).replace("Z", "+00:00")
+                        )
+                        if last_dt.tzinfo is None:
+                            last_dt = last_dt.replace(tzinfo=_tz.utc)
+                        age_s = (_dt.now(_tz.utc) - last_dt).total_seconds()
+                        if age_s > threshold:
+                            stale_reason = (
+                                f"no ticks for {int(age_s)}s "
+                                f"(threshold {int(threshold)}s)"
+                            )
+                    else:
+                        # No ticks ever received — only flag once the
+                        # runner has been up long enough that we'd
+                        # expect ticks during market hours.
+                        started = snap.get("started_at")
+                        if in_market and started:
+                            started_dt = _dt.fromisoformat(
+                                str(started).replace("Z", "+00:00")
+                            )
+                            if started_dt.tzinfo is None:
+                                started_dt = started_dt.replace(tzinfo=_tz.utc)
+                            uptime_s = (_dt.now(_tz.utc) - started_dt).total_seconds()
+                            if uptime_s > threshold:
+                                stale_reason = (
+                                    f"no ticks since runner start "
+                                    f"({int(uptime_s)}s ago)"
+                                )
+
+                if stale_reason:
                     snap["raw_connection_state"] = raw_state
                     snap["connection_state"] = "stale"
-                    snap["stale_reason"] = (
-                        f"no ticks for {int(age_s)}s "
-                        f"(threshold {int(threshold)}s)"
-                    )
+                    snap["stale_reason"] = stale_reason
         except Exception:
             pass
 
