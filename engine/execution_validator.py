@@ -22,9 +22,9 @@ Checks
                         STILL_GOOD_0935 are all fine).
 3. **Entry-date**     — `entry_date < today` blocks (stale suggestion
                         from a prior day that wasn't tidied up).
-4. **Data freshness** — `now - data_as_of` must be <= configured
-                        max age (default 240 min). Skipped if
-                        `data_as_of` is missing.
+4. **Data freshness** — for LIVE suggestions only: `now - data_as_of`
+                        must be <= configured max age (default 240 min).
+                        EOD suggestions skip this (use `entry_date` instead).
 5. **Strike distance** — every short leg's strike must be at least
                         `min_short_strike_buffer_pct` of `spot_at_generation`
                         away from spot, in the correct direction
@@ -112,6 +112,31 @@ def _as_datetime(v) -> Optional[datetime]:
         return None
 
 
+def _is_live_suggestion(suggestion: dict) -> bool:
+    """True for intraday live-engine rows (freshness rules apply)."""
+    ds = (suggestion.get("data_source") or "").upper()
+    trig = (suggestion.get("trigger_type") or "").upper()
+    return ds == "LIVE" or trig == "LIVE_RUN"
+
+
+def _effective_data_as_of(suggestion: dict) -> Optional[datetime]:
+    """Resolve the market-data clock used for live freshness checks.
+
+    Pre-2026 rows may have ``data_as_of`` at FO ``data_date`` midnight
+    (mis-stamped). Treat midnight + LIVE as legacy and use ``generated_on``.
+    """
+    raw = _as_datetime(suggestion.get("data_as_of"))
+    if raw is None:
+        return None
+    if not _is_live_suggestion(suggestion):
+        return raw
+    if raw.hour == 0 and raw.minute == 0 and raw.second == 0:
+        gen = _as_datetime(suggestion.get("generated_on"))
+        if gen is not None:
+            return gen
+    return raw
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -163,40 +188,45 @@ def validate_execution(
             f"entry_date {entry_date} is in the past (today is {today})"
         )
 
-    # 4. Freshness ----------------------------------------------------------
-    max_age_min = float(
-        STRATEGY_CONFIG.get("execution_validator_max_data_age_minutes", 240.0)
-    )
-    data_as_of = _as_datetime(suggestion.get("data_as_of"))
-    if data_as_of is not None:
-        age_min = (now - data_as_of).total_seconds() / 60.0
-        details["data_age_minutes"] = round(age_min, 1)
-        if age_min > max_age_min:
-            vetoes.append(
-                f"underlying data is {age_min:.0f}m old "
-                f"(max {max_age_min:.0f}m)"
-            )
-    else:
-        warnings.append("data_as_of is missing — freshness not checked")
+    live = _is_live_suggestion(suggestion)
+    details["data_source"] = (suggestion.get("data_source") or "").upper() or None
 
-    # 4b. Suggestion freshness (Phase 3 — #2). Hard cap on how stale a
-    # PENDING suggestion can be at the moment of execution. Independent of
-    # data_as_of (which is the underlying market-data clock); this gates
-    # on `generated_on` (the engine clock that priced the legs) so a user
-    # can't click through a 09:30 suggestion at 14:55 with completely
-    # different premiums.
-    fresh_min = float(
-        STRATEGY_CONFIG.get("suggestion_freshness_minutes", 30)
-    )
-    gen_on = _as_datetime(suggestion.get("generated_on"))
-    if gen_on is not None and fresh_min > 0:
-        age_min = (now - gen_on).total_seconds() / 60.0
-        details["suggestion_age_minutes"] = round(age_min, 1)
-        if age_min > fresh_min:
-            vetoes.append(
-                f"suggestion generated {age_min:.0f}m ago "
-                f"(max {fresh_min:.0f}m); re-validate or regenerate"
-            )
+    # 4. Live chain / tick freshness (EOD suggestions use `data_date` on the
+    # row; they are meant to be executed on `entry_date`, often the next morning).
+    if live:
+        max_age_min = float(
+            STRATEGY_CONFIG.get("execution_validator_max_data_age_minutes", 240.0)
+        )
+        data_as_of = _effective_data_as_of(suggestion)
+        if data_as_of is not None:
+            age_min = (now - data_as_of).total_seconds() / 60.0
+            details["data_age_minutes"] = round(age_min, 1)
+            if age_min > max_age_min:
+                vetoes.append(
+                    f"underlying data is {age_min:.0f}m old "
+                    f"(max {max_age_min:.0f}m)"
+                )
+        else:
+            warnings.append("data_as_of is missing — live freshness not checked")
+    else:
+        details["data_freshness"] = "skipped (EOD)"
+
+    # 4b. Live suggestion freshness (Phase 3 — #2). Hard cap on how stale a
+    # same-session live suggestion can be at execution — not applied to EOD
+    # rows (those may legitimately be acted on the next trading day).
+    if live:
+        fresh_min = float(
+            STRATEGY_CONFIG.get("suggestion_freshness_minutes", 30)
+        )
+        gen_on = _as_datetime(suggestion.get("generated_on"))
+        if gen_on is not None and fresh_min > 0:
+            age_min = (now - gen_on).total_seconds() / 60.0
+            details["suggestion_age_minutes"] = round(age_min, 1)
+            if age_min > fresh_min:
+                vetoes.append(
+                    f"suggestion generated {age_min:.0f}m ago "
+                    f"(max {fresh_min:.0f}m); re-validate or regenerate"
+                )
 
     # 5. Strike-distance ----------------------------------------------------
     buf_pct = float(

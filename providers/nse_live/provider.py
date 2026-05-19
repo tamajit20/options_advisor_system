@@ -133,6 +133,7 @@ class NseLiveChainProvider:
                 if not leg:
                     continue
                 last_price = float(leg.get("lastPrice") or 0.0)
+                snap_ts = now_ist()
                 out.append({
                     "strike":         float(strike),
                     "option_type":    side,
@@ -142,7 +143,10 @@ class NseLiveChainProvider:
                     "open_interest":  int(leg.get("openInterest") or 0),
                     "contracts":      int(leg.get("totalTradedVolume") or 0),
                     "expiry_date":    exp,
+                    "trade_date":     trade_date,
                     "_source":        DataSource.LIVE.value,
                     "_provider":      self.name,
+                    "_freshness_ms":  0,
+                    "_data_timestamp": snap_ts,
                 })
         return out

@@ -178,6 +178,10 @@ NSE_CONFIG = {
     "fo_bhav_url":    "https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{yyyymmdd}_F_0000.csv.zip",
     # Cash market bhav copy (zip containing CSV) — yyyymmdd
     "spot_bhav_url":  "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{yyyymmdd}_F_0000.csv.zip",
+    # Index EOD OHLC (all indices, one CSV per day) — ddmmyyyy
+    "index_close_url": (
+        "https://nsearchives.nseindia.com/content/indices/ind_close_all_{ddmmyyyy}.csv"
+    ),
     # VIX history (full archive CSV)
     "vix_archive_url": "https://www.niftyindices.com/IndexConstituent/IndiaVIX_Historical_Data.csv",
     # NSE participant-wise OI (yyyymmdd)
@@ -290,6 +294,53 @@ STRATEGY_CONFIG = {
         # BULL_CALL_SPREAD / BEAR_PUT_SPREAD (debit verticals): NOT listed.
         #   Short leg partially funds the long, so IV-overpay impact is muted.
         # IRON_CONDOR / IRON_BUTTERFLY / BPS / BCS / JL: NOT listed (credit).
+    },
+
+    # ---------------------------------------------------------------
+    # Per-strategy IV/HV floor for WRITING regime (fix D — symmetric
+    # counterpart of `strategy_iv_premium_buy_max`).
+    #
+    # The regime-wide _iv_premium_gate in confidence.py returns SOFT_FAIL when
+    # IV/HV is below `iv_premium_sell_min` (default 0.90), but SOFT_FAILs are
+    # advisory — up to two of them are allowed by the confidence summary. As a
+    # result, IRON_CONDOR was being suggested in conditions where the system
+    # had literally already printed the words "weak selling edge" in the
+    # condition detail (observed live for TRD-20260508-001 BANKNIFTY @ IV/HV
+    # 0.72: the resulting -₹3,061 loss was correctly priced in).
+    #
+    # When a strategy appears in this map, strategy_selector promotes the
+    # check to a HARD VETO in the writing regime (iv_rank > iv_rank_writing_min).
+    # Strategies NOT listed are unaffected.
+    #
+    # Defaults: IRON_BUTTERFLY (narrow ATM short legs) carries the tightest
+    # floor; condors and one-sided credit spreads use the regime default of
+    # 0.90; jade lizard uses the same floor as condors (mirrors call wing).
+    # ---------------------------------------------------------------
+    "strategy_iv_premium_sell_min": {
+        "IRON_CONDOR":       0.90,
+        "IRON_BUTTERFLY":    1.00,    # ATM short legs need IV ≥ realised vol
+        "BULL_PUT_SPREAD":   0.90,
+        "BEAR_CALL_SPREAD":  0.90,
+        "JADE_LIZARD":       0.95,
+    },
+
+    # ---------------------------------------------------------------
+    # ADX (trend strength) band per strategy (fix D companion).
+    #
+    # ADX-14 < 15  → no defined regime (chop)
+    # ADX-14 15-25 → mild/sideways consolidation
+    # ADX-14 25-40 → clear trend
+    # ADX-14 > 40  → strong trend (often climaxing)
+    #
+    # Range-bound non-directional credit strategies want consolidation, not
+    # chop and not a trend. Both observed condor losers had ADX 11-13 —
+    # chop with directional drift, the worst environment for an IRON_CONDOR.
+    # Strategies NOT listed skip the check.
+    # ---------------------------------------------------------------
+    "strategy_adx_band": {
+        # min, max (None disables that side)
+        "IRON_CONDOR":      (15.0, 30.0),
+        "IRON_BUTTERFLY":   (15.0, 25.0),  # tighter — butterfly is most range-sensitive
     },
 
     # Long-premium profit-target multiplier (multiplied by debit paid).
@@ -614,12 +665,29 @@ STRATEGY_CONFIG = {
     "vix_rising_threshold":  5.0,
     "vix_spiking_threshold": 10.0,
 
-    # Trend detection (Phase 1 upgrade)
-    # Old: SMA20 vs SMA50 with 0.5% threshold (too sensitive to chop).
-    # New: SMA crossover + slope direction + ADX strength.
-    "trend_sma_diff_pct":     0.5,    # SMA20 vs SMA50 minimum % gap
-    "trend_slope_min_pct":    0.05,   # SMA20 5-day slope (% of price) minimum
-    "trend_adx_min":          20.0,   # ADX-14 below this = trend too weak, force SIDEWAYS
+    # Trend detection — structural (SMA crossover + slope + ADX)
+    # Shorter MAs (10/20) suit weekly/monthly options better than 20/50.
+    "trend_sma_fast_period":  10,
+    "trend_sma_slow_period":  20,
+    "trend_sma_diff_pct":     0.35,   # SMA_fast vs SMA_slow minimum % gap (tighter MAs → lower bar)
+    "trend_slope_days":       5,      # slope lookback on fast SMA
+    "trend_slope_min_pct":    0.05,   # fast-SMA slope (% of price) minimum
+    "trend_adx_min":          18.0,   # ADX-14 below this → SIDEWAYS (slightly lower with 10/20)
+    # Short-horizon return override (EOD + live) — recent % move vs N-day ago close
+    "trend_return_lookback_days": 5,
+    "trend_return_lookback_days_alt": 10,   # also check; use stronger |move|
+    "trend_return_bullish_pct":   1.5,     # >= → BULLISH short-horizon signal
+    "trend_return_bearish_pct":  -1.5,     # <= → BEARISH short-horizon signal
+    "trend_return_override_structural": True,  # lift SIDEWAYS when return is directional
+    "trend_return_confirm_structural": True, # structural vs return conflict → SIDEWAYS
+    # Session / live trend (intraday; Zerodha OHLC + 5-min snapshots)
+    "trend_session_lookback_days": 5,
+    "trend_session_open_pct_min":  0.35,
+    "trend_session_nday_pct_min":  0.60,
+    "trend_live_session_override": True,
+    "trend_session_confirm_structural": True,
+    # Index spot backfill window (calendar days) for --backfill-index-spot
+    "index_spot_backfill_days": 400,
 }
 
 

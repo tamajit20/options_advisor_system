@@ -31,6 +31,11 @@
     <span class="brand-dot"></span>
     <span class="brand-name">Options Advisor</span>
   </div>
+  <!-- Global banners (system flags + unread CRITICAL/WARNING alerts).
+       Lives inside the green header strip so it is visible on every tab
+       without consuming a separate row. Updated by refreshGlobalBanners()
+       in dashboard.js. Empty by default → invisible. -->
+  <div id="global-banners" class="global-banners" aria-live="polite"></div>
   <div class="header-actions">
     <a id="zerodha-login-btn" class="icon-btn" href="/zerodha/login"
        title="Zerodha login (daily token refresh)"

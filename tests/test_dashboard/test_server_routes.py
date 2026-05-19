@@ -186,11 +186,60 @@ class TestCloseSuggestion:
         mocker.patch("dashboard.server.FoEodRepo.get_chain",
                      return_value=[{"strike": 23200.0, "option_type": "CE",
                                     "settle_price": 25.0}])
+        mocker.patch("dashboard.server.SpotEodRepo.for_date",
+                     return_value={"close_price": 23200.0})
         resp = client.get("/api/trades/TRD-1/close-suggestion")
         assert resp.status_code == 200
         data = resp.get_json()
         # SELL @ 50, close @ 25 → est = (50-25)*75 = 1875
         assert data["est_gross_pnl"] == pytest.approx(1875.0)
+        assert data["legs"][0]["price_source"] == "mid"
+
+    def test_substitutes_intrinsic_when_settle_corrupt(self, client, mocker):
+        """The exact production bug: TRD-20260506-002 LONG_STRADDLE on NIFTY
+        showed est. P&L ₹35 lakh because both 24300 CE and 24300 PE chain
+        rows had ``settle_price`` ≈ 23,618 (the spot value, not the option
+        premium). The dashboard MUST substitute intrinsic settlement value
+        when the chain row is clearly bogus."""
+        mocker.patch("dashboard.server.TradeRepo.get",
+                     return_value={"trade_id": "TRD-20260506-002"})
+        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info",
+                     return_value=[
+                         {"leg_order": 1, "executed": True, "symbol": "NIFTY",
+                          "expiry_date": date(2026, 5, 14),
+                          "strike": 24300.0, "option_type": "CE",
+                          "action": "BUY", "fill_price": 361.80,
+                          "lots": 1, "lots_actual": 1, "lot_size": 75},
+                         {"leg_order": 2, "executed": True, "symbol": "NIFTY",
+                          "expiry_date": date(2026, 5, 14),
+                          "strike": 24300.0, "option_type": "PE",
+                          "action": "BUY", "fill_price": 224.25,
+                          "lots": 1, "lots_actual": 1, "lot_size": 75},
+                     ])
+        # Both rows have a corrupt settle ≈ spot.
+        mocker.patch("dashboard.server.FoEodRepo.get_chain",
+                     return_value=[
+                         {"strike": 24300.0, "option_type": "CE",
+                          "settle_price": 23618.0},
+                         {"strike": 24300.0, "option_type": "PE",
+                          "settle_price": 23618.0},
+                     ])
+        mocker.patch("dashboard.server.SpotEodRepo.for_date",
+                     return_value={"close_price": 23618.0})
+        resp = client.get("/api/trades/TRD-20260506-002/close-suggestion")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        legs = data["legs"]
+        ce_leg = next(l for l in legs if l["option_type"] == "CE")
+        pe_leg = next(l for l in legs if l["option_type"] == "PE")
+        # CE 24300 with spot 23618 → OTM → intrinsic 0
+        assert ce_leg["suggested_close"] == pytest.approx(0.0)
+        assert ce_leg["price_source"] == "intrinsic_fallback"
+        # PE 24300 with spot 23618 → ITM → intrinsic 24300-23618 = 682
+        assert pe_leg["suggested_close"] == pytest.approx(682.0)
+        assert pe_leg["price_source"] == "intrinsic_fallback"
+        # Gross P&L: CE (0-361.80)*75 + PE (682-224.25)*75 = -27135 + 34331.25 = +7196.25
+        assert data["est_gross_pnl"] == pytest.approx(7196.25)
 
 
 class TestHistoryRoutes:

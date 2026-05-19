@@ -1526,6 +1526,20 @@ class AtmIvTimeseriesRepo:
         )
         return list(reversed(rows))
 
+    def recent_spot_for_symbol(
+        self, symbol: str, since: datetime, limit: int = 48
+    ) -> List[dict]:
+        """Spot samples across expiries (for session high/low when Zerodha OHLC missing)."""
+        rows = self.db.fetch_all(
+            "SELECT snapshot_at, spot FROM options_atm_iv_5min "
+            "WHERE symbol = ? AND snapshot_at >= ? AND spot IS NOT NULL "
+            "ORDER BY snapshot_at DESC",
+            [symbol, since],
+        )
+        if len(rows) > limit:
+            rows = rows[:limit]
+        return list(reversed(rows))
+
     def delete_older_than(self, cutoff: date) -> int:
         cur = self.db.execute(
             "DELETE FROM options_atm_iv_5min WHERE snapshot_at < ?",

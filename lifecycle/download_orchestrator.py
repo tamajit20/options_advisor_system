@@ -23,7 +23,9 @@ from database.connection import SQLServerConnection
 from database.models import ExpiryCalendarRepo, FiiRepo, FoEodRepo, SpotEodRepo, VixRepo
 from downloader.fii_data import download_fii_oi
 from downloader.fo_bhav import download_fo_bhav, extract_index_spots
+from downloader.index_spot_nse import download_nse_index_spot
 from downloader.spot_bhav import download_spot_bhav
+from lifecycle.spot_bhav_merge import merge_spot_bhav_rows
 from downloader.vix import download_vix_history
 from utils import today_ist
 
@@ -64,31 +66,38 @@ def run_fo_bhav(db: SQLServerConnection, trade_date: date | None = None) -> int:
 
 
 def run_spot_bhav(db: SQLServerConnection, trade_date: date | None = None) -> int:
-    """Cash-market bhav contains only stocks. Indices (NIFTY/BANKNIFTY/...)
-    are derived from the F&O bhav `UndrlygPric` column for the same date,
-    which carries the official spot reference NSE used to settle options."""
+    """Cash bhav for stocks; NSE ``ind_close_all`` for index OHLC; F&O
+    ``UndrlygPric`` only when index OHLC is unavailable (never overwrites
+    real high/low)."""
     trade_date = trade_date or today_ist()
-    rows = list(download_spot_bhav(trade_date))
+    stock_rows = list(download_spot_bhav(trade_date))
 
-    # Supplement with index spot closes from F&O bhav UndrlygPric.
     indices = [u for u in STRATEGY_CONFIG["underlyings"] if u in {
         "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "BANKEX", "SENSEX",
     }]
+    index_rows: list[SpotBhavRow] = []
     if indices:
         try:
-            spots = extract_index_spots(trade_date, indices)
+            index_rows = download_nse_index_spot(trade_date, keep_only=indices)
+        except Exception as exc:
+            logger.warning("NSE index close download failed: %s", exc)
+        if index_rows:
+            logger.info(
+                "NSE index close %s: %d rows (%s)",
+                trade_date, len(index_rows),
+                ", ".join(r.symbol for r in index_rows),
+            )
+
+    fo_settle: dict[str, float] = {}
+    if indices:
+        try:
+            fo_settle = extract_index_spots(trade_date, indices)
         except Exception as exc:
             logger.warning("Could not derive index spot from F&O bhav: %s", exc)
-            spots = {}
-        for sym, px in spots.items():
-            rows.append(SpotBhavRow(
-                trade_date=trade_date, symbol=sym,
-                open_price=px, high_price=px, low_price=px,
-                close_price=px, volume=0,
-            ))
-        if spots:
-            logger.info("Derived %d index spot rows from F&O bhav: %s",
-                        len(spots), ", ".join(spots))
+        if fo_settle:
+            logger.info("F&O settle fallback available for: %s", ", ".join(fo_settle))
+
+    rows = merge_spot_bhav_rows(stock_rows, index_rows, fo_settle, trade_date)
 
     if not rows:
         logger.warning("Spot bhav: no rows for %s", trade_date)

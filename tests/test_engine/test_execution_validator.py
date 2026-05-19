@@ -112,17 +112,49 @@ class TestEntryDate:
 
 # ---------------------------------------------------------------------------
 class TestFreshness:
-    def test_old_data_blocks(self):
+    def test_old_live_data_blocks(self):
         r = validate_execution(
-            _sug(data_as_of=_NOW - timedelta(hours=10)),
+            _sug(
+                data_source="LIVE",
+                trigger_type="LIVE_RUN",
+                data_as_of=_NOW - timedelta(hours=10),
+                generated_on=_NOW - timedelta(minutes=5),
+            ),
             _legs_iron_condor(), now=_NOW, today=_TODAY,
         )
         assert not r.ok
-        assert any("old" in v for v in r.vetoes)
+        assert any("underlying data" in v for v in r.vetoes)
 
-    def test_missing_data_as_of_warns_not_blocks(self):
+    def test_eod_old_data_as_of_does_not_block(self):
+        """EOD rows may carry a midnight FO stamp; next-day execution is OK."""
         r = validate_execution(
-            _sug(data_as_of=None),
+            _sug(
+                data_source="EOD",
+                trigger_type="EOD_RUN",
+                data_as_of=_NOW - timedelta(hours=10),
+                generated_on=_NOW - timedelta(hours=10),
+            ),
+            _legs_iron_condor(), now=_NOW, today=_TODAY,
+        )
+        assert r.ok
+        assert r.details.get("data_freshness") == "skipped (EOD)"
+
+    def test_live_legacy_midnight_data_as_of_uses_generated_on(self):
+        """Pre-fix rows: data_as_of at FO midnight + fresh generated_on."""
+        r = validate_execution(
+            _sug(
+                data_source="LIVE",
+                trigger_type="LIVE_RUN",
+                data_as_of=datetime(2026, 5, 3, 0, 0, 0),
+                generated_on=_NOW - timedelta(minutes=2),
+            ),
+            _legs_iron_condor(), now=_NOW, today=_TODAY,
+        )
+        assert r.ok
+
+    def test_missing_live_data_as_of_warns_not_blocks(self):
+        r = validate_execution(
+            _sug(data_source="LIVE", data_as_of=None, generated_on=_NOW),
             _legs_iron_condor(), now=_NOW, today=_TODAY,
         )
         assert r.ok
@@ -130,30 +162,49 @@ class TestFreshness:
 
 
 class TestSuggestionFreshness:
-    """Phase 3 — #2 hard cap on `generated_on` age at execution time."""
+    """Phase 3 — #2 hard cap on `generated_on` age for LIVE suggestions only."""
 
-    def test_recent_generated_passes(self):
+    def test_recent_live_generated_passes(self):
         r = validate_execution(
-            _sug(generated_on=_NOW - timedelta(minutes=10)),
+            _sug(
+                data_source="LIVE",
+                generated_on=_NOW - timedelta(minutes=10),
+                data_as_of=_NOW - timedelta(minutes=10),
+            ),
             _legs_iron_condor(), now=_NOW, today=_TODAY,
         )
         assert r.ok
         assert r.details.get("suggestion_age_minutes") == 10.0
 
-    def test_stale_generated_blocks(self):
+    def test_stale_live_generated_blocks(self):
         r = validate_execution(
-            _sug(generated_on=_NOW - timedelta(minutes=120)),
+            _sug(
+                data_source="LIVE",
+                generated_on=_NOW - timedelta(minutes=120),
+                data_as_of=_NOW - timedelta(minutes=5),
+            ),
             _legs_iron_condor(), now=_NOW, today=_TODAY,
         )
         assert not r.ok
         assert any("re-validate" in v for v in r.vetoes)
 
-    def test_missing_generated_on_does_not_block(self):
+    def test_stale_eod_generated_does_not_block(self):
         r = validate_execution(
-            _sug(generated_on=None),
+            _sug(
+                data_source="EOD",
+                generated_on=_NOW - timedelta(hours=14),
+                data_as_of=_NOW - timedelta(hours=14),
+            ),
             _legs_iron_condor(), now=_NOW, today=_TODAY,
         )
-        # No generated_on → no age check; freshness rule is skipped.
+        assert r.ok
+        assert "suggestion_age_minutes" not in r.details
+
+    def test_missing_generated_on_does_not_block(self):
+        r = validate_execution(
+            _sug(data_source="LIVE", generated_on=None, data_as_of=_NOW),
+            _legs_iron_condor(), now=_NOW, today=_TODAY,
+        )
         assert r.ok
         assert "suggestion_age_minutes" not in r.details
 

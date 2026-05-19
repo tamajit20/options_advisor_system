@@ -25,7 +25,7 @@ the underlying error string.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, time
 from typing import Callable, List, Optional
 
 from utils import now_ist
@@ -70,11 +70,21 @@ class NseEodProvider:
             logger.exception("nse_eod: error closing DB connection (non-fatal)")
 
     @staticmethod
+    def _eod_data_timestamp(trade_date: date) -> datetime:
+        """NSE cash close on ``trade_date`` — when EOD settle prices apply (IST)."""
+        return datetime.combine(trade_date, time(15, 30))
+
+    @staticmethod
     def _stamp(rows: List[dict]) -> List[dict]:
         """Tag each row with provenance so callers can branch on `_source`."""
         for r in rows:
             r["_source"] = DataSource.EOD.value
             r["_provider"] = "nse_eod"
+            td = r.get("trade_date")
+            if isinstance(td, datetime):
+                td = td.date()
+            if isinstance(td, date):
+                r["_data_timestamp"] = NseEodProvider._eod_data_timestamp(td)
         return rows
 
     # ------------------------------------------------------------------ API
@@ -139,6 +149,11 @@ class NseEodProvider:
             return None
         row["_source"] = DataSource.EOD.value
         row["_provider"] = self.name
+        td = row.get("trade_date")
+        if isinstance(td, datetime):
+            td = td.date()
+        if isinstance(td, date):
+            row["_data_timestamp"] = self._eod_data_timestamp(td)
         return row
 
     def get_vix(self, trade_date: Optional[date] = None) -> Optional[dict]:

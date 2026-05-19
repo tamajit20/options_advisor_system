@@ -48,11 +48,16 @@ from database.models import (
 from engine.confidence import evaluate as evaluate_confidence
 from engine.em_calibration import band_dte, compute_calibration_warning
 from engine.indicators import build_indicators
+from engine.market_data_provenance import (
+    PricingProvenanceTracker,
+    stamp_eod_rows,
+)
 from engine.iv_calculator import implied_vol
 from engine.iv_rank import iv_rank as compute_iv_rank, pick_atm_iv
 from engine.strategy_selector import assemble_suggestion
 from exceptions import StrategyVeto
 from lifecycle.chain_aggregator import load_trajectory
+from lifecycle.session_spot import build_session_bar
 from utils import days_between, now_ist, today_ist
 
 logger = logging.getLogger(__name__)
@@ -310,6 +315,8 @@ def _evaluate_underlying(
         spot_row = chain_provider.get_spot(symbol)
     else:
         spot_row = sp.for_date(symbol, trade_date)
+        if spot_row:
+            stamp_eod_rows([spot_row], trade_date)
     if not spot_row:
         logger.warning("Suggestion: no spot for %s (%s mode)", symbol,
                        "live" if _live_mode else f"EOD {trade_date}")
@@ -408,6 +415,7 @@ def _evaluate_underlying(
                 oi_abs_rows = eod_chain # absolute OI levels from yesterday's bhav
         else:
             chain = fo.get_chain(symbol, trade_date, expiry)
+            stamp_eod_rows(chain, trade_date)
             # EOD mode: chain_rows already carry open_interest + change_in_oi from bhav.
             # build_indicators defaults both oi_chain_rows and oi_change_rows to chain_rows.
             eod_chain = None
@@ -415,6 +423,11 @@ def _evaluate_underlying(
             oi_abs_rows = None
         if not chain:
             continue
+
+        pricing_prov = PricingProvenanceTracker()
+        pricing_prov.observe_row(spot_row, role="pricing")
+        pricing_prov.observe_chain(chain, role="pricing")
+        provenance = pricing_prov.finalize()
 
         if _live_mode:
             atm_iv, iv_rank = _compute_live_atm_iv_rank(
@@ -435,9 +448,20 @@ def _evaluate_underlying(
             _raw_iv_rank = iv_for_expiry[0].get("iv_rank")
             iv_rank: Optional[float] = float(_raw_iv_rank) if _raw_iv_rank is not None else None
 
+        _trend_as_of = live_today if _live_mode else trade_date
+        _session_bar = None
+        if _live_mode and live_today is not None:
+            _session_bar = build_session_bar(
+                db=db,
+                symbol=symbol,
+                trade_date=live_today,
+                spot_now=spot,
+                chain_provider=chain_provider,
+            )
+
         indicators = build_indicators(
             symbol=symbol,
-            as_of=trade_date,
+            as_of=_trend_as_of,
             spot=spot,
             chain_rows=chain,
             spot_history=spot_history,
@@ -448,6 +472,8 @@ def _evaluate_underlying(
             oi_chain_rows=oi_abs_rows,
             oi_change_rows=oi_change_rows,
             trajectory=load_trajectory(db, symbol=symbol, expiry=expiry) if _live_mode else None,
+            session_bar=_session_bar,
+            live_mode=_live_mode,
         )
 
         confidence = evaluate_confidence(
@@ -496,6 +522,7 @@ def _evaluate_underlying(
                 vix_data_date=actual_vix_date,
                 oi_pcr_change=indicators.oi_pcr_change,
             )
+            primary_suggestion.pricing_provenance = provenance
             suggestions.append(primary_suggestion)
             existing_names.append(primary_suggestion.trade_name)
             _attach_em_calibration_warning(db, primary_suggestion)
@@ -549,6 +576,7 @@ def _evaluate_underlying(
                         vix_data_date=actual_vix_date,
                         oi_pcr_change=indicators.oi_pcr_change,
                     )
+                    comp.pricing_provenance = provenance
                     suggestions.append(comp)
                     existing_names.append(comp.trade_name)
                     _attach_em_calibration_warning(db, comp)
@@ -658,15 +686,28 @@ def _persist_and_notify(
         sug_repo.insert_legs(sug.suggestion_id, sug.legs)
         try:
             from utils import ENGINE_VERSION, market_state_at
+            pp = sug.pricing_provenance
+            effective_source = data_source
+            if pp and pp.pricing_source == "MIXED":
+                effective_source = "MIXED"
+            elif pp and pp.pricing_source in ("LIVE", "EOD"):
+                effective_source = pp.pricing_source
+            data_as_of = pp.data_as_of if pp else None
+            live_fresh_ms = pp.live_data_freshness_ms if pp else None
+            if data_as_of is None:
+                logger.warning(
+                    "No pricing provenance for %s — data_as_of left NULL",
+                    sug.suggestion_id,
+                )
+            market_ts = data_as_of or now_ist()
             sug_repo.write_provenance(
                 sug.suggestion_id,
-                data_source=data_source,
+                data_source=effective_source,
                 provider=provider_name,
-                data_as_of=datetime.combine(
-                    sug.data_date, datetime.min.time()
-                ) if sug.data_date else None,
+                data_as_of=data_as_of,
                 trigger_type=trigger_type,
-                market_state_at_gen=market_state_at(now_ist()),
+                market_state_at_gen=market_state_at(market_ts),
+                live_data_freshness_ms=live_fresh_ms,
                 engine_version=ENGINE_VERSION,
             )
         except Exception:
@@ -787,8 +828,10 @@ def run_live_suggestion_engine(
 
     Uses the Zerodha (or other live) provider for option chain and spot price.
     ATM IV is computed on-the-fly from live premiums.  IV rank is still
-    derived from the historical series stored in the DB.  Historical spot data
-    (for trend / HV-20) is also read from the DB.
+    derived from the historical series stored in the DB.  Structural trend uses
+    index OHLC history from ``options_spot_eod`` (NSE / Zerodha backfill).
+    Session trend uses Zerodha day OHLC when available, else 5-min spot snapshots
+    from the WS pipeline, merged into the effective trend for strategy selection.
 
     Requires OPT_PROVIDERS=zerodha and a valid Kite access token.  Falls back
     gracefully when the provider reports no live-quote capability.

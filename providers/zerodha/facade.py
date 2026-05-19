@@ -18,6 +18,8 @@ uses for market data:
     - `set_access_token(token)`    — wire the daily access token
     - `instruments(exchange=None)` — instrument master for symbol lookup
     - `ltp(keys)`                  — last-traded price for spot / VIX / chain
+    - `ohlc(keys)`                 — session OHLC for indices (live trend)
+    - `historical_data(...)`       — daily candles for index backfill
 
 Trying to call anything else on the facade raises `AttributeError` because
 the attribute simply does not exist. There is no `place_order`,
@@ -97,6 +99,30 @@ class KiteFacade:
         `EXCHANGE:TRADINGSYMBOL` keys.  Kite rate-limit: 1 req/sec.
         Superset of `ltp` — use this when open_interest is needed."""
         return self._kite.quote(list(keys))
+
+    def ohlc(self, keys: Iterable[str]) -> dict:
+        """Session OHLC + last price for index symbols (live trend bar)."""
+        return self._kite.ohlc(list(keys))
+
+    def historical_data(
+        self,
+        instrument_token: int,
+        from_date,
+        to_date,
+        interval: str,
+        *,
+        continuous: bool = False,
+        oi: bool = False,
+    ) -> list:
+        """Daily (or other) candles for index backfill."""
+        return self._kite.historical_data(
+            instrument_token,
+            from_date,
+            to_date,
+            interval,
+            continuous=continuous,
+            oi=oi,
+        )
 
     # ------------------------------------------------------------------
     # Read-only metadata

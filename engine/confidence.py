@@ -142,10 +142,28 @@ def evaluate(
         diff_v = indicators.sma_diff_pct
         adx_str = f"ADX-14: {adx_v:.1f}" if adx_v is not None else "ADX-14: n/a"
         slope_str = f"slope: {slope_v:+.2f}%" if slope_v is not None else "slope: n/a"
-        diff_str  = f"SMA20-50 diff: {diff_v:+.2f}%" if diff_v is not None else "SMA-diff: n/a"
+        from engine.indicators import trend_sma_periods
+        fast_p, slow_p = trend_sma_periods()
+        diff_str = (
+            f"SMA{fast_p}-{slow_p} diff: {diff_v:+.2f}%"
+            if diff_v is not None else "SMA-diff: n/a"
+        )
+        struct = getattr(indicators, "trend_structural", indicators.trend)
+        sess = getattr(indicators, "trend_session", None)
+        ret_pct = getattr(indicators, "trend_return_pct", None)
+        ret_tr = getattr(indicators, "trend_short_horizon", None)
+        extra = []
+        if sess:
+            extra.append(f"session: {sess}")
+        if ret_pct is not None:
+            extra.append(f"{int(STRATEGY_CONFIG.get('trend_return_lookback_days', 5))}d ret: {ret_pct:+.2f}%")
+        if ret_tr:
+            extra.append(f"short-horizon: {ret_tr}")
+        extra_str = (" · " + " · ".join(extra)) if extra else ""
         return (
             _PASS if trend_ok else _SOFT_FAIL,
-            f"Trend: {indicators.trend} · ATR-14: {indicators.atr_14:.0f} pts · "
+            f"Trend: {indicators.trend} (structural: {struct}{extra_str}) · "
+            f"ATR-14: {indicators.atr_14:.0f} pts · "
             f"{diff_str} · {slope_str} · {adx_str}",
         )
 

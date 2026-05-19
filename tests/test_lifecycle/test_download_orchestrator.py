@@ -48,6 +48,13 @@ class TestRunSpotBhav:
         mocker.patch("lifecycle.download_orchestrator.download_spot_bhav",
                      return_value=[SpotBhavRow(date(2026, 4, 30), "RELIANCE",
                                                2500, 2510, 2490, 2505, 1000)])
+        mocker.patch("lifecycle.download_orchestrator.download_nse_index_spot",
+                     return_value=[
+                         SpotBhavRow(date(2026, 4, 30), "NIFTY",
+                                     22900, 23100, 22800, 23050, 0),
+                         SpotBhavRow(date(2026, 4, 30), "BANKNIFTY",
+                                     49900, 50100, 49800, 50050, 0),
+                     ])
         mocker.patch("lifecycle.download_orchestrator.extract_index_spots",
                      return_value={"NIFTY": 23000.0, "BANKNIFTY": 50000.0})
         n = orch.run_spot_bhav(mock_db, date(2026, 4, 30))
@@ -58,6 +65,7 @@ class TestRunSpotBhav:
         mocker.patch("lifecycle.download_orchestrator.download_spot_bhav",
                      return_value=[SpotBhavRow(date(2026, 4, 30), "RELIANCE",
                                                2500, 2510, 2490, 2505, 1000)])
+        mocker.patch("lifecycle.download_orchestrator.download_nse_index_spot", return_value=[])
         mocker.patch("lifecycle.download_orchestrator.extract_index_spots",
                      side_effect=RuntimeError("zip missing"))
         n = orch.run_spot_bhav(mock_db, date(2026, 4, 30))
@@ -66,6 +74,7 @@ class TestRunSpotBhav:
 
     def test_no_rows_returns_zero_no_commit(self, mock_db, mocker):
         mocker.patch("lifecycle.download_orchestrator.download_spot_bhav", return_value=[])
+        mocker.patch("lifecycle.download_orchestrator.download_nse_index_spot", return_value=[])
         mocker.patch("lifecycle.download_orchestrator.extract_index_spots", return_value={})
         n = orch.run_spot_bhav(mock_db, date(2026, 4, 30))
         assert n == 0

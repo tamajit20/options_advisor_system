@@ -44,9 +44,11 @@ from database.models import (
     FoEodRepo,
     NotificationRepo,
     SimulationRepo,
+    SpotEodRepo,
     SuggestionRepo,
     TradeRepo,
 )
+from engine.exit_pricing import sanitized_close_price
 from lifecycle.resuggestion_engine import generate_resuggestion
 from lifecycle.trade_executor import close_trade_with_fills, mark_executed, supplement_trade
 from utils import today_ist
@@ -466,17 +468,37 @@ def create_app() -> Flask:
             return jsonify({"legs": [], "est_gross_pnl": 0.0})
         underlying = executed[0]["symbol"]
         expiry = executed[0]["expiry_date"]
+        as_of = today_ist()
         fo = FoEodRepo(db)
-        chain = fo.get_chain(underlying, today_ist(), expiry)
+        chain = fo.get_chain(underlying, as_of, expiry)
         chain_mid = {
             (float(c["strike"]), c["option_type"]):
                 float(c.get("settle_price") or c.get("close_price") or 0.0)
             for c in chain
         }
+        # Look up underlying spot so sanitized_close_price can sanity-check
+        # each leg's mid against intrinsic. Without this the close-suggestion
+        # endpoint used to pre-fill the Close Trade modal with absurd values
+        # whenever options_fo_eod had a row with settle_price ≈ spot (seen
+        # on expired contracts), making the dashboard report ₹35-lakh of
+        # phantom profit on simple straddles.
+        spot_row = SpotEodRepo(db).for_date(underlying, as_of)
+        spot_close = float(spot_row["close_price"]) if spot_row else None
         out = []
         est = 0.0
         for l in executed:
-            mid = chain_mid.get((float(l["strike"]), l["option_type"]), 0.0)
+            raw_mid = chain_mid.get((float(l["strike"]), l["option_type"]), 0.0)
+            mid, src = sanitized_close_price(
+                option_type=l["option_type"],
+                strike=float(l["strike"]),
+                raw_mid=raw_mid,
+                spot=spot_close,
+            )
+            if src == "intrinsic_fallback":
+                logger.warning(
+                    "close-suggestion: bogus settle for %s %s%s (raw=%.2f) — using intrinsic %.2f",
+                    underlying, l["strike"], l["option_type"], raw_mid, mid,
+                )
             lots = int(l.get("lots_actual") or l.get("lots") or 0)
             qty = lots * int(l.get("lot_size") or 0)
             fill = float(l.get("fill_price") or 0.0)
@@ -493,6 +515,7 @@ def create_app() -> Flask:
                 "fill_price":      fill,
                 "lots":            lots,
                 "suggested_close": round(mid, 2),
+                "price_source":    src,  # "mid" | "intrinsic_fallback"
             })
         return jsonify({"legs": out, "est_gross_pnl": round(est, 2)})
 

@@ -113,7 +113,7 @@ class MarketIndicators:
     pcr:           Optional[float]   # None = OI data absent (call OI was zero or chain empty)
     max_pain:      float
     atr_14:        Optional[float]   # None = insufficient spot history (< period+1 rows)
-    trend:         str               # BULLISH / BEARISH / SIDEWAYS / UNKNOWN
+    trend:         str               # Effective trend for strategy selection
     vix_close:     Optional[float]   # None = VIX row not available today
     vix_regime:    str               # STABLE / RISING / SPIKING / UNKNOWN
     oi_walls_call: List[float]       # top call walls (strikes); empty when OI absent
@@ -125,6 +125,10 @@ class MarketIndicators:
     adx_14:           Optional[float] = None  # ADX-14 trend strength; None = insufficient history
     sma20_slope_pct:  Optional[float] = None  # SMA20 5-day slope as % of price; None = insufficient history
     sma_diff_pct:     Optional[float] = None  # (SMA20 - SMA50) / SMA50 * 100; None = insufficient history
+    trend_structural: str = "SIDEWAYS"  # SMA crossover + ADX on settled daily OHLC
+    trend_session:    Optional[str] = None  # Live intraday; None in EOD mode
+    trend_return_pct: Optional[float] = None  # % vs N-day ago close (5d/10d lookback)
+    trend_short_horizon: Optional[str] = None  # BULLISH/BEARISH/SIDEWAYS from return_pct
     oi_pcr_change:    Optional[float] = None  # ΣΔPut OI / ΣΔCall OI — >1 puts building, <1 calls building; None = not available
     # Trajectory fields (populated only in live mode when WS history is present).
     # All None in EOD mode and when the 5-min table has < 3 samples for the underlying/expiry.
@@ -219,6 +223,14 @@ class ChargeBreakdown:
 
 
 @dataclass
+class PricingProvenance:
+    """Market-data clock for the premiums that built this suggestion."""
+    data_as_of:             Optional[datetime] = None
+    live_data_freshness_ms: Optional[int] = None
+    pricing_source:         str = "UNKNOWN"   # LIVE | EOD | MIXED | UNKNOWN
+
+
+@dataclass
 class SuggestionEconomics:
     net_credit:           float       # positive = credit, negative = debit
     max_profit:            float
@@ -262,6 +274,7 @@ class Suggestion:
     vix_data_date:    Optional[date] = None  # trade_date of the most recent VIX row used
     oi_pcr_change:    Optional[float] = None  # OI change momentum: ΣΔPut OI / ΣΔCall OI (EOD=day-over-day, LIVE=since open)
     em_calibration_warning: Optional[str] = None  # set when realised/expected median for (underlying, dte_band) deviates >threshold
+    pricing_provenance:     Optional[PricingProvenance] = None  # spot+chain timestamps → DB data_as_of
 
 
 @dataclass

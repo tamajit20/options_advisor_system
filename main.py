@@ -77,6 +77,23 @@ def _cmd_init_db() -> int:
         db.close()
 
 
+def _cmd_backfill_index_spot(days) -> int:
+    from database.connection import SQLServerConnection
+    from lifecycle.index_spot_backfill import run_index_spot_backfill
+
+    db = SQLServerConnection()
+    db.connect()
+    try:
+        n = run_index_spot_backfill(db, days=days)
+        logger.info("Index spot backfill complete: %d rows upserted", n)
+        return 0
+    except Exception:
+        logger.exception("Index spot backfill failed")
+        return 1
+    finally:
+        db.close()
+
+
 def _cmd_check_db() -> int:
     from database.connection import SQLServerConnection
 
@@ -538,6 +555,17 @@ def main(argv=None) -> int:
                         help="Run the Zerodha WebSocket tick runner (long-lived, single instance)")
     parser.add_argument("--dashboard-only", action="store_true")
     parser.add_argument("--scheduler-only", action="store_true")
+    parser.add_argument(
+        "--backfill-index-spot",
+        action="store_true",
+        help="Backfill index OHLC into options_spot_eod (NSE + Zerodha if logged in)",
+    )
+    parser.add_argument(
+        "--backfill-days",
+        type=int,
+        default=None,
+        help="Calendar days of history for --backfill-index-spot (default from config)",
+    )
     args = parser.parse_args(argv)
 
     _setup_console_logging()
@@ -554,6 +582,8 @@ def main(argv=None) -> int:
         return _cmd_zerodha_logout()
     if args.ws_runner:
         return _cmd_ws_runner()
+    if args.backfill_index_spot:
+        return _cmd_backfill_index_spot(args.backfill_days)
     _install_db_logging()
     if args.dashboard_only:
         _run_dashboard()

@@ -36,6 +36,7 @@ from exceptions import StrategyVeto
 from engine import leg_builder
 from engine.charges import estimate_charges
 from engine.name_generator import make_trade_name
+from utils import now_ist
 
 
 def select_strategy(
@@ -250,6 +251,49 @@ def assemble_suggestion(
                 f"naked long premium overpays for IV here"
             )
 
+    # Per-strategy IV/HV FLOOR for the WRITING regime (fix D — counterpart of
+    # `strategy_iv_premium_buy_max`). Promotes the SOFT_FAIL emitted by
+    # confidence._iv_premium_gate to a HARD VETO for the listed strategies
+    # when IV/HV < threshold. Catches the live case where IRON_CONDOR was
+    # suggested at IV/HV 0.72 (realised vol > implied vol → negative selling
+    # edge) and proceeded to lose -₹3,061. Strategies NOT listed skip the
+    # check.
+    sell_min_overrides = STRATEGY_CONFIG.get("strategy_iv_premium_sell_min", {}) or {}
+    sell_min = sell_min_overrides.get(strategy)
+    if sell_min is not None:
+        iv_prem = getattr(indicators, "iv_premium", None)
+        iv_writing_min_rank = STRATEGY_CONFIG["iv_rank_writing_min"]
+        in_writing_regime = (iv_rank is not None) and (iv_rank > iv_writing_min_rank)
+        if in_writing_regime and iv_prem is not None and iv_prem < float(sell_min):
+            raise StrategyVeto(
+                f"{strategy} requires IV/HV \u2265 {float(sell_min):.2f}\u00d7 "
+                f"(strategy_iv_premium_sell_min), got {iv_prem:.2f}\u00d7 \u2014 "
+                f"realised vol exceeds implied: negative selling edge"
+            )
+
+    # Per-strategy ADX band (fix D companion). Non-directional credit
+    # structures want defined consolidation (mid ADX), not chop (low ADX)
+    # and not a trend (high ADX). Both live IRON_CONDOR losers ran on
+    # ADX 11-13 (chop with drift) — vetoed by this check at min=15.
+    adx_overrides = STRATEGY_CONFIG.get("strategy_adx_band", {}) or {}
+    adx_band = adx_overrides.get(strategy)
+    if adx_band is not None:
+        adx_value = getattr(indicators, "adx_14", None)
+        adx_min, adx_max = adx_band
+        if adx_value is not None:
+            if adx_min is not None and adx_value < float(adx_min):
+                raise StrategyVeto(
+                    f"{strategy} requires ADX \u2265 {float(adx_min):.0f}, "
+                    f"got {adx_value:.1f} \u2014 market is in chop, not "
+                    f"consolidation; range-bound credit thesis unreliable"
+                )
+            if adx_max is not None and adx_value > float(adx_max):
+                raise StrategyVeto(
+                    f"{strategy} requires ADX \u2264 {float(adx_max):.0f}, "
+                    f"got {adx_value:.1f} \u2014 market is trending; "
+                    f"directional break risk exceeds range-bound edge"
+                )
+
     # Per-strategy IV/HV buy_pass veto (review item #8 follow-up).
     # `strategy_iv_premium_buy_pass` is the per-strategy "real edge" threshold
     # used by edge_score; promote it to a soft veto when iv_premium exceeds it
@@ -393,7 +437,7 @@ def assemble_suggestion(
     return Suggestion(
         suggestion_id=suggestion_id,
         trade_name=trade_name,
-        generated_on=generated_on or datetime.utcnow(),
+        generated_on=generated_on or now_ist(),
         strategy=strategy,
         strategy_type=("WRITING" if strategy in _CREDIT_STRATEGIES else "BUYING"),
         underlying=underlying,

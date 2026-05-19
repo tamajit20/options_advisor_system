@@ -256,17 +256,78 @@ input:focus, select:focus, textarea:focus {
 }
 
 /* ---------- System banners (Phase 4 / Task 7 surfacing) ---------- */
-.sys-banner {
-  margin: 0 0 12px; padding: 10px 14px; border-radius: 8px;
-  font-size: .92rem; line-height: 1.35; border: 1px solid transparent;
+/* Global banners — pinned strip under the app header. Visible on every
+   tab so the user can never miss a CRITICAL alert. Auto-hides when empty
+   (zero-height container) and gets a separator only when populated. */
+/* Global banners now live INSIDE .app-header (between the brand and the
+   icon actions). They flow as a horizontally-scrollable row of compact
+   pills so they don't break the header height. Empty container collapses
+   to zero width. */
+.global-banners {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;            /* allow shrink past intrinsic content width */
+  overflow-x: auto;
+  scrollbar-width: thin;
+  margin: 0 14px;
+  padding: 2px 0;
 }
+.global-banners::-webkit-scrollbar { height: 4px; }
+.global-banners::-webkit-scrollbar-thumb { background: rgba(255,255,255,.25); border-radius: 4px; }
+
+.sys-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;          /* don't let flex squeeze the pill */
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: .82rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  background: rgba(255,255,255,.10);
+  color: #fff;
+}
+.sys-banner strong { font-weight: 700; }
+.sys-banner .btn {
+  padding: 3px 9px;
+  font-size: .75rem;
+  border-radius: 999px;
+  background: rgba(255,255,255,.18);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,.30);
+  min-height: 0;
+  height: auto;
+  line-height: 1;
+}
+.sys-banner .btn:hover { background: rgba(255,255,255,.30); }
 .sys-banner-err {
-  background: rgba(239,68,68,.12); color: var(--err);
-  border-color: rgba(239,68,68,.35);
+  background: rgba(239,68,68,.28);
+  border-color: rgba(255,255,255,.45);
+  color: #fff;
 }
 .sys-banner-warn {
-  background: rgba(251,191,36,.10); color: var(--warn);
-  border-color: rgba(251,191,36,.30);
+  background: rgba(251,191,36,.30);
+  border-color: rgba(255,255,255,.40);
+  color: #1c1108;
+}
+.sys-banner-warn .btn {
+  background: rgba(0,0,0,.20);
+  color: #1c1108;
+  border-color: rgba(0,0,0,.40);
+}
+.sys-banner-warn .btn:hover { background: rgba(0,0,0,.32); color: #fff; }
+
+/* On narrower viewports the banners wrap to a second line under the brand.
+   We can't usefully cram three banners into the same row on a phone, so
+   the global container becomes a wrap-row spanning the full header width. */
+@media (max-width: 900px) {
+  .app-header { flex-wrap: wrap; row-gap: 6px; }
+  .global-banners { order: 3; flex-basis: 100%; margin: 4px 0 0 0; }
 }
 
 /* ---------- Suggestion card legs ---------- */
@@ -359,8 +420,24 @@ input:focus, select:focus, textarea:focus {
   padding: 12px 14px; border-bottom: 1px solid #2a3744; cursor: pointer;
 }
 #notif-list .notif.unread { background: rgba(15,118,110,.08); }
+#notif-list .notif.notif-critical {
+  border-left: 4px solid var(--err);
+  background: rgba(239,68,68,.10);
+}
+#notif-list .notif.notif-warning {
+  border-left: 4px solid var(--warn);
+  background: rgba(251,191,36,.08);
+}
 #notif-list .notif h4 { margin: 0 0 4px; font-size: .95rem; }
 #notif-list .notif p  { margin: 0; color: var(--text-dim); font-size: .85rem; }
+.notif-sev {
+  display: inline-block; padding: 1px 6px; border-radius: 3px;
+  font-size: .68rem; font-weight: 700; letter-spacing: .04em;
+  margin-right: 6px; vertical-align: middle;
+}
+.notif-sev-critical { background: var(--err);  color: #fff; }
+.notif-sev-warning  { background: var(--warn); color: #1a1f24; }
+.notif-sev-info     { background: rgba(255,255,255,.08); color: var(--text-dim); }
 
 /* ---------- Toasts ---------- */
 #toast-container {

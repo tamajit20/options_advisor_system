@@ -61,6 +61,15 @@ def _today_ist() -> date:
     return datetime.now(tz=_IST).date()
 
 
+def _now_ist_naive() -> datetime:
+    return datetime.now(tz=_IST).replace(tzinfo=None)
+
+
+def _quote_timestamp(age_seconds: Optional[float]) -> datetime:
+    """When this quote was current: now minus cache/REST age (naive IST)."""
+    return _now_ist_naive() - timedelta(seconds=float(age_seconds or 0.0))
+
+
 def _is_token_exception(exc: BaseException) -> bool:
     """True if `exc` is a Kite token/auth error. Covers both the SDK's typed
     exception and a plain 403 from generic transports."""
@@ -130,6 +139,7 @@ class ZerodhaProvider:
         # Per-endpoint token buckets (Kite verified limits).
         self._rl_quote = TokenBucket(rate_per_sec=1.0)
         self._rl_ltp = TokenBucket(rate_per_sec=10.0)
+        self._rl_ohlc = TokenBucket(rate_per_sec=10.0)
 
         # RLock (not Lock!) because `_ensure_instruments` acquires this
         # lock and then calls `_ensure_facade`, which acquires it again.
@@ -252,8 +262,64 @@ class ZerodhaProvider:
         self._cache.set(cache_key, row)
         return self._stamp_spot(row, symbol, today, 0.0)
 
+    def get_index_day_ohlc(self, symbol: str, trade_date: Optional[date] = None) -> Optional[dict]:
+        """Today's index session OHLC from Kite ``/quote/ohlc`` (live trend bar)."""
+        today = _today_ist()
+        td = trade_date or today
+        if td != today:
+            return self._eod.get_spot(symbol, td)
+
+        try:
+            facade = self._ensure_facade()
+        except (TokenExpiredError, ProviderError) as exc:
+            logger.warning("zerodha get_index_day_ohlc fallback EOD: %s", exc)
+            return self._eod.get_spot(symbol, td)
+
+        kite_symbol = f"NSE:{_normalise_index_symbol(symbol)}"
+        cache_key = ("ohlc", kite_symbol)
+        cached, age = self._cache.get_with_age(cache_key)
+        if cached is not None:
+            return self._stamp_day_ohlc(cached, symbol, today, age)
+
+        self._rl_ohlc.acquire()
+        try:
+            data = self._wrap_call(lambda: facade.ohlc([kite_symbol]), "ohlc(index)")
+        except (TokenExpiredError, ProviderError) as exc:
+            logger.warning("zerodha get_index_day_ohlc fallback EOD: %s", exc)
+            return self._eod.get_spot(symbol, td)
+
+        row = data.get(kite_symbol) if isinstance(data, dict) else None
+        if not row:
+            return self._eod.get_spot(symbol, td)
+        self._cache.set(cache_key, row, ttl_seconds=30.0)
+        return self._stamp_day_ohlc(row, symbol, today, 0.0)
+
+    def _stamp_day_ohlc(self, row: dict, symbol: str, trade_date: date, age_seconds: Optional[float]) -> dict:
+        ohlc = row.get("ohlc") or {}
+        last_price = float(row.get("last_price") or ohlc.get("close") or 0)
+        o = float(ohlc.get("open") or last_price)
+        h = float(ohlc.get("high") or last_price)
+        l = float(ohlc.get("low") or last_price)
+        c = float(ohlc.get("close") or last_price)
+        age = float(age_seconds or 0.0)
+        return {
+            "symbol": symbol,
+            "trade_date": trade_date,
+            "open_price": o,
+            "high_price": h,
+            "low_price": l,
+            "close_price": c if c > 0 else last_price,
+            "volume": 0,
+            "_source": DataSource.LIVE.value,
+            "_provider": self.name,
+            "_freshness_ms": int(age * 1000),
+            "_data_timestamp": _quote_timestamp(age),
+        }
+
     def _stamp_spot(self, row: dict, symbol: str, trade_date: date, age_seconds: Optional[float]) -> dict:
         last_price = float(row["last_price"])
+        age = float(age_seconds or 0.0)
+        freshness_ms = int(age * 1000)
         return {
             "symbol": symbol,
             "trade_date": trade_date,
@@ -264,7 +330,8 @@ class ZerodhaProvider:
             "volume":      None,
             "_source":     DataSource.LIVE.value,
             "_provider":   self.name,
-            "_freshness_ms": int((age_seconds or 0.0) * 1000),
+            "_freshness_ms": freshness_ms,
+            "_data_timestamp": _quote_timestamp(age),
         }
 
     # ----- VIX -----
@@ -299,12 +366,14 @@ class ZerodhaProvider:
 
     def _stamp_vix(self, row: dict, trade_date: date, age_seconds: Optional[float]) -> dict:
         lp = float(row["last_price"])
+        age = float(age_seconds or 0.0)
         return {
             "trade_date": trade_date,
             "open_price":  lp, "high_price":  lp, "low_price": lp, "close_price": lp,
             "_source":     DataSource.LIVE.value,
             "_provider":   self.name,
-            "_freshness_ms": int((age_seconds or 0.0) * 1000),
+            "_freshness_ms": int(age * 1000),
+            "_data_timestamp": _quote_timestamp(age),
         }
 
     # ----- option chain -----
@@ -413,6 +482,7 @@ class ZerodhaProvider:
                 "_source":        DataSource.LIVE.value,
                 "_provider":      self.name,
                 "_freshness_ms":  freshness_ms,
+                "_data_timestamp": _quote_timestamp(age_seconds),
             })
         return rows
 

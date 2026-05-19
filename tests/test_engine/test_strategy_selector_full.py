@@ -384,6 +384,200 @@ class TestPerStrategyBuyPassVeto:
 
 
 # ---------------------------------------------------------------------------
+# Fix D — Per-strategy IV/HV FLOOR in the writing regime.
+# Mirrors strategy_iv_premium_buy_max but for sellers. Promotes the regime-wide
+# SOFT_FAIL emitted by confidence._iv_premium_gate to a HARD VETO for listed
+# strategies when IV/HV is below their floor. Catches the production case where
+# IRON_CONDOR was suggested at IV/HV 0.72 (realised vol > implied vol) and lost
+# -₹3,061.
+# ---------------------------------------------------------------------------
+class TestPerStrategyIvPremiumSellMin:
+    def _ind(self, iv_premium: float, adx: float = 25.0, trend: str = "SIDEWAYS"):
+        ind = _make_indicators(trend=trend, iv_premium=iv_premium)
+        # Override adx_14 so the ADX band check (also new) doesn't fire here.
+        from dataclasses import replace
+        return replace(ind, adx_14=adx)
+
+    def test_iron_condor_vetoed_below_sell_min(self, sample_chain, mocker):
+        """The exact prod scenario: IV/HV 0.72 < 0.90 floor → veto."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+        })
+        ind = self._ind(iv_premium=0.72)
+        with pytest.raises(StrategyVeto, match="strategy_iv_premium_sell_min"):
+            ss.assemble_suggestion(
+                suggestion_id="S-IC-SM1", underlying="NIFTY",
+                expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=sample_chain,
+                indicators=ind,
+                confidence=_all_pass_confidence(),
+                iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+            )
+
+    def test_iron_condor_passes_at_floor(self, sample_chain, mocker):
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+        })
+        ind = self._ind(iv_premium=0.95)
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-IC-SM2", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+        )
+        assert sug.strategy == "IRON_CONDOR"
+
+    def test_iron_butterfly_has_tighter_floor(self, sample_chain, mocker):
+        """IRON_BUTTERFLY floor is 1.00 (vs 0.90 for IRON_CONDOR)."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+            "iv_butterfly_min_premium": 0.0,  # so we test only the new floor
+        })
+        ind = self._ind(iv_premium=0.95)  # passes condor floor, fails butterfly floor
+        with pytest.raises(StrategyVeto, match="strategy_iv_premium_sell_min"):
+            ss.assemble_suggestion(
+                suggestion_id="S-IB-SM", underlying="NIFTY",
+                expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=sample_chain,
+                indicators=ind,
+                confidence=_all_pass_confidence(),
+                iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+                strategy_override="IRON_BUTTERFLY",
+            )
+
+    def test_buying_regime_skips_sell_min(self, sample_chain, mocker):
+        """sell_min only fires in writing regime (iv_rank > iv_rank_writing_min)."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "strategy_iv_premium_buy_pass": {},  # silence orthogonal gate
+        })
+        ind = self._ind(iv_premium=0.72)  # would veto in writing
+        # iv_rank=15 → buying regime; sell_min is irrelevant
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-LS-SM", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=15.0, atm_iv=0.18, lots=1, lot_size=75,
+            strategy_override="LONG_STRADDLE",
+        )
+        assert sug.strategy == "LONG_STRADDLE"
+
+    def test_debit_strategies_unaffected(self, sample_chain, mocker):
+        """BULL_CALL_SPREAD / BEAR_PUT_SPREAD are NOT in the sell_min map."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+        })
+        ind = self._ind(iv_premium=0.50, trend="BULLISH")
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-BCS-SM", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=40.0, atm_iv=0.18, lots=1, lot_size=75,
+            strategy_override="BULL_CALL_SPREAD",
+        )
+        assert sug.strategy == "BULL_CALL_SPREAD"
+
+
+# ---------------------------------------------------------------------------
+# Fix D companion — ADX band per strategy.
+# Non-directional credit strategies require defined consolidation (mid ADX),
+# not chop (low ADX) and not a trend (high ADX). Both prod IRON_CONDOR losers
+# ran on ADX 11-13 (chop) → vetoed by min=15 here.
+# ---------------------------------------------------------------------------
+class TestPerStrategyAdxBand:
+    def _ind(self, adx: float, iv_premium: float = 1.10, trend: str = "SIDEWAYS"):
+        ind = _make_indicators(trend=trend, iv_premium=iv_premium)
+        from dataclasses import replace
+        return replace(ind, adx_14=adx)
+
+    def test_iron_condor_vetoed_when_adx_below_min(self, sample_chain, mocker):
+        """The exact prod scenario: ADX 12 < 15 floor → veto (chop)."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+        })
+        ind = self._ind(adx=12.7)
+        with pytest.raises(StrategyVeto, match="chop, not"):
+            ss.assemble_suggestion(
+                suggestion_id="S-IC-ADX1", underlying="NIFTY",
+                expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=sample_chain,
+                indicators=ind,
+                confidence=_all_pass_confidence(),
+                iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+            )
+
+    def test_iron_condor_vetoed_when_adx_above_max(self, sample_chain, mocker):
+        """ADX 35 > 30 ceiling → veto (trending market)."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+        })
+        ind = self._ind(adx=35.0)
+        with pytest.raises(StrategyVeto, match="trending"):
+            ss.assemble_suggestion(
+                suggestion_id="S-IC-ADX2", underlying="NIFTY",
+                expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=sample_chain,
+                indicators=ind,
+                confidence=_all_pass_confidence(),
+                iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+            )
+
+    def test_iron_condor_passes_in_band(self, sample_chain, mocker):
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+        })
+        ind = self._ind(adx=22.0)
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-IC-ADX3", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+        )
+        assert sug.strategy == "IRON_CONDOR"
+
+    def test_directional_credit_strategies_unaffected(self, sample_chain, mocker):
+        """BPS / BCS are directional (trending market is fine for them) and
+        are NOT in the ADX band map."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+        })
+        ind = self._ind(adx=40.0, trend="BULLISH")
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-BPS-ADX", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+        )
+        assert sug.strategy == "BULL_PUT_SPREAD"
+
+
+# ---------------------------------------------------------------------------
 # Review item #10 — realised-move vs expected-move calibration validator.
 # Detailed engine-level coverage lives in tests/test_engine/test_em_calibration.py;
 # this single test pins the integration contract: when historical realised/

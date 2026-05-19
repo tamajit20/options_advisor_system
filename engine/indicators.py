@@ -19,6 +19,7 @@ from typing import List, Optional, Sequence, Tuple
 from config import STRATEGY_CONFIG
 from contracts import ChainTrajectory, MarketIndicators
 from engine import trajectory as _traj
+from engine.trend_model import compute_trends, filter_spot_history
 
 
 # ---------------------------------------------------------------------------
@@ -126,37 +127,73 @@ def atr(spot_history: Sequence[dict], period: int = 14) -> Optional[float]:
     return atr_val
 
 
+def trend_sma_periods() -> tuple[int, int]:
+    """Configured fast/slow SMA lengths for structural trend."""
+    fast = int(STRATEGY_CONFIG.get("trend_sma_fast_period", 10))
+    slow = int(STRATEGY_CONFIG.get("trend_sma_slow_period", 20))
+    if fast >= slow:
+        fast, slow = 10, 20
+    return fast, slow
+
+
+def _sma(closes: Sequence[float], period: int) -> float:
+    return sum(closes[-period:]) / period
+
+
+def _sma_slope_pct(
+    closes: Sequence[float],
+    period: int,
+    slope_days: Optional[int] = None,
+) -> Optional[float]:
+    """Fast-SMA % change over ``slope_days`` (default from config)."""
+    days = slope_days if slope_days is not None else int(
+        STRATEGY_CONFIG.get("trend_slope_days", 5)
+    )
+    if len(closes) < period + days:
+        return None
+    sma_today = _sma(closes, period)
+    sma_ago = sum(closes[-period - days:-days]) / period
+    if sma_ago <= 0:
+        return None
+    return (sma_today - sma_ago) / sma_ago * 100.0
+
+
+def _sma20_slope_pct(closes: Sequence[float]) -> Optional[float]:
+    """Backward-compatible alias: slope on configured fast SMA."""
+    fast, _ = trend_sma_periods()
+    return _sma_slope_pct(closes, fast)
+
+
 def trend(spot_history: Sequence[dict]) -> str:
     """Trend classification using SMA crossover + slope + ADX strength.
 
     Rules:
-        BULLISH  : SMA20 > SMA50 by ``trend_sma_diff_pct`` AND
-                   SMA20 5-day slope > ``trend_slope_min_pct`` AND
+        BULLISH  : SMA_fast > SMA_slow by ``trend_sma_diff_pct`` AND
+                   fast-SMA slope > ``trend_slope_min_pct`` AND
                    ADX-14 >= ``trend_adx_min``
         BEARISH  : mirror of bullish on the downside
         SIDEWAYS : everything else (chop, weak directional, insufficient data)
 
-    Insufficient history (< 50 closes for SMA50, or ADX unavailable) → SIDEWAYS
-    (safe fallback — strategy selector treats sideways conservatively).
+    Defaults: SMA_fast=10, SMA_slow=20 (see ``trend_sma_fast_period`` / ``slow``).
+    Insufficient history (< slow_period closes) → SIDEWAYS.
     """
+    fast, slow = trend_sma_periods()
     closes = [float(r["close_price"]) for r in spot_history]
-    if len(closes) < 50:
+    if len(closes) < slow:
         return "SIDEWAYS"
-    sma20 = sum(closes[-20:]) / 20
-    sma50 = sum(closes[-50:]) / 50
-    if sma50 <= 0:
+    sma_fast = _sma(closes, fast)
+    sma_slow = _sma(closes, slow)
+    if sma_slow <= 0:
         return "SIDEWAYS"
-    diff_pct = (sma20 - sma50) / sma50 * 100.0
+    diff_pct = (sma_fast - sma_slow) / sma_slow * 100.0
 
-    slope = _sma20_slope_pct(closes)
+    slope = _sma_slope_pct(closes, fast)
     adx_val = adx(spot_history, 14)
 
     sma_min   = STRATEGY_CONFIG.get("trend_sma_diff_pct",   0.5)
     slope_min = STRATEGY_CONFIG.get("trend_slope_min_pct",  0.05)
-    adx_min   = STRATEGY_CONFIG.get("trend_adx_min",        20.0)
+    adx_min   = STRATEGY_CONFIG.get("trend_adx_min",        18.0)
 
-    # ADX gate: weak trends (< adx_min) collapse to SIDEWAYS even if SMAs diverge.
-    # Missing ADX (insufficient history) → conservative SIDEWAYS.
     strong_enough = adx_val is not None and adx_val >= adx_min
 
     if diff_pct > sma_min and slope is not None and slope > slope_min and strong_enough:
@@ -164,20 +201,6 @@ def trend(spot_history: Sequence[dict]) -> str:
     if diff_pct < -sma_min and slope is not None and slope < -slope_min and strong_enough:
         return "BEARISH"
     return "SIDEWAYS"
-
-
-def _sma20_slope_pct(closes: Sequence[float]) -> Optional[float]:
-    """SMA20 percentage change over the last 5 days (today's SMA20 vs SMA20 5 days ago).
-
-    Returns None when we don't have 25 closes (need SMA20 today AND 5 days ago).
-    """
-    if len(closes) < 25:
-        return None
-    sma_today = sum(closes[-20:]) / 20
-    sma_5d_ago = sum(closes[-25:-5]) / 20
-    if sma_5d_ago <= 0:
-        return None
-    return (sma_today - sma_5d_ago) / sma_5d_ago * 100.0
 
 
 def adx(spot_history: Sequence[dict], period: int = 14) -> Optional[float]:
@@ -323,6 +346,8 @@ def build_indicators(
     oi_chain_rows: Optional[Sequence[dict]] = None,
     oi_change_rows: Optional[Sequence[dict]] = None,
     trajectory: Optional[ChainTrajectory] = None,
+    session_bar: Optional[dict] = None,
+    live_mode: bool = False,
 ) -> MarketIndicators:
     # oi_chain_rows: rows to use for absolute OI levels (PCR, max_pain, OI walls).
     # Callers supply yesterday's bhav chain when chain_rows lack open_interest
@@ -338,16 +363,36 @@ def build_indicators(
     hv = hv_20(spot_history)
     iv_prem = (atm_iv / hv) if (hv is not None and hv > 0) else None
 
-    # Phase 1: trend strength + slope diagnostics
-    closes = [float(r["close_price"]) for r in spot_history]
+    # Trend: structural (daily history) + optional session (live Zerodha / today bar)
+    hist_as_of = filter_spot_history(spot_history, as_of)
+    (
+        effective_trend,
+        structural_trend,
+        session_trend_val,
+        return_pct,
+        return_trend_val,
+    ) = compute_trends(
+        spot_history=spot_history,
+        as_of=as_of,
+        spot_now=spot,
+        session_bar=session_bar,
+        live_mode=live_mode,
+    )
+    trend_hist = hist_as_of
+    if session_bar:
+        from engine.trend_model import upsert_session_bar
+        trend_hist = upsert_session_bar(hist_as_of, session_bar)
+
+    fast_p, slow_p = trend_sma_periods()
+    closes = [float(r["close_price"]) for r in trend_hist]
     sma_diff = None
-    if len(closes) >= 50:
-        sma20_v = sum(closes[-20:]) / 20
-        sma50_v = sum(closes[-50:]) / 50
-        if sma50_v > 0:
-            sma_diff = (sma20_v - sma50_v) / sma50_v * 100.0
-    slope_v = _sma20_slope_pct(closes)
-    adx_v   = adx(spot_history, 14)
+    if len(closes) >= slow_p:
+        sma_f = _sma(closes, fast_p)
+        sma_s = _sma(closes, slow_p)
+        if sma_s > 0:
+            sma_diff = (sma_f - sma_s) / sma_s * 100.0
+    slope_v = _sma_slope_pct(closes, fast_p)
+    adx_v   = adx(trend_hist, 14)
 
     # ── Trajectory-derived fields (live mode only) ────────────────────────
     # All None unless a ChainTrajectory bundle is supplied with enough samples.
@@ -392,8 +437,12 @@ def build_indicators(
         spot             = spot,
         pcr              = pcr(_oi_rows),
         max_pain         = max_pain(_oi_rows),
-        atr_14           = atr(spot_history, 14),
-        trend            = trend(spot_history),
+        atr_14           = atr(trend_hist, 14),
+        trend            = effective_trend,
+        trend_structural = structural_trend,
+        trend_session    = session_trend_val,
+        trend_return_pct = return_pct,
+        trend_short_horizon = return_trend_val,
         vix_close        = float(vix_history[-1]["close_price"]) if vix_history else None,
         vix_regime       = vix_regime(vix_history),
         oi_walls_call    = cw,

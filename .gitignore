@@ -10,6 +10,7 @@ logs/
 archive/
 *.log
 .vscode/
+.vs/
 .idea/
 .pytest_cache/
 *.bak

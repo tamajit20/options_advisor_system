@@ -116,7 +116,12 @@ def test_underlying_kite_client_not_exposed(facade):
     public attribute — otherwise callers could escape the facade."""
     public_attrs = [a for a in dir(facade) if not a.startswith("_")]
     # Whitelist the entire surface — anything new must be added explicitly.
-    assert set(public_attrs) == {"api_key", "instruments", "ltp", "quote", "set_access_token"}
+    # `ohlc` and `historical_data` were added for the index OHLC backfill / live
+    # session-trend feature; both are read-only quote endpoints (no order flow).
+    assert set(public_attrs) == {
+        "api_key", "instruments", "ltp", "quote", "ohlc",
+        "historical_data", "set_access_token",
+    }
 
 
 def test_place_order_call_never_reaches_underlying(facade, kite_mock):

@@ -83,7 +83,7 @@ class TestAtr:
 class TestTrend:
     def test_short_history_returns_sideways(self):
         rows = [{"high_price": 23000, "low_price": 22900, "close_price": 23000}
-                for _ in range(10)]
+                for _ in range(15)]
         assert trend(rows) == "SIDEWAYS"
 
     def test_strong_uptrend_classifies_bullish(self, spot_history_bullish):

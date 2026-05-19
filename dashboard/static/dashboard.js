@@ -4,10 +4,23 @@
 // =====================================================================
 'use strict';
 
-const API = (path, opts={}) => fetch(path, opts).then(async r => {
-  if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || r.statusText);
-  return r.json();
-});
+const API = (path, opts={}) => {
+  // Auto-set Content-Type: application/json whenever the caller passed a
+  // JSON-shaped string body but forgot the header. Without this, Flask's
+  // request.get_json() returns None and the endpoint replies 400. This used
+  // to silently break the Daily P&L circuit breaker Reset button and any
+  // other POST that JSON.stringify()'d its body without an explicit header.
+  const headers = { ...(opts.headers || {}) };
+  if (opts.body && typeof opts.body === 'string') {
+    const hasCt = Object.keys(headers).some(k => k.toLowerCase() === 'content-type');
+    const looksJson = /^\s*[{[]/.test(opts.body);
+    if (!hasCt && looksJson) headers['Content-Type'] = 'application/json';
+  }
+  return fetch(path, { ...opts, headers }).then(async r => {
+    if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || r.statusText);
+    return r.json();
+  });
+};
 
 const $ = sel => document.querySelector(sel);
 const $$ = (sel, ctx=document) => Array.from(ctx.querySelectorAll(sel));
@@ -15,6 +28,18 @@ const fmt = n => (n == null ? '—' : Number(n).toLocaleString('en-IN', {maximum
 const fmtPct = n => (n == null ? '—' : Number(n).toFixed(1) + '%');
 const fmtDt   = s => { if (!s) return '—'; try { const d = new Date(s); return d.toLocaleString('en-IN', {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12:false}); } catch(e) { return String(s); } };
 const fmtDate = s => { if (!s) return '—'; try { const d = new Date(s); return d.toLocaleDateString('en-IN', {day:'2-digit', month:'short', year:'numeric'}); } catch(e) { return String(s); } };
+// Context-chip datetime (matches Execute chip style, includes time)
+const fmtChipDt = s => {
+  if (!s) return null;
+  try {
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleString('en-IN', {
+      weekday: 'short', day: '2-digit', month: 'short', year: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+  } catch { return null; }
+};
 
 // "₹500 (67% of credit ₹750)" — shows a derived value as % of its base
 const pctHint = (val, base, label = '') => {
@@ -116,9 +141,14 @@ async function openNotifDrawer() {
   }
   for (const n of data.notifications) {
     const div = document.createElement('div');
-    div.className = 'notif' + (n.is_read ? '' : ' unread');
+    const sev = (n.severity || '').toUpperCase();
+    const sevClass = sev === 'CRITICAL' ? ' notif-critical'
+                    : sev === 'WARNING' ? ' notif-warning'
+                    : '';
+    div.className = 'notif' + (n.is_read ? '' : ' unread') + sevClass;
+    const sevTag = sev ? `<span class="notif-sev notif-sev-${sev.toLowerCase()}">${escapeHtml(sev)}</span> ` : '';
     div.innerHTML = `
-      <h4>${escapeHtml(n.title)}</h4>
+      <h4>${sevTag}${escapeHtml(n.title)}</h4>
       <p>${escapeHtml(n.body || '')}</p>
       <p class="muted" style="font-size:.75rem">${escapeHtml(n.created_at || '')}</p>`;
     div.addEventListener('click', async () => {
@@ -126,49 +156,95 @@ async function openNotifDrawer() {
         await API(`/api/notifications/${n.id}/read`, {method:'POST'});
         div.classList.remove('unread');
         refreshNotifBadge();
+        refreshGlobalBanners();
       }
     });
     list.appendChild(div);
   }
 }
 $('#notif-btn').addEventListener('click', openNotifDrawer);
-$('#notif-close').addEventListener('click', () => $('#notif-drawer').hidden = true);
+$('#notif-close').addEventListener('click', () => {
+  $('#notif-drawer').hidden = true;
+  // Severity-banner counts may have changed if the user clicked into
+  // any unread notif inside the drawer.
+  refreshGlobalBanners();
+});
 $('#notif-mark-all').addEventListener('click', async () => {
   await API('/api/notifications/read-all', {method:'POST'});
   refreshNotifBadge(); openNotifDrawer();
+  refreshGlobalBanners();
 });
+
+// ---------------- Global banners (header strip) ----------------
+// System flags (kill switch / circuit breaker / trade execution) and unread
+// CRITICAL/WARNING notification summaries live in a single #global-banners
+// container immediately under the page header so they are visible on EVERY
+// tab — not just the Suggestion tab. Called on page load and after any
+// action that could change banner state (notification mark-as-read, flag
+// toggle, etc.).
+async function refreshGlobalBanners() {
+  const host = document.getElementById('global-banners');
+  if (!host) return;
+  const banners = [];
+  // Compact pill format: each banner is a single line with a short label
+  // + actionable button. The `title` attribute carries the full explanation
+  // so hover/tap-and-hold still surfaces the long form.
+  try {
+    const st = await API('/api/system-status');
+    if (st.circuit_breaker_active) {
+      banners.push(`<div class="sys-banner sys-banner-err" title="Daily P&L circuit breaker is ACTIVE — new executions are blocked until reset. This flag re-triggers tonight at 19:50 IST if aggregate open-trade losses still breach the limit.">\ud83d\udea8 P&amp;L breaker <strong>ACTIVE</strong> <button type="button" class="btn btn-ghost btn-flag-reset" data-flag-key="circuit_breaker_active" data-flag-value="false">Reset</button></div>`);
+    }
+    if (st.kill_switch) {
+      banners.push(`<div class="sys-banner sys-banner-err" title="Kill switch is ON — all alerts and execution are paused.">\ud83d\uded1 Kill switch <strong>ON</strong> <button type="button" class="btn btn-ghost btn-flag-reset" data-flag-key="kill_switch" data-flag-value="false">Disable</button></div>`);
+    }
+    if (st.trade_execution_enabled === false) {
+      banners.push(`<div class="sys-banner sys-banner-warn" title="Trade execution disabled by runtime flag. Suggestions are still generated but cannot auto-execute until you re-enable.">\u26a0\ufe0f Execution <strong>OFF</strong> <button type="button" class="btn btn-ghost btn-flag-reset" data-flag-key="trade_execution_enabled" data-flag-value="true">Enable</button></div>`);
+    }
+  } catch {}
+  try {
+    const nd = await API('/api/notifications?unread=1');
+    const unread = nd.notifications || [];
+    const crit = unread.filter(n => (n.severity || '').toUpperCase() === 'CRITICAL');
+    const warn = unread.filter(n => (n.severity || '').toUpperCase() === 'WARNING');
+    if (crit.length) {
+      const titles = crit.slice(0, 3).map(n => (n.title || '')).join(' • ');
+      const more = crit.length > 3 ? ` (+${crit.length - 3} more)` : '';
+      const tt = escapeHtml(`${crit.length} CRITICAL alert(s): ${titles}${more}`);
+      banners.push(`<div class="sys-banner sys-banner-err" title="${tt}">\ud83d\udea8 <strong>${crit.length}</strong> critical <button type="button" class="btn btn-ghost" id="open-notif-from-banner">Open</button></div>`);
+    } else if (warn.length) {
+      const titles = warn.slice(0, 3).map(n => (n.title || '')).join(' • ');
+      const more = warn.length > 3 ? ` (+${warn.length - 3} more)` : '';
+      const tt = escapeHtml(`${warn.length} WARNING(s): ${titles}${more}`);
+      banners.push(`<div class="sys-banner sys-banner-warn" title="${tt}">\u26a0\ufe0f <strong>${warn.length}</strong> warning <button type="button" class="btn btn-ghost" id="open-notif-from-banner">Open</button></div>`);
+    }
+  } catch {}
+  host.innerHTML = banners.join('');
+  bindFlagResetButtons();
+  bindOpenNotifBanner();
+}
+
+function bindOpenNotifBanner() {
+  const btn = document.getElementById('open-notif-from-banner');
+  if (btn) btn.addEventListener('click', () => openNotifDrawer());
+}
 
 // ---------------- Tab 1: Suggestion ----------------
 async function loadSuggestion() {
   const c = $('#suggestion-container');
   c.className = 'loading'; c.textContent = 'Loading…';
+  // Refresh global banners on every tab visit (catches new alerts the user
+  // might have triggered elsewhere). Fire-and-forget — never blocks.
+  refreshGlobalBanners();
   try {
-    // Fetch system status (best-effort) for the top banner; never blocks
-    // the suggestion render if it fails.
-    let bannerHtml = '';
-    try {
-      const st = await API('/api/system-status');
-      const banners = [];
-      if (st.circuit_breaker_active) {
-        banners.push(`<div class="sys-banner sys-banner-err">\ud83d\udea8 Daily P&amp;L circuit breaker is <strong>ACTIVE</strong> \u2014 new executions are blocked until reset.</div>`);
-      }
-      if (st.kill_switch) {
-        banners.push(`<div class="sys-banner sys-banner-err">\ud83d\uded1 Kill switch is ON \u2014 all alerts and execution are paused.</div>`);
-      }
-      if (st.trade_execution_enabled === false) {
-        banners.push(`<div class="sys-banner sys-banner-warn">\u26a0\ufe0f Trade execution disabled by runtime flag.</div>`);
-      }
-      bannerHtml = banners.join('');
-    } catch {}
     const data = await API('/api/suggestion/today');
     const list = data.suggestions || [];
     if (!list.length) {
       c.className = '';
-      c.innerHTML = bannerHtml + '<div class="empty">No suggestion yet.</div>';
+      c.innerHTML = '<div class="empty">No suggestion yet.</div>';
       return;
     }
     c.className = '';
-    c.innerHTML = bannerHtml + list.map(s => renderSuggestion(s, false, list)).join('');
+    c.innerHTML = list.map(s => renderSuggestion(s, false, list)).join('');
     bindSuggestionActions();
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
@@ -286,6 +362,63 @@ function renderExitPlan(s) {
     <div class="sug-section-title">Exit Plan</div>
     <div class="sug-timeline">${rowsHtml}</div>
   </div>`;
+}
+
+// ── Per-leg target close (must mirror renderExitPlan / leg_builder) ─────────
+function longPremiumTargetMult(dte) {
+  const TARGET_BASE = 0.50, TARGET_DTE_SCALE = 14.0, TARGET_MAX = 1.50;
+  const dteSafe = (typeof dte === 'number' && dte > 0) ? dte : 0;
+  return dteSafe === 0
+    ? TARGET_BASE
+    : Math.min(TARGET_MAX, TARGET_BASE + dteSafe / TARGET_DTE_SCALE);
+}
+
+function isDebitStrategy(strategy) {
+  return ['LONG_STRADDLE', 'LONG_STRANGLE', 'LONG_CALL', 'LONG_PUT',
+          'BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(strategy || '');
+}
+
+/** Exit price hint for one leg. SELL shorts: buy back lower. BUY longs: sell higher. */
+function legTargetClosePrice(action, entry, strategy, dte) {
+  const px = parseFloat(entry) || 0;
+  if (!px) return null;
+  if (action === 'SELL') {
+    const capture = strategy === 'IRON_BUTTERFLY' ? 0.25 : 0.50;
+    return Math.round(px * (1 - capture) * 100) / 100;
+  }
+  if (!isDebitStrategy(strategy)) {
+    return null;
+  }
+  if (['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(strategy)) {
+    return Math.round(px * 1.5 * 100) / 100;
+  }
+  const mult = longPremiumTargetMult(dte);
+  return Math.round(px * (1 + mult) * 100) / 100;
+}
+
+function legTargetCloseCaption(action, strategy, dte) {
+  if (action === 'SELL') {
+    return strategy === 'IRON_BUTTERFLY' ? '25% credit capture' : '50% credit capture';
+  }
+  if (!isDebitStrategy(strategy)) {
+    return 'close with spread';
+  }
+  if (['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(strategy)) {
+    return '50% gain on premium';
+  }
+  return `${Math.round(longPremiumTargetMult(dte) * 100)}% gain on premium`;
+}
+
+function legTargetCloseHint(action, entry, strategy, dte, legOrder) {
+  const targetClose = legTargetClosePrice(action, entry, strategy, dte);
+  const orderAttr = legOrder != null ? ` data-leg-order="${legOrder}"` : '';
+  if (targetClose == null) {
+    return `<span class="leg-target-close muted">Target close: ${legTargetCloseCaption(action, strategy, dte)}</span>`;
+  }
+  const capLabel = legTargetCloseCaption(action, strategy, dte);
+  const verb = action === 'SELL' ? 'buy back' : 'sell back';
+  const cmp = action === 'SELL' ? '\u2264' : '\u2265';
+  return `<span class="leg-target-close">Target close: ${verb} ${cmp} \u20b9<span class="target-close-val"${orderAttr}>${fmt(targetClose)}</span> (${capLabel})</span>`;
 }
 
 // ── Confidence checks breakdown ──────────────────────────────────────────────
@@ -479,20 +612,31 @@ function renderPlainEnglishStructured(s) {
       chips.push(`<span class="ctx-chip ctx-fail" title="Re-priced after open and was no longer actionable">\u2717 Stale 09:35</span>`);
     }
   }
-  // Phase 2c: provenance chips (data source / trigger)
-  if (s.data_source) {
-    const cls = s.data_source === 'LIVE' ? 'ctx-chip ctx-iv'
-              : s.data_source === 'EOD'  ? 'ctx-chip'
-              : 'ctx-chip';
+  // Provenance: live suggestions show when they were generated (not a hardcoded job time).
+  const genChipFmt = fmtChipDt(s.generated_on);
+  const isLiveSource = s.data_source === 'LIVE' || s.trigger_type === 'LIVE_RUN';
+  if (isLiveSource) {
+    if (genChipFmt) {
+      const tipParts = ['Suggestion generated at this date/time (IST)'];
+      if (s.provider) tipParts.push(`Data: LIVE via ${s.provider}`);
+      if (s.trigger_type) tipParts.push(`Trigger: ${s.trigger_type}`);
+      if (s.trigger_reason) tipParts.push(s.trigger_reason);
+      chips.push(
+        `<span class="ctx-chip ctx-iv" title="${escapeHtml(tipParts.join('\n'))}">` +
+        `Generated \u2192 ${escapeHtml(genChipFmt)}</span>`
+      );
+    } else {
+      chips.push(`<span class="ctx-chip ctx-iv" title="Live market data">Live</span>`);
+    }
+  } else if (s.data_source) {
     const tip = s.provider ? `Source: ${s.data_source} via ${s.provider}` : `Source: ${s.data_source}`;
-    chips.push(`<span class="${cls}" title="${escapeHtml(tip)}">${escapeHtml(s.data_source)}</span>`);
+    chips.push(`<span class="ctx-chip" title="${escapeHtml(tip)}">${escapeHtml(s.data_source)}</span>`);
   }
-  if (s.trigger_type) {
-    const label = s.trigger_type === 'EOD_RUN'              ? 'EOD'
-                : s.trigger_type === 'LIVE_RUN'             ? 'Live 10:30'
-                : s.trigger_type === 'INTRADAY_VALIDATOR'   ? '09:35 check'
-                : s.trigger_type === 'WS_REGEN'             ? 'Tick regen'
-                : s.trigger_type === 'MANUAL'               ? 'Manual'
+  if (s.trigger_type && s.trigger_type !== 'LIVE_RUN') {
+    const label = s.trigger_type === 'EOD_RUN'            ? 'EOD'
+                : s.trigger_type === 'INTRADAY_VALIDATOR' ? '09:35 check'
+                : s.trigger_type === 'WS_REGEN'           ? 'Tick regen'
+                : s.trigger_type === 'MANUAL'             ? 'Manual'
                 : s.trigger_type;
     const tip = s.trigger_reason ? `Trigger: ${s.trigger_type}\n${s.trigger_reason}` : `Trigger: ${s.trigger_type}`;
     chips.push(`<span class="ctx-chip" title="${escapeHtml(tip)}">${escapeHtml(label)}</span>`);
@@ -1240,18 +1384,18 @@ function renderSuggestion(s, readOnly = false, allSuggestions = []) {
     s.net_credit = econ.np;  // keep renderExitPlan in sync
   }
   const baseTotalCredit = (econ.np || 0) * baseQty;
+  const sugStrategy = s.strategy || '';
+  const sugDte = s.dte != null ? parseInt(s.dte, 10) : null;
   const legsHtml = (s.legs || []).map(l => {
     const legTotal = (l.lots || 0) * (l.lot_size || 0) * (l.suggested_price || 0);
     // Threshold hint: SELL needs price >= low (to retain credit), BUY needs
-    // price <= high (to keep debit small). Target close ≈ 50% of entry =
-    // 50% premium capture, which is the standard profit-target heuristic.
+    // price <= high (to keep debit small).
     const thresholdHint = l.action === 'SELL'
       ? `<span class="leg-threshold ok">Sell ≥ ₹${fmt(l.suggested_price_low)}</span>`
       : `<span class="leg-threshold warn">Buy ≤ ₹${fmt(l.suggested_price_high)}</span>`;
-    const targetClose = (l.suggested_price || 0) * 0.5;
-    const closeHint = l.action === 'SELL'
-      ? `<span class="leg-target-close">Target close: buy back @ ~₹<span class="target-close-val" data-leg-order="${l.leg_order}">${fmt(targetClose)}</span> (50% capture)</span>`
-      : `<span class="leg-target-close">Target close: sell back @ ~₹<span class="target-close-val" data-leg-order="${l.leg_order}">${fmt(targetClose)}</span> (50% capture)</span>`;
+    const closeHint = legTargetCloseHint(
+      l.action, l.suggested_price, sugStrategy, sugDte, l.leg_order,
+    );
     const legMetaHtml = readOnly
       ? `<span class="muted">${l.lots || 1} lot${(l.lots||1)!==1?'s':''} × ${l.lot_size} @ ₹${fmt(l.suggested_price)} = <strong>₹${fmt(legTotal)}</strong></span>
          <span class="leg-price-range muted">(range ₹${fmt(l.suggested_price_low)}–₹${fmt(l.suggested_price_high)})</span>`
@@ -1290,7 +1434,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = []) {
       <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
     </div>
     <div class="card-id-row">
-      <span class="id-chip" title="Suggestion ID">SID&nbsp;${escapeHtml(s.suggestion_id || '—')}</span>
+      <span class="id-chip" title="Suggestion ID">${escapeHtml(s.suggestion_id || '—')}</span>
     </div>
     ${renderStrategyRationale(s)}
     ${renderPlainEnglishStructured(s)}
@@ -1368,6 +1512,8 @@ function renderSuggestion(s, readOnly = false, allSuggestions = []) {
   }
   return `<div class="card"
     data-sug-id="${escapeHtml(s.suggestion_id)}"
+    data-strategy="${escapeHtml(s.strategy || '')}"
+    data-dte="${s.dte != null ? parseInt(s.dte, 10) : ''}"
     data-base-qty="${baseQty}"
     data-base-np="${econ.np || 0}"
     data-base-mp="${econ.mp || 0}"
@@ -1383,6 +1529,37 @@ function renderSuggestion(s, readOnly = false, allSuggestions = []) {
     data-short-call-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='CE')||{}).strike||''}"
     data-short-put-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='PE')||{}).strike||''}"
   >${innerHtml}</div>`;
+}
+
+function bindFlagResetButtons() {
+  $$('.btn-flag-reset').forEach(btn => {
+    if (btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.flagKey;
+      const val = btn.dataset.flagValue === 'true';
+      if (!key) return;
+      const confirmMsg = key === 'circuit_breaker_active'
+        ? 'Reset the daily P&L circuit breaker?\n\nThis will re-enable executions. The flag will re-trigger tonight at 19:50 IST if aggregate open-trade losses still breach the limit.'
+        : `Set runtime flag "${key}" to ${val}?`;
+      if (!window.confirm(confirmMsg)) return;
+      btn.disabled = true;
+      const origText = btn.textContent;
+      btn.textContent = 'Working\u2026';
+      try {
+        await API(`/api/runtime-flags/${encodeURIComponent(key)}`, {
+          method: 'POST',
+          body: JSON.stringify({ value: val }),
+        });
+        toast(`Flag "${key}" set to ${val}`, 'info');
+        loadSuggestion();
+      } catch (e) {
+        toast(`Failed to update flag: ${e.message}`, 'err');
+        btn.disabled = false;
+        btn.textContent = origText;
+      }
+    });
+  });
 }
 
 function bindSuggestionActions() {
@@ -1419,7 +1596,13 @@ function bindSuggestionActions() {
         const shown = card.querySelector(`.leg-price-shown[data-leg-order="${lo}"]`);
         if (shown) shown.textContent = fmt(price);
         const tc = card.querySelector(`.target-close-val[data-leg-order="${lo}"]`);
-        if (tc) tc.textContent = fmt(price * 0.5);
+        if (tc) {
+          const strat = card.dataset.strategy || '';
+          const dteVal = parseInt(card.dataset.dte || '', 10);
+          const dte = Number.isFinite(dteVal) ? dteVal : null;
+          const tgt = legTargetClosePrice(action, price, strat, dte);
+          if (tgt != null) tc.textContent = fmt(tgt);
+        }
       });
       // curQty was summed across all N legs; divide by leg count to get
       // the position quantity (1 lot × lot_size), not N × position quantity.
@@ -1794,18 +1977,32 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       panel.innerHTML = '<div class="muted">No executed legs found.</div>'; return;
     }
     const suggMap = {};
-    (sugg.legs || []).forEach(s => { suggMap[s.leg_order] = s.suggested_close; });
+    const priceSrcMap = {};
+    (sugg.legs || []).forEach(s => {
+      suggMap[s.leg_order] = s.suggested_close;
+      priceSrcMap[s.leg_order] = s.price_source || 'mid';
+    });
     const closeStrategy = (data.legs[0] && data.legs[0].strategy) || '';
     const legsHtml = data.legs.map(l => {
       const closeAction = l.action === 'SELL' ? 'Buy back' : 'Sell back';
       const lotsUsed = l.lots_actual || l.lots || 1;
       const lotSize = l.lot_size || 1;
       const sx = suggMap[l.leg_order];
+      const psrc = priceSrcMap[l.leg_order];
       const prefill = (l.exit_price != null) ? l.exit_price
-                    : (sx != null && sx > 0 ? sx : '');
-      const hint = (sx != null && sx > 0)
-        ? `<span class="muted" style="font-size:.72rem">Suggested \u20b9${fmt(sx)}</span>`
-        : '';
+                    : (sx != null && sx >= 0 ? sx : '');
+      let hint = '';
+      if (sx != null && sx >= 0) {
+        if (psrc === 'intrinsic_fallback') {
+          // Backend flagged the raw chain value as bogus and substituted the
+          // intrinsic settlement value. Make this visible so the user does
+          // not trust the prefill blindly.
+          hint = `<span class="tag tag-warn" style="font-size:.7rem">Estimated at expiry</span>
+                  <span class="muted" style="font-size:.72rem">Intrinsic \u20b9${fmt(sx)} (chain data unreliable \u2014 verify with broker before confirming)</span>`;
+        } else {
+          hint = `<span class="muted" style="font-size:.72rem">Suggested \u20b9${fmt(sx)}</span>`;
+        }
+      }
       return `
         <div class="leg-exit-row" data-leg-order="${l.leg_order}"
              data-action="${escapeHtml(l.action)}"
@@ -2022,6 +2219,13 @@ function renderTrade(t) {
     let targetSummaryHtml = '';
     // Strategy-specific profit target %: Iron Butterfly exits earlier (25%) due to narrow wings
     const _tradeStrategy = (t.suggestion && t.suggestion.strategy) || '';
+    const _tradeDte = (t.suggestion && t.suggestion.dte != null)
+      ? parseInt(t.suggestion.dte, 10) : null;
+    const _netCr = t.net_credit_actual != null ? parseFloat(t.net_credit_actual)
+      : (t.suggestion && t.suggestion.net_credit != null
+        ? parseFloat(t.suggestion.net_credit) : null);
+    const isCreditTrade = _netCr != null && _netCr > 0;
+    const isDebitTrade  = _netCr != null && _netCr < 0;
     const tradePct      = _tradeStrategy === 'IRON_BUTTERFLY' ? 0.25 : 0.50;
     const tradePctLabel = _tradeStrategy === 'IRON_BUTTERFLY' ? '25%' : '50%';
     if (openExecLegs.length > 0) {
@@ -2034,22 +2238,38 @@ function renderTrade(t) {
       });
       const targetPct = perUnitCredit * tradePct * totalQty;
       const targetRows = openExecLegs.map(l => {
-        const tc = (l.fill_price || 0) * tradePct;
+        const tc = legTargetClosePrice(l.action, l.fill_price, _tradeStrategy, _tradeDte);
+        const capLabel = legTargetCloseCaption(l.action, _tradeStrategy, _tradeDte);
         const lotsUsed = l.lots_actual || l.lots || 1;
         const lotSize = l.lot_size || 1;
         const qty = lotsUsed * lotSize;
         const closeVerb = l.action === 'SELL' ? 'Buy back' : 'Sell back';
         const sign = l.action === 'SELL' ? '\u2264' : '\u2265';
+        const priceBit = tc != null
+          ? `${closeVerb} ${sign} <strong>\u20b9${fmt(tc)}</strong>`
+          : closeVerb;
         return `<div class="target-row">
           <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'} tag-sm">${escapeHtml(l.action||'')}</span>
           <span><strong>${escapeHtml(l.symbol||'')} ${l.strike||''} ${escapeHtml(l.option_type||'')}</strong></span>
-          <span>${closeVerb} ${sign} <strong>\u20b9${fmt(tc)}</strong> <span class="muted">(${tradePctLabel} of \u20b9${fmt(l.fill_price)} entry \u00d7 ${qty}u)</span></span>
+          <span>${priceBit} <span class="muted">(${capLabel} \u00b7 entry \u20b9${fmt(l.fill_price)} \u00d7 ${qty}u)</span></span>
         </div>`;
       }).join('');
+      let footer = '';
+      if (isCreditTrade) {
+        footer = `<div class="target-exit-keep">Keep ~\u20b9${fmt(targetPct)} of the \u20b9${fmt(netCreditActual * totalQty)} total credit received</div>`;
+      } else if (isDebitTrade) {
+        const debit = Math.abs(_netCr);
+        const mult = longPremiumTargetMult(_tradeDte);
+        const targetGain = Math.round(debit * mult * 10) / 10;
+        footer = `<div class="target-exit-keep">Close when position gains ~\u20b9${fmt(targetGain)}/unit (${Math.round(mult * 100)}% of \u20b9${fmt(debit)} debit paid)</div>`;
+      }
+      const titleLabel = isDebitTrade
+        ? `${Math.round(longPremiumTargetMult(_tradeDte) * 100)}% debit gain target`
+        : `${tradePctLabel} credit capture`;
       targetSummaryHtml = `<div class="target-exit-box">
-        <div class="target-exit-title">\u{1F3AF} Target exit (${tradePctLabel} profit capture)</div>
+        <div class="target-exit-title">\u{1F3AF} Target exit (${titleLabel})</div>
         ${targetRows}
-        <div class="target-exit-keep">Keep ~\u20b9${fmt(targetPct)} of the \u20b9${fmt(netCreditActual * totalQty)} total credit received</div>
+        ${footer}
       </div>`;
     }
     legsHtml = `<div class="trade-legs-section">
@@ -2068,6 +2288,8 @@ function renderTrade(t) {
       })()}
       <div class="trade-legs-grid">${(() => {
         const tradeStrategy = (t.suggestion && t.suggestion.strategy) || '';
+        const tradeDte = (t.suggestion && t.suggestion.dte != null)
+          ? parseInt(t.suggestion.dte, 10) : null;
         const openExec = legs.filter(l => l.executed && !l.exit_price);
         const pending  = legs.filter(l => !l.executed);
         return legs.map(l => {
@@ -2087,10 +2309,13 @@ function renderTrade(t) {
             </div>
           </div>`;
         } else if (done) {
-          const targetClose = (l.fill_price || 0) * tradePct;
-          const closeHint = l.action === 'SELL'
-            ? `<span class="leg-target-close">Target buy back \u2264 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(${tradePctLabel} of \u20b9${fmt(l.fill_price)} entry)</span></span>`
-            : `<span class="leg-target-close">Target sell back \u2265 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(${tradePctLabel} of \u20b9${fmt(l.fill_price)} entry)</span></span>`;
+          const targetClose = legTargetClosePrice(l.action, l.fill_price, tradeStrategy, tradeDte);
+          const capLabel = legTargetCloseCaption(l.action, tradeStrategy, tradeDte);
+          const closeHint = targetClose != null
+            ? (l.action === 'SELL'
+              ? `<span class="leg-target-close">Target buy back \u2264 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(${capLabel})</span></span>`
+              : `<span class="leg-target-close">Target sell back \u2265 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(${capLabel})</span></span>`)
+            : `<span class="leg-target-close muted">Target close: ${capLabel}</span>`;
           return `<div class="trade-leg-row leg-done action-${l.action}">
             <div class="leg-action-col">${execStepBadge(openExec, l, tradeStrategy, 'close')}${tag}${spreadBadge(legs, l)}</div>
             <div class="tl-info">
@@ -2149,8 +2374,8 @@ function renderTrade(t) {
       </div>
     </div>
     <div class="card-id-row">
-      <span class="id-chip" title="Trade ID">TID&nbsp;${escapeHtml(t.trade_id || '—')}</span>
-      ${t.suggestion_id ? `<span class="id-chip" title="Suggestion ID">SID&nbsp;${escapeHtml(t.suggestion_id)}</span>` : ''}
+      <span class="id-chip" title="Trade ID">${escapeHtml(t.trade_id || '—')}</span>
+      ${t.suggestion_id ? `<span class="id-chip" title="Suggestion ID">${escapeHtml(t.suggestion_id)}</span>` : ''}
     </div>
     <div class="kv-grid">
       ${(() => {
@@ -3001,7 +3226,10 @@ function _debounce(fn, ms) {
 // ---------------- Boot ----------------
 loadSuggestion();
 refreshNotifBadge();
-setInterval(refreshNotifBadge, 60000);
+refreshGlobalBanners();
+// Keep the bell badge AND the global banner strip live without a page
+// refresh: a new CRITICAL alert should appear in both within a minute.
+setInterval(() => { refreshNotifBadge(); refreshGlobalBanners(); }, 60000);
 
 // ---------------- Zerodha session card ----------------
 async function loadZerodhaStatus() {
