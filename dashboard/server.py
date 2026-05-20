@@ -809,10 +809,65 @@ def create_app() -> Flask:
     @app.route("/api/notifications")
     @_with_db
     def api_notifications(db: SQLServerConnection):
-        unread = request.args.get("unread") == "1"
+        args = request.args
+        unread_only = args.get("unread") == "1"
+        severity    = args.get("severity") or None       # CRITICAL / WARNING / INFO
+        category    = args.get("category") or None       # sl / profit / exit / event / system / suggestion
+        notif_type  = args.get("type") or None           # exact notif_type
+        trade_id    = args.get("trade_id") or None
+        from_date   = args.get("from") or None
+        to_date     = args.get("to") or None
+        limit       = min(int(args.get("limit") or 100), 500)
+        offset      = int(args.get("offset") or 0)
+
+        from_dt = datetime.fromisoformat(from_date) if from_date else None
+        to_dt   = datetime.fromisoformat(to_date)   if to_date   else None
+
         repo = NotificationRepo(db)
-        rows = repo.unread() if unread else repo.recent()
-        return jsonify({"notifications": [_row(r) for r in rows]})
+
+        def _notif_row_simple(r):
+            out = _row(r)
+            out["is_read"] = r.get("read_at") is not None
+            out.pop("_rn", None)
+            return out
+
+        # Legacy ?unread=1 path (used by global banner refresh)
+        if unread_only and not any([severity, category, notif_type, trade_id, from_dt, to_dt]):
+            rows = repo.unread(limit=limit)
+            return jsonify({"notifications": [_notif_row_simple(r) for r in rows], "total": len(rows)})
+
+        rows = repo.filtered(
+            severity=severity,
+            category=category,
+            notif_type=notif_type,
+            unread_only=unread_only,
+            trade_id=trade_id,
+            from_dt=from_dt,
+            to_dt=to_dt,
+            limit=limit,
+            offset=offset,
+        )
+        total = repo.count_filtered(
+            severity=severity,
+            category=category,
+            unread_only=unread_only,
+            trade_id=trade_id,
+            from_dt=from_dt,
+            to_dt=to_dt,
+        )
+
+        return jsonify({
+            "notifications": [_notif_row_simple(r) for r in rows],
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+        })
+
+    @app.route("/api/notifications/stats")
+    @_with_db
+    def api_notifications_stats(db: SQLServerConnection):
+        """Return unread counts by severity and category for badge chips."""
+        return jsonify(NotificationRepo(db).stats())
 
     @app.route("/api/notifications/<int:nid>/read", methods=["POST"])
     @_with_db

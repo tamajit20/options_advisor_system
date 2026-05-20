@@ -439,6 +439,122 @@ input:focus, select:focus, textarea:focus {
 .notif-sev-warning  { background: var(--warn); color: #1a1f24; }
 .notif-sev-info     { background: rgba(255,255,255,.08); color: var(--text-dim); }
 
+/* ---------- Notifications tab ------------------------------------------ */
+/* Sidebar tab badge (unread count pill on the nav item) */
+.notif-tab-badge {
+  position: absolute; top: 6px; right: 8px;
+  background: var(--err); color: #fff;
+  font-size: 10px; font-weight: 700;
+  border-radius: 10px; padding: 1px 5px;
+  min-width: 16px; text-align: center;
+}
+
+/* Tab header */
+.nf-header {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 8px; margin-bottom: 12px;
+}
+.nf-header-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* Filter rows */
+.nf-filter-row {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 6px; margin-bottom: 8px;
+}
+.nf-filter-label { font-size: .78rem; color: var(--text-dim); white-space: nowrap; }
+
+/* Filter chips */
+.nf-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: 16px; border: 1px solid #2a3744;
+  background: var(--surface-alt); color: var(--text-dim);
+  font-size: .78rem; cursor: pointer; transition: background .15s;
+  position: relative;
+}
+.nf-chip:hover { background: rgba(255,255,255,.06); }
+.nf-chip.nf-chip-active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.nf-chip-critical { border-color: var(--err); }
+.nf-chip-critical.nf-chip-active { background: var(--err); border-color: var(--err); }
+.nf-chip-warning  { border-color: var(--warn); }
+.nf-chip-warning.nf-chip-active  { background: var(--warn); color: #1a1f24; border-color: var(--warn); }
+.nf-chip-info.nf-chip-active     { background: var(--info, #3b82f6); border-color: var(--info, #3b82f6); }
+.nf-chip-cnt {
+  background: rgba(0,0,0,.25); color: inherit; font-size: .68rem;
+  border-radius: 8px; padding: 0 5px; min-width: 14px; text-align: center;
+  display: none; /* hidden when 0 */
+}
+.nf-chip-cnt.visible { display: inline-block; }
+
+/* Opts row */
+.nf-toggle { display: flex; align-items: center; gap: 5px; font-size: .82rem; cursor: pointer; }
+.nf-trade-input {
+  padding: 4px 8px; border-radius: 6px; border: 1px solid #2a3744;
+  background: var(--surface-alt); color: var(--text); font-size: .82rem; width: 180px;
+}
+.nf-date-input {
+  padding: 3px 6px; border-radius: 6px; border: 1px solid #2a3744;
+  background: var(--surface-alt); color: var(--text); font-size: .78rem;
+  color-scheme: dark;
+}
+
+/* Notification list */
+.nf-list { display: flex; flex-direction: column; gap: 0; }
+.nf-card {
+  display: grid; grid-template-columns: 4px 1fr; gap: 0;
+  background: var(--surface); border-radius: 8px;
+  border: 1px solid #2a3744; margin-bottom: 6px;
+  overflow: hidden; cursor: pointer; transition: background .12s;
+}
+.nf-card:hover { background: rgba(255,255,255,.03); }
+.nf-card.unread { border-color: rgba(15,118,110,.4); }
+.nf-card-stripe { width: 4px; }
+.nf-card-stripe-critical { background: var(--err); }
+.nf-card-stripe-warning  { background: var(--warn); }
+.nf-card-stripe-info     { background: var(--info, #3b82f6); }
+.nf-card-body { padding: 10px 12px; }
+.nf-card-row1 {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.nf-card-title { font-size: .92rem; font-weight: 600; flex: 1; min-width: 0; }
+.nf-card.unread .nf-card-title { color: #e2e8f0; }
+.nf-card-type {
+  display: inline-block; padding: 1px 7px; border-radius: 4px;
+  font-size: .68rem; font-weight: 700; letter-spacing: .04em;
+  background: rgba(255,255,255,.08); color: var(--text-dim);
+  white-space: nowrap;
+}
+.nf-card-unread-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--primary); flex-shrink: 0;
+}
+.nf-card-body-text { font-size: .82rem; color: var(--text-dim); margin-bottom: 6px; }
+.nf-card-meta {
+  display: flex; gap: 10px; flex-wrap: wrap;
+  font-size: .72rem; color: var(--text-dim);
+}
+.nf-card-meta a { color: var(--accent); font-size: .72rem; }
+.nf-card-read-btn {
+  margin-left: auto; background: none; border: 1px solid #2a3744;
+  border-radius: 5px; padding: 2px 8px; font-size: .72rem;
+  cursor: pointer; color: var(--text-dim);
+}
+.nf-card-read-btn:hover { background: rgba(255,255,255,.06); }
+
+/* Empty state */
+.nf-empty {
+  text-align: center; padding: 40px 0; color: var(--text-dim); font-size: .9rem;
+}
+
+/* Pagination */
+.nf-pagination {
+  display: flex; align-items: center; justify-content: center;
+  gap: 12px; padding: 10px 0;
+}
+
+/* Sidebar nav item needs position:relative for the badge */
+.nav-item { position: relative; }
+
 /* ---------- Toasts ---------- */
 #toast-container {
   position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);

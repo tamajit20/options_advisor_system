@@ -71,6 +71,11 @@
     <button class="nav-item" data-tab="wsmon">
       <span class="nav-icon">📡</span><span class="nav-label">WS Monitor</span>
     </button>
+    <button class="nav-item" data-tab="notifications">
+      <span class="nav-icon">🔔</span>
+      <span class="nav-label">Alerts</span>
+      <span id="notif-tab-badge" class="notif-tab-badge" hidden>0</span>
+    </button>
     <button class="nav-item" data-tab="config">
       <span class="nav-icon">⚙️</span><span class="nav-label">Config</span>
     </button>
@@ -189,6 +194,81 @@
       <div id="wsmon-events" class="wsmon-events loading">Loading…</div>
     </article>
 
+    <!-- ─── Notifications Tab ─── -->
+    <article class="panel" id="panel-notifications" aria-hidden="true">
+      <div class="nf-header">
+        <h2 class="panel-title" style="margin:0;">Alerts &amp; Notifications</h2>
+        <div class="nf-header-actions">
+          <span id="nf-total-label" class="muted" style="font-size:.8rem"></span>
+          <button class="btn btn-ghost" id="nf-mark-all">Mark all read</button>
+          <button class="btn btn-ghost" id="nf-refresh">Refresh</button>
+        </div>
+      </div>
+
+      <!-- ── Severity filter chips ── -->
+      <div class="nf-filter-row nf-sev-row">
+        <span class="nf-filter-label">Severity:</span>
+        <button class="nf-chip nf-chip-active" data-nf-sev="">All</button>
+        <button class="nf-chip nf-chip-critical" data-nf-sev="CRITICAL">🔴 Critical
+          <span class="nf-chip-cnt" id="nf-cnt-sev-critical"></span>
+        </button>
+        <button class="nf-chip nf-chip-warning" data-nf-sev="WARNING">🟠 Warning
+          <span class="nf-chip-cnt" id="nf-cnt-sev-warning"></span>
+        </button>
+        <button class="nf-chip nf-chip-info" data-nf-sev="INFO">🔵 Info
+          <span class="nf-chip-cnt" id="nf-cnt-sev-info"></span>
+        </button>
+      </div>
+
+      <!-- ── Category filter chips ── -->
+      <div class="nf-filter-row nf-cat-row">
+        <span class="nf-filter-label">Category:</span>
+        <button class="nf-chip nf-chip-active" data-nf-cat="">All</button>
+        <button class="nf-chip" data-nf-cat="sl">⛔ Stop Loss
+          <span class="nf-chip-cnt" id="nf-cnt-cat-sl"></span>
+        </button>
+        <button class="nf-chip" data-nf-cat="profit">🎯 Take Profit
+          <span class="nf-chip-cnt" id="nf-cnt-cat-profit"></span>
+        </button>
+        <button class="nf-chip" data-nf-cat="exit">🚪 Exit Required
+          <span class="nf-chip-cnt" id="nf-cnt-cat-exit"></span>
+        </button>
+        <button class="nf-chip" data-nf-cat="event">📅 Event Risk
+          <span class="nf-chip-cnt" id="nf-cnt-cat-event"></span>
+        </button>
+        <button class="nf-chip" data-nf-cat="system">⚙️ System
+          <span class="nf-chip-cnt" id="nf-cnt-cat-system"></span>
+        </button>
+        <button class="nf-chip" data-nf-cat="suggestion">💡 Suggestion
+          <span class="nf-chip-cnt" id="nf-cnt-cat-suggestion"></span>
+        </button>
+      </div>
+
+      <!-- ── Status + Trade filter row ── -->
+      <div class="nf-filter-row nf-opts-row">
+        <label class="nf-toggle">
+          <input type="checkbox" id="nf-unread-only">
+          Unread only
+        </label>
+        <input type="search" id="nf-trade-filter" placeholder="Filter by trade ID…"
+               class="nf-trade-input">
+        <label class="nf-filter-label" style="margin-left:auto">From
+          <input type="date" id="nf-from" class="nf-date-input">
+        </label>
+        <label class="nf-filter-label">To
+          <input type="date" id="nf-to" class="nf-date-input">
+        </label>
+      </div>
+
+      <!-- ── Results ── -->
+      <div id="nf-list" class="nf-list loading">Loading…</div>
+      <div class="nf-pagination" id="nf-pagination" hidden>
+        <button class="btn btn-ghost" id="nf-prev">← Prev</button>
+        <span id="nf-page-info" class="muted"></span>
+        <button class="btn btn-ghost" id="nf-next">Next →</button>
+      </div>
+    </article>
+
     <article class="panel" id="panel-config" aria-hidden="true">
       <h2 class="panel-title">Configuration</h2>
       <p class="muted">Runtime overrides — these take precedence over <code>config.py</code> defaults.</p>
@@ -226,6 +306,9 @@
   <button class="bnav-item" data-tab="logs"><span>🪵</span><span>Logs</span></button>
   <button class="bnav-item" data-tab="jobs"><span>🔧</span><span>Jobs</span></button>
   <button class="bnav-item" data-tab="wsmon"><span>📡</span><span>WS</span></button>
+  <button class="bnav-item" data-tab="notifications">
+    <span>🔔</span><span>Alerts</span>
+  </button>
   <button class="bnav-item" data-tab="config"><span>⚙️</span><span>Cfg</span></button>
 </nav>
 

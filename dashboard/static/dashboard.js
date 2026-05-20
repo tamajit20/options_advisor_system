@@ -66,7 +66,7 @@ const toast = (msg, kind='info') => {
 };
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'history', 'logs', 'jobs', 'wsmon', 'config'];
+const TABS = ['suggestion', 'trades', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
 function switchTab(name) {
   TABS.forEach(t => {
     const panel = document.getElementById(`panel-${t}`);
@@ -75,13 +75,14 @@ function switchTab(name) {
     panel.setAttribute('aria-hidden', t !== name);
   });
   $$('.nav-item, .bnav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
-  if (name === 'suggestion') loadSuggestion();
-  if (name === 'trades')     loadTrades();
-  if (name === 'history')    loadHistory();
-  if (name === 'logs')       loadLogs();
-  if (name === 'jobs')       loadJobs();
-  if (name === 'wsmon')      loadWsMonitor();
-  if (name === 'config')     loadConfig();
+  if (name === 'suggestion')    loadSuggestion();
+  if (name === 'trades')        loadTrades();
+  if (name === 'history')       loadHistory();
+  if (name === 'logs')          loadLogs();
+  if (name === 'jobs')          loadJobs();
+  if (name === 'wsmon')         loadWsMonitor();
+  if (name === 'notifications') loadNotifications();
+  if (name === 'config')        loadConfig();
   // Stop jobs auto-refresh when leaving the tab
   if (name !== 'jobs')  stopJobsAutoRefresh();
   if (name !== 'wsmon') stopWsMonitorAutoRefresh();
@@ -310,8 +311,10 @@ function renderExitPlan(s) {
 
   // ── 2. Stop loss — strategy-specific, clearly labelled ───────────────────
   const twoSided    = ['IRON_CONDOR', 'IRON_BUTTERFLY', 'JADE_LIZARD'].includes(strategy);
-  const callSideOnly = ['BEAR_CALL_SPREAD', 'BULL_CALL_SPREAD'].includes(strategy);
-  const putSideOnly  = ['BULL_PUT_SPREAD',  'BEAR_PUT_SPREAD' ].includes(strategy);
+  const callCreditOnly = strategy === 'BEAR_CALL_SPREAD';
+  const putCreditOnly = strategy === 'BULL_PUT_SPREAD';
+  const putDebitOnly  = strategy === 'BEAR_PUT_SPREAD';
+  const callDebitOnly = strategy === 'BULL_CALL_SPREAD';
 
   if (twoSided && scLeg && spLeg) {
     // sl_level is the call-side SL (above short call). Derive put-side symmetrically.
@@ -324,7 +327,7 @@ function renderExitPlan(s) {
       rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above short call ${fmt(scLeg.strike)}` });
       rows.push({ label: 'Put-side SL',  val: `exit put spread if ${und} falls below short put ${fmt(spLeg.strike)}` });
     }
-  } else if (callSideOnly && scLeg) {
+  } else if (callCreditOnly && scLeg) {
     if (slLevel != null) {
       const buf = Math.round(slLevel - scLeg.strike);
       const bufStr = buf > 0 ? ` (${buf} pts above short call ${fmt(scLeg.strike)})` : '';
@@ -332,7 +335,7 @@ function renderExitPlan(s) {
     } else {
       rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above short call ${fmt(scLeg.strike)}` });
     }
-  } else if (putSideOnly && spLeg) {
+  } else if (putCreditOnly && spLeg) {
     if (slLevel != null) {
       const buf = Math.round(spLeg.strike - slLevel);
       const bufStr = buf > 0 ? ` (${buf} pts below short put ${fmt(spLeg.strike)})` : '';
@@ -340,10 +343,23 @@ function renderExitPlan(s) {
     } else {
       rows.push({ label: 'Put-side SL', val: `exit put spread if ${und} falls below short put ${fmt(spLeg.strike)}` });
     }
+  } else if (putDebitOnly) {
+    const slFrac = 50;
+    rows.push({
+      label: 'Stop loss',
+      val: `exit if MTM loss reaches ${slFrac}% of max debit (no Nifty spot trigger — bear put loses when ${und} rallies)`,
+      key: true,
+    });
+  } else if (callDebitOnly) {
+    rows.push({
+      label: 'Stop loss',
+      val: `exit if MTM loss reaches 50% of max debit (no Nifty spot trigger — bull call loses when ${und} falls)`,
+      key: true,
+    });
   } else if (strategy === 'LONG_CALL') {
-    rows.push({ label: 'Stop loss', val: `exit if position loses 50% of premium paid${slLevel ? ` or ${und} falls below ${fmt(slLevel)}` : ''}` });
+    rows.push({ label: 'Stop loss', val: `exit if MTM loss reaches 50% of premium paid (${und} decline hurts long call)`, key: true });
   } else if (strategy === 'LONG_PUT') {
-    rows.push({ label: 'Stop loss', val: `exit if position loses 50% of premium paid${slLevel ? ` or ${und} rises above ${fmt(slLevel)}` : ''}` });
+    rows.push({ label: 'Stop loss', val: `exit if MTM loss reaches 50% of premium paid (${und} rally hurts long put)`, key: true });
   } else if (['LONG_STRADDLE', 'LONG_STRANGLE'].includes(strategy) && isDebit) {
     const slVal = Math.round(Math.abs(np) * 0.5 * 10) / 10;
     rows.push({ label: 'Stop loss', val: `exit if position value decays to 50% of debit paid (₹${fmt(slVal)}/unit lost)` });
@@ -1616,7 +1632,14 @@ function renderSuggestion(s, readOnly = false, allSuggestions = []) {
       ${econ.lb != null ? `<div><span class="k">Lower BE</span><br><span class="v econ-lb">₹${fmt(econ.lb)}${spotDist(econ.lb, s.spot_at_generation)}</span></div>` : ''}
       ${(() => {
         const twoSided = ['IRON_CONDOR', 'IRON_BUTTERFLY'].includes(s.strategy);
-        if (!twoSided || econ.sl == null) {
+        const debitSpread = ['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(s.strategy);
+        if (debitSpread || econ.sl == null) {
+          const mtmNote = debitSpread
+            ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">Spot SL not used — exit on 50% of max debit (MTM)</span>`
+            : '';
+          return `<div><span class="k">Stop loss</span><br><span class="v">${debitSpread ? 'MTM-based' : '—'}${mtmNote}</span></div>`;
+        }
+        if (!twoSided) {
           return `<div><span class="k">Stop loss</span><br><span class="v">₹${fmt(econ.sl)}${spotDist(econ.sl, s.spot_at_generation)}</span></div>`;
         }
         const shortCallLeg = (s.legs || []).find(l => l.action === 'SELL' && l.option_type === 'CE');
@@ -2679,6 +2702,22 @@ function renderTrade(t) {
               </div>
             </div>`;
           }
+          const debitSpreadSl = ['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(
+            (t.suggestion && t.suggestion.strategy) || ''
+          );
+          if (debitSpreadSl) {
+            const ml = t.actual_max_loss != null ? parseFloat(t.actual_max_loss)
+                     : (t.suggestion && t.suggestion.max_loss != null ? parseFloat(t.suggestion.max_loss) : null);
+            const mtmSl = ml != null ? ml * 0.5 : null;
+            const dir = (t.suggestion && t.suggestion.strategy) === 'BEAR_PUT_SPREAD'
+              ? 'rally hurts this bear put'
+              : 'decline hurts this bull call';
+            return `<div class="sl-field" style="grid-column:1/-1">
+              <label class="sl-label">Stop loss (MTM)</label>
+              <span class="sl-prem-val">${mtmSl != null ? `\u20b9${fmt(mtmSl)} loss` : '50% of max debit'}</span>
+              <span class="muted sl-prem-note">No Nifty spot trigger \u2014 ${dir}. Ignore legacy spot level if shown in old trades.</span>
+            </div>`;
+          }
           return `<div class="sl-field">
             <label class="sl-label">Nifty SL level</label>
             <span class="sl-prem-val">${t.actual_stop_loss_level != null ? `\u20b9${fmt(t.actual_stop_loss_level)}` : '\u2014 not set'}</span>
@@ -3454,7 +3493,290 @@ async function loadZerodhaStatus() {
   }
 }
 
-// Refresh header pill on boot and every 60s.
+// ============================================================
+// Notifications Tab (dedicated panel)
+// ============================================================
+
+const _NF_CAT_LABELS = {
+  sl:         { icon: '⛔', label: 'Stop Loss' },
+  profit:     { icon: '🎯', label: 'Take Profit' },
+  exit:       { icon: '🚪', label: 'Exit Required' },
+  event:      { icon: '📅', label: 'Event Risk' },
+  system:     { icon: '⚙️', label: 'System' },
+  suggestion: { icon: '💡', label: 'Suggestion' },
+  other:      { icon: '📋', label: 'Other' },
+};
+
+const _NF_TYPE_CAT = {
+  SL_TRIGGER: 'sl', SL_HIT: 'sl', PRE_BREACH_WARNING: 'sl',
+  TARGET_HIT: 'profit', TAKE_PROFIT: 'profit', TARGET_LOCKED: 'profit',
+  EXIT_TOMORROW: 'exit', TIME_DECAY_DONE: 'exit', EXPIRE: 'exit', AUTO_SETTLED: 'exit',
+  EVENT_AHEAD_REVIEW: 'event',
+  CIRCUIT_BREAKER: 'system', BROKEN_TRADE: 'system', DATA_REPAIR: 'system', KILL_SWITCH: 'system',
+  NEW_SUGGESTION: 'suggestion', NO_SUGGESTION: 'suggestion', STRATEGY_VETO: 'suggestion',
+};
+
+let _nfState = {
+  sev:     '',    // '' | 'CRITICAL' | 'WARNING' | 'INFO'
+  cat:     '',    // '' | 'sl' | 'profit' | 'exit' | 'event' | 'system' | 'suggestion'
+  unread:  false,
+  tradeId: '',
+  from:    '',
+  to:      '',
+  offset:  0,
+  limit:   25,
+  total:   0,
+};
+
+function _nfBuildQuery() {
+  const p = new URLSearchParams({ limit: _nfState.limit, offset: _nfState.offset });
+  if (_nfState.sev)     p.set('severity', _nfState.sev);
+  if (_nfState.cat)     p.set('category', _nfState.cat);
+  if (_nfState.unread)  p.set('unread', '1');
+  if (_nfState.tradeId) p.set('trade_id', _nfState.tradeId.trim());
+  if (_nfState.from)    p.set('from', _nfState.from);
+  if (_nfState.to)      p.set('to', _nfState.to);
+  return p.toString();
+}
+
+function _nfSevIcon(sev) {
+  if (!sev) return '';
+  const s = sev.toUpperCase();
+  if (s === 'CRITICAL') return '🔴';
+  if (s === 'WARNING')  return '🟠';
+  return '🔵';
+}
+
+function _nfRenderCard(n) {
+  const sev       = (n.severity  || 'INFO').toUpperCase();
+  const nt        = (n.notif_type || '').toUpperCase();
+  const cat       = _NF_TYPE_CAT[nt] || 'other';
+  const catMeta   = _NF_CAT_LABELS[cat] || _NF_CAT_LABELS.other;
+  const unread    = !n.is_read;
+  const stripeClass = sev === 'CRITICAL' ? 'nf-card-stripe-critical'
+                    : sev === 'WARNING'  ? 'nf-card-stripe-warning'
+                    : 'nf-card-stripe-info';
+  const tradeLink = n.related_trade_id
+    ? `<a href="#trades" class="nf-trade-link" data-trade="${escapeHtml(n.related_trade_id)}"
+          title="Jump to trade">${escapeHtml(n.related_trade_id)}</a>`
+    : '';
+  const sugLink = n.related_suggestion_id
+    ? `<span>SUG: ${escapeHtml(n.related_suggestion_id)}</span>` : '';
+
+  const card = document.createElement('div');
+  card.className = 'nf-card' + (unread ? ' unread' : '');
+  card.dataset.nid = n.id;
+  card.innerHTML = `
+    <div class="nf-card-stripe ${stripeClass}"></div>
+    <div class="nf-card-body">
+      <div class="nf-card-row1">
+        ${unread ? '<span class="nf-card-unread-dot" title="Unread"></span>' : ''}
+        <span class="notif-sev notif-sev-${sev.toLowerCase()}">${_nfSevIcon(sev)} ${escapeHtml(sev)}</span>
+        <span class="nf-card-type">${escapeHtml(catMeta.icon)} ${escapeHtml(nt || '—')}</span>
+        <span class="nf-card-title">${escapeHtml(n.title || '')}</span>
+        ${unread ? `<button class="nf-card-read-btn" title="Mark read">✓ Read</button>` : ''}
+      </div>
+      ${n.body ? `<p class="nf-card-body-text">${escapeHtml(n.body)}</p>` : ''}
+      <div class="nf-card-meta">
+        <span>${fmtDt(n.created_at)}</span>
+        ${tradeLink}
+        ${sugLink}
+        ${n.is_read ? `<span class="muted">Read ${fmtDt(n.read_at)}</span>` : ''}
+      </div>
+    </div>`;
+
+  // Mark-read on the button
+  const readBtn = card.querySelector('.nf-card-read-btn');
+  if (readBtn) {
+    readBtn.addEventListener('click', async e => {
+      e.stopPropagation();
+      await API(`/api/notifications/${n.id}/read`, { method: 'POST' });
+      card.classList.remove('unread');
+      card.querySelector('.nf-card-unread-dot')?.remove();
+      readBtn.remove();
+      refreshNotifBadge();
+      refreshGlobalBanners();
+      _nfRefreshStats();
+    });
+  }
+
+  // Click card body → mark read + optionally jump to trade
+  card.addEventListener('click', async () => {
+    if (unread) {
+      await API(`/api/notifications/${n.id}/read`, { method: 'POST' }).catch(()=>{});
+      card.classList.remove('unread');
+      card.querySelector('.nf-card-unread-dot')?.remove();
+      card.querySelector('.nf-card-read-btn')?.remove();
+      refreshNotifBadge();
+      refreshGlobalBanners();
+      _nfRefreshStats();
+    }
+  });
+
+  // Trade link — switch tab without full reload
+  card.querySelector('.nf-trade-link')?.addEventListener('click', e => {
+    e.stopPropagation();
+    switchTab('trades');
+  });
+
+  return card;
+}
+
+async function _nfRefreshStats() {
+  try {
+    const st = await API('/api/notifications/stats');
+    const total = st.total_unread || 0;
+    // Update sidebar badge
+    const badge = document.getElementById('notif-tab-badge');
+    if (badge) { badge.textContent = total; badge.hidden = total === 0; }
+
+    // Update chip counts (show only non-zero)
+    const sevMap = st.by_severity || {};
+    const catMap = st.by_category || {};
+    const update = (id, val) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (val > 0) { el.textContent = val; el.classList.add('visible'); }
+      else         { el.textContent = ''; el.classList.remove('visible'); }
+    };
+    update('nf-cnt-sev-critical',  sevMap['CRITICAL']  || 0);
+    update('nf-cnt-sev-warning',   sevMap['WARNING']   || 0);
+    update('nf-cnt-sev-info',      sevMap['INFO']      || 0);
+    update('nf-cnt-cat-sl',         catMap['sl']         || 0);
+    update('nf-cnt-cat-profit',     catMap['profit']     || 0);
+    update('nf-cnt-cat-exit',       catMap['exit']       || 0);
+    update('nf-cnt-cat-event',      catMap['event']      || 0);
+    update('nf-cnt-cat-system',     catMap['system']     || 0);
+    update('nf-cnt-cat-suggestion', catMap['suggestion'] || 0);
+  } catch(e) { /* non-fatal */ }
+}
+
+async function loadNotifications() {
+  const list = document.getElementById('nf-list');
+  if (!list) return;
+  list.className = 'nf-list loading'; list.textContent = 'Loading…';
+
+  await _nfRefreshStats();
+
+  try {
+    const data = await API('/api/notifications?' + _nfBuildQuery());
+    const rows  = data.notifications || [];
+    _nfState.total = data.total || rows.length;
+
+    // Total label
+    const lbl = document.getElementById('nf-total-label');
+    if (lbl) {
+      const unreadSuffix = _nfState.unread ? ' (unread)' : '';
+      lbl.textContent = `${_nfState.total} notification${_nfState.total !== 1 ? 's' : ''}${unreadSuffix}`;
+    }
+
+    list.className = 'nf-list';
+    list.innerHTML = '';
+
+    if (!rows.length) {
+      list.innerHTML = '<div class="nf-empty">No notifications match the current filters.</div>';
+    } else {
+      rows.forEach(n => list.appendChild(_nfRenderCard(n)));
+    }
+
+    // Pagination
+    const pg   = document.getElementById('nf-pagination');
+    const info = document.getElementById('nf-page-info');
+    if (pg) {
+      const pages = _nfState.total > _nfState.limit;
+      pg.hidden = !pages;
+      if (info) {
+        const from = _nfState.offset + 1;
+        const to   = Math.min(_nfState.offset + rows.length, _nfState.total);
+        info.textContent = `${from}–${to} of ${_nfState.total}`;
+      }
+      document.getElementById('nf-prev').disabled = _nfState.offset === 0;
+      document.getElementById('nf-next').disabled = _nfState.offset + _nfState.limit >= _nfState.total;
+    }
+  } catch(e) {
+    list.className = 'nf-list';
+    list.innerHTML = `<div class="nf-empty" style="color:var(--err)">Error loading notifications: ${escapeHtml(String(e))}</div>`;
+  }
+}
+
+// ── Wire up notification tab controls ──
+
+// Severity chips
+$$('[data-nf-sev]').forEach(btn => btn.addEventListener('click', () => {
+  $$('[data-nf-sev]').forEach(b => b.classList.remove('nf-chip-active'));
+  btn.classList.add('nf-chip-active');
+  _nfState.sev    = btn.dataset.nfSev;
+  _nfState.offset = 0;
+  loadNotifications();
+}));
+
+// Category chips
+$$('[data-nf-cat]').forEach(btn => btn.addEventListener('click', () => {
+  $$('[data-nf-cat]').forEach(b => b.classList.remove('nf-chip-active'));
+  btn.classList.add('nf-chip-active');
+  _nfState.cat    = btn.dataset.nfCat;
+  _nfState.offset = 0;
+  loadNotifications();
+}));
+
+// Unread toggle
+document.getElementById('nf-unread-only')?.addEventListener('change', e => {
+  _nfState.unread = e.target.checked;
+  _nfState.offset = 0;
+  loadNotifications();
+});
+
+// Trade ID filter (debounced)
+let _nfTradeTimer;
+document.getElementById('nf-trade-filter')?.addEventListener('input', e => {
+  clearTimeout(_nfTradeTimer);
+  _nfTradeTimer = setTimeout(() => {
+    _nfState.tradeId = e.target.value;
+    _nfState.offset  = 0;
+    loadNotifications();
+  }, 400);
+});
+
+// Date range
+document.getElementById('nf-from')?.addEventListener('change', e => {
+  _nfState.from   = e.target.value ? e.target.value + 'T00:00:00' : '';
+  _nfState.offset = 0;
+  loadNotifications();
+});
+document.getElementById('nf-to')?.addEventListener('change', e => {
+  _nfState.to     = e.target.value ? e.target.value + 'T23:59:59' : '';
+  _nfState.offset = 0;
+  loadNotifications();
+});
+
+// Pagination
+document.getElementById('nf-prev')?.addEventListener('click', () => {
+  if (_nfState.offset <= 0) return;
+  _nfState.offset = Math.max(0, _nfState.offset - _nfState.limit);
+  loadNotifications();
+});
+document.getElementById('nf-next')?.addEventListener('click', () => {
+  if (_nfState.offset + _nfState.limit >= _nfState.total) return;
+  _nfState.offset += _nfState.limit;
+  loadNotifications();
+});
+
+// Refresh button
+document.getElementById('nf-refresh')?.addEventListener('click', () => loadNotifications());
+
+// Mark all read
+document.getElementById('nf-mark-all')?.addEventListener('click', async () => {
+  await API('/api/notifications/read-all', { method: 'POST' });
+  refreshNotifBadge();
+  refreshGlobalBanners();
+  await loadNotifications();
+  toast('All notifications marked as read', 'ok');
+});
+
+// Refresh stats (header pill + sidebar badge) on boot and every 60s.
+_nfRefreshStats();
+setInterval(_nfRefreshStats, 60000);
+
 loadZerodhaStatus();
 setInterval(loadZerodhaStatus, 60000);
 

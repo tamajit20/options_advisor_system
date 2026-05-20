@@ -1299,6 +1299,145 @@ class NotificationRepo:
             [limit],
         )
 
+    def filtered(
+        self,
+        *,
+        severity: Optional[str] = None,
+        notif_type: Optional[str] = None,
+        category: Optional[str] = None,
+        unread_only: bool = False,
+        trade_id: Optional[str] = None,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[dict]:
+        """Flexible filtered query for the Notifications tab.
+
+        `category` is a virtual grouping over `notif_type` (not stored in DB):
+          sl        → SL_TRIGGER, SL_HIT, PRE_BREACH_WARNING
+          profit    → TARGET_HIT, TAKE_PROFIT, TARGET_LOCKED
+          exit      → EXIT_TOMORROW, TIME_DECAY_DONE, EXPIRE, AUTO_SETTLED
+          event     → EVENT_AHEAD_REVIEW
+          system    → CIRCUIT_BREAKER, BROKEN_TRADE, DATA_REPAIR, KILL_SWITCH
+          suggestion→ NEW_SUGGESTION, NO_SUGGESTION, STRATEGY_VETO
+        """
+        _CATEGORY_TYPES: dict[str, list[str]] = {
+            "sl":         ["SL_TRIGGER", "SL_HIT", "PRE_BREACH_WARNING"],
+            "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED"],
+            "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
+            "event":      ["EVENT_AHEAD_REVIEW"],
+            "system":     ["CIRCUIT_BREAKER", "BROKEN_TRADE", "DATA_REPAIR", "KILL_SWITCH"],
+            "suggestion": ["NEW_SUGGESTION", "NO_SUGGESTION", "STRATEGY_VETO"],
+        }
+        wheres: list[str] = []
+        params: list = []
+
+        if unread_only:
+            wheres.append("read_at IS NULL")
+        if severity:
+            wheres.append("severity = ?")
+            params.append(severity.upper())
+        if notif_type:
+            wheres.append("notif_type = ?")
+            params.append(notif_type.upper())
+        if category and category in _CATEGORY_TYPES:
+            placeholders = ", ".join("?" * len(_CATEGORY_TYPES[category]))
+            wheres.append(f"notif_type IN ({placeholders})")
+            params.extend(_CATEGORY_TYPES[category])
+        if trade_id:
+            wheres.append("related_trade_id = ?")
+            params.append(trade_id)
+        if from_dt:
+            wheres.append("created_at >= ?")
+            params.append(from_dt)
+        if to_dt:
+            wheres.append("created_at <= ?")
+            params.append(to_dt)
+
+        where_clause = ("WHERE " + " AND ".join(wheres)) if wheres else ""
+        sql = (
+            f"SELECT * FROM (SELECT *, ROW_NUMBER() OVER (ORDER BY created_at DESC) AS _rn "
+            f"FROM options_notifications {where_clause}) AS _paged "
+            f"WHERE _rn > ? AND _rn <= ?"
+        )
+        params.extend([offset, offset + limit])
+        return self.db.fetch_all(sql, params)
+
+    def count_filtered(
+        self,
+        *,
+        severity: Optional[str] = None,
+        category: Optional[str] = None,
+        unread_only: bool = False,
+        trade_id: Optional[str] = None,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+    ) -> int:
+        _CATEGORY_TYPES: dict[str, list[str]] = {
+            "sl":         ["SL_TRIGGER", "SL_HIT", "PRE_BREACH_WARNING"],
+            "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED"],
+            "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
+            "event":      ["EVENT_AHEAD_REVIEW"],
+            "system":     ["CIRCUIT_BREAKER", "BROKEN_TRADE", "DATA_REPAIR", "KILL_SWITCH"],
+            "suggestion": ["NEW_SUGGESTION", "NO_SUGGESTION", "STRATEGY_VETO"],
+        }
+        wheres: list[str] = []
+        params: list = []
+        if unread_only:
+            wheres.append("read_at IS NULL")
+        if severity:
+            wheres.append("severity = ?")
+            params.append(severity.upper())
+        if category and category in _CATEGORY_TYPES:
+            placeholders = ", ".join("?" * len(_CATEGORY_TYPES[category]))
+            wheres.append(f"notif_type IN ({placeholders})")
+            params.extend(_CATEGORY_TYPES[category])
+        if trade_id:
+            wheres.append("related_trade_id = ?")
+            params.append(trade_id)
+        if from_dt:
+            wheres.append("created_at >= ?")
+            params.append(from_dt)
+        if to_dt:
+            wheres.append("created_at <= ?")
+            params.append(to_dt)
+        where_clause = ("WHERE " + " AND ".join(wheres)) if wheres else ""
+        return self.db.scalar(
+            f"SELECT COUNT(*) FROM options_notifications {where_clause}", params
+        ) or 0
+
+    def stats(self) -> dict:
+        """Return unread counts grouped by severity and category for badge display."""
+        rows = self.db.fetch_all(
+            "SELECT severity, notif_type, COUNT(*) AS cnt "
+            "FROM options_notifications WHERE read_at IS NULL "
+            "GROUP BY severity, notif_type"
+        )
+        by_sev: dict[str, int] = {}
+        by_cat: dict[str, int] = {}
+        _CAT_MAP = {
+            "SL_TRIGGER": "sl", "SL_HIT": "sl", "PRE_BREACH_WARNING": "sl",
+            "TARGET_HIT": "profit", "TAKE_PROFIT": "profit", "TARGET_LOCKED": "profit",
+            "EXIT_TOMORROW": "exit", "TIME_DECAY_DONE": "exit",
+            "EXPIRE": "exit", "AUTO_SETTLED": "exit",
+            "EVENT_AHEAD_REVIEW": "event",
+            "CIRCUIT_BREAKER": "system", "BROKEN_TRADE": "system",
+            "DATA_REPAIR": "system", "KILL_SWITCH": "system",
+            "NEW_SUGGESTION": "suggestion", "NO_SUGGESTION": "suggestion",
+            "STRATEGY_VETO": "suggestion",
+        }
+        total_unread = 0
+        for r in rows:
+            sev = (r.get("severity") or "INFO").upper()
+            nt  = (r.get("notif_type") or "").upper()
+            cnt = int(r.get("cnt") or 0)
+            by_sev[sev] = by_sev.get(sev, 0) + cnt
+            cat = _CAT_MAP.get(nt, "other")
+            by_cat[cat] = by_cat.get(cat, 0) + cnt
+            total_unread += cnt
+        return {"total_unread": total_unread, "by_severity": by_sev, "by_category": by_cat}
+
     def mark_read(self, notification_id: int) -> None:
         self.db.execute(
             "UPDATE options_notifications SET read_at = ? WHERE id = ?",
@@ -1635,3 +1774,102 @@ class EmCalibrationRepo:
             [expiry_date],
         )
 
+
+# ---------------------------------------------------------------------------
+# Trade Greeks drift tracking (C6)
+# ---------------------------------------------------------------------------
+class TradeGreeksRepo:
+    """Daily delta/vega/theta snapshot per open trade.
+
+    Schema (CREATE IF NOT EXISTS handled by ``ensure_table``):
+        options_trade_greeks (
+            trade_id      VARCHAR(40),
+            as_of_date    DATE,
+            net_delta     FLOAT,
+            net_gamma     FLOAT,
+            net_vega      FLOAT,
+            net_theta     FLOAT,
+            legs_json     NVARCHAR(MAX),
+            recorded_at   DATETIME2 DEFAULT SYSUTCDATETIME(),
+            CONSTRAINT pk_trade_greeks PRIMARY KEY (trade_id, as_of_date)
+        )
+    """
+
+    _CREATE_SQL = """
+    IF NOT EXISTS (
+        SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_NAME = 'options_trade_greeks'
+    )
+    CREATE TABLE options_trade_greeks (
+        trade_id    VARCHAR(40)   NOT NULL,
+        as_of_date  DATE          NOT NULL,
+        net_delta   FLOAT         NULL,
+        net_gamma   FLOAT         NULL,
+        net_vega    FLOAT         NULL,
+        net_theta   FLOAT         NULL,
+        legs_json   NVARCHAR(MAX) NULL,
+        recorded_at DATETIME2     DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT pk_trade_greeks PRIMARY KEY (trade_id, as_of_date)
+    )
+    """
+
+    def __init__(self, db: SQLServerConnection):
+        self.db = db
+
+    def ensure_table(self) -> None:
+        self.db.execute(self._CREATE_SQL)
+
+    def upsert(self, trade_id: str, as_of_date: date, greeks: dict) -> None:
+        import json as _json
+        legs_json = _json.dumps(greeks.get("legs", []))
+        self.db.execute(
+            """
+            MERGE options_trade_greeks AS T
+            USING (SELECT ? AS trade_id, ? AS as_of_date) AS S
+            ON T.trade_id = S.trade_id AND T.as_of_date = S.as_of_date
+            WHEN MATCHED THEN UPDATE SET
+                net_delta = ?, net_gamma = ?, net_vega = ?, net_theta = ?,
+                legs_json = ?, recorded_at = SYSUTCDATETIME()
+            WHEN NOT MATCHED THEN INSERT
+                (trade_id, as_of_date, net_delta, net_gamma, net_vega, net_theta, legs_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            [
+                trade_id, as_of_date,
+                _safe_float(greeks.get("net_delta")),
+                _safe_float(greeks.get("net_gamma")),
+                _safe_float(greeks.get("net_vega")),
+                _safe_float(greeks.get("net_theta")),
+                legs_json,
+                trade_id, as_of_date,
+                _safe_float(greeks.get("net_delta")),
+                _safe_float(greeks.get("net_gamma")),
+                _safe_float(greeks.get("net_vega")),
+                _safe_float(greeks.get("net_theta")),
+                legs_json,
+            ],
+        )
+
+    def latest_for_trade(self, trade_id: str) -> Optional[dict]:
+        return self.db.fetch_one(
+            """
+            SELECT TOP 1 trade_id, as_of_date, net_delta, net_gamma, net_vega,
+                   net_theta, legs_json, recorded_at
+            FROM options_trade_greeks
+            WHERE trade_id = ?
+            ORDER BY as_of_date DESC
+            """,
+            [trade_id],
+        )
+
+    def history_for_trade(self, trade_id: str, limit: int = 30) -> list:
+        return self.db.fetch_all(
+            """
+            SELECT TOP (?) trade_id, as_of_date, net_delta, net_gamma, net_vega,
+                   net_theta, recorded_at
+            FROM options_trade_greeks
+            WHERE trade_id = ?
+            ORDER BY as_of_date DESC
+            """,
+            [limit, trade_id],
+        )
