@@ -6,18 +6,28 @@ Boundary: imported by everyone. Do NOT import from any project module here.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
+
+_IST = ZoneInfo("Asia/Kolkata")
 
 
 def now_ist() -> datetime:
-    """Current naive datetime. Relies on TZ=Asia/Kolkata being set in the
-    runtime environment (Docker: TZ env var; local: system timezone)."""
-    return datetime.now()
+    """Current naive IST datetime (no tzinfo).
+
+    Uses explicit ZoneInfo("Asia/Kolkata") so the result is always correct
+    regardless of the host OS timezone — on Windows dev boxes, Docker
+    containers, or any server where TZ may not be set to Asia/Kolkata.
+    The returned datetime is *naive* for backwards-compatibility with the
+    database layer (all options_* tables store naive IST).
+    """
+    return datetime.now(tz=_IST).replace(tzinfo=None)
 
 
 def today_ist() -> date:
-    return date.today()
+    """Current IST date, independent of the host OS timezone."""
+    return datetime.now(tz=_IST).date()
 
 
 def parse_ddmmyyyy(s: str) -> date:

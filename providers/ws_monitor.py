@@ -36,7 +36,7 @@ import os
 import tempfile
 import threading
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional
 
@@ -59,8 +59,10 @@ _DEFAULT_SNAPSHOT_INTERVAL_SECONDS = 0.5
 _DEFAULT_PROVIDER = "zerodha"
 
 
-def _utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
+def _now_ist() -> datetime:
+    """Naive IST datetime — used as the default clock for WSMonitor."""
+    from utils import now_ist
+    return now_ist()
 
 
 class WSMonitor:
@@ -96,7 +98,7 @@ class WSMonitor:
         event_retention_seconds: float = _DEFAULT_EVENT_RETENTION_SECONDS,
         rate_window_seconds: float = _DEFAULT_RATE_WINDOW_SECONDS,
         snapshot_interval_seconds: float = _DEFAULT_SNAPSHOT_INTERVAL_SECONDS,
-        clock: Callable[[], datetime] = _utcnow,
+        clock: Callable[[], datetime] = _now_ist,
     ) -> None:
         if max_recent_events <= 0:
             raise ValueError("max_recent_events must be positive")

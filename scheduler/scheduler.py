@@ -46,6 +46,7 @@ from lifecycle.snapshot_orchestrator import (
 )
 from lifecycle.intraday_validator import run_intraday_validator
 from lifecycle.suggestion_engine import run_live_suggestion_engine, run_suggestion_engine
+from lifecycle.trade_greeks_job import run_trade_greeks_update
 from simulation.simulator import run_simulation_update
 from utils import now_ist, today_ist
 
@@ -339,6 +340,8 @@ def job_live_suggestion_1430(): _run_job("live_suggestion_engine_1430", run_live
 def job_simulation(): _run_job("simulation_update",  run_simulation_update)
 def job_exit():       _run_job("exit_engine",        run_exit_engine,
                                requires=["fo_bhav_download"])
+def job_trade_greeks(): _run_job("trade_greeks_update", run_trade_greeks_update,
+                                 requires=["fo_bhav_download", "spot_bhav_download"])
 def job_events_seed(): _run_job("events_seed",       run_events_seed)
 def job_event_eve_review(): _run_job("event_eve_review", run_event_eve_review)
 
@@ -404,6 +407,7 @@ JOB_FUNCS = {
     "live_suggestion_engine_1430": job_live_suggestion_1430,
     "simulation_update":       job_simulation,
     "exit_engine":        job_exit,
+    "trade_greeks_update": job_trade_greeks,
     "events_seed":        job_events_seed,
     "event_eve_review":   job_event_eve_review,
     "weekly_cleanup":     job_weekly_cleanup,
@@ -456,7 +460,7 @@ def trigger_job_now(job_name: str, trade_date: str | None = None) -> bool:
         raise RuntimeError("Scheduler is not running")
 
     base_fn = JOB_FUNCS[job_name]
-    manual_suffix = f"manual-{datetime.now().strftime('%H%M%S')}"
+    manual_suffix = f"manual-{now_ist().strftime('%H%M%S')}"
 
     if trade_date:
         from datetime import date as _date
@@ -502,7 +506,7 @@ def trigger_job_now(job_name: str, trade_date: str | None = None) -> bool:
         # directly. It already routes through `_run_job` and logs to the DB.
         fn = base_fn
 
-    run_at = datetime.now()
+    run_at = now_ist()
     sch.add_job(
         fn,
         trigger=DateTrigger(run_date=run_at),

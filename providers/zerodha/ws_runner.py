@@ -429,7 +429,8 @@ class KiteWSRunner:
     def _on_ticks(self, ws, ticks) -> None:  # noqa: ARG002
         if not ticks:
             return
-        now = datetime.now(tz=timezone.utc)
+        from utils import now_ist as _now_ist
+        now = _now_ist()
         with self._lock:
             self._last_tick_at = now
         for tick in ticks:
@@ -549,7 +550,8 @@ class KiteWSRunner:
             return True
         if not self._is_market_open():
             return True
-        n = now or datetime.now(tz=timezone.utc)
+        from utils import now_ist as _now_ist
+        n = now or _now_ist()
         with self._lock:
             last = self._last_tick_at
         if last is None:
@@ -599,13 +601,15 @@ class KiteWSRunner:
         self._reconnect_attempts += 1
         self._last_error = f"{type(exc).__name__}: {exc}"
         if self._failure_started_at is None:
-            self._failure_started_at = datetime.now(tz=timezone.utc)
+            from utils import now_ist as _now_ist
+            self._failure_started_at = _now_ist()
         logger.warning("WS connect attempt failed: %s", self._last_error)
 
     def _failure_age_seconds(self) -> float:
         if self._failure_started_at is None:
             return 0.0
-        return (datetime.now(tz=timezone.utc) - self._failure_started_at).total_seconds()
+        from utils import now_ist as _now_ist
+        return (_now_ist() - self._failure_started_at).total_seconds()
 
     def _handle_token_expiry(self, detail: str) -> None:
         logger.error("WS token expired/invalid — re-login required (%s)", detail)

@@ -45,7 +45,7 @@ from config import STRATEGY_CONFIG
 from database.connection import SQLServerConnection
 from database.models import FoEodRepo, SuggestionRepo
 from engine.exit_engine import evaluate_exit
-from utils import days_between
+from utils import days_between, now_ist
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +288,7 @@ def run_backtest(
         return {}
 
     # Write per-trade CSV
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = now_ist().strftime("%Y%m%d_%H%M%S")
     csv_path = output_dir / f"backtest_results_{ts}.csv"
     fields = [
         "suggestion_id", "strategy", "underlying", "expiry", "generated_on",

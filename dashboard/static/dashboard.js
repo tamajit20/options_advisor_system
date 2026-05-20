@@ -3229,7 +3229,9 @@ function startWsMonitorAutoRefresh() {
 
 function _fmtAge(iso) {
   if (!iso) return '—';
-  const t = new Date(iso).getTime();
+  // Treat naive strings as IST by appending +05:30.
+  const s = iso && /[Z+\-]\d{2}:\d{2}$|Z$/.test(iso) ? iso : iso + '+05:30';
+  const t = new Date(s).getTime();
   if (!isFinite(t)) return '—';
   const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
   if (sec < 60)   return sec + 's ago';
@@ -3239,9 +3241,14 @@ function _fmtAge(iso) {
 // Format any ISO timestamp (with or without TZ offset) as IST wall time
 // e.g.  "2026-05-20T11:50:29+00:00"  →  "20 May 17:20:29 IST"
 function _fmtIst(iso) {
+  // Accepts both:
+  //   naive IST  "2026-05-20T17:20:29"        (new from ws_monitor)
+  //   UTC-aware  "2026-05-20T11:50:29+00:00"  (old snapshots / transition)
   if (!iso) return '—';
   try {
-    const d = new Date(iso);
+    // If no timezone info, treat as IST by appending +05:30 before parsing.
+    const s = /[Z+\-]\d{2}:\d{2}$|Z$/.test(iso) ? iso : iso + '+05:30';
+    const d = new Date(s);
     if (!isFinite(d.getTime())) return iso;
     return d.toLocaleString('en-IN', {
       timeZone: 'Asia/Kolkata',

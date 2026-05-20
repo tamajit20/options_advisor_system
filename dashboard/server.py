@@ -948,7 +948,7 @@ def create_app() -> Flask:
         return jsonify({
             "jobs": out,
             "scheduler_running": sch_running,
-            "generated_at": _ist_iso(datetime.now()),
+            "generated_at": _ist_iso(now_ist()),
         })
 
     @app.route("/api/jobs/<job_name>/trigger", methods=["POST"])
@@ -1088,11 +1088,10 @@ def create_app() -> Flask:
         # the session (no ticks flowing, or zero subscribed tokens). The
         # raw value is preserved as `raw_connection_state` for diagnostics.
         try:
-            from datetime import datetime as _dt, timezone as _tz, time as _time
-            from zoneinfo import ZoneInfo as _Z
+            from datetime import time as _time
             raw_state = snap.get("connection_state")
             if raw_state == "connected":
-                ist_now = _dt.now(_Z("Asia/Kolkata"))
+                ist_now = now_ist()
                 in_market = (
                     ist_now.weekday() < 5
                     and _time(9, 15) <= ist_now.time() <= _time(15, 30)
@@ -1109,12 +1108,12 @@ def create_app() -> Flask:
                 if stale_reason is None:
                     last_tick = snap.get("last_tick_at")
                     if last_tick:
-                        last_dt = _dt.fromisoformat(
-                            str(last_tick).replace("Z", "+00:00")
-                        )
-                        if last_dt.tzinfo is None:
-                            last_dt = last_dt.replace(tzinfo=_tz.utc)
-                        age_s = (_dt.now(_tz.utc) - last_dt).total_seconds()
+                        last_dt = datetime.fromisoformat(str(last_tick))
+                        # Normalise: strip tzinfo if present (convert UTC→IST naive)
+                        if last_dt.tzinfo is not None:
+                            from zoneinfo import ZoneInfo as _Z
+                            last_dt = last_dt.astimezone(_Z("Asia/Kolkata")).replace(tzinfo=None)
+                        age_s = (ist_now - last_dt).total_seconds()
                         if age_s > threshold:
                             stale_reason = (
                                 f"no ticks for {int(age_s)}s "

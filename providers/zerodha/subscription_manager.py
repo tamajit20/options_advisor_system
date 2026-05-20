@@ -45,6 +45,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
+from utils import now_ist
 from typing import Callable, Iterable, Iterator, List, Optional, Set, Tuple
 
 from .instruments import InstrumentMaster
@@ -203,7 +204,7 @@ class SubscriptionManager:
                 )
             with self._lock:
                 self._status = SubscriptionStatus(
-                    last_reconcile_at=datetime.utcnow(),
+                    last_reconcile_at=now_ist(),
                     last_token_count=0,
                     last_unresolved_legs=0,
                     last_error=None,
@@ -273,7 +274,7 @@ class SubscriptionManager:
 
         with self._lock:
             self._status = SubscriptionStatus(
-                last_reconcile_at=datetime.utcnow(),
+                last_reconcile_at=now_ist(),
                 last_token_count=len(tokens),
                 last_unresolved_legs=unresolved,
                 last_error=None,
