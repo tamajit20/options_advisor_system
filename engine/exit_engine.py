@@ -26,6 +26,7 @@ from typing import Mapping, Sequence
 
 from config import STRATEGY_CONFIG
 from contracts import ExitDecision
+from utils import now_ist
 
 
 def evaluate_exit(
@@ -41,7 +42,7 @@ def evaluate_exit(
     strategy: str = "",              # Phase 2: drives strategy-aware TP and time-decay exit
     as_of: datetime | None = None,
 ) -> ExitDecision:
-    as_of = as_of or datetime.utcnow()
+    as_of = as_of or now_ist()
 
     if days_to_expiry == 0:
         return ExitDecision(trade_id=trade_id, decision="EXPIRE",
@@ -82,10 +83,11 @@ def evaluate_exit(
             as_of=as_of,
         )
 
-    # SL hit — exit when loss reaches stop_loss_fraction × max_loss
-    # sl_level_per_share is kept as a dashboard display reference only;
-    # we use the premium-based fraction here which is dimensionally correct.
-    sl_fraction = STRATEGY_CONFIG["stop_loss_fraction"]
+    # SL hit — exit when loss reaches stop_loss_fraction × max_loss.
+    # Per-strategy fractions (S5: side-aware SL): put-side structures breach
+    # faster — use a tighter threshold. Falls back to global stop_loss_fraction.
+    sl_overrides = STRATEGY_CONFIG.get("strategy_stop_loss_fraction", {}) or {}
+    sl_fraction = float(sl_overrides.get(strategy, STRATEGY_CONFIG["stop_loss_fraction"]))
     if max_loss_rs > 0 and current_pnl <= -(sl_fraction * max_loss_rs):
         sl_rs = -(sl_fraction * max_loss_rs)
         return ExitDecision(

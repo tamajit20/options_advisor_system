@@ -51,7 +51,7 @@ from database.models import (
 from engine.exit_pricing import sanitized_close_price
 from lifecycle.resuggestion_engine import generate_resuggestion
 from lifecycle.trade_executor import close_trade_with_fills, mark_executed, supplement_trade
-from utils import today_ist
+from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
 
@@ -531,9 +531,9 @@ def create_app() -> Flask:
         # Fallback: legacy ?days= support
         if not from_date:
             days = int(request.args.get("days", 30))
-            from_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+            from_date = (today_ist() - timedelta(days=days)).strftime("%Y-%m-%d")
         if not to_date:
-            to_date = datetime.utcnow().strftime("%Y-%m-%d")
+            to_date = today_ist().strftime("%Y-%m-%d")
 
         valid_statuses = {"PENDING", "EXECUTED", "IGNORED", "NO_SUGGESTION"}
         if status_f and status_f not in valid_statuses:
@@ -565,7 +565,7 @@ def create_app() -> Flask:
     @_with_db
     def api_history_trades(db: SQLServerConnection):
         days = int(request.args.get("days", 30))
-        since = (datetime.utcnow() - timedelta(days=days))
+        since = (today_ist() - timedelta(days=days))
         rows = db.fetch_all(
             "SELECT TOP 200 * FROM options_trades "
             "WHERE executed_on >= ? AND status IN ('CLOSED', 'EXPIRED') "
@@ -578,7 +578,7 @@ def create_app() -> Flask:
     @_with_db
     def api_history_paired(db: SQLServerConnection):
         days = int(request.args.get("days", 30))
-        since = datetime.utcnow() - timedelta(days=days)
+        since = today_ist() - timedelta(days=days)
         rows = db.fetch_all(
             "SELECT TOP 200 "
             "  s.suggestion_id, s.underlying, s.strategy, s.generated_on, s.plain_english, "
@@ -761,7 +761,7 @@ def create_app() -> Flask:
         limit = int(request.args.get("limit", DASHBOARD_CONFIG["log_page_size"]))
         offset = int(request.args.get("offset", 0))
         since_h = request.args.get("since_hours")
-        since = (datetime.utcnow() - timedelta(hours=int(since_h))) if since_h else None
+        since = (now_ist() - timedelta(hours=int(since_h))) if since_h else None
         rows = repo.fetch(level=level, module=module, job_id=job_id,
                           since=since, search=search, limit=limit, offset=offset)
         return jsonify({"logs": [_row(r) for r in rows]})

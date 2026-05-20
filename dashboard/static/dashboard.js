@@ -3236,6 +3236,21 @@ function _fmtAge(iso) {
   if (sec < 3600) return Math.round(sec / 60) + 'm ago';
   return Math.round(sec / 3600) + 'h ago';
 }
+// Format any ISO timestamp (with or without TZ offset) as IST wall time
+// e.g.  "2026-05-20T11:50:29+00:00"  →  "20 May 17:20:29 IST"
+function _fmtIst(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (!isFinite(d.getTime())) return iso;
+    return d.toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit', month: 'short',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }) + ' IST';
+  } catch { return iso; }
+}
 function _wsmonStateClass(state) {
   const s = (state || '').toLowerCase();
   if (s === 'connected')                       return 'wsmon-state-ok';
@@ -3349,7 +3364,7 @@ async function loadWsMonitor({ silent = false } = {}) {
         detail = escapeHtml(JSON.stringify(e));
       }
       return `<div class="wsmon-ev wsmon-ev-${escapeHtml(tag)}">
-        <span class="wsmon-ev-ts">${escapeHtml((e.ts || '').replace('T',' ').slice(0,19))}</span>
+        <span class="wsmon-ev-ts">${escapeHtml(_fmtIst(e.ts))}</span>
         <span class="wsmon-ev-tag">${escapeHtml(tag)}</span>
         ${detail}
       </div>`;

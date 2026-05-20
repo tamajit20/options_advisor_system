@@ -165,10 +165,15 @@ def _tick_to_quote(tick: dict, meta: Optional[_TokenMeta], provider_name: str) -
             ask = float(sell[0].get("price", 0.0) or 0.0) or None
 
     ts = tick.get("exchange_timestamp") or tick.get("timestamp")
-    if isinstance(ts, datetime) and ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    elif not isinstance(ts, datetime):
+    # Kite Connect sends exchange_timestamp / timestamp as naive IST datetimes —
+    # do NOT tag them as UTC. Keep as naive IST to stay consistent with now_ist().
+    if not isinstance(ts, datetime):
         ts = None
+    elif ts.tzinfo is not None:
+        # Rare: arrived timezone-aware — convert to naive IST.
+        from datetime import timedelta as _td
+        _IST = timezone(_td(hours=5, minutes=30))
+        ts = ts.astimezone(_IST).replace(tzinfo=None)
 
     if meta is None:
         symbol = f"token:{tick.get('instrument_token', '?')}"
