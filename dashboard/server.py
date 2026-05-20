@@ -163,6 +163,9 @@ def create_app() -> Flask:
         static_folder="static",
     )
     app.config["JSON_SORT_KEYS"] = False
+    # Never cache static assets in the browser — the cache_bust timestamp in
+    # the HTML template ensures a fresh fetch on every page load anyway.
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
     # ---------- HTML ----------
     @app.route("/")
