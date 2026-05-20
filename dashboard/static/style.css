@@ -1318,6 +1318,9 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .wsmon-ev-ts  { color: var(--text-dim); }
 .wsmon-ev-tag { font-weight: 700; text-transform: uppercase; font-size: .7rem; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,.05); width: fit-content; }
 .wsmon-ev-tick .wsmon-ev-tag             { color: var(--info); background: rgba(6,182,212,.12); }
+.wsmon-opt-tag { font-size: .68rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-right: 4px; }
+.wsmon-opt-tag:has(+.wsmon-ev-sym strong) { } /* PE=red, CE=green handled inline */
+.wsmon-idx-tag { font-size: .68rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-right: 4px; background: rgba(148,163,184,.12); color: var(--text-dim); }
 .wsmon-ev-connection_state .wsmon-ev-tag { color: var(--warn); background: rgba(245,158,11,.12); }
 .wsmon-ev-token_expired .wsmon-ev-tag    { color: var(--err);  background: rgba(239,68,68,.12); }
 .wsmon-ev-sym { font-weight: 700; }

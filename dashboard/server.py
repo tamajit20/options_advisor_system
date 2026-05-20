@@ -1079,8 +1079,15 @@ def create_app() -> Flask:
         if topic_f:
             events = [e for e in events if str(e.get("topic", "")).lower() == topic_f]
         if symbol_f:
-            events = [e for e in events
-                      if str(e.get("symbol", "")).upper() == symbol_f]
+            # Match against symbol alone OR the full "SYMBOL STRIKE OT" string
+            # e.g. "NIFTY 23400 PE" or "23400" or "PE" all match option leg ticks.
+            def _sym_match(e: dict) -> bool:
+                sym    = str(e.get("symbol", "")).upper()
+                strike = str(e.get("strike", "") or "").upper()
+                ot     = str(e.get("option_type", "") or "").upper()
+                full   = f"{sym} {strike} {ot}".strip()
+                return (symbol_f in full) or (symbol_f == sym)
+            events = [e for e in events if _sym_match(e)]
         # Most-recent first, capped.
         events = list(reversed(events))[:max(0, limit)]
         snap["recent_events"] = events

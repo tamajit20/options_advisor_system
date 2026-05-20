@@ -3370,8 +3370,14 @@ async function loadWsMonitor({ silent = false } = {}) {
       let detail = '';
       if (tag === 'tick') {
         const px = e.last_price != null ? Number(e.last_price).toFixed(2) : '—';
-        const strike = e.strike != null ? `${e.strike}${e.option_type || ''}` : '';
-        detail = `<span class="wsmon-ev-sym">${escapeHtml(e.symbol || '?')}</span> ${escapeHtml(strike)} <span class="wsmon-ev-px">@ ${px}</span>`;
+        const isOption = e.strike != null && e.option_type;
+        const instrLabel = isOption
+          ? `${e.symbol || '?'} <strong>${fmt(e.strike)} ${e.option_type}</strong>`
+          : (e.symbol || '?');
+        const typeTag = isOption
+          ? `<span class="wsmon-opt-tag">${e.option_type === 'PE' ? '🔴 PUT' : '🟢 CALL'}</span>`
+          : `<span class="wsmon-idx-tag">IDX</span>`;
+        detail = `${typeTag} <span class="wsmon-ev-sym">${instrLabel}</span> <span class="wsmon-ev-px">@ ${px}</span>`;
       } else if (tag === 'connection_state') {
         detail = `<span class="wsmon-ev-state ${_wsmonStateClass(e.state)}">${escapeHtml(e.state || '?')}</span>${e.detail ? ` <span class="muted">${escapeHtml(String(e.detail))}</span>` : ''}`;
       } else if (tag === 'token_expired') {
