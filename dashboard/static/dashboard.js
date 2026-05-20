@@ -120,61 +120,15 @@ if (document.readyState === 'loading') {
   setTimeout(_restoreActiveTab, 0);
 }
 
-// ---------------- Notifications ----------------
+// ---------------- Notifications (badge only — full panel is the Alerts tab) ----------------
 async function refreshNotifBadge() {
+  // Kept for compatibility with refreshGlobalBanners calls; actual badge is
+  // now on the sidebar Alerts tab nav item via _nfRefreshStats().
   try {
     const data = await API('/api/notifications?unread=1');
-    const n = data.notifications.length;
-    const c = $('#notif-count');
-    c.textContent = n;
-    c.hidden = n === 0;
-  } catch {}
+    return data.notifications || [];
+  } catch { return []; }
 }
-async function openNotifDrawer() {
-  const drawer = $('#notif-drawer');
-  drawer.hidden = false;
-  const data = await API('/api/notifications');
-  const list = $('#notif-list');
-  list.innerHTML = '';
-  if (!data.notifications.length) {
-    list.innerHTML = '<div class="empty">No notifications.</div>';
-    return;
-  }
-  for (const n of data.notifications) {
-    const div = document.createElement('div');
-    const sev = (n.severity || '').toUpperCase();
-    const sevClass = sev === 'CRITICAL' ? ' notif-critical'
-                    : sev === 'WARNING' ? ' notif-warning'
-                    : '';
-    div.className = 'notif' + (n.is_read ? '' : ' unread') + sevClass;
-    const sevTag = sev ? `<span class="notif-sev notif-sev-${sev.toLowerCase()}">${escapeHtml(sev)}</span> ` : '';
-    div.innerHTML = `
-      <h4>${sevTag}${escapeHtml(n.title)}</h4>
-      <p>${escapeHtml(n.body || '')}</p>
-      <p class="muted" style="font-size:.75rem">${escapeHtml(n.created_at || '')}</p>`;
-    div.addEventListener('click', async () => {
-      if (!n.is_read) {
-        await API(`/api/notifications/${n.id}/read`, {method:'POST'});
-        div.classList.remove('unread');
-        refreshNotifBadge();
-        refreshGlobalBanners();
-      }
-    });
-    list.appendChild(div);
-  }
-}
-$('#notif-btn').addEventListener('click', openNotifDrawer);
-$('#notif-close').addEventListener('click', () => {
-  $('#notif-drawer').hidden = true;
-  // Severity-banner counts may have changed if the user clicked into
-  // any unread notif inside the drawer.
-  refreshGlobalBanners();
-});
-$('#notif-mark-all').addEventListener('click', async () => {
-  await API('/api/notifications/read-all', {method:'POST'});
-  refreshNotifBadge(); openNotifDrawer();
-  refreshGlobalBanners();
-});
 
 // ---------------- Global banners (header strip) ----------------
 // System flags (kill switch / circuit breaker / trade execution) and unread
@@ -221,12 +175,9 @@ async function refreshGlobalBanners() {
   } catch {}
   host.innerHTML = banners.join('');
   bindFlagResetButtons();
-  bindOpenNotifBanner();
-}
-
-function bindOpenNotifBanner() {
-  const btn = document.getElementById('open-notif-from-banner');
-  if (btn) btn.addEventListener('click', () => openNotifDrawer());
+  // Wire the "Open" button in critical/warning banners to switch to the Alerts tab.
+  const openBtn = document.getElementById('open-notif-from-banner');
+  if (openBtn) openBtn.addEventListener('click', () => switchTab('notifications'));
 }
 
 // ---------------- Tab 1: Suggestion ----------------
@@ -3434,11 +3385,9 @@ function _debounce(fn, ms) {
 
 // ---------------- Boot ----------------
 loadSuggestion();
-refreshNotifBadge();
 refreshGlobalBanners();
-// Keep the bell badge AND the global banner strip live without a page
-// refresh: a new CRITICAL alert should appear in both within a minute.
-setInterval(() => { refreshNotifBadge(); refreshGlobalBanners(); }, 60000);
+// Keep global banner strip live — new CRITICAL alerts appear within a minute.
+setInterval(refreshGlobalBanners, 60000);
 
 // ---------------- Zerodha session card ----------------
 async function loadZerodhaStatus() {
