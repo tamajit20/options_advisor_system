@@ -1144,6 +1144,170 @@ function parseConditions(s) {
   return out;
 }
 
+/**
+ * Single source of truth for "where must the underlying be for max profit?"
+ * Used by both the Suggestion tab (Ideal scenario) and the Trade tab
+ * (Max profit if… bar). Logic mirrors engine/leg_builder.py breakevens()
+ * and max_profit_loss() — not inferred from leg action alone (which wrongly
+ * treated every short put as a bull-put credit spread).
+ *
+ * @returns {{ ideal: string, maxProfitText: string|null, spotTag: string|null }}
+ */
+function buildProfitScenario({
+  strategy,
+  legs = [],
+  underlying = 'NIFTY',
+  upperBE = null,
+  lowerBE = null,
+  dte = null,
+  spot = null,
+}) {
+  const ul = underlying || 'NIFTY';
+  const name = ul === 'NIFTY' ? 'Nifty' : ul;
+  const dteDesc = dte != null ? `with ${dte} DTE` : '';
+  const scLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE');
+  const spLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'PE');
+  const bcLeg = legs.find(l => l.action === 'BUY'  && l.option_type === 'CE');
+  const bpLeg = legs.find(l => l.action === 'BUY'  && l.option_type === 'PE');
+  const ub = upperBE != null && upperBE !== '' ? parseFloat(upperBE) : null;
+  const lb = lowerBE != null && lowerBE !== '' ? parseFloat(lowerBE) : null;
+
+  const spotTag = (inside, labelOk, labelBad) => {
+    if (spot == null || isNaN(spot)) return null;
+    const cls = inside ? 'pz-inside' : 'pz-outside';
+    return `<span class="pz-spot ${cls}">Spot \u20b9${fmt(spot)} ${inside ? labelOk : labelBad}</span>`;
+  };
+
+  switch (strategy) {
+    case 'IRON_CONDOR': {
+      if (!spLeg || !scLeg) return { ideal: '', maxProfitText: null, spotTag: null };
+      const lo = parseFloat(spLeg.strike);
+      const hi = parseFloat(scLeg.strike);
+      const inside = spot != null && spot >= lo && spot <= hi;
+      return {
+        ideal: `${name} drifts sideways ${dteDesc} between \u20b9${fmt(lo)} and \u20b9${fmt(hi)} (full credit zone).`,
+        maxProfitText: `stays between <strong>\u20b9${fmt(lo)}</strong> and <strong>\u20b9${fmt(hi)}</strong>`,
+        spotTag: spotTag(inside, '\u2713 inside zone', '\u26a0 outside zone'),
+      };
+    }
+    case 'IRON_BUTTERFLY': {
+      const atm = scLeg ? parseFloat(scLeg.strike) : (spLeg ? parseFloat(spLeg.strike) : null);
+      if (atm == null) return { ideal: '', maxProfitText: null, spotTag: null };
+      const lo = lb != null ? lb : atm - (ub != null && lb != null ? (ub - lb) / 2 : 0);
+      const hi = ub != null ? ub : atm;
+      const inside = spot != null && lb != null && ub != null
+        ? spot >= lb && spot <= ub
+        : spot != null && Math.abs(spot - atm) / atm < 0.005;
+      return {
+        ideal: `${name} closes at or near \u20b9${fmt(atm)} ${dteDesc} on expiry.`,
+        maxProfitText: `pins near <strong>\u20b9${fmt(atm)}</strong>`,
+        spotTag: spotTag(inside, '\u2713 near body', '\u26a0 away from body'),
+      };
+    }
+    case 'BULL_PUT_SPREAD': {
+      if (!spLeg) return { ideal: '', maxProfitText: null, spotTag: null };
+      const k = parseFloat(spLeg.strike);
+      const inside = spot != null && spot >= k;
+      return {
+        ideal: `${name} rises or stays comfortably above \u20b9${fmt(k)} ${dteDesc}.`,
+        maxProfitText: `stays at or above <strong>\u20b9${fmt(k)}</strong>`,
+        spotTag: spotTag(inside, '\u2713 above short put', '\u26a0 below short put'),
+      };
+    }
+    case 'BEAR_CALL_SPREAD': {
+      if (!scLeg) return { ideal: '', maxProfitText: null, spotTag: null };
+      const k = parseFloat(scLeg.strike);
+      const inside = spot != null && spot <= k;
+      return {
+        ideal: `${name} falls or remains flat, staying below \u20b9${fmt(k)} ${dteDesc}.`,
+        maxProfitText: `stays at or below <strong>\u20b9${fmt(k)}</strong>`,
+        spotTag: spotTag(inside, '\u2713 below short call', '\u26a0 above short call'),
+      };
+    }
+    case 'JADE_LIZARD': {
+      if (!spLeg) return { ideal: '', maxProfitText: null, spotTag: null };
+      const k = parseFloat(spLeg.strike);
+      const inside = spot != null && spot >= k;
+      return {
+        ideal: `${name} stays flat or rallies steadily through expiry ${dteDesc}.`,
+        maxProfitText: `stays at or above <strong>\u20b9${fmt(k)}</strong>`,
+        spotTag: spotTag(inside, '\u2713 above short put', '\u26a0 below short put'),
+      };
+    }
+    case 'BULL_CALL_SPREAD': {
+      if (!scLeg) return { ideal: '', maxProfitText: null, spotTag: null };
+      const k = parseFloat(scLeg.strike);
+      const inside = spot != null && spot >= k;
+      return {
+        ideal: `${name} climbs steadily to or above \u20b9${fmt(k)} ${dteDesc}.`,
+        maxProfitText: `rises to or above <strong>\u20b9${fmt(k)}</strong>`,
+        spotTag: spotTag(inside, '\u2713 at/above short call', '\u26a0 below short call'),
+      };
+    }
+    case 'BEAR_PUT_SPREAD': {
+      if (!spLeg) return { ideal: '', maxProfitText: null, spotTag: null };
+      const k = parseFloat(spLeg.strike);
+      const inside = spot != null && spot <= k;
+      return {
+        ideal: `${name} drifts or falls to or below \u20b9${fmt(k)} ${dteDesc}.`,
+        maxProfitText: `falls to or below <strong>\u20b9${fmt(k)}</strong>`,
+        spotTag: spotTag(inside, '\u2713 at/below short put', '\u26a0 above short put'),
+      };
+    }
+    case 'LONG_STRADDLE': {
+      const hi = ub;
+      const lo = lb;
+      if (hi == null || lo == null) return { ideal: '', maxProfitText: null, spotTag: null };
+      const outside = spot != null && (spot >= hi || spot <= lo);
+      return {
+        ideal: `A surprise event triggers a large ${name} move in either direction before expiry ${dteDesc}.`,
+        maxProfitText: `breaks above <strong>\u20b9${fmt(hi)}</strong> or below <strong>\u20b9${fmt(lo)}</strong>`,
+        spotTag: spotTag(outside, '\u2713 outside BEs', '\u26a0 inside BEs (losing)'),
+      };
+    }
+    case 'LONG_STRANGLE': {
+      const hi = ub;
+      const lo = lb;
+      if (hi == null || lo == null) return { ideal: '', maxProfitText: null, spotTag: null };
+      const outside = spot != null && (spot >= hi || spot <= lo);
+      return {
+        ideal: `A large gap-and-go move in either direction shortly after entry ${dteDesc}.`,
+        maxProfitText: `breaks above <strong>\u20b9${fmt(hi)}</strong> or below <strong>\u20b9${fmt(lo)}</strong>`,
+        spotTag: spotTag(outside, '\u2713 outside BEs', '\u26a0 inside BEs (losing)'),
+      };
+    }
+    case 'LONG_CALL': {
+      const be = ub != null ? ub : (bcLeg ? parseFloat(bcLeg.strike) : null);
+      if (be == null) return { ideal: '', maxProfitText: null, spotTag: null };
+      const inside = spot != null && spot >= be;
+      return {
+        ideal: `${name} surges upward quickly, well above the call strike ${dteDesc}.`,
+        maxProfitText: `rises above <strong>\u20b9${fmt(be)}</strong>`,
+        spotTag: spotTag(inside, '\u2713 above breakeven', '\u26a0 below breakeven'),
+      };
+    }
+    case 'LONG_PUT': {
+      const be = lb != null ? lb : (bpLeg ? parseFloat(bpLeg.strike) : null);
+      if (be == null) return { ideal: '', maxProfitText: null, spotTag: null };
+      const inside = spot != null && spot <= be;
+      return {
+        ideal: `${name} breaks down sharply before expiry ${dteDesc}.`,
+        maxProfitText: `falls below <strong>\u20b9${fmt(be)}</strong>`,
+        spotTag: spotTag(inside, '\u2713 below breakeven', '\u26a0 above breakeven'),
+      };
+    }
+    default:
+      return { ideal: '', maxProfitText: null, spotTag: null };
+  }
+}
+
+/** Wrap buildProfitScenario output as the trade-card profit-zone bar. */
+function renderProfitZoneBar(scenario, underlying, beHtml = '') {
+  if (!scenario || !scenario.maxProfitText) return '';
+  const tag = scenario.spotTag || '';
+  return `<div class="profit-zone-bar">\u{1F3AF} Max profit if ${escapeHtml(underlying)} ${scenario.maxProfitText}${tag ? ' &nbsp;\u00b7&nbsp; ' + tag : ''}${beHtml}</div>`;
+}
+
 function renderStrategyRationale(s) {
   const legs  = s.legs || [];
   const scLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE');
@@ -1200,62 +1364,67 @@ function renderStrategyRationale(s) {
     IRON_CONDOR: {
       why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Nifty's trend is ${trendDesc} with no clear directional bias${pcrDesc ? `, and ${pcrDesc}` : ''}. A range-bound strategy collects premium from both sides without needing to pick a direction.`,
       better: `Nifty stays inside the profit zone — above ₹${fmt(lb)}${dLB ? ` (${dLB}% below spot)` : ''} and below ₹${fmt(ub)}${dUB ? ` (${dUB}% above spot)` : ''}${pop ? ` — a ${pop}% probability` : ''}. Theta earns you money every day the index stays still. ${vixDesc} favours time decay.`,
-      ideal:  `Nifty drifts sideways ${dteDesc} and expires anywhere inside the zone.`,
     },
     IRON_BUTTERFLY: {
       why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Nifty is ${trendDesc}, and a Butterfly concentrates both short strikes at the ATM level (₹${fmt(scLeg?.strike || spLeg?.strike)}) to collect maximum credit. Higher premium than an Iron Condor, but a narrower profit zone.`,
       better: `Nifty pins close to ₹${fmt(scLeg?.strike || spLeg?.strike)} through expiry. IV crush after any event also accelerates profit. ${vixDesc}. Max credit is captured on expiry-at-the-strike.`,
-      ideal:  `Nifty closes exactly at the ATM strike ${dteDesc} on expiry.`,
     },
     BULL_PUT_SPREAD: {
       why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Nifty's trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. Selling a put spread collects credit with downside risk capped at the spread width — you only lose if Nifty falls hard below ₹${fmt(spLeg?.strike)}.`,
       better: `Nifty rises or stays flat above ₹${fmt(spLeg?.strike)} (the short put). Even a mild pullback is fine as long as it holds above ₹${fmt(lb)}. ${vixDesc}. A rally above spot earns full credit${pop ? ` (${pop}% PoP)` : ''}.`,
-      ideal:  `Nifty rises or stays comfortably above ₹${fmt(spLeg?.strike)} ${dteDesc}.`,
     },
     BEAR_CALL_SPREAD: {
       why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Nifty's trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. Selling a call spread collects credit with upside risk capped — you only lose if Nifty rallies hard above ₹${fmt(scLeg?.strike)}.`,
       better: `Nifty falls or stays flat below ₹${fmt(scLeg?.strike)} (the short call). Even a small bounce is fine as long as it stays under ₹${fmt(ub)}. ${vixDesc}. A continued decline earns full credit${pop ? ` (${pop}% PoP)` : ''}.`,
-      ideal:  `Nifty falls or remains flat, staying below ₹${fmt(scLeg?.strike)} ${dteDesc}.`,
     },
     JADE_LIZARD: {
       why:    `IV Rank is ${ivDesc} — ${ivPremDesc}${pcrDesc ? `. ${pcrDesc.charAt(0).toUpperCase() + pcrDesc.slice(1)}` : ''}. A Jade Lizard (short OTM call spread + short OTM put) generates premium with zero upside risk — the call spread credit exactly offsets the short put's upside exposure.`,
       better: `Nifty rises or stays sideways. No loss on the upside${pop ? ` (${pop}% PoP)` : ''}. Downside risk only appears below ₹${fmt(spLeg?.strike)} minus net credit. ${vixDesc}.`,
-      ideal:  `Nifty stays flat or rallies steadily through expiry.`,
     },
     LONG_STRADDLE: {
       why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Buying both ATM CE and PE ${dteDesc} at low cost lets you profit from any large directional move, regardless of which way Nifty goes.`,
       better: `A sharp breakout above ₹${fmt(ub)} or breakdown below ₹${fmt(lb)}. ${vixDesc}. Every day Nifty stays flat, the ₹${fmt(debit)}/unit debit decays — the move should come soon.`,
-      ideal:  `A surprise event triggers a large Nifty move in either direction before expiry.`,
     },
     LONG_STRANGLE: {
       why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Buying OTM CE (₹${fmt(bcLeg?.strike)}) and OTM PE (₹${fmt(bpLeg?.strike)}) costs less than a Straddle but needs a bigger move to profit.`,
       better: `Nifty breaks sharply above ₹${fmt(ub)} or below ₹${fmt(lb)}. ${vixDesc}. Every day without a move, time decay chips away at the ₹${fmt(debit)}/unit paid.`,
-      ideal:  `A large gap-and-go move in either direction shortly after entry.`,
     },
     LONG_CALL: {
       why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. A Long Call gives unlimited upside for a defined ₹${fmt(debit)}/unit debit${dte ? ` with ${dte} DTE` : ''}. High leverage, low capital at risk.`,
       better: `Nifty rallies strongly above ₹${fmt(bcLeg?.strike)}. Delta and gamma accelerate profits as Nifty moves higher. ${vixDesc}. Act early — time decay accelerates toward expiry.`,
-      ideal:  `Nifty surges upward quickly, well above the call strike.`,
     },
     LONG_PUT: {
       why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. A Long Put profits from a decline while limiting max loss to ₹${fmt(debit)}/unit${dte ? ` with ${dte} DTE` : ''}.`,
       better: `Nifty falls sharply below ₹${fmt(bpLeg?.strike)}. ${vixDesc}. Avoid holding too close to expiry if the move hasn't materialised — theta decay accelerates.`,
-      ideal:  `Nifty breaks down sharply before expiry.`,
     },
     BULL_CALL_SPREAD: {
       why:    `IV Rank is ${ivDesc} — not cheap enough for naked long calls, yet not rich enough for pure credit writing. Trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. A Bull Call Spread caps the debit while allowing upside to ₹${fmt(scLeg?.strike)}.`,
       better: `Nifty rises above ₹${fmt(scLeg?.strike)} by expiry — the full spread width is earned. ${vixDesc}. A flat or falling Nifty loses the debit paid.`,
-      ideal:  `Nifty climbs steadily to or above ₹${fmt(scLeg?.strike)} ${dteDesc}.`,
     },
     BEAR_PUT_SPREAD: {
       why:    `IV Rank is ${ivDesc} — debit spreads work better than naked longs or pure credit writing here. Trend is ${trendDesc}${pcrDesc ? ` and ${pcrDesc}` : ''}. A Bear Put Spread profits from a decline to ₹${fmt(spLeg?.strike)} while capping the debit.`,
       better: `Nifty falls below ₹${fmt(spLeg?.strike)} by expiry — full spread width is earned. ${vixDesc}. A flat or rising Nifty loses the debit paid.`,
-      ideal:  `Nifty drifts or falls to or below ₹${fmt(spLeg?.strike)} ${dteDesc}.`,
     },
   };
 
   const info = lookup[s.strategy];
   if (!info) return '';
+
+  const profit = buildProfitScenario({
+    strategy: s.strategy,
+    legs,
+    underlying: s.underlying,
+    upperBE: s.upper_breakeven,
+    lowerBE: s.lower_breakeven,
+    dte: dte,
+    spot,
+  });
+  const idealHtml = profit.ideal
+    ? `<div class="sr-row sr-ideal">
+      <span class="sr-label">Ideal scenario</span>
+      <span class="sr-text">${profit.ideal}</span>
+    </div>`
+    : '';
 
   return `<div class="strategy-rationale">
     <div class="sr-row">
@@ -1266,10 +1435,7 @@ function renderStrategyRationale(s) {
       <span class="sr-label">What makes it better</span>
       <span class="sr-text">${info.better}</span>
     </div>
-    <div class="sr-row sr-ideal">
-      <span class="sr-label">Ideal scenario</span>
-      <span class="sr-text">${info.ideal}</span>
-    </div>
+    ${idealHtml}
   </div>`;
 }
 
@@ -2438,17 +2604,29 @@ function renderTrade(t) {
       })()}
     </div>
     ${(() => {
+      const strat = (t.suggestion && t.suggestion.strategy) || '';
       const shortCallLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE');
       const shortPutLeg  = legs.find(l => l.action === 'SELL' && l.option_type === 'PE');
+      const longCallLeg  = legs.find(l => l.action === 'BUY'  && l.option_type === 'CE');
+      const longPutLeg   = legs.find(l => l.action === 'BUY'  && l.option_type === 'PE');
       const ul = (t.suggestion && t.suggestion.underlying) || '';
       const spot = t.spot_at_execution != null ? parseFloat(t.spot_at_execution) : null;
-      // Compute actual net credit per unit from fill prices
+      // Compute actual net credit per unit from fill prices (negative = net debit paid)
       const execLegs = legs.filter(l => l.executed && l.fill_price != null);
       let actualNetCredit = 0;
       execLegs.forEach(l => { actualNetCredit += (l.action === 'SELL' ? 1 : -1) * parseFloat(l.fill_price || 0); });
-      // Compute real BEs from fills
-      const realUpperBE = shortCallLeg ? parseFloat(shortCallLeg.strike) + actualNetCredit : null;
-      const realLowerBE = shortPutLeg  ? parseFloat(shortPutLeg.strike)  - actualNetCredit : null;
+      // Compute real BEs from fills — credit spreads use short strike ± credit;
+      // debit spreads use long strike + net credit (credit is negative when debit).
+      let realUpperBE = null;
+      let realLowerBE = null;
+      if (strat === 'BULL_CALL_SPREAD' && longCallLeg) {
+        realLowerBE = parseFloat(longCallLeg.strike) + actualNetCredit;
+      } else if (strat === 'BEAR_PUT_SPREAD' && longPutLeg) {
+        realLowerBE = parseFloat(longPutLeg.strike) + actualNetCredit;
+      } else {
+        if (shortCallLeg) realUpperBE = parseFloat(shortCallLeg.strike) + actualNetCredit;
+        if (shortPutLeg)  realLowerBE = parseFloat(shortPutLeg.strike)  - actualNetCredit;
+      }
       const beHtml = (realUpperBE != null || realLowerBE != null) ? (() => {
         const parts = [];
         if (realLowerBE != null) parts.push(`Lower BE <strong>\u20b9${fmt(realLowerBE)}</strong>`);
@@ -2461,25 +2639,17 @@ function renderTrade(t) {
           : '';
         return `<div class="pz-be-row">\u{1F4CF} Actual BEs (from fills): ${parts.join(' \u00b7 ')}${beStatus ? ' &nbsp;\u00b7&nbsp; ' + beStatus : ''}</div>`;
       })() : '';
-      if (shortCallLeg && shortPutLeg) {
-        const pzLow  = parseFloat(shortPutLeg.strike);
-        const pzHigh = parseFloat(shortCallLeg.strike);
-        const inside = spot != null && spot >= pzLow && spot <= pzHigh;
-        const spotTag = spot != null
-          ? `<span class="pz-spot ${inside ? 'pz-inside' : 'pz-outside'}">Spot at entry \u20b9${fmt(spot)} ${inside ? '\u2713 inside zone' : '\u26a0 outside zone'}</span>` : '';
-        return `<div class="profit-zone-bar">\u{1F3AF} Max profit if ${escapeHtml(ul)} stays <strong>\u20b9${fmt(pzLow)} \u2013 \u20b9${fmt(pzHigh)}</strong>${spotTag ? ' &nbsp;\u00b7&nbsp; ' + spotTag : ''}${beHtml}</div>`;
-      } else if (shortCallLeg) {
-        const pzHigh = parseFloat(shortCallLeg.strike);
-        const inside = spot != null && spot <= pzHigh;
-        const spotTag = spot != null ? `<span class="pz-spot ${inside ? 'pz-inside' : 'pz-outside'}">Spot \u20b9${fmt(spot)} ${inside ? '\u2713 below strike' : '\u26a0 above strike'}</span>` : '';
-        return `<div class="profit-zone-bar">\u{1F3AF} Max profit if ${escapeHtml(ul)} stays below <strong>\u20b9${fmt(pzHigh)}</strong>${spotTag ? ' &nbsp;\u00b7&nbsp; ' + spotTag : ''}${beHtml}</div>`;
-      } else if (shortPutLeg) {
-        const pzLow = parseFloat(shortPutLeg.strike);
-        const inside = spot != null && spot >= pzLow;
-        const spotTag = spot != null ? `<span class="pz-spot ${inside ? 'pz-inside' : 'pz-outside'}">Spot \u20b9${fmt(spot)} ${inside ? '\u2713 above strike' : '\u26a0 below strike'}</span>` : '';
-        return `<div class="profit-zone-bar">\u{1F3AF} Max profit if ${escapeHtml(ul)} stays above <strong>\u20b9${fmt(pzLow)}</strong>${spotTag ? ' &nbsp;\u00b7&nbsp; ' + spotTag : ''}${beHtml}</div>`;
-      }
-      return '';
+      const sug = t.suggestion || {};
+      const profit = buildProfitScenario({
+        strategy: strat,
+        legs,
+        underlying: ul,
+        upperBE: sug.upper_breakeven != null ? sug.upper_breakeven : realUpperBE,
+        lowerBE: sug.lower_breakeven != null ? sug.lower_breakeven : realLowerBE,
+        dte: sug.dte,
+        spot,
+      });
+      return renderProfitZoneBar(profit, ul, beHtml);
     })()}
     <div class="sl-monitor-section">
       <div class="sl-monitor-label">Stop-loss monitor</div>
