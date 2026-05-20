@@ -3302,7 +3302,16 @@ async function loadWsMonitor({ silent = false } = {}) {
   if (summary) {
     summary.classList.remove('loading');
     const stateClass = _wsmonStateClass(snap.connection_state);
-    const runnerState = snap.runner_state || snap.connection_state || 'unknown';
+    // Outside NSE market hours (09:15–15:30 IST Mon–Fri) show "off-market"
+    // instead of "connected" — the WS stays up but no ticks flow, so showing
+    // "connected" alongside "stale" is confusing.
+    const _nowIst = new Date(new Date().toLocaleString('en-US', {timeZone:'Asia/Kolkata'}));
+    const _dow = _nowIst.getDay(); // 0=Sun,6=Sat
+    const _hhmm = _nowIst.getHours() * 100 + _nowIst.getMinutes();
+    const _inMarket = _dow >= 1 && _dow <= 5 && _hhmm >= 915 && _hhmm <= 1530;
+    const _rawRunner = snap.runner_state || snap.connection_state || 'unknown';
+    const runnerState = (!_inMarket && _rawRunner === 'connected') ? 'off-market' : _rawRunner;
+    const runnerStateClass = runnerState === 'off-market' ? 'wsmon-state-warn' : stateClass;
     const topSyms = (snap.top_symbols || []).slice(0, 8)
       .map(t => `<span class="wsmon-pill">${escapeHtml(t.symbol)}<small>${t.ticks}</small></span>`)
       .join('');
@@ -3314,7 +3323,7 @@ async function loadWsMonitor({ silent = false } = {}) {
         </div>
         <div class="wsmon-card">
           <div class="wsmon-card-label">Runner state</div>
-          <div class="wsmon-card-value ${stateClass}">${escapeHtml(runnerState)}</div>
+          <div class="wsmon-card-value ${runnerStateClass}">${escapeHtml(runnerState)}</div>
         </div>
         <div class="wsmon-card">
           <div class="wsmon-card-label">Connection state</div>
@@ -3344,7 +3353,7 @@ async function loadWsMonitor({ silent = false } = {}) {
       ${snap.last_error ? `<div class="wsmon-error">Last error: <code>${escapeHtml(snap.last_error)}</code></div>` : ''}
       ${topSyms ? `<div class="wsmon-tops"><span class="muted">Top symbols:</span> ${topSyms}</div>` : ''}
       <div class="muted" style="font-size:.74rem;margin-top:.4rem;">
-        Snapshot @ ${escapeHtml(snap.generated_at || '')} &middot; uptime ${Math.round(snap.uptime_seconds || 0)}s
+        Snapshot @ ${escapeHtml(_fmtIst(snap.generated_at))} &middot; uptime ${Math.round(snap.uptime_seconds || 0)}s
       </div>
     `;
   }
