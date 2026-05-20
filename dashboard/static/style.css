@@ -1327,3 +1327,68 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   .wsmon-ev { grid-template-columns: 1fr; gap: 2px; }
 }
 
+/* ========================================================================
+   Compact layout — tighter spacing so one suggestion / trade fits on screen
+   without scrolling. Overrides the defaults above; does not change colours,
+   fonts, or any visual style — only padding / margin / gap.
+   ======================================================================== */
+
+/* Shell: less wasted space around the panel area */
+.tab-panels { padding: 10px 12px; }
+.panel-title { margin: 0 0 6px; }
+
+/* Card shell */
+.card { padding: 11px 13px; margin-bottom: 8px; }
+.card-head { margin-bottom: 5px; gap: 6px; }
+.card h3   { margin: 0 0 2px; }
+.card-id-row { margin-bottom: 6px; gap: 4px; }
+
+/* Strategy rationale strip */
+.strategy-rationale { padding: 6px 10px; margin-bottom: 6px; gap: 3px; }
+.sr-row             { font-size: .8rem; }
+
+/* Context chips row */
+.sug-context { gap: 4px; margin: 2px 0 8px; }
+
+/* Suggestion / exit-plan sections */
+.sug-section       { margin: 0 0 7px; }
+.sug-section-title { margin-bottom: 3px; padding-bottom: 2px; }
+.sug-intro         { margin: 2px 0 5px; }
+
+/* Timeline rows */
+.tl-row { padding: 1px 0; font-size: .8rem; gap: 6px; }
+
+/* Key-value economics grid */
+.kv-grid { gap: 5px 12px; margin-top: 5px; font-size: .86rem; }
+
+/* Suggestion legs */
+.legs-grid { gap: 6px; margin-top: 6px; }
+.leg-row   { padding: 7px 8px; gap: 7px; }
+.leg-hints { margin-top: 2px; gap: 4px; }
+
+/* Trade leg breakdown */
+.trade-legs-section { margin: 6px 0 2px; gap: 4px; }
+.trade-legs-grid    { gap: 4px; }
+.trade-leg-row      { padding: 6px 8px; gap: 6px; }
+
+/* Credit breakdown box */
+.credit-breakdown { padding: 7px 10px; margin-top: 4px; }
+
+/* Profit zone bar */
+.profit-zone-bar { padding: 5px 10px; margin: 4px 0; gap: 4px; line-height: 1.4; }
+
+/* SL monitor section */
+.sl-monitor-section { padding: 7px 10px; margin: 6px 0 3px; }
+.sl-monitor-label   { margin-bottom: 5px; }
+.sl-monitor-footer  { margin-top: 5px; }
+.sl-action-note     { margin-top: 6px; padding: 4px 8px; }
+
+/* Action / execute button row */
+.btn-row { gap: 6px; }
+.btn     { padding: 7px 14px; min-height: 36px; }
+
+/* Reduce bottom padding on mobile so the bottom nav doesn't eat as much */
+@media (max-width: 1024px) {
+  .app-main { padding-bottom: 60px; }
+}
+
