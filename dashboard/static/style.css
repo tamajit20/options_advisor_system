@@ -678,7 +678,7 @@ input:focus, select:focus, textarea:focus {
 .win-bar-high { background:rgba(34,197,94,.7); }
 .win-bar-mid  { background:rgba(245,158,11,.7); }
 .win-bar-low  { background:rgba(239,68,68,.6); }
-.perf-stats-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+.perf-stats-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(72px,1fr)); gap:8px; }
 .perf-stat { display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,.03); border-radius:6px; padding:6px 4px; }
 .perf-stat-val { font-size:.9rem; font-weight:700; }
 .perf-stat-lbl { font-size:.65rem; color:var(--text-dim); margin-top:2px; text-align:center; }
