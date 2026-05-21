@@ -608,20 +608,28 @@ class LiveRiskMonitor:
 
     @staticmethod
     def _spot_breached(state: _TradeState, spot: float) -> bool:
-        if state.sl_level is None:
-            return False
-        # Direction inferred from short-leg distribution.
-        short_calls = sum(1 for l in state.legs
-                          if l.action == "SELL" and l.option_type == "CE")
-        short_puts = sum(1 for l in state.legs
-                         if l.action == "SELL" and l.option_type == "PE")
-        if short_calls > short_puts:
-            return spot >= state.sl_level
-        if short_puts > short_calls:
-            return spot <= state.sl_level
-        # Symmetric strategies (e.g. iron condor) need a 2-sided SL band;
-        # without that we conservatively skip spot-based SL.
-        return False
+        from contracts import SuggestionLeg
+        from engine.stop_loss_levels import spot_stop_breached
+
+        sug_legs = [
+            SuggestionLeg(
+                leg_order=i + 1, hedge_pair_leg=None, symbol=state.underlying,
+                expiry_date=state.expiry, strike=l.strike, option_type=l.option_type,
+                action=l.action, lots=l.lots, lot_size=l.lot_size,
+                suggested_price=l.fill_price, suggested_price_low=l.fill_price,
+                suggested_price_high=l.fill_price, leg_purpose_note="",
+            )
+            for i, l in enumerate(state.legs)
+        ]
+        qty = sum(l.lots * l.lot_size for l in state.legs) or 1
+        np_ps = state.entry_net_credit / qty if qty else 0.0
+        return spot_stop_breached(
+            strategy=state.strategy or "",
+            spot=spot,
+            legs=sug_legs,
+            stored_sl_level=state.sl_level,
+            net_premium_per_share=np_ps,
+        )
 
     def _evaluate_locked(
         self, state: _TradeState, now: datetime,
@@ -727,6 +735,12 @@ class LiveRiskMonitor:
                 "max_loss": state.max_loss,
                 "trailing_pnl_floor": state.trailing_pnl_floor,
                 "as_of": now.isoformat(timespec="seconds"),
+                # Per-leg live prices keyed by "symbol|strike|option_type"
+                # for the frontend to update close-form prefills without polling.
+                "leg_ltps": {
+                    f"{k[0]}|{k[1]}|{k[2]}": round(v, 2)
+                    for k, v in state.leg_ltps.items()
+                },
             }
 
         # 1. Hard SL on premium (engine decision OR trailing floor breach).

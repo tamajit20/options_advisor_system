@@ -2129,6 +2129,8 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       const lotSize = l.lot_size || 1;
       const sx = suggMap[l.leg_order];
       const psrc = priceSrcMap[l.leg_order];
+      // Key used by SSE handler to match live LTP to this input
+      const legKey = `${l.symbol}|${l.strike}|${l.option_type}`;
       const prefill = (l.exit_price != null) ? l.exit_price
                     : (sx != null && sx >= 0 ? sx : '');
       let hint = '';
@@ -2158,6 +2160,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
           <div class="leg-exit-input">
             <span class="muted" style="font-size:.8rem">${escapeHtml(closeAction)} @ \u20b9</span>
             <input type="number" step="0.05" class="close-price" data-leg="${l.leg_order}"
+                   data-leg-key="${escapeHtml(legKey)}"
                    value="${prefill}" placeholder="0.00">
             ${hint}
           </div>
@@ -3025,28 +3028,47 @@ function escapeHtml(s) {
 
 // ---------------- Phase 3 #3: Live MTM SSE consumer ----------------
 let _liveMTMSource = null;
+
+function _applyMtmEvent(m) {
+  // 1. Update MTM badge on trade card
+  document.querySelectorAll(`.live-mtm[data-trade-id="${m.trade_id}"]`).forEach(el => {
+    el.textContent = '\u20b9' + Number(m.mtm).toLocaleString('en-IN', {maximumFractionDigits: 0});
+    el.classList.toggle('mtm-pos', m.mtm > 0);
+    el.classList.toggle('mtm-neg', m.mtm < 0);
+    if (m.as_of) el.title = 'Live P\u0026L as of ' + m.as_of + ' IST';
+  });
+
+  // 2. Update close-form price inputs with latest leg LTPs (only if not focused)
+  // Inputs carry data-leg-key="symbol|strike|option_type"
+  if (m.leg_ltps && typeof m.leg_ltps === 'object') {
+    const closePanel = document.getElementById(`close-${m.trade_id}`);
+    if (closePanel && !closePanel.hidden) {
+      closePanel.querySelectorAll('.close-price[data-leg-key]').forEach(inp => {
+        if (document.activeElement === inp) return; // user is typing — don't overwrite
+        const ltp = m.leg_ltps[inp.dataset.legKey];
+        if (ltp != null) {
+          inp.value = ltp;
+          // Trigger recalc of live P&L preview inside the close form
+          inp.dispatchEvent(new Event('input', { bubbles: true }));
+          // Flash the input briefly so user sees a live update
+          inp.classList.add('ltp-flash');
+          setTimeout(() => inp.classList.remove('ltp-flash'), 600);
+        }
+      });
+    }
+  }
+}
+
 function ensureLiveMTMStream() {
   if (_liveMTMSource && _liveMTMSource.readyState !== 2 /* CLOSED */) return;
   try {
     _liveMTMSource = new EventSource('/api/live/mtm');
     _liveMTMSource.onmessage = (ev) => {
-      try {
-        const m = JSON.parse(ev.data);
-        document.querySelectorAll(
-          `.live-mtm[data-trade-id="${m.trade_id}"]`
-        ).forEach(el => {
-          el.textContent = '\u20b9' + Number(m.mtm).toLocaleString('en-IN');
-          el.classList.toggle('mtm-pos', m.mtm > 0);
-          el.classList.toggle('mtm-neg', m.mtm < 0);
-          if (m.as_of) el.title = 'as of ' + m.as_of;
-        });
-      } catch (_) { /* malformed event — ignore */ }
+      try { _applyMtmEvent(JSON.parse(ev.data)); } catch (_) { /* ignore */ }
     };
     _liveMTMSource.onerror = () => {
       // Browser auto-reconnects; just clear stale ref so next render reopens.
-      if (_liveMTMSource && _liveMTMSource.readyState === 2) {
-        _liveMTMSource = null;
-      }
+      if (_liveMTMSource && _liveMTMSource.readyState === 2) _liveMTMSource = null;
     };
   } catch (_) { /* SSE unsupported — silently degrade */ }
 }
