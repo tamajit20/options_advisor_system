@@ -1564,7 +1564,10 @@ function renderSuggestion(s, readOnly = false, allSuggestions = []) {
   const innerHtml = `
     <div class="card-head">
       <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
-      <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
+        ${_qualityBadge(s.edge_score, s.confidence_score, s.probability_of_profit)}
+      </div>
     </div>
     <div class="card-id-row">
       <span class="id-chip" title="Suggestion ID">${escapeHtml(s.suggestion_id || '—')}</span>
@@ -2522,6 +2525,10 @@ function renderTrade(t) {
     </div>`;
   }
 
+  const _sug = t.suggestion || {};
+  const _entryQualBadge = _qualityBadge(
+    _sug.edge_score, _sug.confidence_score, _sug.probability_of_profit, 'Entry quality: '
+  );
   return `<div class="card">
     <div class="card-head">
       <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
@@ -2550,6 +2557,7 @@ function renderTrade(t) {
         <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
         <span class="tag live-mtm" data-trade-id="${escapeHtml(t.trade_id)}" title="Live MTM (updates from broker WS)">\u2014</span>
+        ${_entryQualBadge}
       </div>
     </div>
     <div class="card-id-row">
@@ -3150,6 +3158,34 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
+}
+
+// ---------------- Suggestion Quality Score ----------------
+function _qualityScore(edge, conf, pop) {
+  // edge: 0-100, conf: 0-14 gates passed, pop: 0-100 probability
+  if (edge == null && conf == null && pop == null) return null;
+  const e = parseFloat(edge) || 0;
+  const c = conf != null ? Math.min(parseFloat(conf) / 14 * 100, 100) : 50; // 50 = neutral if missing
+  const p = parseFloat(pop) || 0;
+  const score = Math.round(e * 0.50 + c * 0.30 + p * 0.20);
+  const cls = score >= 80 ? 'qs-excellent'
+            : score >= 65 ? 'qs-good'
+            : score >= 50 ? 'qs-fair'
+            : score >= 35 ? 'qs-weak'
+            :               'qs-poor';
+  const label = score >= 80 ? 'Excellent'
+              : score >= 65 ? 'Good'
+              : score >= 50 ? 'Fair'
+              : score >= 35 ? 'Weak'
+              :               'Poor';
+  const tip = `Quality score ${score}/100\nEdge score: ${e.toFixed(0)} ×50%\nConfidence gates: ${conf != null ? conf : '?'}/14 ×30%\nPoP: ${p.toFixed(0)}% ×20%`;
+  return { score, cls, label, tip };
+}
+
+function _qualityBadge(edge, conf, pop, prefix = '') {
+  const q = _qualityScore(edge, conf, pop);
+  if (!q) return '';
+  return `<span class="quality-score ${q.cls}" title="${escapeHtml(q.tip)}">${prefix}${q.score}<span class="qs-label">${q.label}</span></span>`;
 }
 
 // ---------------- Phase 3 #3: Live MTM SSE consumer ----------------
