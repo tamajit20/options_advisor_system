@@ -2175,15 +2175,20 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
         </div>
         ${execOrderBanner(data.legs, closeStrategy, 'close')}
         <div class="leg-exit-grid">${legsHtml}</div>
-        
-        <div class="live-pnl-preview" id="live-pnl-${escapeHtml(tradeId)}">
-          <div>Gross P&amp;L: <strong class="live-pnl-gross">—</strong></div>
-          <div class="muted" style="font-size:.85rem">Est. charges (entry+exit): <strong class="live-pnl-charges">—</strong></div>
-          <div>Net P&amp;L: <strong class="live-pnl-value">—</strong><span class="live-pnl-pct muted"></span></div>
-        </div>
-        <div class="btn-row" style="margin-top:8px">
-          <button class="btn btn-close-trade btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm close &amp; record fills</button>
-          <button class="btn btn-ghost btn-close-cancel">Cancel</button>
+
+        <div class="close-bottom-row">
+          <div class="live-pnl-preview" id="live-pnl-${escapeHtml(tradeId)}">
+            <div class="live-pnl-label">Current estimated exit</div>
+            <div>Gross P&amp;L: <strong class="live-pnl-gross">—</strong></div>
+            <div class="muted" style="font-size:.82rem">Est. charges (entry+exit): <strong class="live-pnl-charges">—</strong></div>
+            <div>Net P&amp;L: <strong class="live-pnl-value">—</strong><span class="live-pnl-pct muted"></span></div>
+          </div>
+          <div class="close-confirm-col">
+            <div class="btn-row">
+              <button class="btn btn-close-trade btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm close &amp; record fills</button>
+              <button class="btn btn-ghost btn-close-cancel">Cancel</button>
+            </div>
+          </div>
         </div>
       </div>`;
     function recalcClosePnl() {
@@ -2241,9 +2246,9 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
         if (!warnEl) {
           warnEl = document.createElement('div');
           warnEl.className = 'close-loss-warn';
-          panel.querySelector('.live-pnl-preview').after(warnEl);
+          panel.querySelector('.live-pnl-preview').appendChild(warnEl);
         }
-        warnEl.innerHTML = `⚠ Closing at these prices locks in a loss of <strong>₹${fmt(Math.abs(netPnl))}</strong>. Verify current market prices before confirming.`;
+        warnEl.innerHTML = `⚠ Closing at these prices locks in a loss of <strong>₹${fmt(Math.abs(netPnl))}</strong>. Verify before confirming.`;
       } else if (warnEl) {
         warnEl.remove();
       }
