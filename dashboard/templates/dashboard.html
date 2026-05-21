@@ -96,6 +96,7 @@
         <button class="hist-subtab active" data-htab="trades">Trades</button>
         <button class="hist-subtab" data-htab="suggestions">Suggestions</button>
         <button class="hist-subtab" data-htab="performance">📊 Performance</button>
+        <button class="hist-subtab" data-htab="charts">📈 Charts</button>
       </div>
 
       <!-- Trades sub-tab -->
@@ -137,6 +138,24 @@
           <button class="btn" id="hsug-refresh">Refresh</button>
         </div>
         <div id="hsug-container" class="loading">Loading…</div>
+      </div>
+
+      <!-- Charts sub-tab -->
+      <div id="hist-pane-charts" hidden>
+        <div class="chart-toolbar">
+          <label class="hist-filter-label">From
+            <input type="date" id="chart-from" class="hist-date-input">
+          </label>
+          <label class="hist-filter-label">To
+            <input type="date" id="chart-to" class="hist-date-input">
+          </label>
+          <button class="btn" id="chart-refresh">Apply</button>
+          <button class="btn btn-ghost" id="chart-reset">All time</button>
+        </div>
+        <div id="chart-summary-row" class="chart-summary-row"></div>
+        <div id="chart-cumulative" class="chart-wrap"></div>
+        <div id="chart-strategy-bar" class="chart-wrap"></div>
+        <div id="chart-tooltip" class="chart-tooltip" hidden></div>
       </div>
 
       <!-- Performance sub-tab -->

@@ -577,6 +577,78 @@ def create_app() -> Flask:
         )
         return jsonify({"trades": [_row(r) for r in rows]})
 
+    @app.route("/api/stats/pnl-timeline")
+    @_with_db
+    def api_pnl_timeline(db: SQLServerConnection):
+        """Per-trade P&L timeline for charts.
+
+        Returns trades sorted by close date with cumulative P&L columns
+        pre-computed so the frontend only needs to render, not aggregate.
+        Optional query params: from_date, to_date (YYYY-MM-DD).
+        """
+        from_date = request.args.get("from_date") or None
+        to_date   = request.args.get("to_date")   or None
+
+        filters = ["t.status IN ('CLOSED', 'EXPIRED')", "t.net_pnl IS NOT NULL",
+                   "t.closed_on IS NOT NULL"]
+        params: list = []
+        if from_date:
+            filters.append("CONVERT(date, t.closed_on) >= ?")
+            params.append(from_date)
+        if to_date:
+            filters.append("CONVERT(date, t.closed_on) <= ?")
+            params.append(to_date)
+
+        where = " AND ".join(filters)
+        rows = db.fetch_all(
+            f"SELECT t.trade_id, t.trade_name, t.closed_on, t.executed_on, "
+            f"       t.net_pnl, t.gross_pnl, t.total_charges, t.net_credit_actual, "
+            f"       COALESCE(s.strategy, 'UNKNOWN') AS strategy, "
+            f"       COALESCE(s.underlying, '') AS underlying "
+            f"FROM options_trades t "
+            f"LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
+            f"WHERE {where} "
+            f"ORDER BY t.closed_on ASC",
+            params,
+        )
+
+        trades = []
+        cum_overall = 0.0
+        cum_by_strategy: dict = {}
+        total_invested = 0.0
+
+        for r in rows:
+            pnl    = float(r["net_pnl"])
+            credit = float(r["net_credit_actual"] or 0)
+            strat  = r["strategy"]
+            cum_overall += pnl
+            cum_by_strategy[strat] = cum_by_strategy.get(strat, 0.0) + pnl
+            # "Invested" = absolute premium collected/paid (capital at risk per trade)
+            total_invested += abs(credit)
+            trades.append({
+                "trade_id":        r["trade_id"],
+                "trade_name":      r["trade_name"],
+                "closed_on":       _row(r)["closed_on"],
+                "executed_on":     _row(r)["executed_on"],
+                "strategy":        strat,
+                "underlying":      r["underlying"],
+                "net_pnl":         round(pnl, 2),
+                "gross_pnl":       round(float(r["gross_pnl"] or 0), 2),
+                "total_charges":   round(float(r["total_charges"] or 0), 2),
+                "net_credit_actual": round(credit, 2),
+                "cum_pnl_overall": round(cum_overall, 2),
+                "cum_pnl_strategy": round(cum_by_strategy[strat], 2),
+            })
+
+        strategies = sorted(cum_by_strategy.keys())
+        return jsonify({
+            "trades":          trades,
+            "strategies":      strategies,
+            "total_pnl":       round(cum_overall, 2),
+            "total_invested":  round(total_invested, 2),
+            "total_charges":   round(sum(float(r["total_charges"] or 0) for r in rows), 2),
+        })
+
     @app.route("/api/stats/strategy-performance")
     @_with_db
     def api_strategy_performance(db: SQLServerConnection):

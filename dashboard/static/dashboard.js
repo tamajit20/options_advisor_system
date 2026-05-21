@@ -2768,9 +2768,11 @@ document.querySelectorAll('.hist-subtab').forEach(btn => {
     $('#hist-pane-trades').hidden       = (_histActiveSubtab !== 'trades');
     $('#hist-pane-suggestions').hidden  = (_histActiveSubtab !== 'suggestions');
     $('#hist-pane-performance').hidden  = (_histActiveSubtab !== 'performance');
+    $('#hist-pane-charts').hidden       = (_histActiveSubtab !== 'charts');
     if (_histActiveSubtab === 'trades')       loadHistory();
     if (_histActiveSubtab === 'suggestions')  loadHistorySuggestions();
     if (_histActiveSubtab === 'performance')  loadStrategyPerformance();
+    if (_histActiveSubtab === 'charts')       loadPnlCharts();
   });
 });
 
@@ -2846,6 +2848,245 @@ async function loadHistorySuggestions() {
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
 }
+
+// ---------------- Charts sub-tab ----------------
+
+const CHART_STRATEGY_COLORS = [
+  '#38bdf8','#86efac','#fcd34d','#f9a8d4','#c4b5fd',
+  '#fdba74','#6ee7b7','#93c5fd','#fca5a5','#d9f99d',
+];
+
+function _chartColor(idx) { return CHART_STRATEGY_COLORS[idx % CHART_STRATEGY_COLORS.length]; }
+
+// SVG helpers
+function _svgLine(points, color, width = 2) {
+  if (points.length < 2) return '';
+  const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  return `<path d="${d}" fill="none" stroke="${color}" stroke-width="${width}" stroke-linejoin="round" stroke-linecap="round"/>`;
+}
+function _svgCircle(x, y, r, fill, cls = '', extra = '') {
+  return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r}" fill="${fill}" class="${cls}" ${extra}/>`;
+}
+function _svgText(x, y, text, anchor = 'middle', cls = '') {
+  return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" class="chart-axis-label ${cls}">${escapeHtml(String(text))}</text>`;
+}
+
+function _buildLineChart(trades, strategies, W = 700, H = 320) {
+  const PAD = { top: 20, right: 20, bottom: 48, left: 72 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+
+  // Collect all cumulative series
+  // overall: {date, cum}[]
+  // per strategy: strategy → {date, cum}[]
+  const overallSeries = trades.map(t => ({ date: new Date(t.closed_on), cum: t.cum_pnl_overall, t }));
+  const stratSeries = {};
+  strategies.forEach(s => { stratSeries[s] = []; });
+  trades.forEach(t => {
+    if (stratSeries[t.strategy]) stratSeries[t.strategy].push({ date: new Date(t.closed_on), cum: t.cum_pnl_strategy, t });
+  });
+
+  if (!overallSeries.length) return '<div class="empty">No data</div>';
+
+  const allDates = overallSeries.map(p => p.date);
+  const minDate = new Date(Math.min(...allDates));
+  const maxDate = new Date(Math.max(...allDates));
+  const dateRange = Math.max(maxDate - minDate, 86400000); // at least 1 day
+
+  // All y values including 0 baseline
+  const allY = [0, ...overallSeries.map(p => p.cum),
+    ...Object.values(stratSeries).flat().map(p => p.cum)];
+  const minY = Math.min(...allY);
+  const maxY = Math.max(...allY);
+  const yPad = Math.max((maxY - minY) * 0.1, 500);
+  const yMin = minY - yPad, yMax = maxY + yPad;
+  const yRange = yMax - yMin;
+
+  const toX = d => PAD.left + ((d - minDate) / dateRange) * cW;
+  const toY = v => PAD.top + (1 - (v - yMin) / yRange) * cH;
+  const zero = toY(0);
+
+  // Y-axis gridlines + labels
+  const yTicks = 5;
+  let gridLines = '', yLabels = '';
+  for (let i = 0; i <= yTicks; i++) {
+    const v = yMin + (yRange / yTicks) * i;
+    const y = toY(v);
+    gridLines += `<line x1="${PAD.left}" y1="${y.toFixed(1)}" x2="${PAD.left + cW}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,.06)" stroke-width="1"/>`;
+    yLabels += _svgText(PAD.left - 6, y + 4, v >= 1000 ? `₹${(v/1000).toFixed(0)}k` : v <= -1000 ? `-₹${(Math.abs(v)/1000).toFixed(0)}k` : `₹${v.toFixed(0)}`, 'end');
+  }
+
+  // Zero line
+  const zeroLine = `<line x1="${PAD.left}" y1="${zero.toFixed(1)}" x2="${PAD.left + cW}" y2="${zero.toFixed(1)}" stroke="rgba(255,255,255,.2)" stroke-width="1" stroke-dasharray="4,3"/>`;
+
+  // X-axis labels (up to 6 dates)
+  let xLabels = '';
+  const xTickCount = Math.min(6, overallSeries.length);
+  for (let i = 0; i < xTickCount; i++) {
+    const idx = Math.round(i * (overallSeries.length - 1) / Math.max(xTickCount - 1, 1));
+    const p = overallSeries[idx];
+    const x = toX(p.date);
+    const label = p.date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+    xLabels += _svgText(x, PAD.top + cH + 20, label, 'middle');
+  }
+
+  // Strategy lines
+  let stratLines = '';
+  strategies.forEach((s, si) => {
+    const pts = (stratSeries[s] || []).map(p => [toX(p.date), toY(p.cum)]);
+    if (pts.length) stratLines += _svgLine(pts, _chartColor(si), 1.5);
+  });
+
+  // Overall line (bold white)
+  const overallPts = overallSeries.map(p => [toX(p.date), toY(p.cum)]);
+  const overallLine = _svgLine(overallPts, '#f1f5f9', 2.5);
+
+  // Profit/loss fill area under overall line
+  const areaPath = overallPts.length > 1 ? (() => {
+    const d = overallPts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+    return `<path d="${d} L${overallPts[overallPts.length-1][0].toFixed(1)},${zero.toFixed(1)} L${overallPts[0][0].toFixed(1)},${zero.toFixed(1)} Z" fill="url(#pnlGrad)" opacity="0.3"/>`;
+  })() : '';
+
+  // Trade dots (coloured by win/loss)
+  let dots = '';
+  trades.forEach(t => {
+    const x = toX(new Date(t.closed_on));
+    const y = toY(t.cum_pnl_overall);
+    const fill = t.net_pnl >= 0 ? '#86efac' : '#fca5a5';
+    const tip = `${t.trade_name || t.trade_id} | ${t.strategy} | ${t.net_pnl >= 0 ? '+' : ''}₹${t.net_pnl.toLocaleString('en-IN')}`;
+    dots += _svgCircle(x, y, 4, fill, 'chart-dot', `data-tip="${escapeHtml(tip)}"`);
+  });
+
+  // Legend
+  let legend = `<div class="chart-legend"><span class="chart-legend-item"><span class="chart-legend-line" style="background:#f1f5f9"></span>Overall</span>`;
+  strategies.forEach((s, si) => {
+    legend += `<span class="chart-legend-item"><span class="chart-legend-line" style="background:${_chartColor(si)}"></span>${escapeHtml(s)}</span>`;
+  });
+  legend += `</div>`;
+
+  const svg = `<svg viewBox="0 0 ${W} ${H}" class="chart-svg" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="pnlGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.6"/>
+        <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    ${gridLines}${zeroLine}${xLabels}${yLabels}
+    ${areaPath}${stratLines}${overallLine}${dots}
+  </svg>`;
+
+  return `<div class="chart-title">Cumulative P&L over time</div>${legend}${svg}`;
+}
+
+function _buildBarChart(trades, strategies, W = 700, H = 220) {
+  const PAD = { top: 20, right: 20, bottom: 48, left: 72 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+
+  // Per-strategy total P&L
+  const totals = {};
+  strategies.forEach(s => { totals[s] = 0; });
+  trades.forEach(t => { totals[t.strategy] = (totals[t.strategy] || 0) + t.net_pnl; });
+  const sorted = [...strategies].sort((a, b) => (totals[b] || 0) - (totals[a] || 0));
+
+  if (!sorted.length) return '';
+  const vals = sorted.map(s => totals[s]);
+  const maxAbs = Math.max(...vals.map(Math.abs), 1);
+  const barW = Math.min(60, (cW / sorted.length) * 0.65);
+  const gap   = cW / sorted.length;
+  const zero  = PAD.top + cH / 2;
+
+  let bars = '', xLabels = '', yLabels = '';
+  const yTicks = 4;
+  for (let i = -yTicks/2; i <= yTicks/2; i++) {
+    const v = (maxAbs / (yTicks/2)) * i;
+    const y = zero - (v / maxAbs) * (cH / 2);
+    yLabels += `<line x1="${PAD.left}" y1="${y.toFixed(1)}" x2="${PAD.left + cW}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,.06)" stroke-width="1"/>`;
+    if (i !== 0) yLabels += _svgText(PAD.left - 6, y + 4, Math.abs(v) >= 1000 ? `${v < 0 ? '-' : ''}₹${(Math.abs(v)/1000).toFixed(0)}k` : `₹${v.toFixed(0)}`, 'end');
+  }
+  yLabels += `<line x1="${PAD.left}" y1="${zero.toFixed(1)}" x2="${PAD.left+cW}" y2="${zero.toFixed(1)}" stroke="rgba(255,255,255,.2)" stroke-width="1"/>`;
+
+  sorted.forEach((s, i) => {
+    const v = totals[s] || 0;
+    const x = PAD.left + gap * i + gap / 2 - barW / 2;
+    const barH = Math.abs(v / maxAbs) * (cH / 2);
+    const y = v >= 0 ? zero - barH : zero;
+    const fill = v >= 0 ? 'rgba(134,239,172,.75)' : 'rgba(252,165,165,.75)';
+    const tip = `${s}: ${v >= 0 ? '+' : ''}₹${v.toLocaleString('en-IN', {maximumFractionDigits:0})}`;
+    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${barH.toFixed(1)}" rx="3" fill="${fill}" class="chart-bar" data-tip="${escapeHtml(tip)}"/>`;
+    xLabels += _svgText(PAD.left + gap * i + gap / 2, PAD.top + cH + 20, s.replace('_', ' '), 'middle');
+  });
+
+  const svg = `<svg viewBox="0 0 ${W} ${H}" class="chart-svg" xmlns="http://www.w3.org/2000/svg">
+    ${yLabels}${bars}${xLabels}
+  </svg>`;
+  return `<div class="chart-title">Total P&L by strategy</div>${svg}`;
+}
+
+async function loadPnlCharts() {
+  const cumEl  = $('#chart-cumulative');
+  const barEl  = $('#chart-strategy-bar');
+  const sumEl  = $('#chart-summary-row');
+  if (!cumEl) return;
+  cumEl.className = 'chart-wrap loading'; cumEl.textContent = 'Loading…';
+  barEl.className = 'chart-wrap loading'; barEl.textContent = '';
+
+  const fromEl = $('#chart-from'), toEl = $('#chart-to');
+  if (!fromEl.value) { const d = new Date(); d.setFullYear(d.getFullYear() - 1); fromEl.value = d.toISOString().slice(0,10); }
+  if (!toEl.value)   { toEl.value = new Date().toISOString().slice(0,10); }
+
+  const qs = new URLSearchParams();
+  if (fromEl.value) qs.set('from_date', fromEl.value);
+  if (toEl.value)   qs.set('to_date',   toEl.value);
+
+  try {
+    const data = await API('/api/stats/pnl-timeline?' + qs);
+    if (!data.trades.length) {
+      cumEl.className = 'chart-wrap'; cumEl.innerHTML = '<div class="empty">No closed trades in selected period.</div>';
+      barEl.className = 'chart-wrap'; barEl.innerHTML = '';
+      sumEl.innerHTML = '';
+      return;
+    }
+
+    // Summary strip
+    const pnlCls = data.total_pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    sumEl.innerHTML = `
+      <div class="chart-kv"><span>Total net P&L</span><strong class="${pnlCls}">₹${fmt(data.total_pnl)}</strong></div>
+      <div class="chart-kv"><span>Total premium deployed</span><strong>₹${fmt(data.total_invested)}</strong></div>
+      <div class="chart-kv"><span>Return on premium</span><strong class="${pnlCls}">${data.total_invested > 0 ? (data.total_pnl / data.total_invested * 100).toFixed(1) + '%' : '—'}</strong></div>
+      <div class="chart-kv"><span>Total charges paid</span><strong>₹${fmt(data.total_charges)}</strong></div>
+      <div class="chart-kv"><span>Trades</span><strong>${data.trades.length}</strong></div>`;
+
+    cumEl.className = 'chart-wrap';
+    cumEl.innerHTML = _buildLineChart(data.trades, data.strategies);
+
+    barEl.className = 'chart-wrap';
+    barEl.innerHTML = _buildBarChart(data.trades, data.strategies);
+
+    // Tooltip binding
+    const tooltip = $('#chart-tooltip');
+    document.querySelectorAll('.chart-dot, .chart-bar').forEach(el => {
+      el.addEventListener('mouseenter', e => {
+        tooltip.textContent = el.dataset.tip;
+        tooltip.hidden = false;
+      });
+      el.addEventListener('mousemove', e => {
+        tooltip.style.left = (e.clientX + 12) + 'px';
+        tooltip.style.top  = (e.clientY - 28) + 'px';
+      });
+      el.addEventListener('mouseleave', () => { tooltip.hidden = true; });
+    });
+  } catch (err) {
+    cumEl.className = 'chart-wrap'; cumEl.innerHTML = `<div class="empty">Error: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+$('#chart-refresh')?.addEventListener('click', loadPnlCharts);
+$('#chart-reset')?.addEventListener('click', () => {
+  $('#chart-from').value = '';
+  $('#chart-to').value   = '';
+  loadPnlCharts();
+});
 
 // ---------------- Performance sub-tab ----------------
 async function loadStrategyPerformance() {
