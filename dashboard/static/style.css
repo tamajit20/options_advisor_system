@@ -1206,21 +1206,26 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .jobs-auto-label { font-size:.78rem; color:var(--text-dim); display:inline-flex; align-items:center; gap:4px; }
 .jobs-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }
 .job-card { background:var(--surface-alt); border:1px solid rgba(255,255,255,.06); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:8px; }
-.job-card--running { border-color: rgba(56,189,248,.5); box-shadow:0 0 0 1px rgba(56,189,248,.15); }
-.job-card--failed  { border-color: rgba(239,68,68,.5);  box-shadow:0 0 0 1px rgba(239,68,68,.12); }
+.job-card--running  { border-color: rgba(56,189,248,.5);  box-shadow:0 0 0 1px rgba(56,189,248,.15); }
+.job-card--failed   { border-color: rgba(239,68,68,.5);   box-shadow:0 0 0 1px rgba(239,68,68,.12); }
+.job-card--no-data  { border-color: rgba(251,146,60,.45); box-shadow:0 0 0 1px rgba(251,146,60,.10); }
 .job-card-head { display:flex; align-items:flex-start; gap:8px; }
 .job-icon { font-size:1.4rem; flex:0 0 auto; }
 .job-title-block { flex:1 1 auto; min-width:0; }
 .job-name { font-weight:600; font-size:.95rem; }
 .job-schedule { font-size:.75rem; color:var(--text-dim); margin-top:2px; }
 .job-status { flex:0 0 auto; font-size:.7rem; padding:2px 8px; border-radius:10px; font-weight:600; text-transform:uppercase; letter-spacing:.5px; }
-.js-running { background:rgba(56,189,248,.18); color:#7dd3fc; }
-.js-success { background:rgba(34,197,94,.18); color:#86efac; }
-.js-failed  { background:rgba(239,68,68,.20); color:#fca5a5; }
-.js-skipped { background:rgba(245,158,11,.18); color:#fcd34d; }
-.js-never   { background:rgba(148,163,184,.18); color:#cbd5e1; }
+.js-running  { background:rgba(56,189,248,.18);  color:#7dd3fc; }
+.js-success  { background:rgba(34,197,94,.18);   color:#86efac; }
+.js-failed   { background:rgba(239,68,68,.20);   color:#fca5a5; }
+.js-no-data  { background:rgba(251,146,60,.20);  color:#fdba74; }
+.js-skipped  { background:rgba(245,158,11,.18);  color:#fcd34d; }
+.js-never    { background:rgba(148,163,184,.18); color:#cbd5e1; }
 .job-desc { font-size:.78rem; color:var(--text-dim); line-height:1.4; }
-.job-error { font-size:.75rem; color:#fca5a5; background:rgba(239,68,68,.08); border-left:3px solid var(--err); padding:6px 8px; border-radius:4px; word-break:break-word; }
+.job-error              { font-size:.75rem; padding:6px 8px; border-radius:4px; word-break:break-word; border-left-width:3px; border-left-style:solid; }
+.job-error--failed      { color:#fca5a5; background:rgba(239,68,68,.08);   border-left-color:var(--err); }
+.job-error--no_data     { color:#fdba74; background:rgba(251,146,60,.08);  border-left-color:#f97316; }
+.job-error--skipped     { color:#fcd34d; background:rgba(245,158,11,.07);  border-left-color:#f59e0b; }
 .job-meta { display:flex; flex-direction:column; gap:3px; font-size:.78rem; }
 .job-meta-row { display:flex; justify-content:space-between; gap:8px; padding:1px 0; border-bottom:1px dashed rgba(255,255,255,.04); }
 .job-meta-row span:first-child { color:var(--text-dim); }

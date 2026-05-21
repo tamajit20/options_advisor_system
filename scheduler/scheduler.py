@@ -48,6 +48,7 @@ from lifecycle.intraday_validator import run_intraday_validator
 from lifecycle.suggestion_engine import run_live_suggestion_engine, run_suggestion_engine
 from lifecycle.trade_greeks_job import run_trade_greeks_update
 from simulation.simulator import run_simulation_update
+from exceptions import NoDataError
 from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
@@ -169,12 +170,17 @@ def _run_job(
     if job_id_suffix:
         job_id = f"{job_id}-{job_id_suffix}"
 
-    # Chain-skip: if any required upstream job FAILED today, skip this one.
+    # Chain-skip: if any required upstream job FAILED or has NO_DATA today,
+    # skip this one with a clear reason.
     if requires and not skip_freshness:
         for upstream in requires:
             up_status = _LAST_STATUS.get(upstream)
             if up_status in ("FAILED", "CRITICAL"):
-                _record_skipped(job_id, job_name, upstream)
+                _record_skipped(job_id, job_name, f"{upstream} failed")
+                return
+            if up_status == "NO_DATA":
+                _record_skipped(job_id, job_name,
+                                f"{upstream} has no data — market holiday or file not yet published")
                 return
 
     db = SQLServerConnection()
@@ -190,7 +196,8 @@ def _run_job(
             if stale is not None:
                 _record_skipped_with_db(
                     db, job_id, job_name,
-                    f"data not fresh for upstream {stale}",
+                    f"Upstream '{stale}' has no data for today — "
+                    "market holiday or source file not yet published",
                 )
                 return
         job_log = JobLogRepo(db)
@@ -204,6 +211,31 @@ def _run_job(
             db.commit()
             _LAST_STATUS[job_name] = "SUCCESS"
             logger.info("Job %s SUCCESS rows=%d", job_id, rows)
+        except NoDataError as exc:
+            # Source had no data (holiday, file not yet published, etc.).
+            # This is NOT a system failure — record NO_DATA with a clear
+            # message so operators understand why downstream jobs are skipped.
+            msg = str(exc)
+            logger.warning("Job %s NO_DATA — %s", job_id, msg)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            try:
+                if db.connection is None:
+                    db.connect()
+                JobLogRepo(db).finish(job_id, "NO_DATA", error_message=msg[:1900])
+                NotificationRepo(db).insert(Notification(
+                    created_at=now_ist(),
+                    notif_type="JOB_NO_DATA",
+                    severity="WARNING",
+                    title=f"No data: {job_name}",
+                    body=msg[:500],
+                ))
+                db.commit()
+            except Exception:
+                logger.exception("Failed to record NO_DATA status for job %s", job_id)
+            _LAST_STATUS[job_name] = "NO_DATA"
         except Exception as exc:
             err = "".join(traceback.format_exception_only(type(exc), exc)).strip()
             logger.exception("Job %s FAILED", job_id)
@@ -233,16 +265,13 @@ def _run_job(
         db.close()
 
 
-def _record_skipped(job_id: str, job_name: str, upstream: str) -> None:
+def _record_skipped(job_id: str, job_name: str, reason: str) -> None:
     """Open a fresh DB connection to record SKIPPED. Use when no
     connection is available (e.g. early in `_run_job` before connect)."""
     db = SQLServerConnection()
     try:
         db.connect()
-        _record_skipped_with_db(
-            db, job_id, job_name,
-            f"Upstream {upstream} failed",
-        )
+        _record_skipped_with_db(db, job_id, job_name, reason)
     except Exception:
         logger.exception("Failed to record skipped job %s", job_id)
     finally:

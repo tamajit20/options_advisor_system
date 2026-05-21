@@ -3041,11 +3041,12 @@ function ensureLiveMTMStream() {
 
 // ---------------- Tab 6: Jobs (scheduler monitor + manual trigger) ----------------
 const JOB_STATUS_META = {
-  RUNNING: { label: 'Running',   cls: 'js-running' },
-  SUCCESS: { label: 'Success',   cls: 'js-success' },
-  FAILED:  { label: 'Failed',    cls: 'js-failed'  },
-  SKIPPED: { label: 'Skipped',   cls: 'js-skipped' },
-  NEVER:   { label: 'Never run', cls: 'js-never'   },
+  RUNNING: { label: 'Running',   cls: 'js-running'  },
+  SUCCESS: { label: 'Success',   cls: 'js-success'  },
+  FAILED:  { label: 'Failed',    cls: 'js-failed'   },
+  NO_DATA: { label: 'No data',   cls: 'js-no-data'  },
+  SKIPPED: { label: 'Skipped',   cls: 'js-skipped'  },
+  NEVER:   { label: 'Never run', cls: 'js-never'    },
 };
 
 let _jobsTimer = null;
@@ -3106,17 +3107,20 @@ async function loadJobs(silent = false) {
 
 function renderJobCard(j) {
   const sm = JOB_STATUS_META[j.status] || JOB_STATUS_META.NEVER;
-  const isRunning = j.status === 'RUNNING';
-  const isFailed  = j.status === 'FAILED';
-  const cardCls = `job-card${isRunning ? ' job-card--running' : isFailed ? ' job-card--failed' : ''}`;
+  const isRunning  = j.status === 'RUNNING';
+  const isFailed   = j.status === 'FAILED';
+  const isNoData   = j.status === 'NO_DATA';
+  const isSkipped  = j.status === 'SKIPPED';
+  const cardCls = `job-card${isRunning ? ' job-card--running' : isFailed ? ' job-card--failed' : isNoData ? ' job-card--no-data' : ''}`;
 
   const dur = _jobDuration(j.started_at, j.finished_at);
   const lastRunIso = j.finished_at || j.started_at;
   const lastRunRel = _jobRelTime(lastRunIso);
   const nextRunRel = _jobRelTime(j.next_run);
 
-  const errLine = (isFailed && j.error_message)
-    ? `<div class="job-error">⚠ ${escapeHtml(String(j.error_message).slice(0, 200))}</div>`
+  const msgIcon = isFailed ? '⚠' : isNoData ? '📭' : 'ℹ';
+  const errLine = ((isFailed || isNoData || isSkipped) && j.error_message)
+    ? `<div class="job-error job-error--${j.status.toLowerCase()}">${msgIcon} ${escapeHtml(String(j.error_message).slice(0, 300))}</div>`
     : '';
 
   const rowsLine = (j.rows_processed != null)

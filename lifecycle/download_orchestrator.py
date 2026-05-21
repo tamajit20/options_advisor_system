@@ -25,6 +25,7 @@ from downloader.fii_data import download_fii_oi
 from downloader.fo_bhav import download_fo_bhav, extract_index_spots
 from downloader.index_spot_nse import download_nse_index_spot
 from downloader.spot_bhav import download_spot_bhav
+from exceptions import NoDataError
 from lifecycle.spot_bhav_merge import merge_spot_bhav_rows
 from downloader.vix import download_vix_history
 from utils import today_ist
@@ -36,8 +37,10 @@ def run_fo_bhav(db: SQLServerConnection, trade_date: date | None = None) -> int:
     trade_date = trade_date or today_ist()
     rows = download_fo_bhav(trade_date)
     if not rows:
-        logger.warning("FO bhav: no rows for %s", trade_date)
-        return 0
+        raise NoDataError(
+            f"FO bhavcopy not available for {trade_date} — "
+            "market holiday or NSE has not published the file yet"
+        )
     n = FoEodRepo(db).upsert_many(rows)
     try:
         added = ExpiryCalendarRepo(db).upsert_from_fo_rows(rows)
@@ -100,8 +103,10 @@ def run_spot_bhav(db: SQLServerConnection, trade_date: date | None = None) -> in
     rows = merge_spot_bhav_rows(stock_rows, index_rows, fo_settle, trade_date)
 
     if not rows:
-        logger.warning("Spot bhav: no rows for %s", trade_date)
-        return 0
+        raise NoDataError(
+            f"Spot bhavcopy not available for {trade_date} — "
+            "market holiday or NSE has not published the file yet"
+        )
     n = SpotEodRepo(db).upsert_many(rows)
     db.commit()
     logger.info("Spot bhav %s: upserted %d rows", trade_date, n)
@@ -169,8 +174,10 @@ def run_vix(db: SQLServerConnection) -> int:
 
     rows = download_vix_history()
     if not rows:
-        logger.warning("VIX: no rows downloaded")
-        return 0
+        raise NoDataError(
+            "VIX history download returned no rows — "
+            "NSE may not have published today's VIX data yet"
+        )
     n = vix_repo.upsert_many(rows)
     db.commit()
     logger.info("VIX: upserted %d rows", n)
@@ -181,8 +188,10 @@ def run_fii(db: SQLServerConnection, trade_date: date | None = None) -> int:
     trade_date = trade_date or today_ist()
     rows = download_fii_oi(trade_date)
     if not rows:
-        logger.warning("FII OI: no rows for %s (graceful)", trade_date)
-        return 0
+        raise NoDataError(
+            f"FII OI data not available for {trade_date} — "
+            "market holiday or SEBI/NSE has not published the file yet"
+        )
     n = FiiRepo(db).upsert_many(rows)
     db.commit()
     logger.info("FII OI %s: upserted %d rows", trade_date, n)
