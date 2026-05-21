@@ -2892,7 +2892,7 @@ function _renderPerfPage(data) {
         <div class="perf-kv"><span>Avg net P&L / trade</span><strong class="${_perfColor(ov.avg_pnl)}">₹${fmt(ov.avg_pnl)}</strong></div>
         <div class="perf-kv"><span>Best trade</span><strong class="pnl-pos">₹${fmt(ov.best_trade)}</strong></div>
         <div class="perf-kv"><span>Worst trade</span><strong class="pnl-neg">₹${fmt(ov.worst_trade)}</strong></div>
-        ${ov.profit_factor != null ? `<div class="perf-kv"><span>Profit factor</span><strong class="${ov.profit_factor >= 1 ? 'pnl-pos' : 'pnl-neg'}">${ov.profit_factor}x</strong></div>` : ''}
+        <div class="perf-kv"><span>Profit factor</span><strong class="${ov.losses === 0 ? 'pnl-pos' : ov.profit_factor != null ? (ov.profit_factor >= 1 ? 'pnl-pos' : 'pnl-neg') : ''}">${ov.losses === 0 ? '∞' : ov.profit_factor != null ? ov.profit_factor + 'x' : '—'}</strong></div>
       </div>
     </div>`;
 
@@ -2919,7 +2919,7 @@ function _renderPerfPage(data) {
           <div class="perf-stat-lbl">Avg P&L</div>
         </div>
         <div class="perf-stat">
-          <div class="perf-stat-val ${s.profit_factor != null ? (s.profit_factor >= 1 ? 'pnl-pos' : 'pnl-neg') : ''}">${s.profit_factor != null ? s.profit_factor + 'x' : '—'}</div>
+          <div class="perf-stat-val ${s.losses === 0 ? 'pnl-pos' : s.profit_factor != null ? (s.profit_factor >= 1 ? 'pnl-pos' : 'pnl-neg') : ''}">${s.losses === 0 ? '∞' : s.profit_factor != null ? s.profit_factor + 'x' : '—'}</div>
           <div class="perf-stat-lbl">Profit factor</div>
         </div>
         <div class="perf-stat">
