@@ -95,6 +95,7 @@
       <div class="hist-subtabs">
         <button class="hist-subtab active" data-htab="trades">Trades</button>
         <button class="hist-subtab" data-htab="suggestions">Suggestions</button>
+        <button class="hist-subtab" data-htab="performance">📊 Performance</button>
       </div>
 
       <!-- Trades sub-tab -->
@@ -136,6 +137,15 @@
           <button class="btn" id="hsug-refresh">Refresh</button>
         </div>
         <div id="hsug-container" class="loading">Loading…</div>
+      </div>
+
+      <!-- Performance sub-tab -->
+      <div id="hist-pane-performance" hidden>
+        <div class="perf-toolbar">
+          <span class="muted" style="font-size:.82rem">All closed &amp; expired trades, all time</span>
+          <button class="btn btn-ghost" id="perf-refresh">Refresh</button>
+        </div>
+        <div id="perf-container" class="loading">Loading…</div>
       </div>
     </article>
 

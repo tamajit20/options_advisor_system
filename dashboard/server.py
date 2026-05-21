@@ -577,6 +577,94 @@ def create_app() -> Flask:
         )
         return jsonify({"trades": [_row(r) for r in rows]})
 
+    @app.route("/api/stats/strategy-performance")
+    @_with_db
+    def api_strategy_performance(db: SQLServerConnection):
+        """Aggregate closed trade stats grouped by strategy.
+
+        Returns per-strategy: trade count, wins, losses, win rate, avg/total
+        net P&L, avg hold days, best/worst trade, and an overall summary row.
+        """
+        rows = db.fetch_all(
+            "SELECT t.trade_id, t.net_pnl, t.gross_pnl, t.total_charges, "
+            "       t.executed_on, t.closed_on, t.net_credit_actual, "
+            "       t.actual_max_profit, "
+            "       COALESCE(s.strategy, 'UNKNOWN') AS strategy, "
+            "       COALESCE(s.underlying, t.trade_name) AS underlying "
+            "FROM options_trades t "
+            "LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
+            "WHERE t.status IN ('CLOSED', 'EXPIRED') "
+            "  AND t.net_pnl IS NOT NULL "
+            "ORDER BY t.executed_on DESC"
+        )
+
+        from collections import defaultdict
+        buckets: dict = defaultdict(list)
+        for r in rows:
+            buckets[r["strategy"]].append(r)
+
+        def _hold_days(r):
+            ex = r.get("executed_on")
+            cl = r.get("closed_on")
+            if ex and cl:
+                try:
+                    delta = (cl - ex) if hasattr(cl, "days") else None
+                    if delta is None:
+                        from datetime import datetime as _dt
+                        delta = _dt.fromisoformat(str(cl)) - _dt.fromisoformat(str(ex))
+                    return max(0, delta.days)
+                except Exception:
+                    pass
+            return None
+
+        strategy_stats = []
+        all_pnls = []
+        for strategy, trades in sorted(buckets.items()):
+            pnls = [float(t["net_pnl"]) for t in trades]
+            all_pnls.extend(pnls)
+            wins   = [p for p in pnls if p > 0]
+            losses = [p for p in pnls if p <= 0]
+            hold_days = [d for d in (_hold_days(t) for t in trades) if d is not None]
+            best  = max(pnls)
+            worst = min(pnls)
+            avg_max_profit = None
+            mps = [float(t["actual_max_profit"]) for t in trades if t.get("actual_max_profit")]
+            if mps:
+                avg_max_profit = round(sum(mps) / len(mps), 2)
+            strategy_stats.append({
+                "strategy":       strategy,
+                "total":          len(trades),
+                "wins":           len(wins),
+                "losses":         len(losses),
+                "win_rate":       round(len(wins) / len(trades) * 100, 1) if trades else 0,
+                "total_pnl":      round(sum(pnls), 2),
+                "avg_pnl":        round(sum(pnls) / len(pnls), 2),
+                "avg_win":        round(sum(wins)   / len(wins),   2) if wins   else 0,
+                "avg_loss":       round(sum(losses) / len(losses), 2) if losses else 0,
+                "best_trade":     round(best,  2),
+                "worst_trade":    round(worst, 2),
+                "avg_hold_days":  round(sum(hold_days) / len(hold_days), 1) if hold_days else None,
+                "avg_max_profit": avg_max_profit,
+                "profit_factor":  round(sum(wins) / abs(sum(losses)), 2) if losses and sum(losses) != 0 else None,
+            })
+
+        # Overall summary across all strategies
+        overall_wins   = [p for p in all_pnls if p > 0]
+        overall_losses = [p for p in all_pnls if p <= 0]
+        overall = {
+            "total":      len(all_pnls),
+            "wins":       len(overall_wins),
+            "losses":     len(overall_losses),
+            "win_rate":   round(len(overall_wins) / len(all_pnls) * 100, 1) if all_pnls else 0,
+            "total_pnl":  round(sum(all_pnls), 2),
+            "avg_pnl":    round(sum(all_pnls) / len(all_pnls), 2) if all_pnls else 0,
+            "best_trade": round(max(all_pnls), 2) if all_pnls else 0,
+            "worst_trade":round(min(all_pnls), 2) if all_pnls else 0,
+            "profit_factor": round(sum(overall_wins) / abs(sum(overall_losses)), 2)
+                             if overall_losses and sum(overall_losses) != 0 else None,
+        }
+        return jsonify({"strategies": strategy_stats, "overall": overall})
+
     @app.route("/api/history/paired")
     @_with_db
     def api_history_paired(db: SQLServerConnection):

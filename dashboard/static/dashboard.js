@@ -2757,10 +2757,12 @@ document.querySelectorAll('.hist-subtab').forEach(btn => {
     document.querySelectorAll('.hist-subtab').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     _histActiveSubtab = btn.dataset.htab;
-    $('#hist-pane-trades').hidden      = (_histActiveSubtab !== 'trades');
-    $('#hist-pane-suggestions').hidden = (_histActiveSubtab !== 'suggestions');
+    $('#hist-pane-trades').hidden       = (_histActiveSubtab !== 'trades');
+    $('#hist-pane-suggestions').hidden  = (_histActiveSubtab !== 'suggestions');
+    $('#hist-pane-performance').hidden  = (_histActiveSubtab !== 'performance');
     if (_histActiveSubtab === 'trades')       loadHistory();
     if (_histActiveSubtab === 'suggestions')  loadHistorySuggestions();
+    if (_histActiveSubtab === 'performance')  loadStrategyPerformance();
   });
 });
 
@@ -2835,6 +2837,106 @@ async function loadHistorySuggestions() {
   } catch (e) {
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+// ---------------- Performance sub-tab ----------------
+async function loadStrategyPerformance() {
+  const c = $('#perf-container');
+  if (!c) return;
+  c.className = 'loading'; c.textContent = 'Loading…';
+  try {
+    const data = await API('/api/stats/strategy-performance');
+    if (!data.strategies.length) {
+      c.className = ''; c.innerHTML = '<div class="empty">No closed trades found. Close some trades first.</div>'; return;
+    }
+    c.className = '';
+    c.innerHTML = _renderPerfPage(data);
+  } catch (e) {
+    c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+$('#perf-refresh')?.addEventListener('click', loadStrategyPerformance);
+
+function _perfColor(v) {
+  if (v == null) return '';
+  return v > 0 ? 'pnl-pos' : v < 0 ? 'pnl-neg' : '';
+}
+
+function _winBar(wins, total) {
+  const pct = total ? Math.round(wins / total * 100) : 0;
+  const cls = pct >= 60 ? 'win-bar-high' : pct >= 40 ? 'win-bar-mid' : 'win-bar-low';
+  return `<div class="win-bar-wrap" title="${wins} wins / ${total} trades">
+    <div class="win-bar-fill ${cls}" style="width:${pct}%"></div>
+  </div>`;
+}
+
+function _renderPerfPage(data) {
+  const ov = data.overall;
+
+  const overallHtml = `
+    <div class="perf-overall">
+      <div class="perf-overall-title">Overall (all strategies)</div>
+      <div class="perf-overall-grid">
+        <div class="perf-kv"><span>Total trades</span><strong>${ov.total}</strong></div>
+        <div class="perf-kv"><span>Win rate</span><strong class="${ov.win_rate >= 50 ? 'pnl-pos' : 'pnl-neg'}">${ov.win_rate}%</strong></div>
+        <div class="perf-kv"><span>Total net P&L</span><strong class="${_perfColor(ov.total_pnl)}">₹${fmt(ov.total_pnl)}</strong></div>
+        <div class="perf-kv"><span>Avg net P&L / trade</span><strong class="${_perfColor(ov.avg_pnl)}">₹${fmt(ov.avg_pnl)}</strong></div>
+        <div class="perf-kv"><span>Best trade</span><strong class="pnl-pos">₹${fmt(ov.best_trade)}</strong></div>
+        <div class="perf-kv"><span>Worst trade</span><strong class="pnl-neg">₹${fmt(ov.worst_trade)}</strong></div>
+        ${ov.profit_factor != null ? `<div class="perf-kv"><span>Profit factor</span><strong class="${ov.profit_factor >= 1 ? 'pnl-pos' : 'pnl-neg'}">${ov.profit_factor}x</strong></div>` : ''}
+      </div>
+    </div>`;
+
+  const stratCards = data.strategies.map(s => {
+    const winRateCls = s.win_rate >= 60 ? 'pnl-pos' : s.win_rate >= 40 ? '' : 'pnl-neg';
+    return `
+    <div class="perf-card ${s.total_pnl >= 0 ? 'perf-card--pos' : 'perf-card--neg'}">
+      <div class="perf-card-head">
+        <span class="perf-strategy-name">${escapeHtml(s.strategy)}</span>
+        <span class="perf-total-pnl ${_perfColor(s.total_pnl)}">₹${fmt(s.total_pnl)}</span>
+      </div>
+      ${_winBar(s.wins, s.total)}
+      <div class="perf-stats-grid">
+        <div class="perf-stat">
+          <div class="perf-stat-val ${winRateCls}">${s.win_rate}%</div>
+          <div class="perf-stat-lbl">Win rate</div>
+        </div>
+        <div class="perf-stat">
+          <div class="perf-stat-val">${s.wins}W / ${s.losses}L</div>
+          <div class="perf-stat-lbl">${s.total} trades</div>
+        </div>
+        <div class="perf-stat">
+          <div class="perf-stat-val ${_perfColor(s.avg_pnl)}">₹${fmt(s.avg_pnl)}</div>
+          <div class="perf-stat-lbl">Avg P&L</div>
+        </div>
+        <div class="perf-stat">
+          <div class="perf-stat-val ${s.profit_factor != null ? (s.profit_factor >= 1 ? 'pnl-pos' : 'pnl-neg') : ''}">${s.profit_factor != null ? s.profit_factor + 'x' : '—'}</div>
+          <div class="perf-stat-lbl">Profit factor</div>
+        </div>
+        <div class="perf-stat">
+          <div class="perf-stat-val pnl-pos">₹${fmt(s.avg_win)}</div>
+          <div class="perf-stat-lbl">Avg win</div>
+        </div>
+        <div class="perf-stat">
+          <div class="perf-stat-val pnl-neg">₹${fmt(s.avg_loss)}</div>
+          <div class="perf-stat-lbl">Avg loss</div>
+        </div>
+        <div class="perf-stat">
+          <div class="perf-stat-val pnl-pos">₹${fmt(s.best_trade)}</div>
+          <div class="perf-stat-lbl">Best trade</div>
+        </div>
+        <div class="perf-stat">
+          <div class="perf-stat-val pnl-neg">₹${fmt(s.worst_trade)}</div>
+          <div class="perf-stat-lbl">Worst trade</div>
+        </div>
+        ${s.avg_hold_days != null ? `<div class="perf-stat"><div class="perf-stat-val">${s.avg_hold_days}d</div><div class="perf-stat-lbl">Avg hold</div></div>` : ''}
+        ${s.avg_max_profit != null ? `<div class="perf-stat"><div class="perf-stat-val">₹${fmt(s.avg_max_profit)}</div><div class="perf-stat-lbl">Avg max profit</div></div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  return `${overallHtml}<div class="perf-cards">${stratCards}</div>`;
 }
 
 function renderHistorySuggestion(s) {

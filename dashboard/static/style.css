@@ -649,6 +649,31 @@ input:focus, select:focus, textarea:focus {
 .hist-subtab:hover { color: var(--text); }
 .hist-subtab.active { color: var(--primary); border-bottom-color: var(--primary); }
 
+/* ── Strategy Performance tab ── */
+.perf-toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+.perf-overall { background:linear-gradient(135deg,rgba(56,189,248,.08),rgba(99,102,241,.08)); border:1px solid rgba(56,189,248,.18); border-radius:10px; padding:14px 18px; margin-bottom:18px; }
+.perf-overall-title { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--text-dim); margin-bottom:10px; }
+.perf-overall-grid { display:flex; flex-wrap:wrap; gap:16px 28px; }
+.perf-kv { display:flex; flex-direction:column; gap:2px; }
+.perf-kv span { font-size:.72rem; color:var(--text-dim); }
+.perf-kv strong { font-size:1rem; }
+.perf-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
+.perf-card { background:var(--surface-alt); border:1px solid rgba(255,255,255,.06); border-radius:10px; padding:14px; display:flex; flex-direction:column; gap:10px; }
+.perf-card--pos { border-left:3px solid rgba(34,197,94,.5); }
+.perf-card--neg { border-left:3px solid rgba(239,68,68,.4); }
+.perf-card-head { display:flex; justify-content:space-between; align-items:flex-start; }
+.perf-strategy-name { font-size:.95rem; font-weight:700; }
+.perf-total-pnl { font-size:1.05rem; font-weight:700; }
+.win-bar-wrap { height:6px; background:rgba(255,255,255,.08); border-radius:3px; overflow:hidden; }
+.win-bar-fill { height:100%; border-radius:3px; transition:width .4s; }
+.win-bar-high { background:rgba(34,197,94,.7); }
+.win-bar-mid  { background:rgba(245,158,11,.7); }
+.win-bar-low  { background:rgba(239,68,68,.6); }
+.perf-stats-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+.perf-stat { display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,.03); border-radius:6px; padding:6px 4px; }
+.perf-stat-val { font-size:.9rem; font-weight:700; }
+.perf-stat-lbl { font-size:.65rem; color:var(--text-dim); margin-top:2px; text-align:center; }
+
 /* ---------- History redesigned cards ---------- */
 .hist-filter-bar { align-items: flex-end; }
 .hist-filter-label { font-size: .8rem; color: var(--text-dim); display: flex; flex-direction: column; gap: 2px; }
