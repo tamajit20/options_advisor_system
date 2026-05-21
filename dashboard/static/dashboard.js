@@ -2140,7 +2140,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
           hint = `<span class="tag tag-warn" style="font-size:.7rem">Estimated at expiry</span>
                   <span class="muted" style="font-size:.72rem">Intrinsic \u20b9${fmt(sx)} (chain data unreliable \u2014 verify with broker before confirming)</span>`;
         } else {
-          hint = `<span class="muted" style="font-size:.72rem">Suggested \u20b9${fmt(sx)}</span>`;
+          hint = `<span class="muted" style="font-size:.72rem">Current market price \u20b9${fmt(sx)}</span>`;
         }
       }
       return `
@@ -2232,6 +2232,18 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       el.textContent = `₹${fmt(netPnl)}`;
       el.className = 'live-pnl-value ' + (netPnl >= 0 ? 'pnl-pos' : 'pnl-neg');
       if (pctEl) { pctEl.textContent = pctStr; pctEl.className = 'live-pnl-pct ' + (netPnl >= 0 ? 'pnl-pos' : 'pnl-neg'); }
+      // Show/hide loss warning banner
+      let warnEl = panel.querySelector('.close-loss-warn');
+      if (netPnl < 0) {
+        if (!warnEl) {
+          warnEl = document.createElement('div');
+          warnEl.className = 'close-loss-warn';
+          panel.querySelector('.live-pnl-preview').after(warnEl);
+        }
+        warnEl.innerHTML = `⚠ Closing at these prices locks in a loss of <strong>₹${fmt(Math.abs(netPnl))}</strong>. Verify current market prices before confirming.`;
+      } else if (warnEl) {
+        warnEl.remove();
+      }
     }
     panel.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcClosePnl));
     recalcClosePnl(); // init with prefilled values
