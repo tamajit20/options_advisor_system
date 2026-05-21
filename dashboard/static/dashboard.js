@@ -2141,7 +2141,8 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
                    data-lot-size="${l.lot_size || 1}">
         <span class="muted" style="font-size:.78rem">${escapeHtml(closeAction)}</span>
         <strong>${escapeHtml(l.symbol)} ${l.strike} ${escapeHtml(l.option_type)}</strong>
-        <span class="cf-live-price" data-leg-key="${escapeHtml(legKey)}">${priceDisplay}</span>
+        <span class="cf-live-price" data-leg-key="${escapeHtml(legKey)}"
+              data-ltp="${mp != null ? mp : ''}">${priceDisplay}</span>
       </div>`;
     }).join('');
 
@@ -2272,6 +2273,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
 
     panel.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcFillPnl));
     recalcFillPnl();
+    recalcLivePnl();
     panel.querySelector('.btn-close-submit').addEventListener('click', () =>
       submitClose(tradeId, panel));
     panel.querySelector('.btn-close-cancel').addEventListener('click', () => {
