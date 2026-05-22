@@ -45,6 +45,165 @@ function _inMarketHours() {
   return dow >= 1 && dow <= 5 && hhmm >= 915 && hhmm <= 1530;
 }
 
+const LIVE_FEED_STALE_SEC = 45;
+let _zerodhaHasSession = false;
+let _zerodhaValid = false;
+let _lastMtmByTrade = {};  // tradeId → { mtm, as_of, receivedAt }
+
+function _parseMtmAsOf(asOfStr) {
+  if (!asOfStr) return null;
+  try {
+    const s = String(asOfStr).includes('T') ? asOfStr : String(asOfStr).replace(' ', 'T');
+    const t = new Date(s).getTime();
+    return Number.isNaN(t) ? null : t;
+  } catch { return null; }
+}
+
+function _mtmAgeSec(tradeId) {
+  const rec = _lastMtmByTrade[tradeId];
+  if (!rec || !rec.receivedAt) return Infinity;
+  return (Date.now() - rec.receivedAt) / 1000;
+}
+
+/** Describe live-price / P&L feed state for UI labels and banners. */
+function _liveFeedInfo(tradeId, opts = {}) {
+  const { forCloseForm = false, hasLivePrices = false, usingEod = false } = opts;
+  const inMarket = _inMarketHours();
+  const rec = _lastMtmByTrade[tradeId];
+  const fresh = _mtmAgeSec(tradeId) <= LIVE_FEED_STALE_SEC;
+
+  if (inMarket) {
+    if (!_zerodhaHasSession || !_zerodhaValid) {
+      return {
+        mode: 'login',
+        label: 'Login required',
+        tip: 'Zerodha session missing or expired — log in to receive live prices and P&L.',
+        cls: 'tag-err',
+        banner: 'No live feed — Zerodha login required',
+      };
+    }
+    if (fresh || (forCloseForm && hasLivePrices)) {
+      const asOf = rec?.as_of ? ` Updated ${rec.as_of} IST.` : '';
+      return {
+        mode: 'live',
+        label: 'Live',
+        tip: `Live Zerodha feed active.${asOf}`,
+        cls: 'tag-ok',
+        banner: null,
+      };
+    }
+    if (rec) {
+      return {
+        mode: 'stale',
+        label: 'Stale feed',
+        tip: `No fresh ticks — last P&L${rec.as_of ? ' at ' + rec.as_of + ' IST' : ''}.`,
+        cls: 'tag-warn',
+        banner: 'No live feed — showing last known prices (may be outdated)',
+      };
+    }
+    return {
+      mode: 'none',
+      label: 'No live feed',
+      tip: 'Market is open but no live ticks received yet.',
+      cls: 'tag-warn',
+      banner: 'No live feed — waiting for Zerodha ticks',
+    };
+  }
+  if (forCloseForm && usingEod) {
+    return {
+      mode: 'eod',
+      label: 'Last EOD',
+      tip: 'Market closed — prices from last available bhavcopy.',
+      cls: 'tag-warn',
+      banner: 'Off market — showing last EOD prices',
+    };
+  }
+  if (rec) {
+    return {
+      mode: 'stale',
+      label: 'Last session',
+      tip: `Off market — P&L from last live session${rec.as_of ? ' (' + rec.as_of + ' IST)' : ''}.`,
+      cls: 'tag-warn',
+      banner: 'Off market — P&L from last live session (not current)',
+    };
+  }
+  return {
+    mode: 'off',
+    label: 'Off market',
+    tip: 'Market is closed — no live prices.',
+    cls: 'tag-warn',
+    banner: 'Off market — no live prices available',
+  };
+}
+
+function _updateFeedTag(tradeId, opts = {}) {
+  const feed = _liveFeedInfo(tradeId, opts);
+  document.querySelectorAll(`.live-feed-tag[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
+    el.textContent = feed.label;
+    el.className = `tag live-feed-tag ${feed.cls}`;
+    el.title = feed.tip;
+  });
+  const banner = document.getElementById(`live-feed-banner-${tradeId}`);
+  if (banner) {
+    if (feed.banner && feed.mode !== 'live') {
+      banner.hidden = false;
+      banner.textContent = feed.banner;
+      banner.className = `live-feed-banner live-feed-banner--${feed.mode}`;
+    } else {
+      banner.hidden = true;
+    }
+  }
+}
+
+function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
+  if (mtm != null) {
+    _lastMtmByTrade[tradeId] = {
+      mtm,
+      as_of: asOf,
+      receivedAt: liveTick ? Date.now() : (_parseMtmAsOf(asOf) || Date.now()),
+    };
+  }
+  document.querySelectorAll(`.live-mtm[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
+    const valEl = el.querySelector('.cpnl-val');
+    const txt = mtm != null
+      ? '\u20b9' + Number(mtm).toLocaleString('en-IN', { maximumFractionDigits: 0 })
+      : '\u2014';
+    if (valEl) valEl.textContent = txt;
+    else el.textContent = 'Current P&L ' + txt;
+    el.classList.toggle('mtm-pos', mtm > 0);
+    el.classList.toggle('mtm-neg', mtm < 0);
+    const feed = _liveFeedInfo(tradeId);
+    el.title = 'Current profit/loss' + (asOf ? ' as of ' + asOf + ' IST' : '') + '. ' + feed.tip;
+  });
+  _updateFeedTag(tradeId);
+}
+
+function _refreshAllFeedTags() {
+  document.querySelectorAll('.live-feed-tag[data-trade-id]').forEach(el => {
+    const tid = el.dataset.tradeId;
+    const panel = document.getElementById(`close-${tid}`);
+    const opts = {};
+    if (panel && !panel.hidden) {
+      let hasPrices = false;
+      panel.querySelectorAll('.cf-live-price[data-ltp]').forEach(span => {
+        const ltp = parseFloat(span.dataset.ltp);
+        if (!isNaN(ltp) && ltp > 0) hasPrices = true;
+      });
+      opts.forCloseForm = true;
+      opts.hasLivePrices = hasPrices && _inMarketHours();
+      opts.usingEod = hasPrices && !_inMarketHours();
+    }
+    _updateFeedTag(tid, opts);
+  });
+}
+
+function _applyMtmSnapshot(snap) {
+  Object.entries((snap && snap.trades) || {}).forEach(([tid, t]) => {
+    if (t && t.mtm != null) _updateCurrentPnlBadge(tid, t.mtm, t.as_of, false);
+  });
+  _refreshAllFeedTags();
+}
+
 function _applyLegLtpsToClosePanel(tradeId, legLtps) {
   const closePanel = document.getElementById(`close-${tradeId}`);
   if (!closePanel || closePanel.hidden || !legLtps) return false;
@@ -2030,6 +2189,12 @@ async function loadTrades() {
       return;
     }
     c.className=''; c.innerHTML = data.trades.map(renderTrade).join('');
+    try {
+      const snap = await API('/api/live/mtm/snapshot');
+      _applyMtmSnapshot(snap);
+    } catch (_) {
+      _refreshAllFeedTags();
+    }
     // Phase 3 — #3: open SSE stream once after each trades render so live
     // MTM cells (.live-mtm[data-trade-id="..."]) update without polling.
     ensureLiveMTMStream();
@@ -2264,6 +2429,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
 
           <!-- LEFT: live market snapshot -->
           <div class="close-col close-col-live">
+            <div id="live-feed-banner-${escapeHtml(tradeId)}" class="live-feed-banner" hidden></div>
             <div class="close-col-title">📡 Current market prices</div>
             <div class="cf-live-legs">${liveLegsHtml}</div>
             <div class="live-pnl-preview" id="live-pnl-${escapeHtml(tradeId)}">
@@ -2360,6 +2526,10 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     panel.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcFillPnl));
     recalcFillPnl();
     recalcLivePnl();
+    const hasLivePrices = data.legs.some(l =>
+      (mktPriceMap[l.leg_order] > 0) && priceSrcMap[l.leg_order] === 'live');
+    const usingEod = !marketOpen && data.legs.some(l => mktPriceMap[l.leg_order] > 0);
+    _updateFeedTag(tradeId, { forCloseForm: true, hasLivePrices, usingEod });
     // Live prices come from SSE only during market hours — do NOT poll
     // close-suggestion (EOD bhavcopy) as it fights live ticks and flickers.
 
@@ -2642,7 +2812,10 @@ function renderTrade(t) {
         ${hasPendingClose ? `<span class="tag tag-warn" title="Record exit prices to compute P&L">CLOSE PENDING</span>` : ''}
         <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
-        <span class="tag live-mtm" data-trade-id="${escapeHtml(t.trade_id)}" title="Live MTM (updates from broker WS)">\u2014</span>
+        <span class="tag tag-current-pnl live-mtm" data-trade-id="${escapeHtml(t.trade_id)}" title="Current profit/loss">
+          <span class="cpnl-label">Current P&L</span> <strong class="cpnl-val">\u2014</strong>
+        </span>
+        <span class="tag tag-warn live-feed-tag" data-trade-id="${escapeHtml(t.trade_id)}" title="Checking feed\u2026">\u2026</span>
         ${_entryQualBadge}
       </div>
     </div>
@@ -3519,17 +3692,12 @@ function _qualityBadge(edge, conf, pop, prefix = '') {
 let _liveMTMSource = null;
 
 function _applyMtmEvent(m) {
-  // 1. Update MTM badge on trade card
-  document.querySelectorAll(`.live-mtm[data-trade-id="${m.trade_id}"]`).forEach(el => {
-    el.textContent = '\u20b9' + Number(m.mtm).toLocaleString('en-IN', {maximumFractionDigits: 0});
-    el.classList.toggle('mtm-pos', m.mtm > 0);
-    el.classList.toggle('mtm-neg', m.mtm < 0);
-    if (m.as_of) el.title = 'Live P\u0026L as of ' + m.as_of + ' IST';
-  });
+  _updateCurrentPnlBadge(m.trade_id, m.mtm, m.as_of, true);
 
-  // 2. Update LEFT panel live price spans with latest leg LTPs
+  // Update LEFT panel live price spans with latest leg LTPs
   if (m.leg_ltps && typeof m.leg_ltps === 'object') {
     _applyLegLtpsToClosePanel(m.trade_id, m.leg_ltps);
+    _updateFeedTag(m.trade_id, { forCloseForm: true, hasLivePrices: true });
   }
 }
 
@@ -3953,6 +4121,9 @@ async function loadZerodhaStatus() {
   try {
     const r = await fetch('/api/zerodha/status');
     const d = await r.json();
+    _zerodhaHasSession = !!d.has_session;
+    _zerodhaValid = !!d.valid;
+    _refreshAllFeedTags();
     // Update header pill (always present)
     if (headerBtn && headerIcon && headerLabel) {
       if (!d.has_session) {
@@ -4277,6 +4448,7 @@ setInterval(_nfRefreshStats, 60000);
 
 loadZerodhaStatus();
 setInterval(loadZerodhaStatus, 60000);
+setInterval(_refreshAllFeedTags, 30000);
 
 // Auto-capture: when Kite redirects back to http://localhost:5001/?...&request_token=XYZ
 // the dashboard itself loads with the token in the URL. Pre-fill the input,

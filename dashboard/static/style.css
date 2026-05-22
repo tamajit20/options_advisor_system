@@ -136,6 +136,18 @@ a { color: var(--accent); text-decoration: none; }
 .tag-ok    { background: rgba(16,185,129,.15); color: var(--ok); }
 .tag-warn  { background: rgba(245,158,11,.15); color: var(--warn); }
 .tag-err   { background: rgba(239,68,68,.15);  color: var(--err); }
+.tag-current-pnl { display:inline-flex; align-items:center; gap:4px; font-size:.78rem; white-space:nowrap; }
+.tag-current-pnl .cpnl-label { color:var(--text-dim); font-weight:500; }
+.tag-current-pnl .cpnl-val { font-weight:700; }
+.tag-current-pnl.mtm-pos .cpnl-val { color:var(--ok); }
+.tag-current-pnl.mtm-neg .cpnl-val { color:var(--err); }
+.live-feed-tag { font-size:.72rem; white-space:nowrap; }
+.live-feed-banner { font-size:.78rem; padding:6px 10px; border-radius:6px; margin-bottom:8px; line-height:1.35; }
+.live-feed-banner--login { background:rgba(239,68,68,.12); color:#fca5a5; border:1px solid rgba(239,68,68,.22); }
+.live-feed-banner--stale,
+.live-feed-banner--none,
+.live-feed-banner--eod,
+.live-feed-banner--off { background:rgba(245,158,11,.12); color:#fcd34d; border:1px solid rgba(245,158,11,.22); }
 .tag-info  { background: rgba(6,182,212,.15);  color: var(--info); }
 .tag-accent { background: rgba(245,158,11,.15); color: var(--accent); }
 
