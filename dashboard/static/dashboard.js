@@ -372,15 +372,18 @@ function _refreshAllFeedTags() {
     const tid = el.dataset.tradeId;
     const panel = document.getElementById(`close-${tid}`);
     const opts = {};
-    if (panel && !panel.hidden) {
-      let hasPrices = false;
-      panel.querySelectorAll('.cf-live-price[data-ltp]').forEach(span => {
-        const ltp = parseFloat(span.dataset.ltp);
-        if (!isNaN(ltp) && ltp > 0) hasPrices = true;
-      });
-      opts.forCloseForm = true;
-      opts.hasLivePrices = hasPrices && _inMarketHours();
-      opts.usingEod = hasPrices && !_inMarketHours();
+    if (panel) {
+      const content = panel.querySelector('.close-trade-content');
+      if (content && content.querySelector('.cf-live-leg')) {
+        let hasPrices = false;
+        content.querySelectorAll('.cf-live-price[data-ltp]').forEach(span => {
+          const ltp = parseFloat(span.dataset.ltp);
+          if (!isNaN(ltp) && ltp > 0) hasPrices = true;
+        });
+        opts.forCloseForm = true;
+        opts.hasLivePrices = hasPrices && _inMarketHours();
+        opts.usingEod = hasPrices && !_inMarketHours();
+      }
     }
     _updateFeedTag(tid, opts);
   });
@@ -396,7 +399,7 @@ function _applyMtmSnapshot(snap) {
 
 function _applyLegLtpsToClosePanel(tradeId, legLtps) {
   const closePanel = document.getElementById(`close-${tradeId}`);
-  if (!closePanel || closePanel.hidden || !legLtps) return false;
+  if (!closePanel || !legLtps) return false;
   let anyUpdated = false;
   closePanel.querySelectorAll('.cf-live-price[data-leg-key]').forEach(span => {
     const parts = span.dataset.legKey.split('|');
@@ -882,18 +885,117 @@ function _computeTradeActionInstruction(opts) {
     tone: 'hold',
     verb: 'HOLD',
     title: 'No action required',
-    instruction: 'Stay in the trade. Red = close at loss limit · Amber floor = protect profit · '
-      + 'Green target = optional take profit.',
+    instruction: '',
     why: liveMtm != null
       ? `Live MTM ${_fmtMtmSigned(liveMtm)}`
         + (lossRs != null ? ` · loss limit −₹${fmt(lossRs)}` : '')
         + (targetRs != null ? ` · target ₹${fmt(targetRs)}` : '')
       : 'Waiting for live MTM during market hours.',
-    cta: 'Monitor — Close Trade below when you choose to exit.',
+    cta: '',
   };
 }
 
+function renderTapLegendPopover() {
+  return `<button type="button" class="tap-legend-btn" aria-label="What the colors mean">i</button>
+    <span class="tap-legend-popover" role="tooltip">
+      <p>Stay in the trade. Red = close at loss limit · Amber floor = protect profit · Green target = optional take profit.</p>
+      <p class="muted" style="margin:.35rem 0 0">Monitor — Close Trade below when you choose to exit.</p>
+    </span>`;
+}
+
+function renderTradeProfitZone(t, legs) {
+  const strat = (t.suggestion && t.suggestion.strategy) || '';
+  const shortCallLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE');
+  const shortPutLeg  = legs.find(l => l.action === 'SELL' && l.option_type === 'PE');
+  const longCallLeg  = legs.find(l => l.action === 'BUY'  && l.option_type === 'CE');
+  const longPutLeg   = legs.find(l => l.action === 'BUY'  && l.option_type === 'PE');
+  const ul = (t.suggestion && t.suggestion.underlying) || '';
+  const spot = t.spot_at_execution != null ? parseFloat(t.spot_at_execution) : null;
+  const execLegs = legs.filter(l => l.executed && l.fill_price != null);
+  let actualNetCredit = 0;
+  execLegs.forEach(l => { actualNetCredit += (l.action === 'SELL' ? 1 : -1) * parseFloat(l.fill_price || 0); });
+  let realUpperBE = null;
+  let realLowerBE = null;
+  if (strat === 'BULL_CALL_SPREAD' && longCallLeg) {
+    realLowerBE = parseFloat(longCallLeg.strike) + actualNetCredit;
+  } else if (strat === 'BEAR_PUT_SPREAD' && longPutLeg) {
+    realLowerBE = parseFloat(longPutLeg.strike) + actualNetCredit;
+  } else {
+    if (shortCallLeg) realUpperBE = parseFloat(shortCallLeg.strike) + actualNetCredit;
+    if (shortPutLeg)  realLowerBE = parseFloat(shortPutLeg.strike)  - actualNetCredit;
+  }
+  const sug = t.suggestion || {};
+  const profit = buildProfitScenario({
+    strategy: strat,
+    legs,
+    underlying: ul,
+    upperBE: sug.upper_breakeven != null ? sug.upper_breakeven : realUpperBE,
+    lowerBE: sug.lower_breakeven != null ? sug.lower_breakeven : realLowerBE,
+    dte: sug.dte,
+    spot,
+  });
+  const beLine = (realUpperBE != null || realLowerBE != null) ? (() => {
+    const parts = [];
+    if (realLowerBE != null) parts.push(`Lower BE <strong>\u20b9${fmt(realLowerBE)}</strong>`);
+    if (realUpperBE != null) parts.push(`Upper BE <strong>\u20b9${fmt(realUpperBE)}</strong>`);
+    const spotBelowUpperBE = spot != null && realUpperBE != null && spot < realUpperBE;
+    const spotAboveLowerBE = spot != null && realLowerBE != null && spot > realLowerBE;
+    const safeAtEntry = (!realLowerBE || spotAboveLowerBE) && (!realUpperBE || spotBelowUpperBE);
+    const beStatus = spot != null
+      ? `<span class="pz-spot ${safeAtEntry ? 'pz-inside' : 'pz-outside'}">${safeAtEntry ? '\u2713 spot inside BEs at entry' : '\u26a0 spot outside BEs at entry'}</span>`
+      : '';
+    return `<div class="tpz-line pz-be-row">\u{1F4CF} Actual BEs (from fills): ${parts.join(' \u00b7 ')}${beStatus ? ' &nbsp;\u00b7&nbsp; ' + beStatus : ''}</div>`;
+  })() : '';
+  if (!profit.maxProfitText && !beLine) return '';
+  const tag = profit.spotTag || '';
+  const maxLine = profit.maxProfitText
+    ? `<div class="tpz-line">\u{1F3AF} Max profit if ${escapeHtml(ul)} ${profit.maxProfitText}${tag ? ' &nbsp;\u00b7&nbsp; ' + tag : ''}</div>`
+    : '';
+  return `${maxLine}${beLine}`;
+}
+
+function renderTradeKvGrid(t, legs) {
+  const scLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE' && l.fill_price != null);
+  const spLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'PE' && l.fill_price != null);
+  let fillNetCredit = 0;
+  legs.filter(l => l.executed && l.fill_price != null).forEach(l => {
+    fillNetCredit += (l.action === 'SELL' ? 1 : -1) * parseFloat(l.fill_price);
+  });
+  const realUBE = scLeg ? parseFloat(scLeg.strike) + fillNetCredit : null;
+  const realLBE = spLeg ? parseFloat(spLeg.strike) - fillNetCredit : null;
+  const estMp = t.actual_max_profit != null ? t.actual_max_profit
+              : (t.suggestion && t.suggestion.max_profit != null ? t.suggestion.max_profit : null);
+  const estMl = t.actual_max_loss != null ? t.actual_max_loss
+              : (t.suggestion && t.suggestion.max_loss != null ? t.suggestion.max_loss : null);
+  const estPop = t.suggestion && t.suggestion.probability_of_profit != null
+               ? t.suggestion.probability_of_profit : null;
+  const estDte = t.suggestion && t.suggestion.dte != null ? t.suggestion.dte : null;
+  const execWithFills = legs.filter(l => l.executed && l.fill_price != null);
+  const estChg = execWithFills.length > 0
+    ? estChargesFromLegs(execWithFills)
+    : (t.suggestion && t.suggestion.estimated_charges_total != null
+      ? t.suggestion.estimated_charges_total : null);
+  const estNetPnl = (estMp != null && estChg != null) ? (estMp - estChg) : null;
+  return `
+      <div><span class="k">Entry date</span><br><span class="v">${fmtDt(t.executed_on)}</span></div>
+      ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : '<div></div>'}
+      <div><span class="k">Net credit (actual)</span><br><span class="v">\u20b9${fmt(t.net_credit_actual)}</span></div>
+      <div><span class="k">Type</span><br><span class="v">${escapeHtml(t.position_type)}</span></div>
+      ${estMp != null ? `<div><span class="k">Est. max profit</span><br><span class="v pnl-profit">\u20b9${fmt(estMp)}</span></div>` : '<div></div>'}
+      ${estMl != null ? `<div><span class="k">Est. max loss</span><br><span class="v pnl-loss">\u20b9${fmt(estMl)}<span class="econ-ml-hint">${pctHint(estMl, t.net_credit_actual, 'credit')}</span></span></div>` : '<div></div>'}
+      ${estPop != null ? `<div><span class="k">Est. PoP</span><br><span class="v">${fmtPct(estPop)}</span></div>` : '<div></div>'}
+      ${realUBE != null ? `<div><span class="k">Upper BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realUBE)}</span></div>` : '<div></div>'}
+      ${realLBE != null ? `<div><span class="k">Lower BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realLBE)}</span></div>` : '<div></div>'}
+      <div><span class="k">P&amp;L</span><br><span class="v">\u20b9${fmt(t.net_pnl)}${pctHint(t.net_pnl, t.net_credit_actual, 'credit')}</span></div>
+      ${estChg != null ? `<div><span class="k">Est. charges <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(estChg)}</span></div>` : '<div></div>'}
+      ${estNetPnl != null ? `<div><span class="k">Est. net P&amp;L</span><br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">\u20b9${fmt(estNetPnl)}</span></div>` : '<div></div>'}
+      ${estDte != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${estDte}</span></div>` : '<div></div>'}
+      <div><span class="k">Status</span><br><span class="v">${escapeHtml(t.status)}</span></div>
+      ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}`;
+}
+
 function renderTradeActionPanel(t) {
+  const legs = t.legs || [];
   const ra = t.risk_alert || {};
   const sug = t.suggestion || {};
   const initial = _computeTradeActionInstruction({
@@ -901,26 +1003,51 @@ function renderTradeActionPanel(t) {
     exitInstruction: t.exit_instruction,
     riskNotif: ra.notif_type,
   });
+  const origSugHtml = renderOriginalSuggestion(t.suggestion);
+  const isHold = initial.tone === 'hold';
+  const profitZoneLines = renderTradeProfitZone(t, legs);
+  const metaRow = origSugHtml ? `
+      <div class="tap-meta-row">
+        <details class="tap-details">
+          <summary>Why? (numbers)</summary>
+          <p class="tap-why muted">${escapeHtml(initial.why)}</p>
+        </details>
+        ${origSugHtml}
+      </div>` : `
+      <details class="tap-details">
+        <summary>Why? (numbers)</summary>
+        <p class="tap-why muted">${escapeHtml(initial.why)}</p>
+      </details>`;
   return `
     <div class="trade-action-panel" data-trade-id="${escapeHtml(t.trade_id)}"
          data-strategy="${escapeHtml(sug.strategy || '')}"
          data-daily-status="${escapeHtml(t.daily_status || '')}"
          data-exit-instruction="${escapeHtml(t.exit_instruction || '')}"
          data-risk-notif="${escapeHtml(ra.notif_type || '')}">
-      <div class="tap-inner tap-inner-${initial.tone}">
-        <div class="tap-verb">${escapeHtml(initial.verb)}</div>
-        <div class="tap-body">
-          <strong class="tap-title">${escapeHtml(initial.title)}</strong>
-          <p class="tap-instruction">${escapeHtml(initial.instruction)}</p>
-          <p class="tap-cta">${escapeHtml(initial.cta)}</p>
+      <div class="trade-summary-row">
+        <div class="trade-summary-metrics">
+          <div class="card-id-row">
+            <span class="id-chip" title="Trade ID">${escapeHtml(t.trade_id || '\u2014')}</span>
+            ${t.suggestion_id ? `<span class="id-chip" title="Suggestion ID">${escapeHtml(t.suggestion_id)}</span>` : ''}
+          </div>
+          <div class="kv-grid kv-grid-trade">${renderTradeKvGrid(t, legs)}</div>
         </div>
-        <button type="button" class="btn btn-ghost btn-sm tap-goto-close"
-                data-trade-id="${escapeHtml(t.trade_id)}">Close Trade ↓</button>
+        <div class="trade-summary-action">
+          <div class="tap-inner tap-inner-${initial.tone}">
+            <div class="tap-verb">${escapeHtml(initial.verb)}</div>
+            <div class="tap-body">
+              <div class="tap-title-row">
+                <strong class="tap-title">${escapeHtml(initial.title)}</strong>
+                <span class="tap-legend-wrap"${isHold ? '' : ' hidden'}>${renderTapLegendPopover()}</span>
+              </div>
+              <div class="tap-profit-zone"${isHold && profitZoneLines ? '' : ' hidden'}>${profitZoneLines}</div>
+              <p class="tap-instruction"${isHold ? ' hidden' : ''}>${escapeHtml(initial.instruction)}</p>
+              <p class="tap-cta"${isHold ? ' hidden' : ''}>${escapeHtml(initial.cta)}</p>
+            </div>
+          </div>
+        </div>
       </div>
-      <details class="tap-details">
-        <summary>Why? (numbers)</summary>
-        <p class="tap-why muted">${escapeHtml(initial.why)}</p>
-      </details>
+      ${metaRow}
     </div>`;
 }
 
@@ -960,10 +1087,21 @@ function _updateTradeActionPanel(tradeId, payload, stripState) {
       const title = inner.querySelector('.tap-title');
       const instruction = inner.querySelector('.tap-instruction');
       const cta = inner.querySelector('.tap-cta');
+      const legendWrap = inner.querySelector('.tap-legend-wrap');
+      const profitZone = inner.querySelector('.tap-profit-zone');
+      const isHold = instr.tone === 'hold';
       if (verb) verb.textContent = instr.verb;
       if (title) title.textContent = instr.title;
-      if (instruction) instruction.textContent = instr.instruction;
-      if (cta) cta.textContent = instr.cta;
+      if (legendWrap) legendWrap.hidden = !isHold;
+      if (profitZone) profitZone.hidden = !isHold;
+      if (instruction) {
+        instruction.hidden = isHold;
+        if (!isHold) instruction.textContent = instr.instruction;
+      }
+      if (cta) {
+        cta.hidden = isHold;
+        if (!isHold) cta.textContent = instr.cta;
+      }
     }
     const why = panel.querySelector('.tap-why');
     if (why) why.textContent = instr.why;
@@ -1792,12 +1930,11 @@ function execStepBadge(legs, leg, strategy, mode) {
 }
 
 // Banner shown above the legs list explaining the order rule.
-function execOrderBanner(legs, strategy, mode) {
-  if (!legs || legs.length <= 1) return '';
+function execOrderSeqHtml(legs, strategy, mode) {
+  if (!legs || legs.length <= 1) return null;
   const map = executionOrder(legs, strategy, mode);
-  if (!map.size) return '';
-  // Build readable sequence: "BUY 23100 PE \u2192 BUY 24900 CE \u2192 SELL 23400 PE \u2192 SELL 24600 CE"
-  const ordered = [...legs].sort((a, b) => (map.get(a.leg_order)||99) - (map.get(b.leg_order)||99));
+  if (!map.size) return null;
+  const ordered = [...legs].sort((a, b) => (map.get(a.leg_order) || 99) - (map.get(b.leg_order) || 99));
   const seq = ordered.map(l => {
     const verb = mode === 'close'
       ? (l.action === 'SELL' ? 'Buy back' : 'Sell back')
@@ -1809,16 +1946,30 @@ function execOrderBanner(legs, strategy, mode) {
     return `<span class="exec-seq-item">
       <span class="${stepCls}">${map.get(l.leg_order)}</span>
       <span class="tag ${verbClass} tag-sm">${verb}</span>
-      ${l.strike||''} ${escapeHtml(l.option_type||'')}
+      ${l.strike || ''} ${escapeHtml(l.option_type || '')}
     </span>`;
   }).join('<span class="exec-seq-arrow">\u2192</span>');
   const heading = mode === 'close'
-    ? '\u26a0\ufe0f Close in this order \u2014 buy back short legs FIRST, then sell longs:'
-    : '\u26a0\ufe0f Execute in this order \u2014 acquire hedges (BUY) FIRST, then SELL shorts:';
+    ? 'Close in this order \u2014 buy back short legs FIRST, then sell longs:'
+    : 'Execute in this order \u2014 acquire hedges (BUY) FIRST, then SELL shorts:';
+  return { heading, seq };
+}
+
+function execOrderBanner(legs, strategy, mode) {
+  const content = execOrderSeqHtml(legs, strategy, mode);
+  if (!content) return '';
+  const icon = mode === 'close' ? '\u26a0\ufe0f ' : '\u26a0\ufe0f ';
   return `<div class="exec-order-banner exec-order-${mode}">
-    <div class="exec-order-heading">${heading}</div>
-    <div class="exec-order-seq">${seq}</div>
+    <div class="exec-order-heading">${icon}${content.heading}</div>
+    <div class="exec-order-seq">${content.seq}</div>
   </div>`;
+}
+
+function execOrderFillsSection(legs, strategy, titleText) {
+  const orderBanner = execOrderBanner(legs, strategy, 'close');
+  return `
+    <div class="close-col-title">${titleText}</div>
+    ${orderBanner ? `<div class="close-order-static">${orderBanner}</div>` : ''}`;
 }
 
 // ── Strategy rationale ──────────────────────────────────────────────────────
@@ -2226,7 +2377,7 @@ function legRoleNote(strategy, leg) {
 
 // Build the per-card suggestion render output.
 // readOnly=true: static view used inside trade cards (no inputs, no action buttons)
-function renderSuggestion(s, readOnly = false, allSuggestions = []) {
+function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader = false) {
   const isNoSug = s.strategy === 'NONE' || s.status === 'NO_SUGGESTION';
   if (isNoSug) {
     return `<div class="card">
@@ -2408,8 +2559,12 @@ function renderSuggestion(s, readOnly = false, allSuggestions = []) {
     </div>`}`;
 
   if (readOnly) {
-    return `<details class="orig-sug-details" style="margin-top:10px">
-      <summary class="orig-sug-summary">📋 Original suggestion</summary>
+    const detailsCls = inlineHeader
+      ? 'orig-sug-details orig-sug-details-action'
+      : 'orig-sug-details';
+    const detailsStyle = inlineHeader ? '' : ' style="margin-top:10px"';
+    return `<details class="${detailsCls}"${detailsStyle}>
+      <summary class="orig-sug-summary">\ud83d\udccb Original suggestion</summary>
       <div class="orig-sug-body">${innerHtml}</div>
     </details>`;
   }
@@ -2733,32 +2888,16 @@ async function loadTrades() {
     // MTM cells (.live-mtm[data-trade-id="..."]) update without polling.
     ensureLiveMTMStream();
     bindConfChips();
-    $$('.tap-goto-close').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const tid = btn.dataset.tradeId;
-        const closeBtn = document.querySelector(
-          `.btn-close-trade[data-trade-id="${CSS.escape(tid)}"]`,
-        );
-        if (closeBtn) {
-          closeBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          closeBtn.classList.add('btn-pulse');
-          setTimeout(() => closeBtn.classList.remove('btn-pulse'), 2000);
-        }
-      });
-    });
-    $$('.btn-resuggest').forEach(b => b.addEventListener('click', async e => {
-      const id = e.target.dataset.tradeId;
-      try {
-        const r = await API(`/api/trades/${id}/resuggest`, {method:'POST'});
-        toast(r.inserted ? 'Resuggestion generated' : 'Already exists', 'info');
-      } catch (err) { toast(err.message, 'err'); }
-    }));
     $$('.btn-complete-trade').forEach(b => b.addEventListener('click', e => {
       openSupplementForm(e.target.dataset.tradeId);
     }));
-    $$('.btn-close-trade').forEach(b => b.addEventListener('click', e => {
-      openCloseForm(e.target.dataset.tradeId, parseFloat(e.target.dataset.netCredit) || 0);
-    }));
+    data.trades.forEach(t => {
+      const legs = t.legs || [];
+      const hasExecutedLegs = legs.some(l => l.executed);
+      if (hasExecutedLegs) {
+        openCloseForm(t.trade_id, parseFloat(t.net_credit_actual) || 0);
+      }
+    });
     $$('.btn-void-trade').forEach(b => b.addEventListener('click', async e => {
       const id = e.target.dataset.tradeId;
       const card = e.target.closest('.card');
@@ -2888,8 +3027,9 @@ async function submitSupplement(tradeId, panel) {
 async function openCloseForm(tradeId, netCreditActual = 0) {
   const panel = document.getElementById(`close-${tradeId}`);
   if (!panel) return;
-  panel.hidden = false;
-  panel.innerHTML = '<div class="muted">Loading legs…</div>';
+  const content = panel.querySelector('.close-trade-content');
+  if (!content) return;
+  content.innerHTML = '<div class="muted">Loading legs…</div>';
   try {
     const [data, sugg, snap] = await Promise.all([
       API(`/api/trades/${tradeId}/executed-legs`),
@@ -2897,7 +3037,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       API('/api/live/mtm/snapshot').catch(() => ({trades: {}})),
     ]);
     if (!data.legs.length) {
-      panel.innerHTML = '<div class="muted">No executed legs found.</div>'; return;
+      content.innerHTML = '<div class="muted">No executed legs found.</div>'; return;
     }
     const liveLtps = (snap.trades && snap.trades[tradeId] && snap.trades[tradeId].leg_ltps) || {};
     const marketOpen = _inMarketHours();
@@ -2969,9 +3109,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
         </div>`;
     }).join('');
 
-    panel.innerHTML = `
-      <div style="margin-top:10px;padding-top:10px;border-top:1px solid #2a3744">
-        ${execOrderBanner(data.legs, closeStrategy, 'close')}
+    content.innerHTML = `
         <div class="close-two-col">
 
           <!-- LEFT: live market snapshot -->
@@ -2989,7 +3127,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
 
           <!-- RIGHT: actual fills entry -->
           <div class="close-col close-col-fills">
-            <div class="close-col-title">✏️ Enter your actual fills</div>
+            ${execOrderFillsSection(data.legs, closeStrategy, '\u270f\ufe0f Enter your actual fills')}
             <div class="leg-exit-grid">${fillLegsHtml}</div>
             <div class="fill-pnl-preview" id="fill-pnl-${escapeHtml(tradeId)}">
               <div class="live-pnl-label">P&amp;L based on your fills</div>
@@ -2998,13 +3136,11 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
               <div>Net P&amp;L: <strong class="fill-pnl-value">—</strong><span class="fill-pnl-pct muted"></span></div>
             </div>
             <div class="btn-row" style="margin-top:8px">
-              <button class="btn btn-close-trade btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm &amp; record fills</button>
-              <button class="btn btn-ghost btn-close-cancel">Cancel</button>
+              <button class="btn btn-danger btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm &amp; record fills</button>
             </div>
           </div>
 
-        </div>
-      </div>`;
+        </div>`;
 
     // ── Recalc helper (shared by both panels) ──
     function _calcPnl(rows, priceSelector) {
@@ -3058,19 +3194,19 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
 
     // LEFT panel: recalc from live price display spans
     function recalcLivePnl() {
-      const rows = [...panel.querySelectorAll('.cf-live-leg')];
+      const rows = [...content.querySelectorAll('.cf-live-leg')];
       const result = _calcPnl(rows, row => row.querySelector('.cf-live-price')?.dataset.ltp);
-      _renderPnl(panel.querySelector('.live-pnl-preview'), result);
+      _renderPnl(content.querySelector('.live-pnl-preview'), result);
     }
 
     // RIGHT panel: recalc from user fill inputs
     function recalcFillPnl() {
-      const rows = [...panel.querySelectorAll('.leg-exit-row')];
+      const rows = [...content.querySelectorAll('.leg-exit-row')];
       const result = _calcPnl(rows, row => row.querySelector('.close-price')?.value);
-      _renderPnl(panel.querySelector('.fill-pnl-preview'), result);
+      _renderPnl(content.querySelector('.fill-pnl-preview'), result);
     }
 
-    panel.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcFillPnl));
+    content.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcFillPnl));
     recalcFillPnl();
     recalcLivePnl();
     const hasLivePrices = data.legs.some(l =>
@@ -3081,12 +3217,9 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     // close-suggestion (EOD bhavcopy) as it fights live ticks and flickers.
 
     panel.querySelector('.btn-close-submit').addEventListener('click', () =>
-      submitClose(tradeId, panel));
-    panel.querySelector('.btn-close-cancel').addEventListener('click', () => {
-      panel.hidden = true;
-    });
+      submitClose(tradeId, content));
   } catch (err) {
-    panel.innerHTML = `<div class="muted">Error: ${escapeHtml(err.message)}</div>`;
+    content.innerHTML = `<div class="muted">Error: ${escapeHtml(err.message)}</div>`;
   }
 }
 async function submitClose(tradeId, panel) {
@@ -3170,7 +3303,7 @@ function legNextAction(leg, allLegs) {
 // Collapsible original-suggestion panel shown inside each open trade card
 function renderOriginalSuggestion(s) {
   if (!s) return '';
-  return renderSuggestion(s, true);
+  return renderSuggestion(s, true, [], true);
 }
 
 function renderTrade(t) {
@@ -3260,12 +3393,6 @@ function renderTrade(t) {
     legsHtml = `<div class="trade-legs-section">
       ${targetSummaryHtml}
       ${(() => {
-        // Close-order banner shown above legs when there are open executed legs.
-        const openExec = legs.filter(l => l.executed && !l.exit_price);
-        const tradeStrategy2 = (t.suggestion && t.suggestion.strategy) || '';
-        return openExec.length > 1 ? execOrderBanner(openExec, tradeStrategy2, 'close') : '';
-      })()}
-      ${(() => {
         // Entry-order banner when there are still pending (un-executed) legs to fill.
         const pending = legs.filter(l => !l.executed);
         const tradeStrategy3 = (t.suggestion && t.suggestion.strategy) || '';
@@ -3335,7 +3462,7 @@ function renderTrade(t) {
   return `<div class="card">
     <div class="card-head">
       <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <div class="card-head-tags">
         ${(() => {
           // Live risk-monitor verdict (refreshed on every leg tick during
           // market hours). Shown ahead of the daily-status tag so the
@@ -3371,122 +3498,14 @@ function renderTrade(t) {
         </span>
         <span class="tag tag-warn live-feed-tag" data-trade-id="${escapeHtml(t.trade_id)}" title="Checking feed\u2026">\u2026</span>
         ${_entryQualBadge}
+        <button type="button" class="btn btn-danger btn-void-trade card-head-btn" data-trade-id="${escapeHtml(t.trade_id)}">
+          Void Trade</button>
       </div>
     </div>
     ${renderTradeActionPanel(t)}
-    <div class="card-id-row">
-      <span class="id-chip" title="Trade ID">${escapeHtml(t.trade_id || '—')}</span>
-      ${t.suggestion_id ? `<span class="id-chip" title="Suggestion ID">${escapeHtml(t.suggestion_id)}</span>` : ''}
-    </div>
-    <div class="kv-grid">
-      ${(() => {
-        // Compute BEs from actual fill prices — more accurate than DB-stored values
-        // which were copied from the suggestion at execution time.
-        const scLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE' && l.fill_price != null);
-        const spLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'PE' && l.fill_price != null);
-        let fillNetCredit = 0;
-        legs.filter(l => l.executed && l.fill_price != null).forEach(l => {
-          fillNetCredit += (l.action === 'SELL' ? 1 : -1) * parseFloat(l.fill_price);
-        });
-        const realUBE = scLeg ? parseFloat(scLeg.strike) + fillNetCredit : null;
-        const realLBE = spLeg ? parseFloat(spLeg.strike) - fillNetCredit : null;
-        // Resolve max profit/loss — prefer trade-stored actuals, fall back to suggestion
-        const estMp = t.actual_max_profit != null ? t.actual_max_profit
-                    : (t.suggestion && t.suggestion.max_profit != null ? t.suggestion.max_profit : null);
-        const estMl = t.actual_max_loss   != null ? t.actual_max_loss
-                    : (t.suggestion && t.suggestion.max_loss   != null ? t.suggestion.max_loss   : null);
-        const estPop = t.suggestion && t.suggestion.probability_of_profit != null
-                     ? t.suggestion.probability_of_profit : null;
-        const estDte = t.suggestion && t.suggestion.dte != null ? t.suggestion.dte : null;
-
-        // Grid positions mirror suggestion tab exactly (3-col on wide screen):
-        // Pos  1: Entry date       ≈ Suggested on        (col 1)
-        // Pos  2: Options expiry   = Options expiry       (col 2) ✓
-        // Pos  3: Net credit       ≈ Net credit/unit      (col 3) ✓
-        // Pos  4: Type             ≈ Total credit         (col 1, row 2)
-        // Pos  5: Est. max profit  = Max profit           (col 2) ✓
-        // Pos  6: Est. max loss    = Max loss             (col 3) ✓
-        // Pos  7: Est. PoP         = PoP                  (col 1) ✓
-        // Pos  8: Upper BE (fills) ≈ Upper BE             (col 2) ✓
-        // Pos  9: Lower BE (fills) ≈ Stop loss / Lower BE (col 3) ✓
-        // Pos 10: P&L              ≈ Premium SL           (col 1, row 4)
-        // Pos 11: Est. charges     = Est. charges         (col 2) ✓
-        // Pos 12: Est. net P&L     = Est. net P&L         (col 3) ✓
-        // Pos 13: DTE at entry     = DTE                  (col 1) ✓
-        // Pos 14: Status           (col 2)
-        // Pos 15: Exit date (if closed, col 3)
-        const execWithFills = legs.filter(l => l.executed && l.fill_price != null);
-        const estChg = execWithFills.length > 0
-          ? estChargesFromLegs(execWithFills)
-          : (t.suggestion && t.suggestion.estimated_charges_total != null ? t.suggestion.estimated_charges_total : null);
-        const estNetPnl = (estMp != null && estChg != null) ? (estMp - estChg) : null;
-        return `
-      <div><span class="k">Entry date</span><br><span class="v">${fmtDt(t.executed_on)}</span></div>
-      ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : '<div></div>'}
-      <div><span class="k">Net credit (actual)</span><br><span class="v">₹${fmt(t.net_credit_actual)}</span></div>
-      <div><span class="k">Type</span><br><span class="v">${escapeHtml(t.position_type)}</span></div>
-      ${estMp != null ? `<div><span class="k">Est. max profit</span><br><span class="v pnl-profit">₹${fmt(estMp)}</span></div>` : '<div></div>'}
-      ${estMl != null ? `<div><span class="k">Est. max loss</span><br><span class="v pnl-loss">₹${fmt(estMl)}<span class="econ-ml-hint">${pctHint(estMl, t.net_credit_actual, 'credit')}</span></span></div>` : '<div></div>'}
-      ${estPop != null ? `<div><span class="k">Est. PoP</span><br><span class="v">${fmtPct(estPop)}</span></div>` : '<div></div>'}
-      ${realUBE != null ? `<div><span class="k">Upper BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(realUBE)}</span></div>` : '<div></div>'}
-      ${realLBE != null ? `<div><span class="k">Lower BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(realLBE)}</span></div>` : '<div></div>'}
-      <div><span class="k">P&amp;L</span><br><span class="v">₹${fmt(t.net_pnl)}${pctHint(t.net_pnl, t.net_credit_actual, 'credit')}</span></div>
-      ${estChg    != null ? `<div><span class="k">Est. charges <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">₹${fmt(estChg)}</span></div>` : '<div></div>'}
-      ${estNetPnl != null ? `<div><span class="k">Est. net P&amp;L</span><br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">₹${fmt(estNetPnl)}</span></div>` : '<div></div>'}
-      ${estDte != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${estDte}</span></div>` : '<div></div>'}
-      <div><span class="k">Status</span><br><span class="v">${escapeHtml(t.status)}</span></div>
-      ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}`;
-      })()}
-    </div>
     ${(() => {
-      const strat = (t.suggestion && t.suggestion.strategy) || '';
-      const shortCallLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE');
-      const shortPutLeg  = legs.find(l => l.action === 'SELL' && l.option_type === 'PE');
-      const longCallLeg  = legs.find(l => l.action === 'BUY'  && l.option_type === 'CE');
-      const longPutLeg   = legs.find(l => l.action === 'BUY'  && l.option_type === 'PE');
-      const ul = (t.suggestion && t.suggestion.underlying) || '';
-      const spot = t.spot_at_execution != null ? parseFloat(t.spot_at_execution) : null;
-      // Compute actual net credit per unit from fill prices (negative = net debit paid)
-      const execLegs = legs.filter(l => l.executed && l.fill_price != null);
-      let actualNetCredit = 0;
-      execLegs.forEach(l => { actualNetCredit += (l.action === 'SELL' ? 1 : -1) * parseFloat(l.fill_price || 0); });
-      // Compute real BEs from fills — credit spreads use short strike ± credit;
-      // debit spreads use long strike + net credit (credit is negative when debit).
-      let realUpperBE = null;
-      let realLowerBE = null;
-      if (strat === 'BULL_CALL_SPREAD' && longCallLeg) {
-        realLowerBE = parseFloat(longCallLeg.strike) + actualNetCredit;
-      } else if (strat === 'BEAR_PUT_SPREAD' && longPutLeg) {
-        realLowerBE = parseFloat(longPutLeg.strike) + actualNetCredit;
-      } else {
-        if (shortCallLeg) realUpperBE = parseFloat(shortCallLeg.strike) + actualNetCredit;
-        if (shortPutLeg)  realLowerBE = parseFloat(shortPutLeg.strike)  - actualNetCredit;
-      }
-      const beHtml = (realUpperBE != null || realLowerBE != null) ? (() => {
-        const parts = [];
-        if (realLowerBE != null) parts.push(`Lower BE <strong>\u20b9${fmt(realLowerBE)}</strong>`);
-        if (realUpperBE != null) parts.push(`Upper BE <strong>\u20b9${fmt(realUpperBE)}</strong>`);
-        const spotBelowUpperBE = spot != null && realUpperBE != null && spot < realUpperBE;
-        const spotAboveLowerBE = spot != null && realLowerBE != null && spot > realLowerBE;
-        const safeAtEntry = (!realLowerBE || spotAboveLowerBE) && (!realUpperBE || spotBelowUpperBE);
-        const beStatus = spot != null
-          ? `<span class="pz-spot ${safeAtEntry ? 'pz-inside' : 'pz-outside'}">${safeAtEntry ? '\u2713 spot inside BEs at entry' : '\u26a0 spot outside BEs at entry'}</span>`
-          : '';
-        return `<div class="pz-be-row">\u{1F4CF} Actual BEs (from fills): ${parts.join(' \u00b7 ')}${beStatus ? ' &nbsp;\u00b7&nbsp; ' + beStatus : ''}</div>`;
-      })() : '';
-      const sug = t.suggestion || {};
-      const profit = buildProfitScenario({
-        strategy: strat,
-        legs,
-        underlying: ul,
-        upperBE: sug.upper_breakeven != null ? sug.upper_breakeven : realUpperBE,
-        lowerBE: sug.lower_breakeven != null ? sug.lower_breakeven : realLowerBE,
-        dte: sug.dte,
-        spot,
-      });
-      return renderProfitZoneBar(profit, ul, beHtml);
-    })()}
-    ${renderLiveProfitLevels(t)}
+      const liveProfitHtml = renderLiveProfitLevels(t);
+      const slMonitorHtml = `
     <div class="sl-monitor-section">
       <div class="sl-monitor-label">Stop-loss monitor</div>
       <div class="sl-monitor-grid">
@@ -3543,26 +3562,25 @@ function renderTrade(t) {
       </div>
       <div class="sl-action-note">
         <strong>Spot SL</strong> = underlying crosses stored level (two-sided spreads: close breached side only).<br>
-        <strong>Loss limit</strong> and <strong>profit floor</strong> are MTM-based — see Live profit levels above.
+        <strong>Loss limit</strong> and <strong>profit floor</strong> are MTM-based — see Live profit levels.
       </div>
-    </div>
+    </div>`;
+      return `<div class="risk-levels-pair">${liveProfitHtml}${slMonitorHtml}</div>`;
+    })()}
     ${hasPendingClose ? `<div class="pending-close-alert">\u26a0 Exit fills not recorded \u2014 use Close Trade below to compute P&amp;L</div>` : ''}
     ${legsHtml}
     ${t.exit_instruction ? `<p class="muted" style="margin:8px 0 0">Exit: ${escapeHtml(t.exit_instruction)}</p>` : ''}
     ${brokenHtml}
-    ${renderOriginalSuggestion(t.suggestion)}
-    <div class="btn-row" style="margin-top:10px">
-      <button class="btn btn-ghost btn-resuggest" data-trade-id="${escapeHtml(t.trade_id)}">
-        Generate resuggestion</button>
-      ${isPartial ? `<button class="btn btn-warn btn-complete-trade" data-trade-id="${escapeHtml(t.trade_id)}">
-        Complete Trade</button>` : ''}
-      ${hasExecutedLegs ? `<button class="btn btn-close-trade" data-trade-id="${escapeHtml(t.trade_id)}" data-net-credit="${t.net_credit_actual || 0}">
-        Close Trade</button>` : ''}
-      <button class="btn btn-danger btn-void-trade" data-trade-id="${escapeHtml(t.trade_id)}"
-              style="margin-left:auto">Void Trade</button>
-    </div>
+    ${isPartial ? `<div class="btn-row" style="margin-top:10px">
+      <button class="btn btn-warn btn-complete-trade" data-trade-id="${escapeHtml(t.trade_id)}">
+        Complete Trade</button>
+    </div>` : ''}
+    ${hasExecutedLegs ? `
+    <section class="close-trade-section" id="close-${escapeHtml(t.trade_id)}">
+      <div class="close-trade-header sl-monitor-label">Close Trade</div>
+      <div class="close-trade-content"><div class="muted">Loading…</div></div>
+    </section>` : ''}
     ${isPartial ? `<div class="supplement-panel" id="supp-${escapeHtml(t.trade_id)}" hidden></div>` : ''}
-    ${hasExecutedLegs ? `<div class="close-trade-panel" id="close-${escapeHtml(t.trade_id)}" hidden></div>` : ''}
   </div>`;
 }
 
