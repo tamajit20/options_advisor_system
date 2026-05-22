@@ -294,6 +294,22 @@ def vix_regime(vix_history: Sequence[dict]) -> str:
     return "STABLE"
 
 
+def vix_nd_change_pct(vix_history: Sequence[dict], n_days: int = 3) -> Optional[float]:
+    """Percentage change of VIX over the last `n_days` trading sessions.
+
+    Returns None when fewer than n_days+1 rows are available.
+    Used by the VIX spike veto (S4) to detect fast-rising volatility
+    environments where short-premium strategies face elevated gap risk.
+    """
+    if len(vix_history) < n_days + 1:
+        return None
+    latest = float(vix_history[-1]["close_price"])
+    base   = float(vix_history[-(n_days + 1)]["close_price"])
+    if base <= 0:
+        return None
+    return (latest - base) / base * 100.0
+
+
 # ---------------------------------------------------------------------------
 # Expected move
 # ---------------------------------------------------------------------------
@@ -431,6 +447,7 @@ def build_indicators(
             if std > 0:
                 vol_burst = (last - mean) / std
 
+    _vix_n = int(STRATEGY_CONFIG.get("vix_spike_lookback_days", 3))
     return MarketIndicators(
         symbol           = symbol,
         as_of            = as_of,
@@ -462,4 +479,5 @@ def build_indicators(
         atm_call_spread_bps = call_spr_bps,
         atm_put_spread_bps  = put_spr_bps,
         volume_burst_z      = vol_burst,
+        vix_nd_change_pct   = vix_nd_change_pct(vix_history, _vix_n),
     )

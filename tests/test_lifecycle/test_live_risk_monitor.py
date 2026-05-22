@@ -135,7 +135,7 @@ class TestEvaluation:
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 250.0))
         notifier.notify.assert_called_once()
         kwargs = notifier.notify.call_args.kwargs
-        assert kwargs["notif_type"] == "SL_TRIGGER"
+        assert kwargs["notif_type"] == "LOSS_LIMIT_HIT"
         assert kwargs["severity"] == "CRITICAL"
 
     def test_does_not_evaluate_until_all_legs_seen(self):
@@ -400,7 +400,7 @@ class TestPreBreachWarning:
         # Another tick at same loss level — should NOT re-fire pre-breach.
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 135.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 135.0))
-        # May fire SL_TRIGGER if loss > 50%, but not a 2nd PRE_BREACH.
+        # May fire LOSS_LIMIT_HIT if loss > 50%, but not a 2nd PRE_BREACH.
         types = [c.kwargs["notif_type"] for c in notifier.notify.call_args_list]
         assert types.count("PRE_BREACH_WARNING") == 1
 
@@ -441,15 +441,22 @@ class TestSpotSL:
     def test_spot_breach_fires_sl_trigger(self):
         """Item #7 — when underlying spot crosses actual_stop_loss_level the
         monitor fires SL_TRIGGER even without leg ticks."""
+        expiry = date(2026, 5, 28)
         state = _make_state(max_loss=10000.0)
-        # Short call dominant → upside SL at 23500. Spot at 23600 → breach.
-        state.sl_level = 23500.0
-        # Make both legs CE so direction is unambiguous.
-        state.legs[1] = _LegRef(
-            leg_order=2, action="SELL", strike=23200.0, option_type="CE",
-            fill_price=100.0, lots=1, lot_size=50,
-            key=("NIFTY", state.expiry, 23200.0, "CE"),
-        )
+        state.strategy = "BEAR_CALL_SPREAD"
+        state.sl_level = 23950.0  # short 23800 CE + half of 200-wide wing
+        state.legs = [
+            _LegRef(
+                leg_order=1, action="SELL", strike=23800.0, option_type="CE",
+                fill_price=100.0, lots=1, lot_size=50,
+                key=("NIFTY", expiry, 23800.0, "CE"),
+            ),
+            _LegRef(
+                leg_order=2, action="BUY", strike=24000.0, option_type="CE",
+                fill_price=50.0, lots=1, lot_size=50,
+                key=("NIFTY", expiry, 24000.0, "CE"),
+            ),
+        ]
         monitor, notifier, bus = _build_monitor_full(state)
         # Re-index for the new leg.
         monitor._snapshot.index.clear()
@@ -459,20 +466,56 @@ class TestSpotSL:
         # Spot tick (strike & option_type are None).
         spot_quote = LiveQuote(
             symbol="NIFTY", expiry=None, strike=None, option_type=None,
-            last_price=23600.0, source=DataSource.LIVE, provider="zerodha",
+            last_price=24000.0, source=DataSource.LIVE, provider="zerodha",
         )
         bus.publish("tick", spot_quote)
         assert notifier.notify.call_count == 1
         assert notifier.notify.call_args.kwargs["notif_type"] == "SL_TRIGGER"
 
-    def test_spot_below_level_does_not_breach_for_short_call(self):
+    def test_iron_condor_lower_band_breach(self):
+        """Iron condor must alert when spot falls through put-side band, not only rally."""
+        expiry = date(2026, 5, 28)
         state = _make_state(max_loss=10000.0)
-        state.sl_level = 23500.0
-        state.legs[1] = _LegRef(
-            leg_order=2, action="SELL", strike=23200.0, option_type="CE",
-            fill_price=100.0, lots=1, lot_size=50,
-            key=("NIFTY", state.expiry, 23200.0, "CE"),
-        )
+        state.strategy = "IRON_CONDOR"
+        state.legs = [
+            _LegRef(leg_order=1, action="SELL", strike=23200.0, option_type="PE",
+                    fill_price=80.0, lots=1, lot_size=50, key=("NIFTY", expiry, 23200.0, "PE")),
+            _LegRef(leg_order=2, action="BUY", strike=22900.0, option_type="PE",
+                    fill_price=40.0, lots=1, lot_size=50, key=("NIFTY", expiry, 22900.0, "PE")),
+            _LegRef(leg_order=3, action="SELL", strike=24100.0, option_type="CE",
+                    fill_price=80.0, lots=1, lot_size=50, key=("NIFTY", expiry, 24100.0, "CE")),
+            _LegRef(leg_order=4, action="BUY", strike=24400.0, option_type="CE",
+                    fill_price=40.0, lots=1, lot_size=50, key=("NIFTY", expiry, 24400.0, "CE")),
+        ]
+        state.sl_level = 24250.0
+        monitor, notifier, bus = _build_monitor_full(state)
+        monitor._snapshot.index.clear()
+        for leg in state.legs:
+            monitor._snapshot.index.setdefault(leg.key, []).append(state.trade_id)
+        bus.publish("tick", LiveQuote(
+            symbol="NIFTY", expiry=None, strike=None, option_type=None,
+            last_price=23000.0, source=DataSource.LIVE, provider="zerodha",
+        ))
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "SL_TRIGGER"
+
+    def test_spot_below_level_does_not_breach_for_short_call(self):
+        expiry = date(2026, 5, 28)
+        state = _make_state(max_loss=10000.0)
+        state.strategy = "BEAR_CALL_SPREAD"
+        state.sl_level = 23950.0
+        state.legs = [
+            _LegRef(
+                leg_order=1, action="SELL", strike=23800.0, option_type="CE",
+                fill_price=100.0, lots=1, lot_size=50,
+                key=("NIFTY", expiry, 23800.0, "CE"),
+            ),
+            _LegRef(
+                leg_order=2, action="BUY", strike=24000.0, option_type="CE",
+                fill_price=50.0, lots=1, lot_size=50,
+                key=("NIFTY", expiry, 24000.0, "CE"),
+            ),
+        ]
         monitor, notifier, bus = _build_monitor_full(state)
         # Spot well below SL → no alert.
         bus.publish("tick", LiveQuote(
@@ -621,11 +664,11 @@ class TestTrailingSL:
         assert state.trailing_step_idx == 1
         assert state.trailing_pnl_floor == 0.0
         assert persisted == [("T-001", 0.0, 1)]
-        # TARGET_LOCKED notification fired.
-        assert any(c.kwargs.get("notif_type") == "TARGET_LOCKED"
+        # PROFIT_FLOOR_SET notification fired.
+        assert any(c.kwargs.get("notif_type") == "PROFIT_FLOOR_SET"
                    for c in notifier.notify.call_args_list)
 
-    def test_floor_breach_fires_sl_trigger(self):
+    def test_floor_breach_fires_profit_floor_hit(self):
         # Two-step: 50% locks breakeven, 80% locks 40% of max.
         m, notifier, bus, state, _ = self._build_with_trailing(
             steps=[[0.50, 0.0], [0.80, 0.40]])
@@ -639,9 +682,32 @@ class TestTrailingSL:
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 70.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 70.0))
         sl_calls = [c for c in notifier.notify.call_args_list
-                    if c.kwargs.get("notif_type") == "SL_TRIGGER"]
+                    if c.kwargs.get("notif_type") == "PROFIT_FLOOR_HIT"]
         assert len(sl_calls) == 1
-        assert "trailing floor" in sl_calls[0].kwargs.get("body", "").lower()
+        assert "profit floor" in sl_calls[0].kwargs.get("body", "").lower()
+
+    def test_loss_limit_after_profit_floor_is_separate_alert(self):
+        """Floor breach and later loss limit use distinct notification types."""
+        m, notifier, bus, state, _ = self._build_with_trailing(
+            steps=[[0.50, 0.0], [0.80, 0.40]])
+        # Arm floor at 4000 via 80% profit.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 20.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 20.0))
+        assert state.trailing_pnl_floor == 4000.0
+        notifier.reset_mock()
+        # Profit floor breach (still above loss limit).
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 70.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 70.0))
+        floor_calls = [c for c in notifier.notify.call_args_list
+                       if c.kwargs.get("notif_type") == "PROFIT_FLOOR_HIT"]
+        assert len(floor_calls) == 1
+        notifier.reset_mock()
+        # Deep loss crosses premium SL — separate alert type.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 250.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 250.0))
+        loss_calls = [c for c in notifier.notify.call_args_list
+                      if c.kwargs.get("notif_type") == "LOSS_LIMIT_HIT"]
+        assert len(loss_calls) == 1
 
     def test_floor_never_lowers(self):
         # If we cross 80% then drop to 60%, floor must remain 4000 (the 80% lock).
@@ -753,25 +819,69 @@ class TestEventEvePreBreach:
         return monitor, notifier, bus, state, events_repo
 
     def test_event_eve_uses_tighter_fraction(self):
-        # MTM = -2200 → 22% of max_loss. Below 30% standard but ABOVE 20% eve.
-        # Premiums up to 122 each: 10000 - 2*22*50 = 7800. Hmm that's profit.
-        # Need MTM ≈ -2200 → premiums up to 122 each (122*50=6100 each, 12200
-        # total cost - 10000 credit = -2200 loss). ✓
+        # MTM ≈ -2200; SL threshold 50%×10k=5k; event-eve pre_breach 20%→₹1k → fires.
         m, notifier, bus, state, _ = self._build(has_event_tomorrow=True)
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 122.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 122.0))
         warns = [c for c in notifier.notify.call_args_list
                  if c.kwargs.get("notif_type") == "PRE_BREACH_WARNING"]
-        assert len(warns) == 1, "event-eve tightens to 20% so 22% loss fires"
+        assert len(warns) == 1, "event-eve tightens pre-breach vs SL threshold"
 
     def test_no_event_uses_standard_fraction(self):
-        # Same MTM ≈ -2200 → 22% loss. Standard 30% → no warning.
+        # MTM ≈ -1200; standard pre_breach 30%×SL(5k)=₹1.5k → no warning yet.
         m, notifier, bus, state, _ = self._build(has_event_tomorrow=False)
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 122.0))
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 122.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 112.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 112.0))
         warns = [c for c in notifier.notify.call_args_list
                  if c.kwargs.get("notif_type") == "PRE_BREACH_WARNING"]
         assert len(warns) == 0
 
 
+# ---------------------------------------------------------------------------
+# Level breach transition log (ENTER / EXIT)
+# ---------------------------------------------------------------------------
+class TestLevelEventLog:
+    def test_loss_enter_and_exit_on_recovery(self):
+        state = _make_state(max_loss=10000.0, max_profit=1_000_000.0)
+        clock = {"now": datetime(2026, 5, 5, 11, 0)}
+        snap = _Snapshot()
+        snap.trades[state.trade_id] = state
+        for leg in state.legs:
+            snap.index.setdefault(leg.key, []).append(state.trade_id)
+        bus = EventBus()
+        notifier = MagicMock()
+        events = []
+        monitor = LiveRiskMonitor(
+            notifier=notifier, snapshot_loader=lambda: snap, event_bus=bus,
+            config={"enabled": True,
+                    "target_fraction_at_min_dte": 0.70,
+                    "target_fraction_at_max_dte": 0.70,
+                    "cooldown_minutes": 60, "reload_interval_sec": 9999,
+                    "session_start": "09:15", "session_end": "15:30",
+                    "pre_breach_fraction": 0.99,
+                    "stale_leg_seconds": 9999,
+                    "trailing_sl_steps": []},
+            clock=lambda: clock["now"],
+            level_event_persister=lambda p: events.append(dict(p)),
+        )
+        monitor._snapshot = snap
+        monitor._unsubscribe = bus.subscribe("tick", monitor._on_tick)
+
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 250.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 250.0))
+        enters = [e for e in events if e["event_type"] == "ENTER"]
+        assert len(enters) == 1
+        assert enters[0]["level_type"] == "LOSS_LIMIT"
+        assert enters[0]["mtm"] < 0
+
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 30.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 30.0))
+        exits = [e for e in events if e["event_type"] == "EXIT"]
+        assert len(exits) == 1
+        assert exits[0]["level_type"] == "LOSS_LIMIT"
+
+        clock["now"] = datetime(2026, 5, 5, 11, 10)
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 280.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 280.0))
+        assert sum(1 for e in events if e["event_type"] == "ENTER") == 2
 

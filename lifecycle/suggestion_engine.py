@@ -1,4 +1,4 @@
-﻿"""
+"""
 lifecycle/suggestion_engine.py
 ==============================
 
@@ -498,6 +498,49 @@ def _evaluate_underlying(
         suggestion_id = sug_repo.next_suggestion_id(trade_date)
         primary_suggestion: Optional[Suggestion] = None
         try:
+            # P2: Dynamic lot sizing — dry-run at 1 lot to discover max_loss, then scale.
+            import math as _math
+            _capital = float(STRATEGY_CONFIG.get("trading_capital_rs", 0.0))
+            _risk_pct = float(STRATEGY_CONFIG.get("risk_per_trade_pct", 0.02))
+            _max_lots = int(STRATEGY_CONFIG.get("max_lots_cap", 3))
+            _computed_lots = 1
+            if _capital > 0:
+                try:
+                    _test_sug = assemble_suggestion(
+                        suggestion_id=suggestion_id,
+                        underlying=symbol,
+                        expiry=expiry,
+                        expiry_type=expiry_type,
+                        dte=entry_dte,
+                        spot=spot,
+                        chain=chain,
+                        indicators=indicators,
+                        confidence=confidence,
+                        iv_rank=iv_rank,
+                        atm_iv=atm_iv,
+                        lots=1,
+                        lot_size=lot_size,
+                        existing_trade_names=existing_names,
+                        generated_on=now_ist(),
+                        execution_window=execution_window,
+                        data_date=trade_date,
+                        entry_date=entry_day,
+                        spot_data_date=actual_spot_date,
+                        fii_data_date=actual_fii_date,
+                        vix_data_date=actual_vix_date,
+                        oi_pcr_change=indicators.oi_pcr_change,
+                    )
+                    _ml = float(_test_sug.economics.max_loss or 0.0)
+                    if _ml > 0:
+                        _computed_lots = max(1, min(_max_lots, int(_math.floor(
+                            _capital * _risk_pct / _ml
+                        ))))
+                except Exception:
+                    logger.debug(
+                        "Position sizing dry-run failed for %s %s — using 1 lot",
+                        symbol, expiry,
+                    )
+
             primary_suggestion = assemble_suggestion(
                 suggestion_id=suggestion_id,
                 underlying=symbol,
@@ -510,7 +553,7 @@ def _evaluate_underlying(
                 confidence=confidence,
                 iv_rank=iv_rank,
                 atm_iv=atm_iv,
-                lots=1,
+                lots=_computed_lots,
                 lot_size=lot_size,
                 existing_trade_names=existing_names,
                 generated_on=now_ist(),
@@ -651,6 +694,69 @@ def _persist_and_notify(
                 ),
             ))
             best_by_expiry_type[key] = sug
+
+    # C4: Same-direction concentration cap.
+    # After (expiry_type, strategy) dedup, enforce a max of 1 bullish and 1 bearish
+    # suggestion across all underlyings. NIFTY + BANKNIFTY BULL_PUT_SPREAD = 2×
+    # correlated bullish exposure that doubles drawdown when the market falls.
+    # Neutral strategies (IC, IB, STRADDLE, STRANGLE, CALENDAR) are not capped.
+    _BULLISH_STRATS = frozenset({
+        "BULL_PUT_SPREAD", "BULL_CALL_SPREAD", "JADE_LIZARD", "LONG_CALL",
+    })
+    _BEARISH_STRATS = frozenset({
+        "BEAR_CALL_SPREAD", "BEAR_PUT_SPREAD", "LONG_PUT",
+    })
+
+    def _direction(s: Suggestion) -> str:
+        if s.strategy in _BULLISH_STRATS:
+            return "BULLISH"
+        if s.strategy in _BEARISH_STRATS:
+            return "BEARISH"
+        return "NEUTRAL"
+
+    survivors: list[Suggestion] = list(best_by_expiry_type.values())
+    bull_kept: Optional[Suggestion] = None
+    bear_kept: Optional[Suggestion] = None
+    concentration_dropped: list[Suggestion] = []
+    for s in sorted(survivors,
+                    key=lambda x: (x.confidence.score,
+                                   getattr(x.economics, "edge_score", 0.0) or 0.0),
+                    reverse=True):
+        d = _direction(s)
+        if d == "BULLISH":
+            if bull_kept is None:
+                bull_kept = s
+            else:
+                concentration_dropped.append(s)
+        elif d == "BEARISH":
+            if bear_kept is None:
+                bear_kept = s
+            else:
+                concentration_dropped.append(s)
+
+    for dropped in concentration_dropped:
+        logger.info(
+            "Concentration cap: dropping %s %s (direction=%s) — already have a "
+            "stronger %s suggestion",
+            dropped.underlying, dropped.strategy, _direction(dropped), _direction(dropped),
+        )
+        no_suggestions.append(NoSuggestion(
+            generated_on=now_ist(),
+            underlying=dropped.underlying,
+            confidence=dropped.confidence,
+            reason=(
+                f"[{dropped.expiry_type}:{dropped.strategy}] Concentration cap: "
+                f"already have a {_direction(dropped)} suggestion with higher edge. "
+                f"NIFTY/BANKNIFTY are highly correlated — holding two {_direction(dropped)} "
+                f"positions doubles directional risk."
+            ),
+        ))
+
+    best_by_expiry_type = {
+        f"{s.expiry_type}:{s.strategy}": s
+        for s in survivors
+        if s not in concentration_dropped
+    }
 
     persisted: List[Suggestion] = []
 

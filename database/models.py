@@ -1319,16 +1319,18 @@ class NotificationRepo:
         """Flexible filtered query for the Notifications tab.
 
         `category` is a virtual grouping over `notif_type` (not stored in DB):
-          sl        → SL_TRIGGER, SL_HIT, PRE_BREACH_WARNING
-          profit    → TARGET_HIT, TAKE_PROFIT, TARGET_LOCKED
+          sl        → SL_TRIGGER, SL_HIT, PRE_BREACH_WARNING, LOSS_LIMIT_HIT, PROFIT_FLOOR_HIT
+          profit    → TARGET_HIT, TAKE_PROFIT, TARGET_LOCKED, PROFIT_FLOOR_SET
           exit      → EXIT_TOMORROW, TIME_DECAY_DONE, EXPIRE, AUTO_SETTLED
           event     → EVENT_AHEAD_REVIEW
           system    → CIRCUIT_BREAKER, BROKEN_TRADE, DATA_REPAIR, KILL_SWITCH
           suggestion→ NEW_SUGGESTION, NO_SUGGESTION, STRATEGY_VETO
         """
         _CATEGORY_TYPES: dict[str, list[str]] = {
-            "sl":         ["SL_TRIGGER", "SL_HIT", "PRE_BREACH_WARNING"],
-            "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED"],
+            "sl":         ["SL_TRIGGER", "SL_HIT", "PRE_BREACH_WARNING",
+                           "LOSS_LIMIT_HIT", "PROFIT_FLOOR_HIT"],
+            "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED",
+                           "PROFIT_FLOOR_SET"],
             "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
             "event":      ["EVENT_AHEAD_REVIEW"],
             "system":     ["CIRCUIT_BREAKER", "BROKEN_TRADE", "DATA_REPAIR", "KILL_SWITCH"],
@@ -1379,8 +1381,10 @@ class NotificationRepo:
         to_dt: Optional[datetime] = None,
     ) -> int:
         _CATEGORY_TYPES: dict[str, list[str]] = {
-            "sl":         ["SL_TRIGGER", "SL_HIT", "PRE_BREACH_WARNING"],
-            "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED"],
+            "sl":         ["SL_TRIGGER", "SL_HIT", "PRE_BREACH_WARNING",
+                           "LOSS_LIMIT_HIT", "PROFIT_FLOOR_HIT"],
+            "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED",
+                           "PROFIT_FLOOR_SET"],
             "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
             "event":      ["EVENT_AHEAD_REVIEW"],
             "system":     ["CIRCUIT_BREAKER", "BROKEN_TRADE", "DATA_REPAIR", "KILL_SWITCH"],
@@ -1422,7 +1426,9 @@ class NotificationRepo:
         by_cat: dict[str, int] = {}
         _CAT_MAP = {
             "SL_TRIGGER": "sl", "SL_HIT": "sl", "PRE_BREACH_WARNING": "sl",
+            "LOSS_LIMIT_HIT": "sl", "PROFIT_FLOOR_HIT": "sl",
             "TARGET_HIT": "profit", "TAKE_PROFIT": "profit", "TARGET_LOCKED": "profit",
+            "PROFIT_FLOOR_SET": "profit",
             "EXIT_TOMORROW": "exit", "TIME_DECAY_DONE": "exit",
             "EXPIRE": "exit", "AUTO_SETTLED": "exit",
             "EVENT_AHEAD_REVIEW": "event",
@@ -1468,9 +1474,9 @@ class NotificationRepo:
         current IST trading day, or ``None``.
 
         Used by the My Trades dashboard to surface a prominent
-        ``TARGET_HIT`` / ``SL_TRIGGER`` / ``PRE_BREACH_WARNING`` /
-        ``TARGET_LOCKED`` badge on the open-trade card so the operator
-        doesn't rely solely on the notification bar.
+        ``TARGET_HIT`` / ``LOSS_LIMIT_HIT`` / ``PROFIT_FLOOR_HIT`` /
+        ``PRE_BREACH_WARNING`` / ``PROFIT_FLOOR_SET`` badge on the open-trade
+        card so the operator doesn't rely solely on the notification bar.
         """
         today_start = datetime.combine(now_ist().date(), datetime.min.time())
         return self.db.fetch_one(
@@ -1479,7 +1485,9 @@ class NotificationRepo:
             " WHERE related_trade_id = ? "
             "   AND created_at >= ? "
             "   AND notif_type IN ('TARGET_HIT', 'SL_TRIGGER', "
-            "                      'PRE_BREACH_WARNING', 'TARGET_LOCKED') "
+            "                      'PRE_BREACH_WARNING', 'TARGET_LOCKED', "
+            "                      'PROFIT_FLOOR_SET', 'PROFIT_FLOOR_HIT', "
+            "                      'LOSS_LIMIT_HIT') "
             " ORDER BY created_at DESC",
             [trade_id, today_start],
         )
@@ -1555,27 +1563,95 @@ class IntradayCloseSnapshotRepo:
 
 
 # ---------------------------------------------------------------------------
-# Trade MTM snapshots (hourly live session)
+# Trade level breach events (ENTER / EXIT transitions)
+# ---------------------------------------------------------------------------
+class TradeLevelEventRepo:
+    """Append-only log when live risk levels are entered or exited.
+
+    Complements ``options_notifications`` (alerts only) and
+    ``options_trade_mtm_snapshot`` (15-min price series). Use this table
+    to measure time-in-breach, whip-saw, and re-entry counts.
+    """
+
+    _VALID_LEVELS = frozenset({
+        "TARGET", "PROFIT_FLOOR", "LOSS_LIMIT", "SPOT_SL",
+    })
+    _VALID_EVENTS = frozenset({"ENTER", "EXIT"})
+
+    def __init__(self, db: SQLServerConnection):
+        self.db = db
+
+    def insert(self, payload: dict) -> None:
+        level = str(payload.get("level_type") or "").upper()
+        event = str(payload.get("event_type") or "").upper()
+        if level not in self._VALID_LEVELS:
+            raise ValueError(f"invalid level_type: {level!r}")
+        if event not in self._VALID_EVENTS:
+            raise ValueError(f"invalid event_type: {event!r}")
+        event_at = payload.get("event_at")
+        if isinstance(event_at, str):
+            event_at = datetime.fromisoformat(event_at.replace(" ", "T"))
+        elif not isinstance(event_at, datetime):
+            event_at = now_ist()
+        leg_ltps = payload.get("leg_ltps") or payload.get("leg_ltps_json")
+        if isinstance(leg_ltps, dict):
+            leg_json = json.dumps(leg_ltps, separators=(",", ":"))
+        elif leg_ltps:
+            leg_json = str(leg_ltps)
+        else:
+            leg_json = None
+        self.db.execute(
+            "INSERT INTO options_trade_level_events "
+            "(trade_id, level_type, event_type, event_at, mtm, "
+            " threshold_rs, spot, leg_ltps_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                payload["trade_id"],
+                level,
+                event,
+                event_at,
+                float(payload["mtm"]),
+                payload.get("threshold_rs"),
+                payload.get("spot"),
+                leg_json,
+            ],
+        ).close()
+
+    def list_for_trade(
+        self, trade_id: str, *, limit: int = 500,
+    ) -> List[dict]:
+        return self.db.fetch_all(
+            "SELECT TOP (?) * FROM options_trade_level_events "
+            "WHERE trade_id = ? ORDER BY event_at DESC, id DESC",
+            [limit, trade_id],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Trade MTM snapshots (15-min live session)
 # ---------------------------------------------------------------------------
 class TradeMtmSnapshotRepo:
-    """Hourly per-trade MTM snapshots from LiveRiskMonitor.
+    """Periodic per-trade MTM snapshots from LiveRiskMonitor (default 15 min).
 
     Hot rows live in ``options_trade_mtm_snapshot`` while the trade is ACTIVE.
     On close (or weekly cleanup) rows are moved to
     ``options_trade_mtm_snapshot_history``.
     """
 
-    GRANULARITY_HOURLY = "hourly"
+    SNAPSHOT_INTERVAL_MINUTES = 15
+    GRANULARITY = "15min"
 
     def __init__(self, db: SQLServerConnection):
         self.db = db
 
-    @staticmethod
-    def hour_bucket(dt: datetime) -> datetime:
-        return dt.replace(minute=0, second=0, microsecond=0)
+    @classmethod
+    def snap_bucket(cls, dt: datetime) -> datetime:
+        step = cls.SNAPSHOT_INTERVAL_MINUTES
+        floored = (dt.minute // step) * step
+        return dt.replace(minute=floored, second=0, microsecond=0)
 
     def upsert_hourly(self, payload: dict) -> None:
-        """Insert/replace one hourly snapshot for *payload*['trade_id']."""
+        """Insert/replace one snapshot bucket for *payload*['trade_id']."""
         as_of_raw = payload.get("as_of")
         if isinstance(as_of_raw, datetime):
             captured = as_of_raw
@@ -1583,13 +1659,13 @@ class TradeMtmSnapshotRepo:
             captured = datetime.fromisoformat(str(as_of_raw).replace(" ", "T"))
         else:
             captured = now_ist()
-        bucket = self.hour_bucket(captured)
+        bucket = self.snap_bucket(captured)
         leg_ltps = payload.get("leg_ltps") or {}
         leg_json = json.dumps(leg_ltps, separators=(",", ":")) if leg_ltps else None
         self.db.execute(
             "DELETE FROM options_trade_mtm_snapshot "
             "WHERE trade_id = ? AND snapshot_at = ? AND snapshot_granularity = ?",
-            [payload["trade_id"], bucket, self.GRANULARITY_HOURLY],
+            [payload["trade_id"], bucket, self.GRANULARITY],
         ).close()
         self.db.execute(
             "INSERT INTO options_trade_mtm_snapshot "
@@ -1600,7 +1676,7 @@ class TradeMtmSnapshotRepo:
                 payload["trade_id"],
                 payload.get("trade_name"),
                 bucket,
-                self.GRANULARITY_HOURLY,
+                self.GRANULARITY,
                 float(payload["mtm"]),
                 payload.get("max_profit"),
                 payload.get("max_loss"),

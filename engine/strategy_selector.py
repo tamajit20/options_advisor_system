@@ -124,17 +124,16 @@ def select_strategy(
             return "LONG_STRANGLE"
         raise StrategyVeto(f"Unrecognised trend in buying regime: {trend}")
 
-    # ---------- MID-IV zone (30..50) — previously dead-zoned ----------
+    # ---------- MID-IV zone (30..50) ----------
     # Debit spreads work here: not enough IV to write profitably,
     # but premiums are too rich for naked longs.
     if trend == "BULLISH":
         return "BULL_CALL_SPREAD"
     if trend == "BEARISH":
         return "BEAR_PUT_SPREAD"
-    # Sideways in mid-IV remains unactionable — no decent edge for either path
-    raise StrategyVeto(
-        f"IV Rank {iv_rank:.1f} in mid-zone with sideways trend — no actionable edge"
-    )
+    # Sideways in mid-IV: calendar spread (P4). The short near-leg decays faster
+    # than the long far-leg, extracting theta without a large directional bet.
+    return "CALENDAR_SPREAD"
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +168,7 @@ _CREDIT_STRATEGIES = frozenset({
 _DEBIT_STRATEGIES = frozenset({
     "LONG_STRADDLE", "LONG_STRANGLE", "LONG_CALL", "LONG_PUT",
     "BULL_CALL_SPREAD", "BEAR_PUT_SPREAD",
+    "CALENDAR_SPREAD",   # net debit: far_premium − near_premium
 })
 
 
@@ -197,6 +197,7 @@ def assemble_suggestion(
     fii_data_date: date | None = None,
     vix_data_date: date | None = None,
     oi_pcr_change: float | None = None,
+    calendar_legs: dict | None = None,
 ) -> Suggestion:
     """Top-level: select strategy, build legs, compute economics, return Suggestion.
 
@@ -316,9 +317,41 @@ def assemble_suggestion(
                 f"{threshold:.2f}\u00d7) \u2014 marginal buying edge, premium too rich"
             )
 
+    # VIX spike veto (S4): protect short-premium structures when VIX is surging.
+    # A fast-rising VIX (>20% over last 3 trading days) means the market is pricing
+    # in continued large moves — the worst environment for selling premium ATM.
+    _vix_spike_strats = frozenset({"IRON_CONDOR", "IRON_BUTTERFLY"})
+    if strategy in _vix_spike_strats:
+        vix_nd = getattr(indicators, "vix_nd_change_pct", None)
+        vix_spike_thresh = float(STRATEGY_CONFIG.get("vix_spike_veto_pct", 20.0))
+        if vix_nd is not None and vix_nd >= vix_spike_thresh:
+            raise StrategyVeto(
+                f"{strategy} vetoed: VIX has risen {vix_nd:.1f}% over last "
+                f"{int(STRATEGY_CONFIG.get('vix_spike_lookback_days', 3))} sessions "
+                f"(threshold {vix_spike_thresh:.0f}%) — short-premium thesis unreliable "
+                f"during a volatility spike"
+            )
+
     # Build legs by strategy (registry-driven dispatch)
     em_builder, no_em_builder = _builder_for(strategy)
-    if em_builder is not None:
+    if strategy == "CALENDAR_SPREAD":
+        # Calendar spread needs two expiries: near + far, supplied by caller.
+        if calendar_legs is None:
+            raise StrategyVeto(
+                "CALENDAR_SPREAD requires calendar_legs kwarg (near_expiry, far_expiry, "
+                "near_chain, far_chain) — suggestion engine must supply it"
+            )
+        legs = leg_builder.build_calendar_spread(
+            underlying=underlying,
+            near_expiry=calendar_legs["near_expiry"],
+            far_expiry=calendar_legs["far_expiry"],
+            near_chain=calendar_legs["near_chain"],
+            far_chain=calendar_legs["far_chain"],
+            spot=spot,
+            lots=lots,
+            lot_size=lot_size,
+        )
+    elif em_builder is not None:
         legs = em_builder(
             underlying=underlying, expiry=expiry, chain=chain,
             spot=spot, expected_move=indicators.expected_move,
@@ -337,6 +370,30 @@ def assemble_suggestion(
         raise StrategyVeto("Chain too thin — at least one leg has zero/missing price")
 
     np_per_share = leg_builder.net_premium(legs)
+
+    # JADE_LIZARD upside-risk guard (S2): the defining property of a Jade Lizard is
+    # net_credit >= call_spread_width, which eliminates upside risk entirely. When
+    # this is violated the call spread can expire at a loss even if the put is fine.
+    if strategy == "JADE_LIZARD":
+        call_legs = [l for l in legs if l.option_type == "CE"]
+        call_sells = [l for l in call_legs if l.action == "SELL"]
+        call_buys  = [l for l in call_legs if l.action == "BUY"]
+        if call_sells and call_buys:
+            # cs_width per share = strike difference (points are per share for index options)
+            cs_width_pts = abs(call_buys[0].strike - call_sells[0].strike)
+            # np_per_share: total net (credit minus debit) across all legs, per lot_size unit.
+            # For the guard we need credit per share (per lot_size unit).
+            # net_premium() returns sign×price×lots×lot_size summed. Divide by (lots×lot_size)
+            # to get the per-share figure. Use any leg's lots/lot_size as the reference.
+            ref_lots = legs[0].lots or 1
+            ref_lot_size = legs[0].lot_size or 75
+            net_credit_per_share = np_per_share / (ref_lots * ref_lot_size)
+            if net_credit_per_share < cs_width_pts:
+                raise StrategyVeto(
+                    f"JADE_LIZARD: net credit/share {net_credit_per_share:.1f} < call spread "
+                    f"width {cs_width_pts:.0f} pts — upside risk not fully hedged. "
+                    f"Increase short put premium or tighten call spread width."
+                )
 
     # Credit-to-width ratio veto: for defined-risk credit strategies the net credit
     # must be at least min_credit_to_width_ratio × spread width.  A condor collecting
@@ -395,7 +452,7 @@ def assemble_suggestion(
         max_loss=round(max_loss_rs, 2),
         upper_breakeven=upper_be,
         lower_breakeven=lower_be,
-        stop_loss_level=_compute_stop_loss(legs, strategy, max_loss_rs),
+        stop_loss_level=_stop_loss_level_for_db(legs, strategy, np_per_share),
         probability_of_profit=round(pop, 1),
         estimated_charges=charges,
         estimated_net_pnl=round(estimated_net_pnl, 2),
@@ -459,32 +516,14 @@ def assemble_suggestion(
     )
 
 
-def _compute_stop_loss(
-    legs: Sequence[SuggestionLeg], strategy: str, max_loss_rs: float
+def _stop_loss_level_for_db(
+    legs: Sequence[SuggestionLeg], strategy: str, net_premium_per_share: float,
 ) -> float | None:
-    """Return a spot-level SL based on short strikes + 50% of wing width.
-
-    For a call spread (or two-sided strategy), SL = short_call + 50% of CE wing.
-    For a put-only spread, SL = short_put - 50% of PE wing.
-    The frontend derives the complementary put/call SL symmetrically for two-sided
-    strategies (Iron Condor, Iron Butterfly) using the stored call-side SL.
-    Debit strategies have no meaningful single spot-level SL; return None.
-    """
-    sc = next((l for l in legs if l.action == "SELL" and l.option_type == "CE"), None)
-    sp = next((l for l in legs if l.action == "SELL" and l.option_type == "PE"), None)
-    lc = next((l for l in legs if l.action == "BUY"  and l.option_type == "CE"), None)
-    lp = next((l for l in legs if l.action == "BUY"  and l.option_type == "PE"), None)
-
-    # Strategies with a call spread: SL = short call + 50% of CE wing width
-    if sc and lc:
-        ce_width = lc.strike - sc.strike
-        return round(sc.strike + ce_width * 0.5)
-    # Put-only spreads (no short call): SL = short put - 50% of PE wing width
-    if sp and lp and not sc:
-        pe_width = sp.strike - lp.strike
-        return round(sp.strike - pe_width * 0.5)
-    # Debit strategies / naked longs: no spot-level SL
-    return None
+    """Persist one spot reference level; see ``engine.stop_loss_levels``."""
+    from engine.stop_loss_levels import primary_stop_loss_level
+    return primary_stop_loss_level(
+        legs, strategy, net_premium_per_share=net_premium_per_share,
+    )
 
 
 def _explain(

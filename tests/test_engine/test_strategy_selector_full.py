@@ -77,10 +77,11 @@ class TestSelectStrategyMidRegime:
         ind = _make_indicators(trend="BEARISH")
         assert ss.select_strategy(iv_rank=40.0, trend="BEARISH", indicators=ind) == "BEAR_PUT_SPREAD"
 
-    def test_mid_iv_sideways_vetoes(self):
+    def test_mid_iv_sideways_returns_calendar_spread(self):
+        # P4: CALENDAR_SPREAD now handles mid-IV + sideways instead of vetoing.
         ind = _make_indicators(trend="SIDEWAYS")
-        with pytest.raises(StrategyVeto, match="mid-zone"):
-            ss.select_strategy(iv_rank=40.0, trend="SIDEWAYS", indicators=ind)
+        result = ss.select_strategy(iv_rank=40.0, trend="SIDEWAYS", indicators=ind)
+        assert result == "CALENDAR_SPREAD"
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +576,31 @@ class TestPerStrategyAdxBand:
             iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
         )
         assert sug.strategy == "BULL_PUT_SPREAD"
+
+
+# ---------------------------------------------------------------------------
+class TestComputeStopLoss:
+    """DB stop_loss_level via _stop_loss_level_for_db (delegates to stop_loss_levels)."""
+
+    def test_bear_put_spread_returns_none(self):
+        legs = [_leg(1, "BUY", 23650, "PE"), _leg(2, "SELL", 23300, "PE")]
+        assert ss._stop_loss_level_for_db(legs, "BEAR_PUT_SPREAD", -117.0) is None
+
+    def test_bull_put_spread_uses_lower_band(self):
+        legs = [_leg(1, "SELL", 23400, "PE"), _leg(2, "BUY", 23000, "PE")]
+        sl = ss._stop_loss_level_for_db(legs, "BULL_PUT_SPREAD", 50.0)
+        assert sl == pytest.approx(23200.0)
+
+
+def _leg(order, action, strike, opt):
+    from contracts import SuggestionLeg
+    return SuggestionLeg(
+        leg_order=order, hedge_pair_leg=None, symbol="NIFTY",
+        expiry_date=date(2026, 6, 1), strike=float(strike), option_type=opt,
+        action=action, lots=1, lot_size=75,
+        suggested_price=100.0, suggested_price_low=95.0, suggested_price_high=105.0,
+        leg_purpose_note="",
+    )
 
 
 # ---------------------------------------------------------------------------

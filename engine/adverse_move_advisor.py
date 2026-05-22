@@ -50,10 +50,15 @@ class AdverseMoveAdvice:
     recovery_hint: str      # multi-line action suggestion
 
 
+from config import STRATEGY_CONFIG
+from engine.sl_threshold import effective_sl_rs
+
+
 def assess_adverse_move(
     *,
     current_pnl: float,
     max_loss_rs: float,
+    strategy: str = "",
     warning_pct: Optional[float] = None,
     sl_pct: Optional[float] = None,
 ) -> Optional[AdverseMoveAdvice]:
@@ -63,34 +68,37 @@ def assess_adverse_move(
     if current_pnl >= 0:
         return None  # winning or flat
 
-    warning_pct = (
-        float(warning_pct) if warning_pct is not None
-        else float(STRATEGY_CONFIG.get("adverse_move_warning_pct", 30.0))
-    )
-    sl_pct = (
-        float(sl_pct) if sl_pct is not None
-        else float(STRATEGY_CONFIG.get("stop_loss_fraction", 0.60)) * 100.0
-    )
-
-    pct_of_max = abs(current_pnl) / max_loss_rs * 100.0
-
-    # Below warning threshold \u2014 nothing to say.
-    if pct_of_max < warning_pct:
+    sl_threshold, sl_label = effective_sl_rs(strategy=strategy, max_loss_rs=max_loss_rs)
+    if sl_threshold <= 0:
         return None
-    # SL has already triggered \u2014 caller will fire SL_HIT instead.
-    if pct_of_max >= sl_pct:
+
+    lrm = STRATEGY_CONFIG.get("live_risk_monitor") or {}
+    warn_frac = (
+        float(warning_pct) / 100.0 if warning_pct is not None
+        else float(lrm.get("pre_breach_fraction", 0.70))
+    )
+    sl_frac = (
+        float(sl_pct) / 100.0 if sl_pct is not None
+        else 1.0
+    )
+
+    loss = abs(current_pnl)
+    pct_of_sl = loss / sl_threshold * 100.0
+
+    if loss < warn_frac * sl_threshold:
+        return None
+    if loss >= sl_frac * sl_threshold:
         return None
 
     headline = (
-        f"\u26a0 Trade is at {pct_of_max:.0f}% of max loss "
-        f"(\u20b9{current_pnl:.0f} of \u2013\u20b9{max_loss_rs:.0f})"
+        f"\u26a0 Trade is at {pct_of_sl:.0f}% of SL threshold "
+        f"(\u20b9{current_pnl:.0f} of \u2013\u20b9{sl_threshold:.0f}, {sl_label})"
     )
     recovery_hint = (
         "Adverse-move advisory:\n"
         f"  \u2022 Current MTM is \u20b9{current_pnl:.0f}, which is "
-        f"{pct_of_max:.0f}% of the defined max loss.\n"
-        f"  \u2022 Hard SL fires at {sl_pct:.0f}% of max loss \u2014 still room, "
-        "but the trade is meaningfully in the red.\n"
+        f"{pct_of_sl:.0f}% of the effective SL threshold (₹{sl_threshold:,.0f}).\n"
+        f"  \u2022 Hard SL fires at ₹{sl_threshold:,.0f} ({sl_label}).\n"
         "  \u2022 Consider: roll the threatened side further OTM, take a "
         "partial close on the losing leg, or close the whole structure if "
         "the directional view has changed.\n"
@@ -99,7 +107,7 @@ def assess_adverse_move(
     )
     return AdverseMoveAdvice(
         severity="MODERATE",
-        pnl_pct_of_max_loss=round(pct_of_max, 1),
+        pnl_pct_of_max_loss=round(pct_of_sl, 1),
         headline=headline,
         recovery_hint=recovery_hint,
     )

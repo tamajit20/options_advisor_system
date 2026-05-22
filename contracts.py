@@ -139,6 +139,7 @@ class MarketIndicators:
     atm_call_spread_bps:  Optional[float] = None  # current ATM call bid-ask spread (bps of mid)
     atm_put_spread_bps:   Optional[float] = None  # current ATM put bid-ask spread (bps of mid)
     volume_burst_z:       Optional[float] = None  # z-score of last-bucket volume vs trailing window mean
+    vix_nd_change_pct:    Optional[float] = None  # VIX % change over last N trading days (S4 spike veto)
 
 
 @dataclass

@@ -95,18 +95,79 @@ class TestExitEngine:
         assert result.decision == "HOLD"
 
 
+def test_long_straddle_sl_at_hybrid_cap_not_50pct_debit():
+    """LONG_STRADDLE SL binds at min(30% debit, ₹10k cap) → ₹10k on BNIFTY-sized debit."""
+    legs = [
+        {"action": "BUY", "strike": 54900.0, "option_type": "CE",
+         "fill_price": 1178.0, "lots": 1, "lot_size": 35},
+        {"action": "BUY", "strike": 54900.0, "option_type": "PE",
+         "fill_price": 838.0, "lots": 1, "lot_size": 35},
+    ]
+    entry_debit = -(1178 + 838) * 35
+    max_loss = abs(entry_debit)
+    chain = [
+        {"strike": 54900.0, "option_type": "CE", "mid_price": 900.0},
+        {"strike": 54900.0, "option_type": "PE", "mid_price": 750.0},
+    ]
+    result = evaluate_exit(
+        trade_id="T-STRADDLE",
+        legs=legs,
+        current_chain=chain,
+        entry_net_credit=entry_debit,
+        max_profit_rs=float("inf"),
+        max_loss_rs=max_loss,
+        sl_level_per_share=None,
+        days_to_expiry=10,
+        strategy="LONG_STRADDLE",
+    )
+    assert result.decision == "SL_HIT"
+    assert "10,000" in result.reason or "10000" in result.reason.replace(",", "")
+
+
+def test_long_straddle_holds_below_hybrid_cap():
+    legs = [
+        {"action": "BUY", "strike": 54900.0, "option_type": "CE",
+         "fill_price": 1178.0, "lots": 1, "lot_size": 35},
+        {"action": "BUY", "strike": 54900.0, "option_type": "PE",
+         "fill_price": 838.0, "lots": 1, "lot_size": 35},
+    ]
+    entry_debit = -(1178 + 838) * 35
+    chain = [
+        {"strike": 54900.0, "option_type": "CE", "mid_price": 1100.0},
+        {"strike": 54900.0, "option_type": "PE", "mid_price": 820.0},
+    ]
+    result = evaluate_exit(
+        trade_id="T-STRADDLE",
+        legs=legs,
+        current_chain=chain,
+        entry_net_credit=entry_debit,
+        max_profit_rs=float("inf"),
+        max_loss_rs=abs(entry_debit),
+        sl_level_per_share=None,
+        days_to_expiry=10,
+        strategy="LONG_STRADDLE",
+    )
+    assert result.decision == "HOLD"
+
+
 # ---------------------------------------------------------------------------
 # FUTURE-SCOPE PLACEHOLDERS — see FUTURE_ENHANCEMENT_SCOPES.md
 # ---------------------------------------------------------------------------
 
-@pytest.mark.future
-@pytest.mark.skip(reason="future: side-aware SL multiplier, asymmetric put/call (FUTURE_ENHANCEMENT_SCOPES.md → Strategy & Regime Coverage)")
-def test_put_side_uses_tighter_sl_multiplier():
-    """When implemented, put-side breach should trigger SL at 1.25× credit, not 1.5×."""
-    pass
+def test_put_side_uses_tighter_sl_fraction():
+    """S5: BULL_PUT_SPREAD uses 40% SL fraction (tighter than default 50%)."""
+    from engine.sl_threshold import strategy_sl_config
+
+    bps = strategy_sl_config("BULL_PUT_SPREAD")
+    bcs = strategy_sl_config("BEAR_CALL_SPREAD")
+    assert bps["loss_fraction"] < bcs["loss_fraction"]
+    assert bps["loss_fraction"] <= 0.40
 
 
-@pytest.mark.future
-@pytest.mark.skip(reason="future: pre-event forced exit (FUTURE_ENHANCEMENT_SCOPES.md → Risk & Monitoring)")
-def test_high_impact_event_within_2_days_forces_pre_event_exit():
-    pass
+def test_jade_lizard_uses_same_tight_sl_as_bull_put_spread():
+    """S5: JADE_LIZARD has a naked short put — same tight SL as BULL_PUT_SPREAD."""
+    from engine.sl_threshold import strategy_sl_config
+
+    jl = strategy_sl_config("JADE_LIZARD")
+    bps = strategy_sl_config("BULL_PUT_SPREAD")
+    assert jl["loss_fraction"] == bps["loss_fraction"]

@@ -516,19 +516,43 @@ STRATEGY_CONFIG = {
     "oi_change_pcr_bullish_below": 0.7,   # OI delta PCR below this → calls building (bullish signal)
 
     # ---------------------------------------------------------------
-    # Per-strategy stop-loss fraction (S5 — side-aware SL).
-    # Strategies not listed use the global `stop_loss_fraction` (0.50).
-    # Put-side structures breach faster — use a tighter 40% threshold.
+    # Per-strategy MTM stop-loss (fraction of max_loss + optional ₹ cap).
+    # Effective SL = loss_fraction × max_loss, capped when cap applies.
+    # cap_min_max_loss_rs: apply absolute_cap_rs only when max_loss ≥ that
+    # amount (smaller credit spreads keep fraction-only — less whipsaw).
+    # Set absolute_cap_rs to null to disable the rupee cap entirely.
     # ---------------------------------------------------------------
-    "strategy_stop_loss_fraction": {
-        "BULL_PUT_SPREAD":  0.40,   # put side — falls faster; exit at 40% of max loss
-        "IRON_CONDOR":      0.50,   # symmetric default (monitor both wings)
-        "IRON_BUTTERFLY":   0.50,
-        "BEAR_CALL_SPREAD": 0.50,   # call side — standard
-        "BEAR_PUT_SPREAD":  0.40,   # debit put — stop quickly
-        "BULL_CALL_SPREAD": 0.50,
-        "JADE_LIZARD":      0.40,   # has a naked short put → tight like BULL_PUT_SPREAD
+    "strategy_sl_defaults": {
+        "loss_fraction":        0.50,
+        "absolute_cap_rs":      10_000.0,
+        "cap_min_max_loss_rs":  None,
     },
+    "strategy_sl_limits": {
+        # Long premium — tight protection on expensive debits
+        "LONG_STRADDLE":    {"loss_fraction": 0.30, "absolute_cap_rs": 10_000},
+        "LONG_STRANGLE":    {"loss_fraction": 0.30, "absolute_cap_rs": 10_000},
+        "LONG_CALL":        {"loss_fraction": 0.30, "absolute_cap_rs": 10_000},
+        "LONG_PUT":         {"loss_fraction": 0.30, "absolute_cap_rs": 10_000},
+        # Credit spreads — fraction-first on smaller trades; ₹15k cap on large
+        "IRON_CONDOR":      {
+            "loss_fraction": 0.50, "absolute_cap_rs": 15_000, "cap_min_max_loss_rs": 20_000,
+        },
+        "IRON_BUTTERFLY":   {
+            "loss_fraction": 0.50, "absolute_cap_rs": 15_000, "cap_min_max_loss_rs": 20_000,
+        },
+        "BEAR_CALL_SPREAD": {
+            "loss_fraction": 0.50, "absolute_cap_rs": 15_000, "cap_min_max_loss_rs": 20_000,
+        },
+        "BULL_PUT_SPREAD":  {"loss_fraction": 0.40, "absolute_cap_rs": 10_000},
+        "JADE_LIZARD":      {"loss_fraction": 0.40, "absolute_cap_rs": 10_000},
+        # Debit spreads
+        "BEAR_PUT_SPREAD":  {"loss_fraction": 0.40, "absolute_cap_rs": 10_000},
+        "BULL_CALL_SPREAD": {"loss_fraction": 0.50, "absolute_cap_rs": 10_000},
+        "CALENDAR_SPREAD":  {"loss_fraction": 0.50, "absolute_cap_rs": 10_000},
+    },
+
+    # Legacy fallback only — prefer strategy_sl_limits above.
+    "stop_loss_fraction": 0.50,
 
     # Take-profit threshold for exit engine (fraction of max profit)
     "take_profit_fraction": 0.80,   # default fallback when strategy not in override map
@@ -555,10 +579,6 @@ STRATEGY_CONFIG = {
         "JADE_LIZARD",
     ],
 
-    # Stop-loss threshold for exit engine (fraction of max loss)
-    # Exit when current loss reaches this fraction of the defined max loss.
-    "stop_loss_fraction": 0.50,   # 50% of max loss — standard for defined-risk options
-
     # Phase 2b-iii — intraday WS-driven SL alert
     # Per-leg "short premium doubled" rule used by lifecycle/intraday_monitor.
     # When a SHORT leg's live LTP rises above fill_price * intraday_sl_multiplier
@@ -568,7 +588,8 @@ STRATEGY_CONFIG = {
     # Live trade-level risk monitor (lifecycle/live_risk_monitor.py)
     # On every WS tick that updates a leg of an ACTIVE trade we recompute the
     # whole-trade MTM via engine.exit_engine.evaluate_exit() and emit:
-    #   * SL_TRIGGER  — when current_pnl <= -(stop_loss_fraction * max_loss)
+    #   * LOSS_LIMIT_HIT — when current_pnl <= -effective_sl_rs(strategy, max_loss)
+    #   * PROFIT_FLOOR_SET / PROFIT_FLOOR_HIT — trailing profit-lock steps
     #   * TARGET_HIT  — when current_pnl >= live_target_fraction * max_profit
     # Stricter than EOD take-profit (0.5) because intraday wiggle can briefly
     # cross 0.5 and reverse; 0.7 leaves room before alerting the user.
@@ -588,10 +609,10 @@ STRATEGY_CONFIG = {
         # treated as "no fresh price"; trade evaluation is skipped until it
         # ticks again. Prevents false alerts on illiquid legs.
         "stale_leg_seconds": 30,
-        # Pre-breach soft warning: emit PRE_BREACH_WARNING once when current
-        # loss first crosses this fraction of max loss (default 30%).
-        # Gives the user lead time before the hard SL_TRIGGER (50%).
-        "pre_breach_fraction": 0.30,
+        # Pre-breach soft warning: emit PRE_BREACH_WARNING once when loss
+        # reaches this fraction of the effective SL threshold (not max loss).
+        # e.g. 0.70 with ₹7.5k SL → warn at ~₹5.25k loss.
+        "pre_breach_fraction": 0.70,
         # DTE-aware target tightening: at low DTE we tighten the target so
         # we don't sit through gamma; at high DTE we let theta run.
         # Linear interpolation between the two endpoints (clamped).
@@ -614,7 +635,7 @@ STRATEGY_CONFIG = {
         # Trailing SL on profit (Phase 3 — #4).
         # Each step is (profit_fraction_trigger, lock_floor_fraction_of_max_profit).
         # When current_pnl crosses trigger, the trade's PnL floor is set to
-        # lock × max_profit; if PnL ever drops below the floor, fire SL_TRIGGER.
+        # lock × max_profit; if PnL ever drops below the floor, fire PROFIT_FLOOR_HIT.
         # Steps must be sorted by ascending trigger.
         # Example: at 50% of target, lock breakeven (0.0); at 80% lock 40%.
         "trailing_sl_steps": [
@@ -625,8 +646,8 @@ STRATEGY_CONFIG = {
         # Throttle TOPIC_TRADE_MTM publishes to this many seconds per trade
         # so the SSE stream stays cheap on fast-ticking trades.
         "mtm_publish_interval_sec": 1.0,
-        # Hourly MTM rows persisted to options_trade_mtm_snapshot (per trade).
-        "mtm_snapshot_interval_sec": 3600,
+        # 15-min MTM rows persisted to options_trade_mtm_snapshot (per trade).
+        "mtm_snapshot_interval_sec": 900,
         # Event-eve tightening (Phase 3 — #5).
         # When events_repo reports a HIGH-impact event for tomorrow, the live
         # monitor uses this tighter pre-breach fraction (default 0.20)

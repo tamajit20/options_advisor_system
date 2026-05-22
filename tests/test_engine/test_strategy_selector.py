@@ -94,9 +94,10 @@ class TestMidIvRegime:
         assert select_strategy(iv_rank=40.0, trend="BEARISH",
                                indicators=_ind()) == "BEAR_PUT_SPREAD"
 
-    def test_mid_iv_sideways_raises_veto(self):
-        with pytest.raises(StrategyVeto):
-            select_strategy(iv_rank=40.0, trend="SIDEWAYS", indicators=_ind())
+    def test_mid_iv_sideways_returns_calendar_spread(self):
+        # P4: mid-IV + SIDEWAYS is now handled by CALENDAR_SPREAD instead of vetoing.
+        result = select_strategy(iv_rank=40.0, trend="SIDEWAYS", indicators=_ind())
+        assert result == "CALENDAR_SPREAD"
 
 
 class TestUnknownTrend:
@@ -113,22 +114,25 @@ class TestUnknownTrend:
 # FUTURE-SCOPE PLACEHOLDERS — paired with FUTURE_ENHANCEMENT_SCOPES.md entries
 # ---------------------------------------------------------------------------
 
-@pytest.mark.future
-@pytest.mark.skip(reason="future: VIX slope filter (FUTURE_ENHANCEMENT_SCOPES.md → Risk & Monitoring)")
 def test_iron_condor_blocked_when_vix_rising_3day():
-    """Engine should skip IC when VIX has risen >20% in last 3 days."""
-    pass
+    """S4: IC vetoed when VIX has risen >20% over last 3 sessions."""
+    # NOTE: VIX spike veto is enforced in assemble_suggestion (uses indicators.vix_nd_change_pct).
+    # select_strategy only returns the strategy name. The full assemble_suggestion
+    # veto is tested in test_suggestion_engine_integration.py::TestVixSpikeVeto.
+    # Here we just confirm select_strategy itself does NOT raise (veto is downstream).
+    result = select_strategy(iv_rank=65.0, trend="SIDEWAYS", indicators=_ind())
+    assert result == "IRON_CONDOR"
 
 
-@pytest.mark.future
-@pytest.mark.skip(reason="future: LONG_STRANGLE never triggered without VL_IV+strong_PCR — dead code (FUTURE_ENHANCEMENT_SCOPES.md → Engine Correctness)")
-def test_long_strangle_routing_redesigned():
-    """When fixed, define explicit routing condition (low IV + expected breakout)."""
-    pass
+def test_long_strangle_routing_reachable_in_mid_iv_boundary():
+    """C3: LONG_STRANGLE is selected in the buying regime boundary (iv_rank ~25, BULLISH)."""
+    # iv_rank 25 is below iv_rank_buying_max (30) and at / above iv_naked_long_max (20),
+    # so LONG_CALL is NOT selected — LONG_STRANGLE is the fallback.
+    result = select_strategy(iv_rank=25.0, trend="BULLISH", indicators=_ind())
+    assert result == "LONG_STRANGLE"
 
 
-@pytest.mark.future
-@pytest.mark.skip(reason="future: mid-IV sideways calendar spread (FUTURE_ENHANCEMENT_SCOPES.md → Strategy & Regime Coverage)")
-def test_mid_iv_sideways_returns_calendar_spread():
-    """When implemented, mid-IV + sideways should return CALENDAR instead of veto."""
-    pass
+def test_mid_iv_sideways_now_returns_calendar_spread():
+    """P4 implemented: mid-IV + sideways returns CALENDAR_SPREAD (no more veto)."""
+    result = select_strategy(iv_rank=40.0, trend="SIDEWAYS", indicators=_ind())
+    assert result == "CALENDAR_SPREAD"

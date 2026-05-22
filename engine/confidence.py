@@ -253,6 +253,39 @@ def evaluate(
 
     checks.append(_gate("FII positioning aligned with trend", _fii_gate))
 
+    # 8 (new). OI change conviction — EOD mode signal (S6).
+    # Measures whether real-money participants are building or shedding positions.
+    # OI delta PCR > bearish_above with a bullish-regime strategy = conviction mismatch.
+    # OI delta PCR < bullish_below with a bearish-regime strategy = conviction mismatch.
+    # Emits SOFT_FAIL (not a hard block) so 1 mismatch still allows the trade.
+    # In live mode this is superseded by the more precise oi_pcr_slope/persistence gates.
+    oi_change_bearish_above = STRATEGY_CONFIG.get("oi_change_pcr_bearish_above", 1.5)
+    oi_change_bullish_below = STRATEGY_CONFIG.get("oi_change_pcr_bullish_below", 0.7)
+
+    def _oi_change_gate():
+        oi_chg = indicators.oi_pcr_change
+        if oi_chg is None:
+            return _PASS_WARN, "OI change data not available — conviction signal unknown"
+        trend_dir = indicators.trend
+        if trend_dir == "BULLISH" and oi_chg > oi_change_bearish_above:
+            return (
+                _SOFT_FAIL,
+                f"OI delta PCR {oi_chg:.2f} > {oi_change_bearish_above:.1f}: "
+                f"puts building faster than calls (bearish money flow vs BULLISH trend)",
+            )
+        if trend_dir == "BEARISH" and oi_chg < oi_change_bullish_below:
+            return (
+                _SOFT_FAIL,
+                f"OI delta PCR {oi_chg:.2f} < {oi_change_bullish_below:.1f}: "
+                f"calls building faster than puts (bullish money flow vs BEARISH trend)",
+            )
+        return (
+            _PASS,
+            f"OI delta PCR {oi_chg:.2f} — money flow aligned with {trend_dir} trend",
+        )
+
+    checks.append(_gate("OI change conviction aligned with trend", _oi_change_gate))
+
     # ══════════════════════════════════════════════════════════════
     # HARD GATES — failure → FAIL (always blocks)
     # ══════════════════════════════════════════════════════════════
@@ -365,7 +398,7 @@ def evaluate(
     # price-driven IV not premium-rich, weak selling edge; low IV Rank but
     # IV/HV ≥ 1 → cheap rank but not cheap vs realised vol, weak buying edge).
     # Emits PASS_WARN with explanatory text; does NOT count toward soft_failed
-    # (advisory gates live at index ≥ 9 and are excluded from the soft slice).
+    # (advisory gates live at index ≥ 10 and are excluded from the soft slice).
     iv_writing_min_v = STRATEGY_CONFIG.get("iv_rank_writing_min", 50.0)
     iv_buying_max_v = STRATEGY_CONFIG.get("iv_rank_buying_max", 30.0)
     iv_premium_sell_min_v = STRATEGY_CONFIG.get("iv_premium_sell_min", 0.90)
@@ -396,17 +429,17 @@ def evaluate(
     # ══════════════════════════════════════════════════════════════
     # Score + all_passed
     # ══════════════════════════════════════════════════════════════
-    # Soft gates: checks[0..6] = 7 gates (original 5 + IV premium + FII)
-    # Event warning: checks[7] — SOFT_FAIL but excluded from hard_failed count
-    # Hard gate: checks[8] — DTE
-    # Trajectory gates: checks[9..11] — IV traj, OI traj (advisory SOFT_FAIL,
+    # Soft gates: checks[0..7] = 8 gates (original 5 + IV premium + FII + OI change)
+    # Event warning: checks[8] — SOFT_FAIL but excluded from hard_failed count
+    # Hard gate: checks[9] — DTE
+    # Trajectory gates: checks[10..12] — IV traj, OI traj (advisory SOFT_FAIL,
     #   visible but NOT counted in soft_failed), spread quality (hard FAIL).
-    soft_min   = STRATEGY_CONFIG["soft_gate_min_pass"]   # default 5 (of 7)
-    soft_total = 7  # gates 1–7
+    soft_min   = STRATEGY_CONFIG["soft_gate_min_pass"]   # default 5 (of 8 now)
+    soft_total = 8  # gates 1–8 (added OI change conviction gate)
 
     # Count any hard FAIL anywhere (DTE + spread quality both qualify).
     hard_failed = sum(1 for c in checks if c.status == _FAIL)
-    soft_failed = sum(1 for c in checks[:7] if c.status == _SOFT_FAIL)
+    soft_failed = sum(1 for c in checks[:8] if c.status == _SOFT_FAIL)
 
     all_passed = hard_failed == 0 and soft_failed <= (soft_total - soft_min)
 

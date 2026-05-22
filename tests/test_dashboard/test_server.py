@@ -21,6 +21,9 @@ def app(mocker):
     fake_conn = MagicMock()
     fake_conn.connect = MagicMock(return_value=None)
     fake_conn.close = MagicMock(return_value=None)
+    # fetch_one must return None (not a MagicMock) so routes that call it
+    # directly (e.g. data_as_of provenance lookup) produce JSON-serialisable output.
+    fake_conn.fetch_one.return_value = None
     mocker.patch("dashboard.server.SQLServerConnection", return_value=fake_conn)
     app = server.create_app()
     app.config["TESTING"] = True

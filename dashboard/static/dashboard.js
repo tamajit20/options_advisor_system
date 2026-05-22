@@ -155,9 +155,198 @@ function _updateFeedTag(tradeId, opts = {}) {
   }
 }
 
+function _buildMtmPayload(trade, snapTrade) {
+  const sug = trade.suggestion || {};
+  const st = snapTrade || {};
+  return {
+    ...st,
+    trade_id: trade.trade_id,
+    max_profit: st.max_profit ?? trade.actual_max_profit ?? sug.max_profit,
+    max_loss: st.max_loss ?? trade.actual_max_loss ?? sug.max_loss,
+    trailing_pnl_floor: st.trailing_pnl_floor ?? trade.trailing_pnl_floor,
+    mtm: st.mtm,
+    dte: st.dte,
+    as_of: st.as_of,
+  };
+}
+
+function _bootstrapLiveLevelsForTrades(trades, snap) {
+  const byId = (snap && snap.trades) || {};
+  (trades || []).forEach(t => {
+    const payload = _buildMtmPayload(t, byId[t.trade_id]);
+    if (payload.mtm != null) {
+      _updateCurrentPnlBadge(t.trade_id, payload.mtm, payload.as_of, false);
+    }
+    _updateLiveProfitLevels(t.trade_id, payload);
+  });
+  _refreshAllFeedTags();
+}
+
+function _updateLiveRiskStrip(tradeId, state) {
+  document.querySelectorAll(`.live-risk-live[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
+    const card = el.closest('.card');
+    const staticRa = card && card.querySelector('.risk-alert-static');
+    if (!state || state.liveMtm == null || isNaN(state.liveMtm)) {
+      el.hidden = true;
+      if (staticRa) staticRa.hidden = false;
+      return;
+    }
+    if (state.lossHit) {
+      el.className = 'tag tag-err live-risk-live';
+      el.textContent = '\ud83d\uded1 LOSS LIMIT HIT';
+      el.title = 'Live MTM has reached the loss limit — consider closing';
+      el.hidden = false;
+      if (staticRa) staticRa.hidden = true;
+      return;
+    }
+    if (state.floorBreach) {
+      el.className = 'tag tag-warn live-risk-live';
+      el.textContent = '\u26a0\ufe0f PROFIT FLOOR BREACHED';
+      el.title = 'Live MTM fell below the armed profit floor';
+      el.hidden = false;
+      if (staticRa) staticRa.hidden = true;
+      return;
+    }
+    if (state.targetHit) {
+      el.className = 'tag tag-ok live-risk-live';
+      el.textContent = '\u2705 TARGET HIT';
+      el.title = 'Live MTM reached the profit target';
+      el.hidden = false;
+      if (staticRa) staticRa.hidden = true;
+      return;
+    }
+    el.hidden = true;
+    if (staticRa) staticRa.hidden = false;
+  });
+}
+
+function _resolveLiveLevelThresholds(section, payload) {
+  const mp = parseFloat(payload.max_profit ?? section.dataset.maxProfit);
+  const mlRaw = payload.max_loss ?? section.dataset.maxLoss;
+  const ml = mlRaw != null && mlRaw !== '' ? parseFloat(mlRaw) : null;
+  const strat = section.dataset.strategy || '';
+  const dte = payload.dte != null ? parseInt(payload.dte, 10) : dteFromExpiry(section.dataset.expiry);
+  if (!mp || mp <= 0 || isNaN(mp)) return null;
+  const tgtFrac = liveTargetFraction(dte);
+  const targetRs = Math.round(mp * tgtFrac);
+  const lossRs = effectiveSlRs(strat, ml);
+  let floor = payload.trailing_pnl_floor;
+  if (floor == null && section.dataset.trailingFloor != null && section.dataset.trailingFloor !== '') {
+    floor = parseFloat(section.dataset.trailingFloor);
+  }
+  if (floor != null && isNaN(floor)) floor = null;
+  return { targetRs, lossRs, floor };
+}
+
+function _setLiveLevelRowStatus(row, statusEl, active, label, variant) {
+  if (!row || !statusEl) return;
+  row.classList.toggle('lpl-row-active', !!active);
+  row.classList.toggle('lpl-row-hit', !!active && variant === 'hit');
+  row.classList.toggle('lpl-row-breach', !!active && variant === 'breach');
+  if (active && label) {
+    statusEl.textContent = label;
+    statusEl.hidden = false;
+    statusEl.className = `lpl-status lpl-status-${variant}`;
+  } else {
+    statusEl.textContent = '';
+    statusEl.hidden = true;
+    statusEl.className = 'lpl-status';
+  }
+}
+
+function _clearLiveLevelLabels(section) {
+  if (!section) return;
+  _setLiveLevelRowStatus(
+    section.querySelector('.lpl-target-row'),
+    section.querySelector('.lpl-status-target'),
+    false, '', 'hit',
+  );
+  _setLiveLevelRowStatus(
+    section.querySelector('.lpl-floor-row'),
+    section.querySelector('.lpl-status-floor'),
+    false, '', 'breach',
+  );
+  _setLiveLevelRowStatus(
+    section.querySelector('.lpl-loss-row'),
+    section.querySelector('.lpl-status-loss'),
+    false, '', 'breach',
+  );
+}
+
+function _updateLiveProfitLevels(tradeId, payload) {
+  if (!payload) return;
+  const mtm = payload.mtm != null ? parseFloat(payload.mtm) : null;
+  const floorIn = payload.trailing_pnl_floor;
+  if (floorIn != null) {
+    _lastMtmByTrade[tradeId] = _lastMtmByTrade[tradeId] || {};
+    _lastMtmByTrade[tradeId].trailing_pnl_floor = floorIn;
+  }
+  const liveMtm = mtm != null && !isNaN(mtm)
+    ? mtm
+    : (_lastMtmByTrade[tradeId] && _lastMtmByTrade[tradeId].mtm);
+
+  let stripState = null;
+  document.querySelectorAll(`.live-profit-levels[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(section => {
+    const floorVal = section.querySelector('.live-profit-floor-val');
+    const floorNote = section.querySelector('.live-profit-floor-note');
+    const floor = floorIn != null ? parseFloat(floorIn) : null;
+    if (floor != null && !isNaN(floor) && floorVal) {
+      section.dataset.trailingFloor = String(floor);
+      floorVal.textContent = '\u20b9' + fmt(floor);
+      floorVal.classList.remove('muted');
+      if (floorNote) {
+        floorNote.textContent = 'Trailing lock — alert if MTM falls below (always below target)';
+      }
+    }
+
+    const thresholds = _resolveLiveLevelThresholds(section, payload);
+    if (!thresholds || liveMtm == null || isNaN(liveMtm)) {
+      _clearLiveLevelLabels(section);
+      return;
+    }
+
+    const { targetRs, lossRs, floor: armedFloor } = thresholds;
+    const targetRow = section.querySelector('.lpl-target-row');
+    const floorRow = section.querySelector('.lpl-floor-row');
+    const lossRow = section.querySelector('.lpl-loss-row');
+
+    _setLiveLevelRowStatus(
+      targetRow,
+      section.querySelector('.lpl-status-target'),
+      liveMtm >= targetRs,
+      'HIT',
+      'hit',
+    );
+    _setLiveLevelRowStatus(
+      floorRow,
+      section.querySelector('.lpl-status-floor'),
+      armedFloor != null && liveMtm < armedFloor,
+      'BREACHED',
+      'breach',
+    );
+    _setLiveLevelRowStatus(
+      lossRow,
+      section.querySelector('.lpl-status-loss'),
+      lossRs != null && liveMtm <= -lossRs,
+      'HIT',
+      'breach',
+    );
+
+    stripState = {
+      liveMtm,
+      lossHit: lossRs != null && liveMtm <= -lossRs,
+      floorBreach: armedFloor != null && liveMtm < armedFloor,
+      targetHit: liveMtm >= targetRs,
+    };
+  });
+  _updateLiveRiskStrip(tradeId, stripState);
+  _updateTradeActionPanel(tradeId, payload, stripState);
+}
+
 function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
   if (mtm != null) {
     _lastMtmByTrade[tradeId] = {
+      ...(_lastMtmByTrade[tradeId] || {}),
       mtm,
       as_of: asOf,
       receivedAt: liveTick ? Date.now() : (_parseMtmAsOf(asOf) || Date.now()),
@@ -200,6 +389,7 @@ function _refreshAllFeedTags() {
 function _applyMtmSnapshot(snap) {
   Object.entries((snap && snap.trades) || {}).forEach(([tid, t]) => {
     if (t && t.mtm != null) _updateCurrentPnlBadge(tid, t.mtm, t.as_of, false);
+    _updateLiveProfitLevels(tid, t);
   });
   _refreshAllFeedTags();
 }
@@ -429,6 +619,357 @@ async function loadSuggestion() {
   }
 }
 
+// ── Per-strategy MTM SL (mirrors config.py strategy_sl_limits) ──
+const STRATEGY_SL_DEFAULTS = { loss_fraction: 0.50, absolute_cap_rs: 10000, cap_min_max_loss_rs: null };
+const STRATEGY_SL_LIMITS = {
+  LONG_STRADDLE:    { loss_fraction: 0.30, absolute_cap_rs: 10000 },
+  LONG_STRANGLE:    { loss_fraction: 0.30, absolute_cap_rs: 10000 },
+  LONG_CALL:        { loss_fraction: 0.30, absolute_cap_rs: 10000 },
+  LONG_PUT:         { loss_fraction: 0.30, absolute_cap_rs: 10000 },
+  IRON_CONDOR:      { loss_fraction: 0.50, absolute_cap_rs: 15000, cap_min_max_loss_rs: 20000 },
+  IRON_BUTTERFLY:   { loss_fraction: 0.50, absolute_cap_rs: 15000, cap_min_max_loss_rs: 20000 },
+  BEAR_CALL_SPREAD: { loss_fraction: 0.50, absolute_cap_rs: 15000, cap_min_max_loss_rs: 20000 },
+  BULL_PUT_SPREAD:  { loss_fraction: 0.40, absolute_cap_rs: 10000 },
+  BEAR_PUT_SPREAD:  { loss_fraction: 0.40, absolute_cap_rs: 10000 },
+  BULL_CALL_SPREAD: { loss_fraction: 0.50, absolute_cap_rs: 10000 },
+  JADE_LIZARD:      { loss_fraction: 0.40, absolute_cap_rs: 10000 },
+  CALENDAR_SPREAD:  { loss_fraction: 0.50, absolute_cap_rs: 10000 },
+};
+
+function strategySlConfig(strategy) {
+  const base = STRATEGY_SL_LIMITS[strategy] || STRATEGY_SL_DEFAULTS;
+  return { ...STRATEGY_SL_DEFAULTS, ...base };
+}
+
+function capApplies(cfg, maxLossRs) {
+  if (cfg.absolute_cap_rs == null) return false;
+  if (cfg.cap_min_max_loss_rs != null && maxLossRs < cfg.cap_min_max_loss_rs) return false;
+  return true;
+}
+
+function effectiveSlRs(strategy, maxLossRs) {
+  if (maxLossRs == null || maxLossRs <= 0) return null;
+  const cfg = strategySlConfig(strategy);
+  const pct = maxLossRs * cfg.loss_fraction;
+  if (capApplies(cfg, maxLossRs) && pct > cfg.absolute_cap_rs) return cfg.absolute_cap_rs;
+  return pct;
+}
+
+function slExitPlanText(strategy, maxLossRs) {
+  const cfg = strategySlConfig(strategy);
+  const slRs = effectiveSlRs(strategy, maxLossRs);
+  const pctLabel = `${Math.round(cfg.loss_fraction * 100)}%`;
+  let capDesc = 'no cap';
+  if (cfg.absolute_cap_rs != null) {
+    capDesc = cfg.cap_min_max_loss_rs != null
+      ? `₹${fmt(cfg.absolute_cap_rs)} cap when max loss ≥ ₹${fmt(cfg.cap_min_max_loss_rs)}`
+      : `₹${fmt(cfg.absolute_cap_rs)} cap`;
+  }
+  if (slRs == null) return `exit on MTM loss (${pctLabel} of max loss, ${capDesc})`;
+  return `exit if MTM loss reaches ₹${fmt(slRs)} (${pctLabel} of max loss; ${capDesc})`;
+}
+
+// ── Live risk monitor levels (mirrors config.py live_risk_monitor) ─────────
+const LIVE_RISK_MONITOR = {
+  target_fraction_at_min_dte: 0.50,
+  target_fraction_at_max_dte: 0.80,
+  target_min_dte: 3,
+  target_max_dte: 15,
+  trailing_sl_steps: [[0.50, 0.0], [0.80, 0.40]],
+  pre_breach_fraction: 0.70,
+};
+
+function dteFromExpiry(expiryDateStr) {
+  if (!expiryDateStr) return null;
+  const s = String(expiryDateStr).slice(0, 10);
+  const parts = s.split('-');
+  if (parts.length !== 3) return null;
+  const exp = new Date(+parts[0], +parts[1] - 1, +parts[2]);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.max(0, Math.round((exp - today) / 86400000));
+}
+
+function liveTargetFraction(dte) {
+  const c = LIVE_RISK_MONITOR;
+  if (dte == null) return c.target_fraction_at_max_dte;
+  if (dte <= c.target_min_dte) return c.target_fraction_at_min_dte;
+  if (dte >= c.target_max_dte) return c.target_fraction_at_max_dte;
+  const span = c.target_max_dte - c.target_min_dte;
+  if (span <= 0) return c.target_fraction_at_max_dte;
+  const f = (dte - c.target_min_dte) / span;
+  return c.target_fraction_at_min_dte
+    + f * (c.target_fraction_at_max_dte - c.target_fraction_at_min_dte);
+}
+
+function renderLiveProfitLevels(t) {
+  const sug = t.suggestion || {};
+  const mpRaw = t.actual_max_profit != null ? t.actual_max_profit
+              : (sug.max_profit != null ? sug.max_profit : null);
+  const mp = mpRaw != null ? parseFloat(mpRaw) : null;
+  if (mp == null || mp <= 0 || isNaN(mp)) return '';
+  const expiry = sug.expiry_date;
+  const dte = dteFromExpiry(expiry);
+  const tgtFrac = liveTargetFraction(dte);
+  const targetRs = Math.round(mp * tgtFrac);
+  const strat = sug.strategy || '';
+  const mlRaw = t.actual_max_loss != null ? t.actual_max_loss
+              : (sug.max_loss != null ? sug.max_loss : null);
+  const ml = mlRaw != null ? parseFloat(mlRaw) : null;
+  const lossRs = effectiveSlRs(strat, ml);
+  const stepIdx = parseInt(t.trailing_step_idx || 0, 10);
+  const floor = t.trailing_pnl_floor != null ? parseFloat(t.trailing_pnl_floor) : null;
+  const steps = LIVE_RISK_MONITOR.trailing_sl_steps || [];
+  const nextStep = stepIdx < steps.length ? steps[stepIdx] : null;
+
+  let floorValHtml;
+  let floorNote;
+  if (floor != null) {
+    floorValHtml = `<span class="lpl-val lpl-floor live-profit-floor-val">\u20b9${fmt(floor)}</span>`;
+    floorNote = 'Trailing lock — alert if MTM falls below (always below target)';
+  } else if (nextStep) {
+    const trigRs = Math.round(mp * nextStep[0]);
+    const lockRs = Math.round(mp * nextStep[1]);
+    floorValHtml = `<span class="lpl-val muted live-profit-floor-val">Not armed</span>`;
+    floorNote = `Arms at \u20b9${fmt(trigRs)} profit (${Math.round(nextStep[0] * 100)}%) \u2192 floor \u20b9${fmt(lockRs)}`;
+  } else {
+    floorValHtml = `<span class="lpl-val muted live-profit-floor-val">\u2014</span>`;
+    floorNote = 'All trailing steps armed';
+  }
+
+  const dteLabel = dte != null ? `, DTE ${dte}` : '';
+  const floorAttr = floor != null ? String(floor) : '';
+  return `
+    <div class="live-profit-levels" data-trade-id="${escapeHtml(t.trade_id)}"
+         data-max-profit="${mp}"
+         data-max-loss="${ml != null && !isNaN(ml) ? ml : ''}"
+         data-strategy="${escapeHtml(strat)}"
+         data-expiry="${expiry ? escapeHtml(String(expiry).slice(0, 10)) : ''}"
+         data-trailing-floor="${floorAttr}">
+      <div class="sl-monitor-label">Live profit levels</div>
+      <div class="lpl-grid">
+        <div class="lpl-row lpl-target-row">
+          <span class="lpl-label">Target profit</span>
+          <span class="lpl-val-line">
+            <span class="lpl-val lpl-target">\u20b9${fmt(targetRs)}</span>
+            <span class="lpl-status lpl-status-target" hidden></span>
+          </span>
+          <span class="muted lpl-note">Exit goal — ${Math.round(tgtFrac * 100)}% of max profit${dteLabel}</span>
+        </div>
+        <div class="lpl-row lpl-floor-row">
+          <span class="lpl-label">Profit floor</span>
+          <span class="lpl-val-line">
+            ${floorValHtml}
+            <span class="lpl-status lpl-status-floor" hidden></span>
+          </span>
+          <span class="muted lpl-note live-profit-floor-note">${floorNote}</span>
+        </div>
+        <div class="lpl-row lpl-loss-row">
+          <span class="lpl-label">Loss limit</span>
+          <span class="lpl-val-line">
+            <span class="lpl-val lpl-loss">${lossRs != null ? `\u20b9${fmt(lossRs)} loss` : '\u2014'}</span>
+            <span class="lpl-status lpl-status-loss" hidden></span>
+          </span>
+          <span class="muted lpl-note">${lossRs != null ? slExitPlanText(strat, ml) : 'Set max loss on trade'}</span>
+        </div>
+      </div>
+      <div class="lpl-foot muted">Labels show <strong>current</strong> breach only — they clear when MTM recovers. Alerts stay in the Notifications tab.</div>
+    </div>`;
+}
+
+function _fmtMtmSigned(v) {
+  if (v == null || isNaN(v)) return '—';
+  const n = Math.round(v);
+  return (n >= 0 ? '+₹' : '−₹') + fmt(Math.abs(n));
+}
+
+function _computeTradeActionInstruction(opts) {
+  const {
+    liveMtm, lossHit, floorBreach, targetHit, preBreachNear,
+    lossRs, targetRs, floor, strategy,
+    dailyStatus, exitInstruction, riskNotif,
+  } = opts;
+  const ds = (dailyStatus || '').toUpperCase();
+  const rn = (riskNotif || '').toUpperCase();
+
+  if (ds === 'EXIT_AT_OPEN' || ds === 'EXIT') {
+    return {
+      tone: 'critical',
+      verb: 'CLOSE',
+      title: 'Exit today — EOD / daily rule',
+      instruction: exitInstruction
+        || 'The exit engine flagged this trade for exit. Close all legs when you can.',
+      why: `Daily status: ${dailyStatus}`,
+      cta: 'Use Close Trade below and record exit prices.',
+    };
+  }
+  if (lossHit || rn === 'LOSS_LIMIT_HIT') {
+    return {
+      tone: 'critical',
+      verb: 'CLOSE NOW',
+      title: 'Close the entire trade',
+      instruction: 'Buy back every short leg and sell every long leg — exit the full position. '
+        + 'This is your MTM stop loss.',
+      why: liveMtm != null && lossRs != null
+        ? `Live MTM ${_fmtMtmSigned(liveMtm)} · loss limit −₹${fmt(lossRs)}`
+        : 'Loss limit alert is active.',
+      cta: 'Tap Close Trade below → enter live exit prices → confirm.',
+    };
+  }
+  if (rn === 'SL_TRIGGER') {
+    const sideHint = ['IRON_CONDOR', 'IRON_BUTTERFLY'].includes(strategy)
+      ? 'Close only the spread that spot breached (call side if Nifty rallied, put side if it fell), '
+        + 'or close the whole trade if unsure.'
+      : 'Spot crossed your stored SL level — close the threatened side or the full trade.';
+    return {
+      tone: 'critical',
+      verb: 'CLOSE',
+      title: 'Spot stop triggered',
+      instruction: sideHint,
+      why: 'Underlying price hit the stop-loss level in Stop-loss monitor.',
+      cta: 'Use Close Trade below to exit.',
+    };
+  }
+  if (floorBreach || rn === 'PROFIT_FLOOR_HIT') {
+    return {
+      tone: 'warn',
+      verb: 'CLOSE',
+      title: 'Close to protect profit',
+      instruction: 'MTM dropped below your trailing profit floor. Exit now if you accept the '
+        + '"lock gains" rule — don\'t wait for target again.',
+      why: liveMtm != null && floor != null
+        ? `Live MTM ${_fmtMtmSigned(liveMtm)} · floor ₹${fmt(floor)} · target ₹${fmt(targetRs || 0)}`
+        : 'Profit floor breach is active.',
+      cta: 'Use Close Trade below.',
+    };
+  }
+  if (targetHit || rn === 'TARGET_HIT') {
+    return {
+      tone: 'ok',
+      verb: 'TAKE PROFIT',
+      title: 'Target reached — your call',
+      instruction: 'You may close now to lock profit, or hold for more if you still like the setup. '
+        + 'No forced exit on target alone.',
+      why: liveMtm != null && targetRs != null
+        ? `Live MTM ${_fmtMtmSigned(liveMtm)} · target ₹${fmt(targetRs)}`
+        : 'Target alert is active.',
+      cta: 'Optional: Close Trade below to book profit.',
+    };
+  }
+  if (preBreachNear || rn === 'PRE_BREACH_WARNING') {
+    return {
+      tone: 'watch',
+      verb: 'WATCH',
+      title: 'Approaching loss limit — prepare to exit',
+      instruction: 'Do not add size. Decide your exit plan now; close if MTM falls to the loss limit.',
+      why: liveMtm != null && lossRs != null
+        ? `Live MTM ${_fmtMtmSigned(liveMtm)} · loss limit −₹${fmt(lossRs)}`
+        : 'Pre-breach warning fired today.',
+      cta: 'No action yet unless loss limit hits.',
+    };
+  }
+  if (exitInstruction && /exit|close/i.test(exitInstruction)) {
+    return {
+      tone: 'warn',
+      verb: 'REVIEW',
+      title: 'EOD exit note on this trade',
+      instruction: exitInstruction,
+      why: 'From the daily exit engine (not live tick).',
+      cta: 'Compare with live levels below, then decide.',
+    };
+  }
+  return {
+    tone: 'hold',
+    verb: 'HOLD',
+    title: 'No action required',
+    instruction: 'Stay in the trade. Red = close at loss limit · Amber floor = protect profit · '
+      + 'Green target = optional take profit.',
+    why: liveMtm != null
+      ? `Live MTM ${_fmtMtmSigned(liveMtm)}`
+        + (lossRs != null ? ` · loss limit −₹${fmt(lossRs)}` : '')
+        + (targetRs != null ? ` · target ₹${fmt(targetRs)}` : '')
+      : 'Waiting for live MTM during market hours.',
+    cta: 'Monitor — Close Trade below when you choose to exit.',
+  };
+}
+
+function renderTradeActionPanel(t) {
+  const ra = t.risk_alert || {};
+  const sug = t.suggestion || {};
+  const initial = _computeTradeActionInstruction({
+    dailyStatus: t.daily_status,
+    exitInstruction: t.exit_instruction,
+    riskNotif: ra.notif_type,
+  });
+  return `
+    <div class="trade-action-panel" data-trade-id="${escapeHtml(t.trade_id)}"
+         data-strategy="${escapeHtml(sug.strategy || '')}"
+         data-daily-status="${escapeHtml(t.daily_status || '')}"
+         data-exit-instruction="${escapeHtml(t.exit_instruction || '')}"
+         data-risk-notif="${escapeHtml(ra.notif_type || '')}">
+      <div class="tap-inner tap-inner-${initial.tone}">
+        <div class="tap-verb">${escapeHtml(initial.verb)}</div>
+        <div class="tap-body">
+          <strong class="tap-title">${escapeHtml(initial.title)}</strong>
+          <p class="tap-instruction">${escapeHtml(initial.instruction)}</p>
+          <p class="tap-cta">${escapeHtml(initial.cta)}</p>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm tap-goto-close"
+                data-trade-id="${escapeHtml(t.trade_id)}">Close Trade ↓</button>
+      </div>
+      <details class="tap-details">
+        <summary>Why? (numbers)</summary>
+        <p class="tap-why muted">${escapeHtml(initial.why)}</p>
+      </details>
+    </div>`;
+}
+
+function _updateTradeActionPanel(tradeId, payload, stripState) {
+  document.querySelectorAll(`.trade-action-panel[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(panel => {
+    const section = document.querySelector(
+      `.live-profit-levels[data-trade-id="${CSS.escape(tradeId)}"]`,
+    );
+    const thresholds = section ? _resolveLiveLevelThresholds(section, payload || {}) : null;
+    const liveMtm = (stripState && stripState.liveMtm != null)
+      ? stripState.liveMtm
+      : (payload && payload.mtm != null ? parseFloat(payload.mtm) : null);
+    const lossRs = thresholds && thresholds.lossRs;
+    const preBreachNear = (
+      liveMtm != null && lossRs != null
+      && liveMtm <= -(LIVE_RISK_MONITOR.pre_breach_fraction * lossRs)
+      && liveMtm > -lossRs
+    );
+    const instr = _computeTradeActionInstruction({
+      liveMtm,
+      lossHit: stripState && stripState.lossHit,
+      floorBreach: stripState && stripState.floorBreach,
+      targetHit: stripState && stripState.targetHit,
+      preBreachNear,
+      lossRs,
+      targetRs: thresholds && thresholds.targetRs,
+      floor: thresholds && thresholds.floor,
+      strategy: panel.dataset.strategy || '',
+      dailyStatus: panel.dataset.dailyStatus,
+      exitInstruction: panel.dataset.exitInstruction,
+      riskNotif: panel.dataset.riskNotif,
+    });
+    const inner = panel.querySelector('.tap-inner');
+    if (inner) {
+      inner.className = `tap-inner tap-inner-${instr.tone}`;
+      const verb = inner.querySelector('.tap-verb');
+      const title = inner.querySelector('.tap-title');
+      const instruction = inner.querySelector('.tap-instruction');
+      const cta = inner.querySelector('.tap-cta');
+      if (verb) verb.textContent = instr.verb;
+      if (title) title.textContent = instr.title;
+      if (instruction) instruction.textContent = instr.instruction;
+      if (cta) cta.textContent = instr.cta;
+    }
+    const why = panel.querySelector('.tap-why');
+    if (why) why.textContent = instr.why;
+  });
+}
+
 // ── Computed Exit Plan ───────────────────────────────────────────────────────
 // Derives profit target and per-side stop loss entirely from suggestion data.
 // Works for every strategy, every suggestion (old or new) — no plain_english parsing.
@@ -504,6 +1045,8 @@ function renderExitPlan(s) {
       rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above short call ${fmt(scLeg.strike)}` });
       rows.push({ label: 'Put-side SL',  val: `exit put spread if ${und} falls below short put ${fmt(spLeg.strike)}` });
     }
+    const maxLossRs = s.max_loss != null ? parseFloat(s.max_loss) : null;
+    rows.push({ label: 'MTM stop loss', val: slExitPlanText(strategy, maxLossRs), key: true });
   } else if (callCreditOnly && scLeg) {
     if (slLevel != null) {
       const buf = Math.round(slLevel - scLeg.strike);
@@ -512,6 +1055,7 @@ function renderExitPlan(s) {
     } else {
       rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above short call ${fmt(scLeg.strike)}` });
     }
+    rows.push({ label: 'MTM stop loss', val: slExitPlanText(strategy, s.max_loss != null ? parseFloat(s.max_loss) : null), key: true });
   } else if (putCreditOnly && spLeg) {
     if (slLevel != null) {
       const buf = Math.round(spLeg.strike - slLevel);
@@ -520,26 +1064,16 @@ function renderExitPlan(s) {
     } else {
       rows.push({ label: 'Put-side SL', val: `exit put spread if ${und} falls below short put ${fmt(spLeg.strike)}` });
     }
-  } else if (putDebitOnly) {
-    const slFrac = 50;
-    rows.push({
-      label: 'Stop loss',
-      val: `exit if MTM loss reaches ${slFrac}% of max debit (no Nifty spot trigger — bear put loses when ${und} rallies)`,
-      key: true,
-    });
-  } else if (callDebitOnly) {
-    rows.push({
-      label: 'Stop loss',
-      val: `exit if MTM loss reaches 50% of max debit (no Nifty spot trigger — bull call loses when ${und} falls)`,
-      key: true,
-    });
-  } else if (strategy === 'LONG_CALL') {
-    rows.push({ label: 'Stop loss', val: `exit if MTM loss reaches 50% of premium paid (${und} decline hurts long call)`, key: true });
-  } else if (strategy === 'LONG_PUT') {
-    rows.push({ label: 'Stop loss', val: `exit if MTM loss reaches 50% of premium paid (${und} rally hurts long put)`, key: true });
-  } else if (['LONG_STRADDLE', 'LONG_STRANGLE'].includes(strategy) && isDebit) {
-    const slVal = Math.round(Math.abs(np) * 0.5 * 10) / 10;
-    rows.push({ label: 'Stop loss', val: `exit if position value decays to 50% of debit paid (₹${fmt(slVal)}/unit lost)` });
+    rows.push({ label: 'MTM stop loss', val: slExitPlanText(strategy, s.max_loss != null ? parseFloat(s.max_loss) : null), key: true });
+  } else if (putDebitOnly || callDebitOnly || strategy === 'LONG_CALL' || strategy === 'LONG_PUT'
+      || (['LONG_STRADDLE', 'LONG_STRANGLE', 'CALENDAR_SPREAD'].includes(strategy) && isDebit)) {
+    const maxLossRs = s.max_loss != null ? parseFloat(s.max_loss) : null;
+    let note = '';
+    if (putDebitOnly) note = ` — no spot trigger; bear put loses when ${und} rallies`;
+    else if (callDebitOnly) note = ` — no spot trigger; bull call loses when ${und} falls`;
+    else if (strategy === 'LONG_CALL') note = ` — ${und} decline hurts long call`;
+    else if (strategy === 'LONG_PUT') note = ` — ${und} rally hurts long put`;
+    rows.push({ label: 'Stop loss', val: slExitPlanText(strategy, maxLossRs) + note, key: true });
   }
 
   if (!rows.length) return '';
@@ -2191,14 +2725,27 @@ async function loadTrades() {
     c.className=''; c.innerHTML = data.trades.map(renderTrade).join('');
     try {
       const snap = await API('/api/live/mtm/snapshot');
-      _applyMtmSnapshot(snap);
+      _bootstrapLiveLevelsForTrades(data.trades, snap);
     } catch (_) {
-      _refreshAllFeedTags();
+      _bootstrapLiveLevelsForTrades(data.trades, { trades: {} });
     }
     // Phase 3 — #3: open SSE stream once after each trades render so live
     // MTM cells (.live-mtm[data-trade-id="..."]) update without polling.
     ensureLiveMTMStream();
     bindConfChips();
+    $$('.tap-goto-close').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tid = btn.dataset.tradeId;
+        const closeBtn = document.querySelector(
+          `.btn-close-trade[data-trade-id="${CSS.escape(tid)}"]`,
+        );
+        if (closeBtn) {
+          closeBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          closeBtn.classList.add('btn-pulse');
+          setTimeout(() => closeBtn.classList.remove('btn-pulse'), 2000);
+        }
+      });
+    });
     $$('.btn-resuggest').forEach(b => b.addEventListener('click', async e => {
       const id = e.target.dataset.tradeId;
       try {
@@ -2798,17 +3345,24 @@ function renderTrade(t) {
           const cls =
             ra.notif_type === 'TARGET_HIT'         ? 'tag tag-ok'   :
             ra.notif_type === 'TARGET_LOCKED'      ? 'tag tag-ok'   :
+            ra.notif_type === 'PROFIT_FLOOR_SET'   ? 'tag tag-ok'   :
+            ra.notif_type === 'PROFIT_FLOOR_HIT'   ? 'tag tag-warn' :
+            ra.notif_type === 'LOSS_LIMIT_HIT'     ? 'tag tag-err'  :
             ra.notif_type === 'SL_TRIGGER'         ? 'tag tag-err'  :
             ra.notif_type === 'PRE_BREACH_WARNING' ? 'tag tag-warn' : 'tag';
           const icon =
             ra.notif_type === 'TARGET_HIT'         ? '\u2705 '  :
             ra.notif_type === 'TARGET_LOCKED'      ? '\ud83d\udd12 ' :
+            ra.notif_type === 'PROFIT_FLOOR_SET'   ? '\ud83d\udd12 ' :
+            ra.notif_type === 'PROFIT_FLOOR_HIT'   ? '\u26a0\ufe0f ' :
+            ra.notif_type === 'LOSS_LIMIT_HIT'     ? '\ud83d\uded1 ' :
             ra.notif_type === 'SL_TRIGGER'         ? '\ud83d\uded1 ' :
             ra.notif_type === 'PRE_BREACH_WARNING' ? '\u26a0\ufe0f ' : '';
           const tip = (ra.title || ra.notif_type) +
                       (ra.body ? ` — ${ra.body}` : '');
-          return `<span class="${cls}" title="${escapeHtml(tip)}">${icon}${escapeHtml(ra.notif_type.replace(/_/g, ' '))}</span>`;
+          return `<span class="${cls} risk-alert-static" title="${escapeHtml(tip)}">${icon}${escapeHtml(ra.notif_type.replace(/_/g, ' '))}</span>`;
         })()}
+        <span class="tag live-risk-live" data-trade-id="${escapeHtml(t.trade_id)}" hidden></span>
         ${hasPendingClose ? `<span class="tag tag-warn" title="Record exit prices to compute P&L">CLOSE PENDING</span>` : ''}
         <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
@@ -2819,6 +3373,7 @@ function renderTrade(t) {
         ${_entryQualBadge}
       </div>
     </div>
+    ${renderTradeActionPanel(t)}
     <div class="card-id-row">
       <span class="id-chip" title="Trade ID">${escapeHtml(t.trade_id || '—')}</span>
       ${t.suggestion_id ? `<span class="id-chip" title="Suggestion ID">${escapeHtml(t.suggestion_id)}</span>` : ''}
@@ -2931,6 +3486,7 @@ function renderTrade(t) {
       });
       return renderProfitZoneBar(profit, ul, beHtml);
     })()}
+    ${renderLiveProfitLevels(t)}
     <div class="sl-monitor-section">
       <div class="sl-monitor-label">Stop-loss monitor</div>
       <div class="sl-monitor-grid">
@@ -2984,15 +3540,10 @@ function renderTrade(t) {
           <label class="sl-label">Spot at entry</label>
           <span class="sl-prem-val">${t.spot_at_execution != null ? `\u20b9${fmt(t.spot_at_execution)}` : '\u2014 not set'}</span>
         </div>
-        <div class="sl-field">
-          <label class="sl-label">Premium SL <span class="muted" style="font-size:.72rem">(1.5\u00d7\u00a0credit)</span></label>
-          <span class="sl-prem-val">\u20b9${fmt((t.net_credit_actual || 0) * 1.5)}</span>
-          <span class="muted sl-prem-note">exit if MTM loss exceeds this</span>
-        </div>
       </div>
       <div class="sl-action-note">
-        <strong>MTM loss</strong> = (current buy-back cost of all short legs) \u2212 net credit received<br>
-        Exit if <strong>MTM loss \u2265 Premium SL</strong> or Nifty spot hits the SL level \u2014 use <strong>Close Trade</strong> below.
+        <strong>Spot SL</strong> = underlying crosses stored level (two-sided spreads: close breached side only).<br>
+        <strong>Loss limit</strong> and <strong>profit floor</strong> are MTM-based — see Live profit levels above.
       </div>
     </div>
     ${hasPendingClose ? `<div class="pending-close-alert">\u26a0 Exit fills not recorded \u2014 use Close Trade below to compute P&amp;L</div>` : ''}
@@ -3693,6 +4244,7 @@ let _liveMTMSource = null;
 
 function _applyMtmEvent(m) {
   _updateCurrentPnlBadge(m.trade_id, m.mtm, m.as_of, true);
+  _updateLiveProfitLevels(m.trade_id, m);
 
   // Update LEFT panel live price spans with latest leg LTPs
   if (m.leg_ltps && typeof m.leg_ltps === 'object') {
@@ -4178,7 +4730,9 @@ const _NF_CAT_LABELS = {
 
 const _NF_TYPE_CAT = {
   SL_TRIGGER: 'sl', SL_HIT: 'sl', PRE_BREACH_WARNING: 'sl',
+  LOSS_LIMIT_HIT: 'sl', PROFIT_FLOOR_HIT: 'sl',
   TARGET_HIT: 'profit', TAKE_PROFIT: 'profit', TARGET_LOCKED: 'profit',
+  PROFIT_FLOOR_SET: 'profit',
   EXIT_TOMORROW: 'exit', TIME_DECAY_DONE: 'exit', EXPIRE: 'exit', AUTO_SETTLED: 'exit',
   EVENT_AHEAD_REVIEW: 'event',
   CIRCUIT_BREAKER: 'system', BROKEN_TRADE: 'system', DATA_REPAIR: 'system', KILL_SWITCH: 'system',

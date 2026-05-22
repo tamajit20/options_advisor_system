@@ -26,6 +26,7 @@ from typing import Mapping, Sequence
 
 from config import STRATEGY_CONFIG
 from contracts import ExitDecision
+from engine.sl_threshold import effective_sl_rs
 from utils import now_ist
 
 
@@ -83,17 +84,13 @@ def evaluate_exit(
             as_of=as_of,
         )
 
-    # SL hit — exit when loss reaches stop_loss_fraction × max_loss.
-    # Per-strategy fractions (S5: side-aware SL): put-side structures breach
-    # faster — use a tighter threshold. Falls back to global stop_loss_fraction.
-    sl_overrides = STRATEGY_CONFIG.get("strategy_stop_loss_fraction", {}) or {}
-    sl_fraction = float(sl_overrides.get(strategy, STRATEGY_CONFIG["stop_loss_fraction"]))
-    if max_loss_rs > 0 and current_pnl <= -(sl_fraction * max_loss_rs):
-        sl_rs = -(sl_fraction * max_loss_rs)
+    # SL hit — per-strategy min(fraction × max_loss, absolute_cap_rs).
+    sl_threshold, sl_label = effective_sl_rs(strategy=strategy, max_loss_rs=max_loss_rs)
+    if sl_threshold > 0 and current_pnl <= -sl_threshold:
         return ExitDecision(
             trade_id=trade_id, decision="SL_HIT",
-            reason=f"Loss ≥ {sl_fraction*100:.0f}% of max loss: "
-                   f"₹{current_pnl:.0f} ≤ ₹{sl_rs:.0f}",
+            reason=f"Loss ≥ SL threshold ({sl_label}): "
+                   f"₹{current_pnl:.0f} ≤ ₹{-sl_threshold:.0f}",
             as_of=as_of,
         )
 

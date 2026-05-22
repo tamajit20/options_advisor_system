@@ -10,10 +10,15 @@ that maps to a leg of an ACTIVE trade, recomputes whole-trade MTM via
 uses) and emits a notification when:
 
 * ``PRE_BREACH_WARNING`` — current loss first crosses
-  ``pre_breach_fraction × max_loss``. Soft warning; gives the user lead time
-  before a hard SL_TRIGGER. Fires once per trade per IST day.
-* ``SL_TRIGGER`` — current PnL <= ``-(stop_loss_fraction × max_loss)`` OR
-  the underlying spot crosses ``actual_stop_loss_level`` (when set).
+  ``pre_breach_fraction × effective_sl_rs``. Soft warning; gives the user lead
+  time before a hard loss limit. Fires once per trade per IST day.
+* ``PROFIT_FLOOR_SET`` — a trailing profit-lock step arms and raises the
+  trade's ``trailing_pnl_floor``.
+* ``PROFIT_FLOOR_HIT`` — live MTM drops below the armed profit floor.
+* ``LOSS_LIMIT_HIT`` — current PnL crosses the strategy effective loss limit
+  (``effective_sl_rs``).
+* ``SL_TRIGGER`` — underlying spot crosses ``actual_stop_loss_level`` (when
+  set). Premium-based loss uses ``LOSS_LIMIT_HIT`` instead.
 * ``TARGET_HIT`` — current PnL >= ``live_target_fraction × max_profit``,
   where ``live_target_fraction`` is interpolated by DTE (tighter at low DTE).
 
@@ -60,6 +65,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from config import STRATEGY_CONFIG
 from engine.exit_engine import evaluate_exit
+from engine.sl_threshold import effective_sl_rs
 from providers.base import LiveQuote
 from providers.event_bus import (
     EventBus,
@@ -253,7 +259,7 @@ _DEFAULTS = {
     "trailing_sl_steps":          [[0.50, 0.0], [0.80, 0.40]],
     # Phase 3 — #3 publish-rate throttle (seconds per trade).
     "mtm_publish_interval_sec":   1.0,
-    "mtm_snapshot_interval_sec":  3600,
+    "mtm_snapshot_interval_sec":  900,
     # Phase 3 — #5 tighter pre-breach when there is a HIGH-impact event
     # tomorrow (events_repo provides has_high_impact()).
     "event_eve_pre_breach_fraction": 0.20,
@@ -351,6 +357,7 @@ class LiveRiskMonitor:
         clock: Callable[[], datetime] = now_ist,
         trailing_persister: Optional[Callable[[str, Optional[float], int], None]] = None,
         mtm_snapshot_persister: Optional[Callable[[dict], None]] = None,
+        level_event_persister: Optional[Callable[[dict], None]] = None,
         events_repo: Optional[object] = None,
     ) -> None:
         self._notifier = notifier
@@ -381,9 +388,10 @@ class LiveRiskMonitor:
         self._mtm_publish_interval = timedelta(
             seconds=float(cfg["mtm_publish_interval_sec"] or 0))
         self._mtm_snapshot_interval = timedelta(
-            seconds=float(cfg["mtm_snapshot_interval_sec"] or 3600))
+            seconds=float(cfg["mtm_snapshot_interval_sec"] or 900))
         self._trailing_persister = trailing_persister
         self._mtm_snapshot_persister = mtm_snapshot_persister
+        self._level_event_persister = level_event_persister
         self._events_repo = events_repo
         self._clock = clock
 
@@ -403,6 +411,7 @@ class LiveRiskMonitor:
             "reloads":           0,
             "trailing_steps_armed": 0,
             "mtm_published":      0,
+            "level_events_logged": 0,
         }
         self._last_status_write: Optional[datetime] = None
         self._current_day: Optional[date] = None
@@ -617,6 +626,13 @@ class LiveRiskMonitor:
                 if breached:
                     last = state.last_alert_at.get(key)
                     if (not was) or last is None or (now - last) >= self._cooldown:
+                        if not was:
+                            self._record_level_transition(
+                                state, key, "ENTER", now,
+                                self._current_pnl(state),
+                                threshold_rs=state.sl_level,
+                                spot=ltp, include_legs=True,
+                            )
                         state.in_breach[key] = True
                         state.last_alert_at[key] = now
                         decisions.append(_PendingAlert(
@@ -628,6 +644,12 @@ class LiveRiskMonitor:
                         ))
                 else:
                     if was:
+                        self._record_level_transition(
+                            state, key, "EXIT", now,
+                            self._current_pnl(state),
+                            threshold_rs=state.sl_level,
+                            spot=ltp,
+                        )
                         # Reset cooldown so a new breach alerts immediately.
                         state.in_breach[key] = False
                         state.last_alert_at.pop(key, None)
@@ -677,7 +699,7 @@ class LiveRiskMonitor:
         ``mtm_payload`` is non-None when this evaluation should publish on
         TOPIC_TRADE_MTM after the lock is released. ``trailing_persist_args``
         is non-None when a trailing-step ratchet must be persisted to DB.
-        ``snapshot_payload`` is non-None when an hourly DB snapshot should
+        ``snapshot_payload`` is non-None when a periodic DB snapshot should
         be written.
         """
         # Stale guard.
@@ -726,6 +748,12 @@ class LiveRiskMonitor:
         current_pnl = self._current_pnl(state)
         target_fraction = self._dte_target_fraction(dte)
         active_pre_breach = self._active_pre_breach_fraction(now)
+        sl_threshold, sl_label = effective_sl_rs(
+            strategy=state.strategy, max_loss_rs=state.max_loss)
+        target_rs = (
+            target_fraction * state.max_profit
+            if state.max_profit > 0 else None
+        )
 
         # Trailing SL ratchet (#4): when current_pnl crosses the next step's
         # trigger (= step_trigger × max_profit), bump the floor up.
@@ -749,11 +777,11 @@ class LiveRiskMonitor:
                     state.trailing_step_idx,
                 )
                 trailing_lock_alert = _PendingAlert(
-                    state=state, notif_type="TARGET_LOCKED", severity="INFO",
-                    title=f"Profit locked on {state.trade_name}",
+                    state=state, notif_type="PROFIT_FLOOR_SET", severity="INFO",
+                    title=f"Profit floor set on {state.trade_name}",
                     body=self._format_pnl_body(
                         state, current_pnl,
-                        f"Reached {trig*100:.0f}% of max profit; SL "
+                        f"Reached {trig*100:.0f}% of max profit; profit floor "
                         f"raised to ₹{state.trailing_pnl_floor:,.0f}",
                     ),
                     breach_key=f"TRAIL_{state.trailing_step_idx}",
@@ -804,31 +832,48 @@ class LiveRiskMonitor:
                 "feed_source": self._feed_source(state, now),
             }
 
-        # 1. Hard SL on premium (engine decision OR trailing floor breach).
         trailing_breach = (
             state.trailing_pnl_floor is not None
             and current_pnl < state.trailing_pnl_floor
         )
-        if decision.decision == "SL_HIT" or trailing_breach:
-            reason = decision.reason if decision.decision == "SL_HIT" else (
-                f"Live MTM ₹{current_pnl:,.0f} fell below trailing floor "
+
+        # 1a. Hard loss limit (premium-based SL from exit engine).
+        if decision.decision == "SL_HIT":
+            alert = self._maybe_alert(
+                state, "LOSS_LIMIT_HIT", "CRITICAL",
+                title=f"Loss limit hit on {state.trade_name}",
+                body=self._format_pnl_body(
+                    state, current_pnl, decision.reason,
+                ),
+                breach_key="LOSS_LIMIT", now=now,
+                threshold_rs=sl_threshold,
+            )
+            return alert, mtm_payload, trailing_persist, snapshot_payload
+
+        # 1b. Trailing profit floor breach (separate breach bucket / cooldown).
+        if trailing_breach:
+            reason = (
+                f"Live MTM ₹{current_pnl:,.0f} fell below profit floor "
                 f"₹{state.trailing_pnl_floor:,.0f}"
             )
             alert = self._maybe_alert(
-                state, "SL_TRIGGER", "CRITICAL",
-                title=f"SL hit on {state.trade_name}",
+                state, "PROFIT_FLOOR_HIT", "WARNING",
+                title=f"Profit floor hit on {state.trade_name}",
                 body=self._format_pnl_body(state, current_pnl, reason),
-                breach_key="PNL_SL", now=now,
+                breach_key="PROFIT_FLOOR", now=now,
+                threshold_rs=state.trailing_pnl_floor,
             )
             return alert, mtm_payload, trailing_persist, snapshot_payload
 
         # 2. Soft pre-breach warning. Event-eve uses tighter fraction.
-        if (state.max_loss > 0
-                and current_pnl <= -(active_pre_breach * state.max_loss)
+        pre_breach_rs = active_pre_breach * sl_threshold
+        if (sl_threshold > 0
+                and current_pnl <= -pre_breach_rs
                 and not state.pre_breach_alerted_today):
             state.pre_breach_alerted_today = True
-            reason = (f"Loss ≥ {active_pre_breach * 100:.0f}% of max "
-                      f"(₹{current_pnl:,.0f} of ₹{-state.max_loss:,.0f})")
+            reason = (f"Loss ≥ {active_pre_breach * 100:.0f}% of SL threshold "
+                      f"(₹{sl_threshold:,.0f}, {sl_label}): "
+                      f"₹{current_pnl:,.0f}")
             state.in_breach["PRE_BREACH"] = True
             state.last_alert_at["PRE_BREACH"] = now
             return _PendingAlert(
@@ -850,13 +895,18 @@ class LiveRiskMonitor:
                     f"{decision.reason} (live target {target_fraction*100:.0f}%)",
                 ),
                 breach_key="TARGET", now=now,
+                threshold_rs=target_rs,
             ), mtm_payload, trailing_persist, snapshot_payload
 
         # 4. Not in breach — clear so cooldown resets on re-entry.
-        for k in ("PNL_SL", "TARGET"):
-            if state.in_breach.get(k):
-                state.in_breach[k] = False
-                state.last_alert_at.pop(k, None)
+        if decision.decision != "SL_HIT":
+            self._clear_level_breach(
+                state, "LOSS_LIMIT", now, current_pnl, sl_threshold)
+        if not trailing_breach:
+            self._clear_level_breach(
+                state, "PROFIT_FLOOR", now, current_pnl,
+                state.trailing_pnl_floor)
+        self._clear_level_breach(state, "TARGET", now, current_pnl, target_rs)
         # If we armed a trailing step but no other alert fired, surface
         # the lock confirmation. Otherwise return only the MTM payload.
         if trailing_lock_alert is not None:
@@ -866,6 +916,7 @@ class LiveRiskMonitor:
     def _maybe_alert(
         self, state: _TradeState, notif_type: str, severity: str,
         *, title: str, body: str, breach_key: str, now: datetime,
+        threshold_rs: Optional[float] = None,
     ) -> Optional["_PendingAlert"]:
         was = state.in_breach.get(breach_key, False)
         last = state.last_alert_at.get(breach_key)
@@ -875,12 +926,89 @@ class LiveRiskMonitor:
         if was and in_cooldown:
             self._counters["alerts_suppressed"] += 1
             return None
+        if not was:
+            self._record_level_transition(
+                state, breach_key, "ENTER", now,
+                self._current_pnl(state),
+                threshold_rs=threshold_rs,
+                include_legs=True,
+            )
         state.in_breach[breach_key] = True
         state.last_alert_at[breach_key] = now
         return _PendingAlert(
             state=state, notif_type=notif_type, severity=severity,
             title=title, body=body, breach_key=breach_key,
         )
+
+    _LEVEL_EVENT_KEYS = {
+        "TARGET": "TARGET",
+        "PROFIT_FLOOR": "PROFIT_FLOOR",
+        "LOSS_LIMIT": "LOSS_LIMIT",
+        "SPOT_SL": "SPOT_SL",
+    }
+
+    def _leg_ltps_dict(self, state: _TradeState) -> Dict[str, float]:
+        return {
+            f"{k[0]}|{k[2]}|{k[3]}": round(v, 2)
+            for k, v in state.leg_ltps.items()
+        }
+
+    def _record_level_transition(
+        self,
+        state: _TradeState,
+        breach_key: str,
+        event_type: str,
+        now: datetime,
+        mtm: float,
+        *,
+        threshold_rs: Optional[float] = None,
+        spot: Optional[float] = None,
+        include_legs: bool = False,
+    ) -> None:
+        """Persist ENTER/EXIT for post-trade analysis (whip-saw, time-in-breach)."""
+        if self._level_event_persister is None:
+            return
+        level = self._LEVEL_EVENT_KEYS.get(breach_key)
+        if not level:
+            return
+        payload: dict = {
+            "trade_id": state.trade_id,
+            "level_type": level,
+            "event_type": event_type,
+            "event_at": now,
+            "mtm": round(float(mtm), 2),
+            "threshold_rs": threshold_rs,
+            "spot": spot if spot is not None else state.last_spot,
+        }
+        if include_legs and event_type == "ENTER":
+            legs = self._leg_ltps_dict(state)
+            if legs:
+                payload["leg_ltps"] = legs
+        try:
+            self._level_event_persister(payload)
+            with self._lock:
+                self._counters["level_events_logged"] += 1
+        except Exception:
+            logger.exception(
+                "LiveRiskMonitor: level_event_persister failed for %s/%s",
+                state.trade_id, level,
+            )
+
+    def _clear_level_breach(
+        self,
+        state: _TradeState,
+        breach_key: str,
+        now: datetime,
+        mtm: float,
+        threshold_rs: Optional[float],
+    ) -> None:
+        if not state.in_breach.get(breach_key):
+            return
+        self._record_level_transition(
+            state, breach_key, "EXIT", now, mtm, threshold_rs=threshold_rs,
+        )
+        state.in_breach[breach_key] = False
+        state.last_alert_at.pop(breach_key, None)
 
     def _dispatch(self, alert: "_PendingAlert") -> None:
         try:
@@ -918,6 +1046,8 @@ class LiveRiskMonitor:
         span = self._target_max_dte - self._target_min_dte
         if span <= 0:
             return self._target_max
+        f = (dte - self._target_min_dte) / span
+        return self._target_min + f * (self._target_max - self._target_min)
 
     def _active_pre_breach_fraction(self, now: datetime) -> float:
         """Returns the pre-breach loss fraction to use right now.
@@ -955,8 +1085,6 @@ class LiveRiskMonitor:
         except Exception:
             logger.exception(
                 "LiveRiskMonitor: trailing_persister raised for %s", trade_id)
-        f = (dte - self._target_min_dte) / span
-        return self._target_min + f * (self._target_max - self._target_min)
 
     def _format_pnl_body(self, state: _TradeState, current_pnl: float, reason: str) -> str:
         body = (

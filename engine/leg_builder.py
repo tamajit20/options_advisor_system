@@ -190,14 +190,21 @@ def build_long_strangle(
     lots: int,
     lot_size: int,
 ) -> List[SuggestionLeg]:
+    """Long strangle — buy OTM call and put at ±1σ (expected_move boundary).
+
+    Strikes sit at the edge of the expected move (±1.0×EM) so the cost is
+    lower and the directional edge is genuine. Using 0.5×EM placed strikes
+    near ATM, making the trade expensive with little incremental edge over a
+    straddle.
+    """
     strikes = sorted({float(r["strike"]) for r in chain})
-    long_call = closest_strike(strikes, spot + expected_move * 0.5)
-    long_put  = closest_strike(strikes, spot - expected_move * 0.5)
+    long_call = closest_strike(strikes, spot + expected_move * 1.0)
+    long_put  = closest_strike(strikes, spot - expected_move * 1.0)
     return [
         _make_leg(1, None, underlying, expiry, long_call, "CE", "BUY", lots, lot_size, chain,
-                  "Long strangle — long OTM call, profits on upside breakout"),
+                  "Long strangle — long OTM call at +1σ, profits on upside breakout"),
         _make_leg(2, None, underlying, expiry, long_put,  "PE", "BUY", lots, lot_size, chain,
-                  "Long strangle — long OTM put, profits on downside breakdown"),
+                  "Long strangle — long OTM put at −1σ, profits on downside breakdown"),
     ]
 
 
@@ -311,6 +318,41 @@ def build_iron_butterfly(
                   "Iron butterfly — short ATM call (body), maximum premium zone"),
         _make_leg(4, 3, underlying, expiry, long_call, "CE", "BUY",  lots, lot_size, chain,
                   "Iron butterfly — long OTM call hedge, caps upside risk"),
+    ]
+
+
+def build_calendar_spread(
+    *,
+    underlying: str,
+    near_expiry: date,
+    far_expiry: date,
+    near_chain: Sequence[Mapping],
+    far_chain: Sequence[Mapping],
+    spot: float,
+    lots: int,
+    lot_size: int,
+) -> List[SuggestionLeg]:
+    """ATM call calendar spread — SELL near expiry, BUY far expiry, same strike.
+
+    Profits when spot stays near the ATM strike through near expiry (theta decay
+    on the short leg is faster than the long leg at low DTE). Ideal for mid-IV,
+    low-directional markets where selling premium alone is not edge-positive.
+
+    Max loss = net debit (far_premium − near_premium).
+    Max profit ≈ time-value difference at near expiry (approximated by near ATM price).
+    """
+    near_strikes = sorted({float(r["strike"]) for r in near_chain})
+    far_strikes  = sorted({float(r["strike"]) for r in far_chain})
+    atm_near = closest_strike(near_strikes, spot)
+    atm_far  = closest_strike(far_strikes, spot)
+    # Prefer the same strike on both legs; fall back to closest on each chain.
+    if atm_near in far_strikes:
+        atm_far = atm_near
+    return [
+        _make_leg(1, 2, underlying, near_expiry, atm_near, "CE", "SELL", lots, lot_size, near_chain,
+                  "Calendar spread — short near-term call, collects faster theta decay"),
+        _make_leg(2, 1, underlying, far_expiry,  atm_far,  "CE", "BUY",  lots, lot_size, far_chain,
+                  "Calendar spread — long far-term call, retains time value after near expiry"),
     ]
 
 
@@ -606,6 +648,15 @@ def breakevens(legs: Sequence[SuggestionLeg], strategy: str) -> tuple[Optional[f
         lower = short_put - np_
         return upper, lower
 
+    if strategy == "CALENDAR_SPREAD":
+        # Breakeven at near expiry ≈ ATM ± net debit (simplified; true BE depends on
+        # far-leg vega at near expiry which is not modelled here).
+        atm = next((l.strike for l in legs if l.action == "SELL"), None)
+        if atm is None:
+            return None, None
+        debit = max(-np_, 0.0)
+        return atm + debit, atm - debit
+
     return None, None
 
 
@@ -640,6 +691,15 @@ def max_profit_loss(legs: Sequence[SuggestionLeg], strategy: str) -> tuple[float
         downside_loss = max(short_put - np_, 0.0)   # if assigned at expiry below short_put
         upside_loss   = max(call_width - np_, 0.0)
         return max(np_, 0.0), max(downside_loss, upside_loss)
+    if strategy == "CALENDAR_SPREAD":
+        # Max loss = net debit (far_premium − near_premium).
+        # Max profit ≈ near-leg premium (full time-value captured if spot pins ATM at near expiry).
+        # We use near-leg suggested_price as an estimate since far-leg vega at near expiry
+        # is not modelled here.
+        debit = max(-np_, 0.0)
+        near_leg = next((l for l in legs if l.action == "SELL"), None)
+        max_p = near_leg.suggested_price if near_leg else debit * 0.5
+        return max_p, debit
     return 0.0, 0.0
 
 

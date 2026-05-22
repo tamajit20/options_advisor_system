@@ -274,26 +274,25 @@ class TestEconomicsPrimitives:
 # FUTURE-SCOPE PLACEHOLDERS — see FUTURE_ENHANCEMENT_SCOPES.md
 # ---------------------------------------------------------------------------
 
-@pytest.mark.future
-@pytest.mark.skip(reason="future: LONG_STRANGLE should use ±1.0 EM, not ±0.5 EM (FUTURE_ENHANCEMENT_SCOPES.md → Engine Correctness)")
 def test_long_strangle_uses_full_expected_move(sample_chain, expiry_date):
-    """When fixed, long strangle strikes should sit at ±EM not ±0.5×EM."""
+    """LONG_STRANGLE strikes must sit at ±1.0×EM from spot (P1 fix, C3 coverage).
+
+    Placing strikes at ±0.5×EM puts them near ATM which is expensive and
+    provides little incremental edge over a straddle. ±1.0×EM sits at the
+    1-sigma boundary — genuinely OTM, lower cost, clearer directional intent.
+    """
     legs = build_long_strangle(
         underlying="NIFTY", expiry=expiry_date, chain=sample_chain,
         spot=23000.0, expected_move=300.0, lots=1, lot_size=75,
     )
     long_call = next(l for l in legs if l.option_type == "CE")
     long_put  = next(l for l in legs if l.option_type == "PE")
-    # Expected after fix: ≈ 23300 / 22700 (spot ± 1.0×EM)
-    assert long_call.strike >= 23250
-    assert long_put.strike  <= 22750
-
-
-@pytest.mark.future
-@pytest.mark.skip(reason="future: JADE_LIZARD must validate net_credit ≥ call_spread_width (FUTURE_ENHANCEMENT_SCOPES.md → Engine Correctness)")
-def test_jade_lizard_vetoes_when_net_credit_below_call_spread_width():
-    """When fixed, builder/selector should raise StrategyVeto if upside risk is undefined."""
-    pass
+    # Strikes should be at ±1.0×EM (≈ 23300 / 22700)
+    assert long_call.strike >= 23250, f"Call strike {long_call.strike} not ≥ 23250"
+    assert long_put.strike  <= 22750, f"Put strike {long_put.strike} not ≤ 22750"
+    # And both legs must be OTM (call above spot, put below spot)
+    assert long_call.strike > 23000
+    assert long_put.strike  < 23000
 
 
 # ---------------------------------------------------------------------------

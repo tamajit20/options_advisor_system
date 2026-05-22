@@ -203,3 +203,91 @@ class TestCloseTradeWithFills:
         # BUY:  -(25-12.5)*75 = -937.5 × 2 = -1875
         # gross = 3750 - 1875 = 1875
         assert gross == pytest.approx(1875.0)
+
+
+# ---------------------------------------------------------------------------
+# C2 — additional trade executor tests for new behaviours
+# ---------------------------------------------------------------------------
+
+class TestCircuitBreakerBlocks:
+    """Circuit breaker active → execution blocked (ValueError)."""
+
+    def test_blocked_when_circuit_breaker_active(
+        self, mock_db, mocker, fake_suggestion, fake_legs
+    ):
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        # Simulate circuit breaker ON
+        mocker.patch(
+            "lifecycle.trade_executor.RuntimeFlagsRepo.get_bool",
+            return_value=True,
+        )
+        fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
+                              fill_time=datetime(2026, 5, 4, 9, 30))
+                 for i in (1, 2, 3, 4)]
+        with pytest.raises(ValueError, match="Execution blocked"):
+            te.mark_executed(mock_db, "SUG-X", fills)
+
+
+class TestActualNetCreditComputation:
+    """net_credit_actual must reflect actual fill prices, not suggestion prices."""
+
+    def test_actual_net_credit_uses_fill_price(
+        self, mock_db, mocker, fake_suggestion, fake_legs
+    ):
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.update_status")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.next_trade_id",
+                     return_value="TRD-003")
+        ins = mocker.patch("lifecycle.trade_executor.TradeRepo.insert")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.insert_legs")
+        # legs 1 + 3 are SELL at 60/55; legs 2 + 4 are BUY at 30/25
+        fill_prices = {1: 60.0, 2: 30.0, 3: 55.0, 4: 25.0}
+        fills = [TradeLegFill(leg_order=i, executed=True,
+                              fill_price=fill_prices[i],
+                              fill_time=datetime(2026, 5, 4, 9, 30))
+                 for i in (1, 2, 3, 4)]
+        te.mark_executed(mock_db, "SUG-X", fills)
+        call_arg = ins.call_args[0][0]
+        # SELL = +1, BUY = -1
+        # net = (60 + 55 - 30 - 25) × 75 = 60 × 75 = 4500
+        assert call_arg["net_credit_actual"] == pytest.approx(4500.0)
+
+
+class TestLotsOverride:
+    """TradeLegFill.lots_override must override default lots when provided."""
+
+    def test_lots_override_affects_net_credit(
+        self, mock_db, mocker, fake_suggestion, fake_legs
+    ):
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.update_status")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.next_trade_id",
+                     return_value="TRD-004")
+        ins = mocker.patch("lifecycle.trade_executor.TradeRepo.insert")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.insert_legs")
+        # Override to 2 lots for SELL legs, 1 lot for BUY legs
+        fills = [
+            TradeLegFill(leg_order=1, executed=True, fill_price=60.0,
+                         fill_time=datetime(2026, 5, 4, 9, 30), lots_override=2),
+            TradeLegFill(leg_order=2, executed=True, fill_price=30.0,
+                         fill_time=datetime(2026, 5, 4, 9, 30), lots_override=1),
+            TradeLegFill(leg_order=3, executed=True, fill_price=55.0,
+                         fill_time=datetime(2026, 5, 4, 9, 30), lots_override=2),
+            TradeLegFill(leg_order=4, executed=True, fill_price=25.0,
+                         fill_time=datetime(2026, 5, 4, 9, 30), lots_override=1),
+        ]
+        te.mark_executed(mock_db, "SUG-X", fills)
+        call_arg = ins.call_args[0][0]
+        # SELL: (60*2 + 55*2)*75 = 175×75 = 13125
+        # BUY:  -(30*1 + 25*1)*75 = -55×75 = -4125
+        expected = (60 * 2 + 55 * 2 - 30 * 1 - 25 * 1) * 75
+        assert call_arg["net_credit_actual"] == pytest.approx(float(expected))

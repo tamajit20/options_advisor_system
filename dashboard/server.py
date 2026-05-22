@@ -333,8 +333,8 @@ def create_app() -> Flask:
         for r in rows:
             r_out = _row(r)
             r_out["legs"] = [_row(l) for l in trd.legs_with_suggestion_info(r["trade_id"])]
-            # Live risk alert (TARGET_HIT / SL_TRIGGER / PRE_BREACH_WARNING /
-            # TARGET_LOCKED) so the card can render a prominent badge instead
+            # Live risk alert (TARGET_HIT / LOSS_LIMIT_HIT / PROFIT_FLOOR_HIT /
+            # PRE_BREACH_WARNING / PROFIT_FLOOR_SET) so the card can render a prominent badge instead
             # of relying solely on the notification bar.
             ra = notif.latest_risk_alert_for_trade(r["trade_id"])
             r_out["risk_alert"] = _row(ra) if ra else None

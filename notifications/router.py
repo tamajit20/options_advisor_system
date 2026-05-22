@@ -46,6 +46,8 @@ logger = logging.getLogger(__name__)
 # to be dispatched. Keys are uppercase. A missing key means "no gate".
 _TYPE_TO_FLAG = {
     "SL_TRIGGER":             "sl_alerts",
+    "LOSS_LIMIT_HIT":         "sl_alerts",
+    "PROFIT_FLOOR_HIT":       "sl_alerts",
     "PRE_BREACH_WARNING":     "sl_alerts",
     "PERFECT_CLOSURE":        "closure_alerts",
     "TARGET_HIT":             "closure_alerts",

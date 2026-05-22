@@ -25,7 +25,7 @@ import logging
 from datetime import date, timedelta
 from typing import List, Optional, Sequence
 
-from config import SIMULATION_CONFIG
+from config import SIMULATION_CONFIG, STRATEGY_CONFIG
 from contracts import SimulationDayUpdate
 from database.connection import SQLServerConnection
 from database.models import (
@@ -33,6 +33,7 @@ from database.models import (
     SimulationRepo,
     SuggestionRepo,
 )
+from engine.charges import estimate_charges
 from utils import days_between, today_ist
 
 logger = logging.getLogger(__name__)
@@ -221,11 +222,40 @@ def update_simulation(
         for leg in legs_state:
             if leg["quality"] == "ADJUSTED" and worst_quality == "FULL_VALID":
                 worst_quality = "ADJUSTED"
+
+        # C5: Compute realistic charges and apply bid-ask slippage so simulated
+        # net P&L reflects what a real trade would have earned.
+        slippage_bps = float(SIMULATION_CONFIG.get("slippage_bps", 50))
+        charge_inputs = []
+        for leg in legs_state:
+            ep = leg.get("sim_entry_price")
+            if ep is None:
+                continue
+            slip = ep * slippage_bps / 10_000.0
+            # For SELL legs slippage costs us (fill lower); for BUY legs (fill higher).
+            slipped_price = ep - slip if leg["action"] == "SELL" else ep + slip
+            charge_inputs.append({
+                "action":   leg["action"],
+                "price":    slipped_price,
+                "lots":     int(leg.get("lots") or 1),
+                "lot_size": int(leg.get("lot_size") or 1),
+            })
+        charges_obj = estimate_charges(charge_inputs) if charge_inputs else None
+        sim_charges = float(charges_obj.total) if charges_obj else 0.0
+        # Adjust gross P&L for slippage: each leg's pnl is reduced by the slippage cost
+        slippage_total = sum(
+            (float(l.get("sim_entry_price") or 0) * slippage_bps / 10_000.0)
+            * int(l.get("lots") or 1) * int(l.get("lot_size") or 1)
+            for l in legs_state if l.get("sim_entry_price") is not None
+        )
+        gross_after_slippage = cum_pnl - slippage_total
+        net_pnl = gross_after_slippage - sim_charges
+
         sim.update_summary(
             suggestion_id, completed_on=sim_date, overall_quality=worst_quality,
-            sim_net_credit=0.0, sim_final_pnl=cum_pnl,
-            sim_charges=0.0, sim_net_pnl=cum_pnl,
-            notes="Closed at expiry settle",
+            sim_net_credit=0.0, sim_final_pnl=gross_after_slippage,
+            sim_charges=sim_charges, sim_net_pnl=net_pnl,
+            notes=f"Closed at expiry settle | slippage {slippage_bps:.0f}bps={slippage_total:.0f} charges={sim_charges:.0f}",
         )
     else:
         sim.update_summary(

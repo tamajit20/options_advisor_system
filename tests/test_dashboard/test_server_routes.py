@@ -348,8 +348,8 @@ class TestConfigRoutes:
 
 class TestNotifications:
     def test_recent(self, client, mocker):
-        mocker.patch("dashboard.server.NotificationRepo.recent",
-                     return_value=[])
+        mocker.patch("dashboard.server.NotificationRepo.filtered", return_value=[])
+        mocker.patch("dashboard.server.NotificationRepo.count_filtered", return_value=0)
         resp = client.get("/api/notifications")
         assert resp.status_code == 200
 
@@ -509,13 +509,22 @@ class TestLiveMTMStream:
         assert b"connected" in first
         resp.close()
 
-    def test_publish_propagates_to_client(self, client):
-        from providers.event_bus import TOPIC_TRADE_MTM, get_event_bus
+    def test_publish_propagates_to_client(self, client, mocker):
+        import json
+        import os
+
+        path = "data/live_mtm_state.json"
+        os.makedirs("data", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({
+                "trades": {
+                    "T-001": {"trade_id": "T-001", "mtm": 1234.0, "dte": 5},
+                },
+            }, fh)
+        mocker.patch("time.sleep", return_value=None)
         resp = client.get("/api/live/mtm", buffered=False)
         # Drain the connect comment.
         next(resp.response)
-        get_event_bus().publish(TOPIC_TRADE_MTM,
-            {"trade_id": "T-001", "mtm": 1234.0, "dte": 5})
         chunk = next(resp.response)
         assert b"T-001" in chunk and b"1234" in chunk
         resp.close()

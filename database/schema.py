@@ -516,9 +516,9 @@ _TABLE_DDL: List[str] = [
     "CREATE INDEX IF NOT EXISTS IX_options_intraday_close_snapshot_date "
     "ON options_intraday_close_snapshot (snapshot_date)",
 
-    # ---------------- Trade MTM snapshots (hourly, live session) ----------------
+    # ---------------- Trade MTM snapshots (15-min, live session) ----------------
     # Hot table: ACTIVE trades only (archived to history on close / weekly job).
-    # One row per trade per hour bucket while ws_runner evaluates live MTM.
+    # One row per trade per 15-min bucket while ws_runner evaluates live MTM.
     """
     IF OBJECT_ID('options_trade_mtm_snapshot', 'U') IS NULL
     CREATE TABLE options_trade_mtm_snapshot (
@@ -526,7 +526,7 @@ _TABLE_DDL: List[str] = [
         trade_id              NVARCHAR(40)  NOT NULL,
         trade_name            NVARCHAR(200) NULL,
         snapshot_at           DATETIME2(0)  NOT NULL,
-        snapshot_granularity  NVARCHAR(10)  NOT NULL DEFAULT 'hourly',
+        snapshot_granularity  NVARCHAR(10)  NOT NULL DEFAULT '15min',
         mtm                   DECIMAL(18,2) NOT NULL,
         max_profit            DECIMAL(18,2) NULL,
         max_loss              DECIMAL(18,2) NULL,
@@ -564,6 +564,31 @@ _TABLE_DDL: List[str] = [
     "ON options_trade_mtm_snapshot_history (trade_id, snapshot_at DESC)",
     "CREATE INDEX IF NOT EXISTS IX_options_trade_mtm_snapshot_hist_arch "
     "ON options_trade_mtm_snapshot_history (archived_at)",
+
+    # ---------------- Trade level breach transitions (live session) ----------------
+    # One row each time a monitored level is ENTERed or EXITed (TARGET,
+    # PROFIT_FLOOR, LOSS_LIMIT, SPOT_SL). Used to analyse whip-saw / time-in-
+    # breach without replaying tick data. Leg prices on ENTER are optional;
+    # full 15-min leg_ltps_json lives in options_trade_mtm_snapshot.
+    """
+    IF OBJECT_ID('options_trade_level_events', 'U') IS NULL
+    CREATE TABLE options_trade_level_events (
+        id              BIGINT IDENTITY(1,1) PRIMARY KEY,
+        trade_id        NVARCHAR(40)  NOT NULL,
+        level_type      NVARCHAR(30)  NOT NULL,
+        event_type      NVARCHAR(10)  NOT NULL,
+        event_at        DATETIME2(0)  NOT NULL,
+        mtm             DECIMAL(18,2) NOT NULL,
+        threshold_rs    DECIMAL(18,2) NULL,
+        spot            DECIMAL(18,4) NULL,
+        leg_ltps_json   NVARCHAR(MAX) NULL,
+        created_at      DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_trade_level_events_trade "
+    "ON options_trade_level_events (trade_id, event_at DESC)",
+    "CREATE INDEX IF NOT EXISTS IX_options_trade_level_events_level "
+    "ON options_trade_level_events (trade_id, level_type, event_at DESC)",
 
     # ---------------- Provenance markers (Phase 2c) ----------------
     # Goal: every row that downstream code reasons about must declare WHICH
@@ -907,4 +932,5 @@ def list_tables() -> List[str]:
         "options_intraday_close_snapshot",
         "options_trade_mtm_snapshot",
         "options_trade_mtm_snapshot_history",
+        "options_trade_level_events",
     ]

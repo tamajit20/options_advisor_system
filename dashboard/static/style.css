@@ -952,6 +952,126 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .sl-save-msg { font-size: .8rem; color: var(--ok); }
 .sl-action-note { margin-top: 10px; font-size: .8rem; color: var(--text-dim); background: rgba(245,158,11,.08); border-left: 3px solid var(--warn); padding: 6px 10px; border-radius: 0 4px 4px 0; }
 @media (max-width: 500px) { .sl-monitor-grid { grid-template-columns: 1fr 1fr; } }
+
+/* Live profit levels — target vs trailing floor vs loss limit */
+.live-profit-levels {
+  background: rgba(34, 197, 94, .05);
+  border: 1px solid rgba(34, 197, 94, .22);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 10px 0 4px;
+  font-size: .85rem;
+}
+.lpl-grid { display: flex; flex-direction: column; gap: 8px; }
+.lpl-row { display: grid; grid-template-columns: 7.5rem 1fr; gap: 4px 10px; align-items: baseline; }
+.lpl-label { font-size: .75rem; color: var(--text-dim); font-weight: 600; }
+.lpl-val { font-size: .95rem; font-weight: 700; }
+.lpl-val-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  grid-column: 2;
+}
+.lpl-note { font-size: .72rem; grid-column: 2; }
+.lpl-target { color: var(--ok); }
+.lpl-floor { color: #f59e0b; }
+.lpl-loss { color: var(--err); }
+.lpl-status {
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 4px;
+  line-height: 1.2;
+}
+.lpl-status-hit {
+  color: #166534;
+  background: rgba(34, 197, 94, .18);
+  border: 1px solid rgba(34, 197, 94, .35);
+}
+.lpl-status-breach {
+  color: #991b1b;
+  background: rgba(239, 68, 68, .12);
+  border: 1px solid rgba(239, 68, 68, .3);
+}
+.lpl-floor-row.lpl-row-breach .lpl-status-breach {
+  color: #92400e;
+  background: rgba(245, 158, 11, .18);
+  border-color: rgba(245, 158, 11, .35);
+}
+.lpl-row-active.lpl-row-hit {
+  background: rgba(34, 197, 94, .08);
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+}
+.lpl-row-active.lpl-row-breach {
+  background: rgba(239, 68, 68, .08);
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+}
+.lpl-floor-row.lpl-row-breach {
+  background: rgba(245, 158, 11, .12);
+}
+.lpl-foot { margin-top: 8px; font-size: .72rem; line-height: 1.35; }
+
+/* Trade action instruction panel */
+.trade-action-panel {
+  margin: 10px 0 8px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #2a3744;
+}
+.tap-inner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+}
+.tap-inner-critical { background: rgba(239, 68, 68, .14); border-left: 4px solid var(--err); }
+.tap-inner-warn     { background: rgba(245, 158, 11, .12); border-left: 4px solid var(--warn); }
+.tap-inner-ok       { background: rgba(34, 197, 94, .12); border-left: 4px solid var(--ok); }
+.tap-inner-watch    { background: rgba(14, 165, 233, .10); border-left: 4px solid #0ea5e9; }
+.tap-inner-hold     { background: rgba(100, 116, 139, .12); border-left: 4px solid #64748b; }
+.tap-inner-wait     { background: var(--surface-alt); border-left: 4px solid #475569; }
+.tap-verb {
+  flex-shrink: 0;
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(0,0,0,.25);
+  color: var(--text);
+  min-width: 5.5rem;
+  text-align: center;
+}
+.tap-body { flex: 1; min-width: 0; }
+.tap-title { display: block; font-size: 1rem; margin-bottom: 4px; }
+.tap-instruction { margin: 0 0 6px; font-size: .88rem; line-height: 1.4; color: var(--text); }
+.tap-cta { margin: 0; font-size: .78rem; color: var(--text-dim); font-style: italic; }
+.tap-goto-close { flex-shrink: 0; align-self: center; white-space: nowrap; }
+.tap-details {
+  border-top: 1px solid #2a3744;
+  padding: 0 14px;
+  background: rgba(0,0,0,.15);
+  font-size: .8rem;
+}
+.tap-details summary {
+  cursor: pointer;
+  padding: 6px 0;
+  color: var(--text-dim);
+  user-select: none;
+}
+.tap-why { margin: 0 0 8px; line-height: 1.35; }
+.btn-pulse { animation: btn-pulse 0.6s ease 2; }
+@keyframes btn-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(14, 165, 233, .6); }
+  50%      { box-shadow: 0 0 0 8px rgba(14, 165, 233, 0); }
+}
 .leg-exit-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

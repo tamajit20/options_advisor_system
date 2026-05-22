@@ -68,6 +68,36 @@ Pick up from here in future development sessions.
 **Issue:** v1 of the watcher only triggers on VIX % change and spot %  change. PCR-band-cross (neutral → strong-bullish/bearish or vice versa) is conceptually a strong regime-shift signal but the live WebSocket tick stream carries only LTP/depth — full chain OI is needed to compute PCR. Adding it would require rate-limited REST `quote()` calls or a dedicated chain-OI snapshot.  
 **Fix:** Either (a) piggy-back on `SubscriptionManager`'s 60s reload to also snapshot ATM±5 chain OI, recompute PCR, and emit `OPPORTUNITY_REGEN_HINT` on band crossings; or (b) add a separate intraday scheduler job that hits the public NSE chain JSON every 5 min and computes PCR.
 
+### Trade Action Panel — live spot SL in instruction priority
+**Files:** `lifecycle/live_risk_monitor.py`, `dashboard/static/dashboard.js`  
+**Issue:** The operator instruction banner (`renderTradeActionPanel`) uses today's `SL_TRIGGER` notification or static tags, not live underlying vs `actual_stop_loss_level` on every tick. Spot can breach before the alert/cache updates, so the panel may still say HOLD while spot SL is already violated.  
+**Fix:** Include `spot`, `spot_sl_breached`, and `spot_sl_side` (call/put/upper/lower) in the MTM SSE payload. Re-run the same priority stack with live spot for strategies that have a stored SL level (IC, IB, bear call, etc.), ahead of or alongside MTM loss limit per strategy rules.
+
+### Trade Action Panel — leg-level close instructions
+**Files:** `dashboard/static/dashboard.js`, optional helper in `engine/exit_engine.py` or `lifecycle/trade_executor.py`  
+**Issue:** Instructions say "close entire trade" or "close call spread" but not concrete leg actions like "Buy back NIFTY 26000 PE @ ~₹120 (1 lot)". Operator still maps rules to Zerodha manually.  
+**Fix:** From executed open legs + live `leg_ltps`, render per-leg exit lines: BUY to close shorts, SELL to close longs, with strike/option type and last LTP. Optionally scroll/highlight matching rows in the Close Trade form.
+
+### Trade Action Panel — per-leg intraday SL integration
+**Files:** `lifecycle/intraday_monitor.py`, `dashboard/static/dashboard.js`  
+**Issue:** `IntradayMonitor` fires per-short-leg `SL_TRIGGER` when premium doubles; the Trade Action Panel does not read that path. A single leg can be toxic while whole-trade MTM is still inside loss limit.  
+**Fix:** Feed leg-level breach state into the action panel (secondary priority or dedicated "Close leg N" instruction) with link to which short leg breached the multiplier.
+
+### Trade Action Panel — multi-condition summary
+**Files:** `dashboard/static/dashboard.js`  
+**Issue:** Priority stack shows one verb only (e.g. loss limit wins over profit floor). When multiple levels are active, context is hidden — user cannot see "also below profit floor" without expanding Live profit levels.  
+**Fix:** Keep single primary action; add an "Also active:" line listing secondary breached/warning levels with MTM vs threshold (e.g. floor breached while approaching loss limit).
+
+### Breach history UI on trade card
+**Files:** `dashboard/server.py`, `dashboard/static/dashboard.js`, `database/models.py` (`TradeLevelEventRepo`)  
+**Issue:** `options_trade_level_events` logs ENTER/EXIT for TARGET / PROFIT_FLOOR / LOSS_LIMIT / SPOT_SL but there is no dashboard timeline. Whip-saw analysis requires SQL.  
+**Fix:** Add `GET /api/trades/<trade_id>/level-events` and a collapsible timeline on the trade card (time, level, ENTER/EXIT, MTM, threshold). Optional export CSV.
+
+### Broker order execution from action panel
+**Status:** Explicitly deferred — panel is advisory only.  
+**Issue:** One-click "close in Zerodha" would need OAuth, order placement API, partial-fill handling, and audit trail.  
+**Fix:** Only after explicit product decision; until then instruction ends at Close Trade + manual broker entry.
+
 ---
 
 ## 🟡 Strategy & Regime Coverage
@@ -181,6 +211,7 @@ subtract from gross P&L when writing the summary row.
 |---|---|
 | Broker-agnostic adapter layer (ZerodhaAdapter / NoOpAdapter) | Discussed only — not implementing yet |
 | Telegram / email notification dispatcher | Discussed only — not implementing yet |
+| Trade Action Panel — full rule fusion + broker execution | Advisory panel shipped May 2026; live spot, leg-level orders, intraday leg SL, history UI → see Risk & Monitoring |
 | BANKNIFTY/FINNIFTY weekly options (NSE discontinued ~Nov 2024) | No fix needed — they reappear when monthly expiry DTE ≤ 21 |
 | VIX ghost rows on non-trading days (cosmetic) | Left as-is by user choice (May 2026) |
 

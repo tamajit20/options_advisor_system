@@ -18,7 +18,7 @@ from datetime import date
 
 from contracts import Notification
 from database.connection import SQLServerConnection
-from database.models import FoEodRepo, NotificationRepo, SpotEodRepo, TradeRepo
+from database.models import EventCalendarRepo, FoEodRepo, NotificationRepo, SpotEodRepo, TradeRepo
 from database.runtime_flags import FLAG_CIRCUIT_BREAKER_ACTIVE, RuntimeFlagsRepo
 from engine.adverse_move_advisor import assess_adverse_move
 from engine.circuit_breaker import check_daily_pnl_breach
@@ -48,6 +48,19 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
     fo = FoEodRepo(db)
     notif = NotificationRepo(db)
     spot_repo = SpotEodRepo(db)
+    event_repo = EventCalendarRepo(db)
+
+    # Pre-event check (S1): if tomorrow is a high-impact event day, trades that are
+    # HOLD today should be downgraded to EXIT_TOMORROW so the user closes before
+    # the overnight gap risk materialises.
+    from datetime import timedelta
+    tomorrow = trade_date + timedelta(days=1)
+    day_after = tomorrow + timedelta(days=1)
+    _has_event_tomorrow = event_repo.has_high_impact(tomorrow, day_after)
+    _credit_strategies = frozenset({
+        "IRON_CONDOR", "IRON_BUTTERFLY", "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD",
+        "JADE_LIZARD",
+    })
 
     open_trades = trd.open_trades()
     decisions_made = 0
@@ -135,6 +148,28 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
         # actual broker exit fills via the Close Trade UI. We surface a clear
         # daily_status, an exit instruction containing suggested per-leg
         # closing prices, and notify so the user can act.
+
+        # S1: Pre-event advisory — when a HIGH-impact event is tomorrow, change
+        # HOLD → EXIT_TOMORROW so the dashboard shows a prominent warning and a
+        # WARNING-severity notification is fired. The trade is NOT automatically
+        # closed; the user must act via the Close Trade button as normal.
+        if (
+            decision.decision == "HOLD"
+            and _has_event_tomorrow
+            and strategy in _credit_strategies
+        ):
+            from contracts import ExitDecision
+            from utils import now_ist as _now_ist_fn
+            decision = ExitDecision(
+                trade_id=trade_id,
+                decision="EXIT_TOMORROW",
+                reason=(
+                    "HIGH-impact event scheduled for tomorrow — consider exiting today "
+                    "to avoid overnight gap risk on this short-premium position"
+                ),
+                as_of=_now_ist_fn(),
+            )
+
         if decision.decision == "HOLD":
             trd.update_status(trade_id, "ACTIVE", "OPEN", None)
             # Adverse-move early warning. Computes the same MTM that
@@ -153,7 +188,9 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
             current_pnl = entry_credit + current_value
             aggregate_mtm += current_pnl
             advice = assess_adverse_move(
-                current_pnl=current_pnl, max_loss_rs=max_loss_rs,
+                current_pnl=current_pnl,
+                max_loss_rs=max_loss_rs,
+                strategy=strategy,
             )
             if advice is not None:
                 notif.insert(Notification(

@@ -1,4 +1,4 @@
-"""Unit tests for engine.confidence — 7-soft-gate + DTE hard-gate evaluator."""
+"""Unit tests for engine.confidence — 8-soft-gate + DTE hard-gate evaluator."""
 from __future__ import annotations
 
 from datetime import date
@@ -20,11 +20,12 @@ class TestEvaluate:
             events_calendar_row_count=10,
         )
         assert result.all_passed is True
-        # 7 soft + event + DTE + 3 trajectory + IV-Rank/IV-HV alignment = 13 total.
+        # 8 soft + event + DTE + 3 trajectory + IV-Rank/IV-HV alignment = 14 total.
+        # Soft gate 8 = OI change conviction (S6).
         # Trajectory gates are PASS_WARN when indicator fields are None
         # (default sample_indicators has no live trajectory).
-        assert result.total == 13
-        assert result.score >= 8
+        assert result.total == 14
+        assert result.score >= 9
 
     def test_dte_below_band_hard_fails(self, sample_indicators):
         result = evaluate(
