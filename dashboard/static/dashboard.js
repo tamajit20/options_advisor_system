@@ -2284,7 +2284,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     async function _pollLivePrices() {
       if (panel.hidden) return;
       try {
-        const fresh = await API(`/api/close-suggestion/${encodeURIComponent(tradeId)}`);
+        const fresh = await API(`/api/trades/${encodeURIComponent(tradeId)}/close-suggestion`);
         fresh.suggestions.forEach(s => {
           const price = (s.suggested_close != null && s.suggested_close > 0) ? s.suggested_close : null;
           if (price == null) return;
