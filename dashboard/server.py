@@ -471,9 +471,18 @@ def create_app() -> Flask:
             return jsonify({"legs": [], "est_gross_pnl": 0.0})
         underlying = executed[0]["symbol"]
         expiry = executed[0]["expiry_date"]
-        as_of = today_ist()
+        today = today_ist()
         fo = FoEodRepo(db)
-        chain = fo.get_chain(underlying, as_of, expiry)
+        # During live market hours today's bhavcopy hasn't been published yet.
+        # Fall back to the most recent available date so we don't return all-zeros.
+        chain = fo.get_chain(underlying, today, expiry)
+        if not chain:
+            from datetime import timedelta
+            for delta in (1, 2, 3, 4, 5):
+                chain = fo.get_chain(underlying, today - timedelta(days=delta), expiry)
+                if chain:
+                    break
+        as_of = today
         chain_mid = {
             (float(c["strike"]), c["option_type"]):
                 float(c.get("settle_price") or c.get("close_price") or 0.0)
@@ -485,7 +494,13 @@ def create_app() -> Flask:
         # whenever options_fo_eod had a row with settle_price ≈ spot (seen
         # on expired contracts), making the dashboard report ₹35-lakh of
         # phantom profit on simple straddles.
-        spot_row = SpotEodRepo(db).for_date(underlying, as_of)
+        spot_row = SpotEodRepo(db).for_date(underlying, today)
+        if spot_row is None:
+            from datetime import timedelta
+            for delta in (1, 2, 3, 4, 5):
+                spot_row = SpotEodRepo(db).for_date(underlying, today - timedelta(days=delta))
+                if spot_row:
+                    break
         spot_close = float(spot_row["close_price"]) if spot_row else None
         out = []
         est = 0.0
