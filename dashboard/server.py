@@ -1526,6 +1526,7 @@ def create_app() -> Flask:
         @stream_with_context
         def _gen():
             last_seen: dict = {}   # trade_id → last mtm value sent
+            initial_sent = False
             yield ": connected\n\n"
             heartbeat_at = _time.monotonic()
             while True:
@@ -1536,9 +1537,10 @@ def create_app() -> Flask:
                             state = _json.load(fh)
                         for tid, payload in (state.get("trades") or {}).items():
                             cur_mtm = payload.get("mtm")
-                            if last_seen.get(tid) != cur_mtm:
+                            if not initial_sent or last_seen.get(tid) != cur_mtm:
                                 last_seen[tid] = cur_mtm
                                 yield f"data: {_json.dumps(payload)}\n\n"
+                        initial_sent = True
                 except Exception:
                     pass
                 # Heartbeat every 15 s so proxies don't kill the connection.

@@ -22,6 +22,12 @@ const API = (path, opts={}) => {
   });
 };
 
+// Normalize leg keys so SSE/poll prices match DOM spans regardless of
+// strike formatting (26000 vs 26000.0 vs 26000.0000).
+function _normLegKey(sym, strike, ot) {
+  return `${String(sym || '').toUpperCase()}|${parseFloat(strike)}|${String(ot || '').toUpperCase()}`;
+}
+
 const $ = sel => document.querySelector(sel);
 const $$ = (sel, ctx=document) => Array.from(ctx.querySelectorAll(sel));
 const fmt = n => (n == null ? '—' : Number(n).toLocaleString('en-IN', {maximumFractionDigits: 2}));
@@ -2134,7 +2140,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       const mp = (mktPriceMap[l.leg_order] != null && mktPriceMap[l.leg_order] > 0)
                  ? mktPriceMap[l.leg_order] : null;
       const psrc = priceSrcMap[l.leg_order];
-      const legKey = `${l.symbol}|${l.strike}|${l.option_type}`;
+      const legKey = _normLegKey(l.symbol, l.strike, l.option_type);
       let priceDisplay = mp != null ? `\u20b9${fmt(mp)}` : '<span class="muted">—</span>';
       if (mp != null && psrc === 'intrinsic_fallback') priceDisplay += ' <span class="tag tag-warn" style="font-size:.65rem">intrinsic est.</span>';
       return `<div class="cf-live-leg"
@@ -2285,12 +2291,12 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       if (panel.hidden) return;
       try {
         const fresh = await API(`/api/trades/${encodeURIComponent(tradeId)}/close-suggestion`);
-        fresh.suggestions.forEach(s => {
+        (fresh.legs || []).forEach(s => {
           const price = (s.suggested_close != null && s.suggested_close > 0) ? s.suggested_close : null;
           if (price == null) return;
           const leg = data.legs.find(l => l.leg_order === s.leg_order);
           if (!leg) return;
-          const key = `${leg.symbol}|${leg.strike}|${leg.option_type}`;
+          const key = _normLegKey(leg.symbol, leg.strike, leg.option_type);
           const span = panel.querySelector(`.cf-live-price[data-leg-key="${CSS.escape(key)}"]`);
           if (span) {
             span.textContent = `\u20b9${fmt(price)}`;
@@ -3472,11 +3478,16 @@ function _applyMtmEvent(m) {
   // 2. Update LEFT panel live price spans with latest leg LTPs
   // Spans carry data-leg-key="symbol|strike|option_type" and data-ltp for calculation
   if (m.leg_ltps && typeof m.leg_ltps === 'object') {
+    const ltpMap = {};
+    Object.entries(m.leg_ltps).forEach(([k, v]) => {
+      const parts = k.split('|');
+      if (parts.length === 3) ltpMap[_normLegKey(parts[0], parts[1], parts[2])] = v;
+    });
     const closePanel = document.getElementById(`close-${m.trade_id}`);
     if (closePanel && !closePanel.hidden) {
       let anyUpdated = false;
       closePanel.querySelectorAll('.cf-live-price[data-leg-key]').forEach(span => {
-        const ltp = m.leg_ltps[span.dataset.legKey];
+        const ltp = ltpMap[span.dataset.legKey];
         if (ltp != null) {
           span.textContent = `\u20b9${fmt(ltp)}`;
           span.dataset.ltp = ltp;  // store for recalcLivePnl
