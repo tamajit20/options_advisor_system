@@ -1513,6 +1513,20 @@ def create_app() -> Flask:
     # LiveRiskMonitor) and pushes changed trade MTM events over SSE so the
     # dashboard can show a live MTM ticker without polling.
     # Falls back to the in-process EventBus for single-container deployments.
+    @app.route("/api/live/mtm/snapshot")
+    def api_live_mtm_snapshot():
+        """Return current per-trade MTM state written by ws_runner."""
+        import json as _json
+        import os as _os
+        path = "data/live_mtm_state.json"
+        if not _os.path.exists(path):
+            return jsonify({"as_of": None, "trades": {}})
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return jsonify(_json.load(fh))
+        except Exception:
+            return jsonify({"as_of": None, "trades": {}})
+
     @app.route("/api/live/mtm")
     def api_live_mtm():
         import json as _json

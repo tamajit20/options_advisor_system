@@ -28,6 +28,67 @@ function _normLegKey(sym, strike, ot) {
   return `${String(sym || '').toUpperCase()}|${parseFloat(strike)}|${String(ot || '').toUpperCase()}`;
 }
 
+function _lookupLegLtp(legLtps, symbol, strike, optionType) {
+  if (!legLtps || typeof legLtps !== 'object') return null;
+  const want = _normLegKey(symbol, strike, optionType);
+  for (const [k, v] of Object.entries(legLtps)) {
+    const parts = k.split('|');
+    if (parts.length === 3 && _normLegKey(parts[0], parts[1], parts[2]) === want) return v;
+  }
+  return null;
+}
+
+function _inMarketHours() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const dow = now.getDay();
+  const hhmm = now.getHours() * 100 + now.getMinutes();
+  return dow >= 1 && dow <= 5 && hhmm >= 915 && hhmm <= 1530;
+}
+
+function _applyLegLtpsToClosePanel(tradeId, legLtps) {
+  const closePanel = document.getElementById(`close-${tradeId}`);
+  if (!closePanel || closePanel.hidden || !legLtps) return false;
+  let anyUpdated = false;
+  closePanel.querySelectorAll('.cf-live-price[data-leg-key]').forEach(span => {
+    const parts = span.dataset.legKey.split('|');
+    if (parts.length !== 3) return;
+    const ltp = _lookupLegLtp(legLtps, parts[0], parts[1], parts[2]);
+    if (ltp == null || ltp <= 0) return;
+    span.textContent = `\u20b9${fmt(ltp)}`;
+    span.dataset.ltp = ltp;
+    span.classList.add('ltp-flash');
+    setTimeout(() => span.classList.remove('ltp-flash'), 600);
+    anyUpdated = true;
+  });
+  if (!anyUpdated) return false;
+  const rows = [...closePanel.querySelectorAll('.cf-live-leg')];
+  let gross = 0; let allFilled = true;
+  const entryTxns = [], exitTxns = [];
+  rows.forEach(row => {
+    const action = row.dataset.action;
+    const ep = parseFloat(row.dataset.fillPrice) || 0;
+    const lots = parseInt(row.dataset.lots) || 1;
+    const ls = parseInt(row.dataset.lotSize) || 1;
+    const cp = parseFloat(row.querySelector('.cf-live-price')?.dataset.ltp);
+    if (isNaN(cp) || cp <= 0) { allFilled = false; return; }
+    gross += action === 'SELL' ? (ep - cp) * lots * ls : (cp - ep) * lots * ls;
+    entryTxns.push({ action, fill_price: ep, lots, lot_size: ls });
+    exitTxns.push({ action: action === 'SELL' ? 'BUY' : 'SELL', fill_price: cp, lots, lot_size: ls });
+  });
+  const preview = closePanel.querySelector('.live-pnl-preview');
+  if (preview && allFilled) {
+    const charges = estChargesOneSide([...entryTxns, ...exitTxns]);
+    const net = gross - charges;
+    const g = preview.querySelector('.live-pnl-gross');
+    const c = preview.querySelector('.live-pnl-charges');
+    const n = preview.querySelector('.live-pnl-value');
+    if (g) { g.textContent = `\u20b9${fmt(gross)}`; g.className = 'live-pnl-gross ' + (gross >= 0 ? 'pnl-pos' : 'pnl-neg'); }
+    if (c) c.textContent = `\u20b9${fmt(charges)}`;
+    if (n) { n.textContent = `\u20b9${fmt(net)}`; n.className = 'live-pnl-value ' + (net >= 0 ? 'pnl-pos' : 'pnl-neg'); }
+  }
+  return anyUpdated;
+}
+
 const $ = sel => document.querySelector(sel);
 const $$ = (sel, ctx=document) => Array.from(ctx.querySelectorAll(sel));
 const fmt = n => (n == null ? '—' : Number(n).toLocaleString('en-IN', {maximumFractionDigits: 2}));
@@ -2118,18 +2179,33 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
   panel.hidden = false;
   panel.innerHTML = '<div class="muted">Loading legs…</div>';
   try {
-    const [data, sugg] = await Promise.all([
+    const [data, sugg, snap] = await Promise.all([
       API(`/api/trades/${tradeId}/executed-legs`),
       API(`/api/trades/${tradeId}/close-suggestion`).catch(() => ({legs: [], est_gross_pnl: 0})),
+      API('/api/live/mtm/snapshot').catch(() => ({trades: {}})),
     ]);
     if (!data.legs.length) {
       panel.innerHTML = '<div class="muted">No executed legs found.</div>'; return;
     }
+    const liveLtps = (snap.trades && snap.trades[tradeId] && snap.trades[tradeId].leg_ltps) || {};
+    const marketOpen = _inMarketHours();
     const mktPriceMap = {};  // leg_order → current market price
     const priceSrcMap = {};
     (sugg.legs || []).forEach(s => {
-      mktPriceMap[s.leg_order] = s.suggested_close;
       priceSrcMap[s.leg_order] = s.price_source || 'mid';
+    });
+    data.legs.forEach(l => {
+      const live = _lookupLegLtp(liveLtps, l.symbol, l.strike, l.option_type);
+      if (live != null && live > 0) {
+        mktPriceMap[l.leg_order] = live;
+        priceSrcMap[l.leg_order] = 'live';
+      } else if (!marketOpen) {
+        const s = (sugg.legs || []).find(x => x.leg_order === l.leg_order);
+        if (s && s.suggested_close > 0) {
+          mktPriceMap[l.leg_order] = s.suggested_close;
+          priceSrcMap[l.leg_order] = s.price_source || 'mid';
+        }
+      }
     });
     const closeStrategy = (data.legs[0] && data.legs[0].strategy) || '';
 
@@ -2284,32 +2360,8 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     panel.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcFillPnl));
     recalcFillPnl();
     recalcLivePnl();
-
-    // Poll for fresh prices every 5 s while panel is visible (covers trades
-    // not yet in live_risk_monitor scope or where SSE arrived before form opened)
-    async function _pollLivePrices() {
-      if (panel.hidden) return;
-      try {
-        const fresh = await API(`/api/trades/${encodeURIComponent(tradeId)}/close-suggestion`);
-        (fresh.legs || []).forEach(s => {
-          const price = (s.suggested_close != null && s.suggested_close > 0) ? s.suggested_close : null;
-          if (price == null) return;
-          const leg = data.legs.find(l => l.leg_order === s.leg_order);
-          if (!leg) return;
-          const key = _normLegKey(leg.symbol, leg.strike, leg.option_type);
-          const span = panel.querySelector(`.cf-live-price[data-leg-key="${CSS.escape(key)}"]`);
-          if (span) {
-            span.textContent = `\u20b9${fmt(price)}`;
-            span.dataset.ltp = price;
-            span.classList.add('ltp-flash');
-            setTimeout(() => span.classList.remove('ltp-flash'), 600);
-          }
-        });
-        recalcLivePnl();
-      } catch (_) { /* silent */ }
-      if (!panel.hidden) setTimeout(_pollLivePrices, 5000);
-    }
-    setTimeout(_pollLivePrices, 5000);
+    // Live prices come from SSE only during market hours — do NOT poll
+    // close-suggestion (EOD bhavcopy) as it fights live ticks and flickers.
 
     panel.querySelector('.btn-close-submit').addEventListener('click', () =>
       submitClose(tradeId, panel));
@@ -3476,56 +3528,8 @@ function _applyMtmEvent(m) {
   });
 
   // 2. Update LEFT panel live price spans with latest leg LTPs
-  // Spans carry data-leg-key="symbol|strike|option_type" and data-ltp for calculation
   if (m.leg_ltps && typeof m.leg_ltps === 'object') {
-    const ltpMap = {};
-    Object.entries(m.leg_ltps).forEach(([k, v]) => {
-      const parts = k.split('|');
-      if (parts.length === 3) ltpMap[_normLegKey(parts[0], parts[1], parts[2])] = v;
-    });
-    const closePanel = document.getElementById(`close-${m.trade_id}`);
-    if (closePanel && !closePanel.hidden) {
-      let anyUpdated = false;
-      closePanel.querySelectorAll('.cf-live-price[data-leg-key]').forEach(span => {
-        const ltp = ltpMap[span.dataset.legKey];
-        if (ltp != null) {
-          span.textContent = `\u20b9${fmt(ltp)}`;
-          span.dataset.ltp = ltp;  // store for recalcLivePnl
-          span.classList.add('ltp-flash');
-          setTimeout(() => span.classList.remove('ltp-flash'), 600);
-          anyUpdated = true;
-        }
-      });
-      // Re-run left panel P&L calc after price update
-      if (anyUpdated) {
-        const rows = [...closePanel.querySelectorAll('.cf-live-leg')];
-        // inline recalc — same logic as recalcLivePnl inside the form
-        let gross = 0; let allFilled = true;
-        const entryTxns = [], exitTxns = [];
-        rows.forEach(row => {
-          const action = row.dataset.action;
-          const ep = parseFloat(row.dataset.fillPrice) || 0;
-          const lots = parseInt(row.dataset.lots) || 1;
-          const ls = parseInt(row.dataset.lotSize) || 1;
-          const cp = parseFloat(row.querySelector('.cf-live-price')?.dataset.ltp);
-          if (isNaN(cp) || cp <= 0) { allFilled = false; return; }
-          gross += action === 'SELL' ? (ep - cp) * lots * ls : (cp - ep) * lots * ls;
-          entryTxns.push({ action, fill_price: ep, lots, lot_size: ls });
-          exitTxns.push({ action: action === 'SELL' ? 'BUY' : 'SELL', fill_price: cp, lots, lot_size: ls });
-        });
-        const preview = closePanel.querySelector('.live-pnl-preview');
-        if (preview && allFilled) {
-          const charges = estChargesOneSide([...entryTxns, ...exitTxns]);
-          const net = gross - charges;
-          const g = preview.querySelector('.live-pnl-gross');
-          const c = preview.querySelector('.live-pnl-charges');
-          const n = preview.querySelector('.live-pnl-value');
-          if (g) { g.textContent = `\u20b9${fmt(gross)}`; g.className = 'live-pnl-gross ' + (gross >= 0 ? 'pnl-pos' : 'pnl-neg'); }
-          if (c) c.textContent = `\u20b9${fmt(charges)}`;
-          if (n) { n.textContent = `\u20b9${fmt(net)}`; n.className = 'live-pnl-value ' + (net >= 0 ? 'pnl-pos' : 'pnl-neg'); }
-        }
-      }
-    }
+    _applyLegLtpsToClosePanel(m.trade_id, m.leg_ltps);
   }
 }
 
