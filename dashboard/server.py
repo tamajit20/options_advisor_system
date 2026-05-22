@@ -1509,52 +1509,43 @@ def create_app() -> Flask:
         return jsonify(out)
 
     # ---------- Phase 3 — #3 Live MTM streaming via SSE -----------------
-    # Subscribes to TOPIC_TRADE_MTM on the in-process EventBus and pushes
-    # JSON-encoded events over text/event-stream so the dashboard can show
-    # a live MTM ticker without polling. Each browser tab gets its own
-    # bounded queue; if a client falls more than 100 events behind we drop
-    # the oldest to avoid unbounded memory growth.
+    # Polls data/live_mtm_state.json (written by the ws_runner container's
+    # LiveRiskMonitor) and pushes changed trade MTM events over SSE so the
+    # dashboard can show a live MTM ticker without polling.
+    # Falls back to the in-process EventBus for single-container deployments.
     @app.route("/api/live/mtm")
     def api_live_mtm():
-        from queue import Empty, Queue
+        import json as _json
+        import os as _os
+        import time as _time
         from flask import Response, stream_with_context
-        from providers.event_bus import TOPIC_TRADE_MTM, get_event_bus
 
-        client_q: Queue = Queue(maxsize=200)
-        bus = get_event_bus()
-
-        def _on_mtm(payload):
-            try:
-                client_q.put_nowait(payload)
-            except Exception:
-                # Queue full — drop the oldest, keep the newest.
-                try:
-                    client_q.get_nowait()
-                    client_q.put_nowait(payload)
-                except Exception:
-                    pass
-
-        unsub = bus.subscribe(TOPIC_TRADE_MTM, _on_mtm)
+        MTM_STATE_PATH = "data/live_mtm_state.json"
+        POLL_INTERVAL  = 1.0   # seconds between file reads
 
         @stream_with_context
         def _gen():
-            try:
-                # Initial comment so the browser confirms the connection.
-                yield ": connected\n\n"
-                while True:
-                    try:
-                        ev = client_q.get(timeout=15.0)
-                    except Empty:
-                        # Heartbeat to keep the connection alive through
-                        # proxies that idle-timeout at 30-60s.
-                        yield ": ping\n\n"
-                        continue
-                    yield f"data: {json.dumps(ev, default=_json_default)}\n\n"
-            finally:
+            last_seen: dict = {}   # trade_id → last mtm value sent
+            yield ": connected\n\n"
+            heartbeat_at = _time.monotonic()
+            while True:
+                _time.sleep(POLL_INTERVAL)
                 try:
-                    unsub()
+                    if _os.path.exists(MTM_STATE_PATH):
+                        with open(MTM_STATE_PATH, encoding="utf-8") as fh:
+                            state = _json.load(fh)
+                        for tid, payload in (state.get("trades") or {}).items():
+                            cur_mtm = payload.get("mtm")
+                            if last_seen.get(tid) != cur_mtm:
+                                last_seen[tid] = cur_mtm
+                                yield f"data: {_json.dumps(payload)}\n\n"
                 except Exception:
                     pass
+                # Heartbeat every 15 s so proxies don't kill the connection.
+                if _time.monotonic() - heartbeat_at >= 15:
+                    heartbeat_at = _time.monotonic()
+                    yield ": ping\n\n"
+                    continue
 
         return Response(_gen(), mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",

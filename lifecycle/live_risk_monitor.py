@@ -244,6 +244,9 @@ _DEFAULTS = {
     "dashboard_url":              None,
     "status_path":                None,
     "status_write_interval_sec":  30,
+    # Path for the cross-container per-trade MTM state file (polled by Flask SSE).
+    # Both containers must mount the same directory (they share data/).
+    "mtm_state_path":             "data/live_mtm_state.json",
     # Phase 3 — #4 trailing SL on profit. List of [profit_trigger_fraction,
     # lock_floor_fraction_of_max_profit] tuples, ascending by trigger.
     "trailing_sl_steps":          [[0.50, 0.0], [0.80, 0.40]],
@@ -363,7 +366,9 @@ class LiveRiskMonitor:
         self._target_max = cfg["target_fraction_at_max_dte"]
         self._spot_sl_enabled = cfg["spot_sl_enabled"]
         self._dashboard_url = cfg["dashboard_url"]
-        self._status_path = cfg["status_path"]
+        self._status_path    = cfg["status_path"]
+        self._mtm_state_path = cfg.get("mtm_state_path") or "data/live_mtm_state.json"
+        self._mtm_state: dict = {}   # trade_id → last payload written
         self._status_interval = cfg["status_write_interval_sec"]
         self._trailing_steps: List[Tuple[float, float]] = list(cfg["trailing_sl_steps"])
         self._mtm_publish_interval = timedelta(
@@ -556,6 +561,7 @@ class LiveRiskMonitor:
         for payload in pending_mtm:
             try:
                 self._bus.publish(TOPIC_TRADE_MTM, payload)
+                self._write_mtm_state(payload)
             except Exception:
                 logger.exception("LiveRiskMonitor: TOPIC_TRADE_MTM publish failed")
         for args in pending_trail:
@@ -933,6 +939,23 @@ class LiveRiskMonitor:
         self._current_day = today
         for state in self._snapshot.trades.values():
             state.pre_breach_alerted_today = False
+
+    def _write_mtm_state(self, payload: dict) -> None:
+        """Write per-trade MTM to a shared file so the Flask dashboard
+        container (separate process) can poll it for the live MTM SSE stream."""
+        try:
+            self._mtm_state[payload["trade_id"]] = payload
+            path = self._mtm_state_path
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({
+                    "as_of":  payload["as_of"],
+                    "trades": self._mtm_state,
+                }, f)
+            os.replace(tmp, path)
+        except Exception:
+            pass  # never let file I/O interrupt the monitor loop
 
     def _maybe_write_status(self) -> None:
         if not self._status_path:
