@@ -1030,6 +1030,10 @@ class TradeRepo:
             "gross_pnl = ?, total_charges = ?, net_pnl = ? WHERE trade_id = ?",
             [now_ist(), gross, charges, net, trade_id],
         ).close()
+        try:
+            TradeMtmSnapshotRepo(self.db).archive_trade(trade_id)
+        except Exception:
+            logger.exception("Failed to archive MTM snapshots for %s", trade_id)
         # Best-effort: notify listeners (live risk monitor) that the watchlist
         # needs refreshing. Failure to publish must never break trade closure.
         try:
@@ -1543,6 +1547,127 @@ class IntradayCloseSnapshotRepo:
     def delete_older_than(self, cutoff: date) -> int:
         cur = self.db.execute(
             "DELETE FROM options_intraday_close_snapshot WHERE snapshot_date < ?",
+            [cutoff],
+        )
+        n = cur.rowcount or 0
+        cur.close()
+        return n
+
+
+# ---------------------------------------------------------------------------
+# Trade MTM snapshots (hourly live session)
+# ---------------------------------------------------------------------------
+class TradeMtmSnapshotRepo:
+    """Hourly per-trade MTM snapshots from LiveRiskMonitor.
+
+    Hot rows live in ``options_trade_mtm_snapshot`` while the trade is ACTIVE.
+    On close (or weekly cleanup) rows are moved to
+    ``options_trade_mtm_snapshot_history``.
+    """
+
+    GRANULARITY_HOURLY = "hourly"
+
+    def __init__(self, db: SQLServerConnection):
+        self.db = db
+
+    @staticmethod
+    def hour_bucket(dt: datetime) -> datetime:
+        return dt.replace(minute=0, second=0, microsecond=0)
+
+    def upsert_hourly(self, payload: dict) -> None:
+        """Insert/replace one hourly snapshot for *payload*['trade_id']."""
+        as_of_raw = payload.get("as_of")
+        if isinstance(as_of_raw, datetime):
+            captured = as_of_raw
+        elif as_of_raw:
+            captured = datetime.fromisoformat(str(as_of_raw).replace(" ", "T"))
+        else:
+            captured = now_ist()
+        bucket = self.hour_bucket(captured)
+        leg_ltps = payload.get("leg_ltps") or {}
+        leg_json = json.dumps(leg_ltps, separators=(",", ":")) if leg_ltps else None
+        self.db.execute(
+            "DELETE FROM options_trade_mtm_snapshot "
+            "WHERE trade_id = ? AND snapshot_at = ? AND snapshot_granularity = ?",
+            [payload["trade_id"], bucket, self.GRANULARITY_HOURLY],
+        ).close()
+        self.db.execute(
+            "INSERT INTO options_trade_mtm_snapshot "
+            "(trade_id, trade_name, snapshot_at, snapshot_granularity, mtm, "
+            " max_profit, max_loss, dte, leg_ltps_json, feed_source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                payload["trade_id"],
+                payload.get("trade_name"),
+                bucket,
+                self.GRANULARITY_HOURLY,
+                float(payload["mtm"]),
+                payload.get("max_profit"),
+                payload.get("max_loss"),
+                payload.get("dte"),
+                leg_json,
+                payload.get("feed_source"),
+            ],
+        ).close()
+
+    def list_for_trade(self, trade_id: str, *, limit: int = 500) -> List[dict]:
+        hot = self.db.fetch_all(
+            "SELECT TOP (?) *, 'hot' AS store FROM options_trade_mtm_snapshot "
+            "WHERE trade_id = ? ORDER BY snapshot_at DESC",
+            [limit, trade_id],
+        )
+        hist = self.db.fetch_all(
+            "SELECT TOP (?) *, 'history' AS store FROM options_trade_mtm_snapshot_history "
+            "WHERE trade_id = ? ORDER BY snapshot_at DESC",
+            [limit, trade_id],
+        )
+        return sorted(hot + hist, key=lambda r: r["snapshot_at"], reverse=True)[:limit]
+
+    def archive_trade(self, trade_id: str) -> int:
+        """Move all hot snapshots for *trade_id* to history."""
+        rows = self.db.fetch_all(
+            "SELECT * FROM options_trade_mtm_snapshot WHERE trade_id = ?",
+            [trade_id],
+        )
+        if not rows:
+            return 0
+        for r in rows:
+            self.db.execute(
+                "INSERT INTO options_trade_mtm_snapshot_history "
+                "(trade_id, trade_name, snapshot_at, snapshot_granularity, mtm, "
+                " max_profit, max_loss, dte, leg_ltps_json, feed_source, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    r["trade_id"], r.get("trade_name"), r["snapshot_at"],
+                    r["snapshot_granularity"], r["mtm"], r.get("max_profit"),
+                    r.get("max_loss"), r.get("dte"), r.get("leg_ltps_json"),
+                    r.get("feed_source"), r.get("created_at") or now_ist(),
+                ],
+            ).close()
+        cur = self.db.execute(
+            "DELETE FROM options_trade_mtm_snapshot WHERE trade_id = ?",
+            [trade_id],
+        )
+        n = cur.rowcount or len(rows)
+        cur.close()
+        return n
+
+    def archive_non_active(self) -> int:
+        """Move hot snapshots whose trade is no longer ACTIVE."""
+        rows = self.db.fetch_all(
+            "SELECT DISTINCT s.trade_id FROM options_trade_mtm_snapshot s "
+            "JOIN options_trades t ON t.trade_id = s.trade_id "
+            "WHERE t.status <> 'ACTIVE'"
+        )
+        total = 0
+        for r in rows:
+            total += self.archive_trade(r["trade_id"])
+        return total
+
+    def delete_history_older_than(self, cutoff: date) -> int:
+        cur = self.db.execute(
+            "DELETE FROM options_trade_mtm_snapshot_history "
+            "WHERE CAST(archived_at AS DATE) < ?",
             [cutoff],
         )
         n = cur.rowcount or 0

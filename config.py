@@ -117,6 +117,8 @@ SCHEDULER_CONFIG = {
         },
         "simulation_update":  {"hour": 19, "minute": 45, "enabled": True},
         "exit_engine":        {"hour": 19, "minute": 50, "enabled": True},
+        # C6 — Greek drift: recompute delta/vega/theta for open trades after EOD data
+        "trade_greeks_update": {"hour": 20, "minute": 0, "enabled": True},
         # Phase 2b.1 — live-vs-settled drift detection
         # 15:35 IST: capture live LTP for every leg of every ACTIVE trade.
         # 19:35 IST: compare to today's settled close (loaded by fo_bhav at
@@ -403,6 +405,24 @@ STRATEGY_CONFIG = {
         "FINNIFTY":   65,
     },
 
+    # ---------------------------------------------------------------
+    # Position sizing — dynamic lots (P2).
+    # lots = floor( trading_capital_rs × risk_per_trade_pct / max_loss_per_lot )
+    # Minimum 1 lot, maximum max_lots_cap per suggestion.
+    # Set trading_capital_rs to 0 to keep legacy lots=1 behaviour.
+    # ---------------------------------------------------------------
+    "trading_capital_rs":    500_000.0,  # total options trading float (₹)
+    "risk_per_trade_pct":    0.02,       # risk 2% of capital per trade
+    "max_lots_cap":          3,          # never suggest more than this many lots
+
+    # ---------------------------------------------------------------
+    # Calendar Spread (P4) — mid-IV + sideways regime.
+    # DTE band for the NEAR (short) leg of a calendar spread.
+    # FAR leg is the next available expiry beyond calendar_far_dte_min.
+    # ---------------------------------------------------------------
+    "calendar_near_dte_max": 10,   # near expiry must be ≤ 10 DTE
+    "calendar_far_dte_min":  15,   # far expiry must be ≥ 15 DTE
+
     # Net credit must be at least this fraction of spread width to be viable.
     # Used as default fallback when a strategy is not in the per-strategy override.
     "min_credit_to_width_ratio": 0.20,   # 20% — e.g. ₹40 credit on ₹200-wide condor
@@ -473,6 +493,41 @@ STRATEGY_CONFIG = {
         "credit_or_debit": 25.0,   # credit-to-width grade (credit) OR debit-discount (debit)
         "iv_alignment":    20.0,   # IV regime alignment (writing: IV/HV high; buying: IV/HV low)
         "confidence":      15.0,   # soft-pass count above the strategy's required minimum
+    },
+
+    # ---------------------------------------------------------------
+    # VIX spike veto for short-premium strategies (S4).
+    # If VIX has risen more than this % over the last N trading days,
+    # IRON_CONDOR and IRON_BUTTERFLY are hard-vetoed regardless of rank.
+    # vix_spike_lookback_days: how many VIX rows to look back (business days).
+    # ---------------------------------------------------------------
+    "vix_spike_veto_pct":          20.0,  # >20% rise in VIX over lookback → veto IC/IB
+    "vix_spike_lookback_days":      3,    # 3 trading days (Mon–Wed last Mon covers weekend)
+
+    # ---------------------------------------------------------------
+    # OI change conviction gate (S6).
+    # Added to the EOD confidence pipeline: SOFT_FAIL when the OI delta PCR
+    # (ΣΔPut / ΣΔCall) conflicts strongly with the selected strategy direction.
+    # A strong put-build (oi_change_pcr > oi_change_pcr_bearish) when entering a
+    # bullish credit structure (BULL_PUT_SPREAD, JADE_LIZARD) is a conviction signal
+    # mismatch. Likewise for call-build vs bearish structures.
+    # ---------------------------------------------------------------
+    "oi_change_pcr_bearish_above": 1.5,   # OI delta PCR above this → puts building (bearish signal)
+    "oi_change_pcr_bullish_below": 0.7,   # OI delta PCR below this → calls building (bullish signal)
+
+    # ---------------------------------------------------------------
+    # Per-strategy stop-loss fraction (S5 — side-aware SL).
+    # Strategies not listed use the global `stop_loss_fraction` (0.50).
+    # Put-side structures breach faster — use a tighter 40% threshold.
+    # ---------------------------------------------------------------
+    "strategy_stop_loss_fraction": {
+        "BULL_PUT_SPREAD":  0.40,   # put side — falls faster; exit at 40% of max loss
+        "IRON_CONDOR":      0.50,   # symmetric default (monitor both wings)
+        "IRON_BUTTERFLY":   0.50,
+        "BEAR_CALL_SPREAD": 0.50,   # call side — standard
+        "BEAR_PUT_SPREAD":  0.40,   # debit put — stop quickly
+        "BULL_CALL_SPREAD": 0.50,
+        "JADE_LIZARD":      0.40,   # has a naked short put → tight like BULL_PUT_SPREAD
     },
 
     # Take-profit threshold for exit engine (fraction of max profit)
@@ -570,6 +625,8 @@ STRATEGY_CONFIG = {
         # Throttle TOPIC_TRADE_MTM publishes to this many seconds per trade
         # so the SSE stream stays cheap on fast-ticking trades.
         "mtm_publish_interval_sec": 1.0,
+        # Hourly MTM rows persisted to options_trade_mtm_snapshot (per trade).
+        "mtm_snapshot_interval_sec": 3600,
         # Event-eve tightening (Phase 3 — #5).
         # When events_repo reports a HIGH-impact event for tomorrow, the live
         # monitor uses this tighter pre-breach fraction (default 0.20)
@@ -711,6 +768,9 @@ ZERODHA_CONFIG = {
 SIMULATION_CONFIG = {
     # Day-1 entry classification
     "adjusted_max_gap_pct": 10.0,   # ≤10% gap from suggested → ADJUSTED; >10% → VOID
+    # C5: Bid-ask slippage per leg, applied on entry in the simulator.
+    # 50 bps = 0.5% of the option mid-price per side (NSE conservative estimate).
+    "slippage_bps": 50,
 }
 
 
@@ -850,6 +910,8 @@ RETENTION_CONFIG = {
     # for the time-series replay backtester (future scope).
     "chain_5min_keep_days":       180,
     "atm_iv_5min_keep_days":      180,
+    # Hourly trade MTM snapshots (hot table); history kept with trades audit.
+    "trade_mtm_snapshot_history_keep_days": 1825,
 }
 
 

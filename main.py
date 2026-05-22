@@ -205,7 +205,7 @@ def _cmd_ws_runner() -> int:
     """
     from config import PROVIDERS_CONFIG, STRATEGY_CONFIG, ZERODHA_API_CONFIG
     from database.connection import SQLServerConnection
-    from database.models import EventCalendarRepo, TradeRepo
+    from database.models import EventCalendarRepo, TradeMtmSnapshotRepo, TradeRepo
     from database.runtime_flags import FLAG_KILL_SWITCH, RuntimeFlagsRepo
     from lifecycle.intraday_monitor import (
         IntradayMonitor,
@@ -347,6 +347,10 @@ def _cmd_ws_runner() -> int:
                 out[key] = float(ltp)
         return out
 
+    def _persist_mtm_snapshot(payload: dict) -> None:
+        TradeMtmSnapshotRepo(db).upsert_hourly(payload)
+        db.commit()
+
     live_risk_monitor = LiveRiskMonitor(
         notifier=build_notifier(db, provider="zerodha"),
         snapshot_loader=make_db_risk_snapshot_loader(db),
@@ -356,6 +360,7 @@ def _cmd_ws_runner() -> int:
         # the floor survives process restart.
         trailing_persister=lambda tid, floor, idx: TradeRepo(db).update_trailing(
             tid, trailing_pnl_floor=floor, trailing_step_idx=idx),
+        mtm_snapshot_persister=_persist_mtm_snapshot,
         # Phase 3 #5 — events_repo for event-eve tightening.
         events_repo=EventCalendarRepo(db),
     )

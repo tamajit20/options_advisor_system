@@ -397,7 +397,7 @@ def job_weekly_cleanup():
         from database.models import (
             FoEodRepo, SpotEodRepo, VixRepo, FiiRepo, IvHistoryRepo,
             SuggestionRepo, NotificationRepo,
-            ChainTimeseriesRepo, AtmIvTimeseriesRepo,
+            ChainTimeseriesRepo, AtmIvTimeseriesRepo, TradeMtmSnapshotRepo,
         )
         today = today_ist()
         n = 0
@@ -410,6 +410,11 @@ def job_weekly_cleanup():
         n += NotificationRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["notifications_keep_days"]))
         n += ChainTimeseriesRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["chain_5min_keep_days"]))
         n += AtmIvTimeseriesRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["atm_iv_5min_keep_days"]))
+        mtm_repo = TradeMtmSnapshotRepo(db)
+        n += mtm_repo.archive_non_active()
+        n += mtm_repo.delete_history_older_than(
+            today - _td(days=RETENTION_CONFIG["trade_mtm_snapshot_history_keep_days"]))
+        db.commit()
         return n
 
     _run_job("weekly_cleanup", _cleanup)

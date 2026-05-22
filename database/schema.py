@@ -516,6 +516,55 @@ _TABLE_DDL: List[str] = [
     "CREATE INDEX IF NOT EXISTS IX_options_intraday_close_snapshot_date "
     "ON options_intraday_close_snapshot (snapshot_date)",
 
+    # ---------------- Trade MTM snapshots (hourly, live session) ----------------
+    # Hot table: ACTIVE trades only (archived to history on close / weekly job).
+    # One row per trade per hour bucket while ws_runner evaluates live MTM.
+    """
+    IF OBJECT_ID('options_trade_mtm_snapshot', 'U') IS NULL
+    CREATE TABLE options_trade_mtm_snapshot (
+        id                    BIGINT IDENTITY(1,1) PRIMARY KEY,
+        trade_id              NVARCHAR(40)  NOT NULL,
+        trade_name            NVARCHAR(200) NULL,
+        snapshot_at           DATETIME2(0)  NOT NULL,
+        snapshot_granularity  NVARCHAR(10)  NOT NULL DEFAULT 'hourly',
+        mtm                   DECIMAL(18,2) NOT NULL,
+        max_profit            DECIMAL(18,2) NULL,
+        max_loss              DECIMAL(18,2) NULL,
+        dte                   INT           NULL,
+        leg_ltps_json         NVARCHAR(MAX) NULL,
+        feed_source           NVARCHAR(20)  NULL,
+        created_at            DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        CONSTRAINT UX_options_trade_mtm_snapshot
+            UNIQUE (trade_id, snapshot_at, snapshot_granularity)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_trade_mtm_snapshot_trade "
+    "ON options_trade_mtm_snapshot (trade_id, snapshot_at DESC)",
+
+    # History table: rows moved here when a trade closes or during weekly cleanup.
+    """
+    IF OBJECT_ID('options_trade_mtm_snapshot_history', 'U') IS NULL
+    CREATE TABLE options_trade_mtm_snapshot_history (
+        id                    BIGINT IDENTITY(1,1) PRIMARY KEY,
+        trade_id              NVARCHAR(40)  NOT NULL,
+        trade_name            NVARCHAR(200) NULL,
+        snapshot_at           DATETIME2(0)  NOT NULL,
+        snapshot_granularity  NVARCHAR(10)  NOT NULL,
+        mtm                   DECIMAL(18,2) NOT NULL,
+        max_profit            DECIMAL(18,2) NULL,
+        max_loss              DECIMAL(18,2) NULL,
+        dte                   INT           NULL,
+        leg_ltps_json         NVARCHAR(MAX) NULL,
+        feed_source           NVARCHAR(20)  NULL,
+        created_at            DATETIME2(0)  NOT NULL,
+        archived_at           DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_trade_mtm_snapshot_hist_trade "
+    "ON options_trade_mtm_snapshot_history (trade_id, snapshot_at DESC)",
+    "CREATE INDEX IF NOT EXISTS IX_options_trade_mtm_snapshot_hist_arch "
+    "ON options_trade_mtm_snapshot_history (archived_at)",
+
     # ---------------- Provenance markers (Phase 2c) ----------------
     # Goal: every row that downstream code reasons about must declare WHICH
     # data tier produced it (EOD vs LIVE), WHICH adapter served the data
@@ -856,4 +905,6 @@ def list_tables() -> List[str]:
         "options_notifications",
         "options_runtime_flags",
         "options_intraday_close_snapshot",
+        "options_trade_mtm_snapshot",
+        "options_trade_mtm_snapshot_history",
     ]

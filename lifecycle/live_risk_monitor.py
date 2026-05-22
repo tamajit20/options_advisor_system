@@ -118,6 +118,7 @@ class _TradeState:
     trailing_step_idx: int = 0
     # Phase 3 — #3 MTM throttle
     last_mtm_publish_at: Optional[datetime] = None
+    last_mtm_snapshot_at: Optional[datetime] = None
 
 
 @dataclass
@@ -252,6 +253,7 @@ _DEFAULTS = {
     "trailing_sl_steps":          [[0.50, 0.0], [0.80, 0.40]],
     # Phase 3 — #3 publish-rate throttle (seconds per trade).
     "mtm_publish_interval_sec":   1.0,
+    "mtm_snapshot_interval_sec":  3600,
     # Phase 3 — #5 tighter pre-breach when there is a HIGH-impact event
     # tomorrow (events_repo provides has_high_impact()).
     "event_eve_pre_breach_fraction": 0.20,
@@ -325,6 +327,10 @@ def _safe_cfg(raw: Optional[dict]) -> dict:
         out["mtm_publish_interval_sec"] = max(0.0, float(out["mtm_publish_interval_sec"]))
     except (TypeError, ValueError):
         out["mtm_publish_interval_sec"] = float(_DEFAULTS["mtm_publish_interval_sec"])
+    try:
+        out["mtm_snapshot_interval_sec"] = max(60.0, float(out["mtm_snapshot_interval_sec"]))
+    except (TypeError, ValueError):
+        out["mtm_snapshot_interval_sec"] = float(_DEFAULTS["mtm_snapshot_interval_sec"])
     return out
 
 
@@ -344,6 +350,7 @@ class LiveRiskMonitor:
         config: Optional[dict] = None,
         clock: Callable[[], datetime] = now_ist,
         trailing_persister: Optional[Callable[[str, Optional[float], int], None]] = None,
+        mtm_snapshot_persister: Optional[Callable[[dict], None]] = None,
         events_repo: Optional[object] = None,
     ) -> None:
         self._notifier = notifier
@@ -373,7 +380,10 @@ class LiveRiskMonitor:
         self._trailing_steps: List[Tuple[float, float]] = list(cfg["trailing_sl_steps"])
         self._mtm_publish_interval = timedelta(
             seconds=float(cfg["mtm_publish_interval_sec"] or 0))
+        self._mtm_snapshot_interval = timedelta(
+            seconds=float(cfg["mtm_snapshot_interval_sec"] or 3600))
         self._trailing_persister = trailing_persister
+        self._mtm_snapshot_persister = mtm_snapshot_persister
         self._events_repo = events_repo
         self._clock = clock
 
@@ -541,6 +551,7 @@ class LiveRiskMonitor:
         decisions: List[_PendingAlert] = []
         pending_mtm: List[dict] = []
         pending_trail: List[Tuple[str, Optional[float], int]] = []
+        pending_snapshots: List[dict] = []
         with self._lock:
             for tid in self._snapshot.index.get(key, ()):
                 state = self._snapshot.trades.get(tid)
@@ -548,13 +559,15 @@ class LiveRiskMonitor:
                     continue
                 state.leg_ltps[key] = ltp
                 state.leg_last_tick[key] = now
-                alert, mtm, trail = self._evaluate_locked(state, now)
+                alert, mtm, trail, snap = self._evaluate_locked(state, now)
                 if alert is not None:
                     decisions.append(alert)
                 if mtm is not None:
                     pending_mtm.append(mtm)
                 if trail is not None:
                     pending_trail.append(trail)
+                if snap is not None:
+                    pending_snapshots.append(snap)
 
         for d in decisions:
             self._dispatch(d)
@@ -564,6 +577,15 @@ class LiveRiskMonitor:
                 self._write_mtm_state(payload)
             except Exception:
                 logger.exception("LiveRiskMonitor: TOPIC_TRADE_MTM publish failed")
+        for snap in pending_snapshots:
+            if self._mtm_snapshot_persister is not None:
+                try:
+                    self._mtm_snapshot_persister(snap)
+                except Exception:
+                    logger.exception(
+                        "LiveRiskMonitor: MTM snapshot persist failed for %s",
+                        snap.get("trade_id"),
+                    )
         for args in pending_trail:
             self._persist_trailing(*args)
 
@@ -637,29 +659,41 @@ class LiveRiskMonitor:
             net_premium_per_share=np_ps,
         )
 
+    def _feed_source(self, state: _TradeState, now: datetime) -> str:
+        for leg in state.legs:
+            last = state.leg_last_tick.get(leg.key)
+            if last is None or (now - last) > self._stale_window:
+                return "stale"
+        return "live"
+
     def _evaluate_locked(
         self, state: _TradeState, now: datetime,
-    ) -> Tuple[Optional["_PendingAlert"], Optional[dict], Optional[Tuple[str, Optional[float], int]]]:
-        """Returns (alert, mtm_payload, trailing_persist_args).
+    ) -> Tuple[
+        Optional["_PendingAlert"], Optional[dict],
+        Optional[Tuple[str, Optional[float], int]], Optional[dict],
+    ]:
+        """Returns (alert, mtm_payload, trailing_persist_args, snapshot_payload).
 
         ``mtm_payload`` is non-None when this evaluation should publish on
         TOPIC_TRADE_MTM after the lock is released. ``trailing_persist_args``
         is non-None when a trailing-step ratchet must be persisted to DB.
+        ``snapshot_payload`` is non-None when an hourly DB snapshot should
+        be written.
         """
         # Stale guard.
         for leg in state.legs:
             last = state.leg_last_tick.get(leg.key)
             if last is None:
-                return None, None, None
+                return None, None, None, None
             if (now - last) > self._stale_window:
                 self._counters["stale_skips"] += 1
-                return None, None, None
+                return None, None, None, None
         if not self._in_session(now):
             self._counters["session_skips"] += 1
-            return None, None, None
+            return None, None, None, None
         if state.silenced_until is not None and now < state.silenced_until:
             self._counters["silenced_skips"] += 1
-            return None, None, None
+            return None, None, None, None
 
         self._counters["evaluations"] += 1
 
@@ -750,6 +784,26 @@ class LiveRiskMonitor:
                 },
             }
 
+        snapshot_payload: Optional[dict] = None
+        if (self._mtm_snapshot_persister is not None
+                and (state.last_mtm_snapshot_at is None
+                     or (now - state.last_mtm_snapshot_at) >= self._mtm_snapshot_interval)):
+            state.last_mtm_snapshot_at = now
+            snapshot_payload = {
+                "trade_id": state.trade_id,
+                "trade_name": state.trade_name,
+                "mtm": round(current_pnl, 2),
+                "dte": dte,
+                "max_profit": state.max_profit,
+                "max_loss": state.max_loss,
+                "as_of": now.isoformat(timespec="seconds"),
+                "leg_ltps": {
+                    f"{k[0]}|{k[2]}|{k[3]}": round(v, 2)
+                    for k, v in state.leg_ltps.items()
+                },
+                "feed_source": self._feed_source(state, now),
+            }
+
         # 1. Hard SL on premium (engine decision OR trailing floor breach).
         trailing_breach = (
             state.trailing_pnl_floor is not None
@@ -766,7 +820,7 @@ class LiveRiskMonitor:
                 body=self._format_pnl_body(state, current_pnl, reason),
                 breach_key="PNL_SL", now=now,
             )
-            return alert, mtm_payload, trailing_persist
+            return alert, mtm_payload, trailing_persist, snapshot_payload
 
         # 2. Soft pre-breach warning. Event-eve uses tighter fraction.
         if (state.max_loss > 0
@@ -782,7 +836,7 @@ class LiveRiskMonitor:
                 title=f"Approaching SL on {state.trade_name}",
                 body=self._format_pnl_body(state, current_pnl, reason),
                 breach_key="PRE_BREACH",
-            ), mtm_payload, trailing_persist
+            ), mtm_payload, trailing_persist, snapshot_payload
 
         # 3. Target hit (DTE-aware fraction).
         if (decision.decision == "TAKE_PROFIT"
@@ -796,7 +850,7 @@ class LiveRiskMonitor:
                     f"{decision.reason} (live target {target_fraction*100:.0f}%)",
                 ),
                 breach_key="TARGET", now=now,
-            ), mtm_payload, trailing_persist
+            ), mtm_payload, trailing_persist, snapshot_payload
 
         # 4. Not in breach — clear so cooldown resets on re-entry.
         for k in ("PNL_SL", "TARGET"):
@@ -806,8 +860,8 @@ class LiveRiskMonitor:
         # If we armed a trailing step but no other alert fired, surface
         # the lock confirmation. Otherwise return only the MTM payload.
         if trailing_lock_alert is not None:
-            return trailing_lock_alert, mtm_payload, trailing_persist
-        return None, mtm_payload, trailing_persist
+            return trailing_lock_alert, mtm_payload, trailing_persist, snapshot_payload
+        return None, mtm_payload, trailing_persist, snapshot_payload
 
     def _maybe_alert(
         self, state: _TradeState, notif_type: str, severity: str,
