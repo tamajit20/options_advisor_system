@@ -84,6 +84,14 @@ _WATCHDOG_DEGRADE_THRESHOLD = 3
 _WATCHDOG_WINDOW_SECONDS = 5 * 60.0
 
 
+def _naive_ist(dt: datetime) -> datetime:
+    """Normalize a datetime to naive IST for idle math (matches ``now_ist``)."""
+    from zoneinfo import ZoneInfo
+    if dt.tzinfo is not None:
+        return dt.astimezone(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+    return dt
+
+
 # ---------------------------------------------------------------------------
 # Singleton guard
 # ---------------------------------------------------------------------------
@@ -556,7 +564,7 @@ class KiteWSRunner:
             last = self._last_tick_at
         if last is None:
             return True
-        idle = (n - last).total_seconds()
+        idle = (_naive_ist(n) - _naive_ist(last)).total_seconds()
         if idle <= self._heartbeat_timeout:
             return True
         logger.warning("watchdog: no tick for %.1fs (>%.1fs); forcing reconnect", idle, self._heartbeat_timeout)

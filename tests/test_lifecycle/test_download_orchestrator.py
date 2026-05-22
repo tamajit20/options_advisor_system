@@ -7,6 +7,7 @@ import pytest
 
 import lifecycle.download_orchestrator as orch
 from contracts import FoBhavRow, SpotBhavRow, VixRow
+from exceptions import NoDataError
 
 
 _FO_ROWS = [
@@ -18,10 +19,10 @@ _FO_ROWS = [
 
 
 class TestRunFoBhav:
-    def test_empty_download_returns_zero_no_commit(self, mock_db, mocker):
+    def test_empty_download_raises_no_data_error(self, mock_db, mocker):
         mocker.patch("lifecycle.download_orchestrator.download_fo_bhav", return_value=[])
-        n = orch.run_fo_bhav(mock_db, date(2026, 4, 30))
-        assert n == 0
+        with pytest.raises(NoDataError, match="FO bhavcopy not available"):
+            orch.run_fo_bhav(mock_db, date(2026, 4, 30))
         mock_db.commit.assert_not_called()
 
     def test_happy_path_upserts_and_commits(self, mock_db, mocker):
@@ -72,12 +73,12 @@ class TestRunSpotBhav:
         assert n == 1
         mock_db.commit.assert_called_once()
 
-    def test_no_rows_returns_zero_no_commit(self, mock_db, mocker):
+    def test_no_rows_raises_no_data_error(self, mock_db, mocker):
         mocker.patch("lifecycle.download_orchestrator.download_spot_bhav", return_value=[])
         mocker.patch("lifecycle.download_orchestrator.download_nse_index_spot", return_value=[])
         mocker.patch("lifecycle.download_orchestrator.extract_index_spots", return_value={})
-        n = orch.run_spot_bhav(mock_db, date(2026, 4, 30))
-        assert n == 0
+        with pytest.raises(NoDataError, match="Spot bhavcopy not available"):
+            orch.run_spot_bhav(mock_db, date(2026, 4, 30))
         mock_db.commit.assert_not_called()
 
 
@@ -85,12 +86,10 @@ class TestRunVix:
     def test_seeds_from_bundled_csv_when_table_nearly_empty(self, mock_db, mocker):
         # VixRepo.count() returns 5 < 30 → seed path
         mock_db.fetch_one.return_value = {"n": 5}
-        # _seed_vix_from_bundled_csv reads the bundled CSV — patch open + os.path.exists
         mocker.patch("lifecycle.download_orchestrator.os.path.exists", return_value=False)
         mocker.patch("lifecycle.download_orchestrator.download_vix_history", return_value=[])
-        # Should run without error (CSV missing → seed returns 0)
-        n = orch.run_vix(mock_db)
-        assert n >= 0
+        with pytest.raises(NoDataError, match="VIX history download returned no rows"):
+            orch.run_vix(mock_db)
 
     def test_normal_path_when_history_already_seeded(self, mock_db, mocker):
         mock_db.fetch_one.return_value = {"n": 200}  # >= 30, skip seed
