@@ -736,9 +736,10 @@ class LiveRiskMonitor:
                 "trailing_pnl_floor": state.trailing_pnl_floor,
                 "as_of": now.isoformat(timespec="seconds"),
                 # Per-leg live prices keyed by "symbol|strike|option_type"
-                # for the frontend to update close-form prefills without polling.
+                # (LegKey is (symbol, expiry, strike, option_type) so we use
+                #  indices 0, 2, 3 to match the frontend legKey format)
                 "leg_ltps": {
-                    f"{k[0]}|{k[1]}|{k[2]}": round(v, 2)
+                    f"{k[0]}|{k[2]}|{k[3]}": round(v, 2)
                     for k, v in state.leg_ltps.items()
                 },
             }

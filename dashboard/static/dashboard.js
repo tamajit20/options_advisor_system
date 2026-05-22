@@ -2131,11 +2131,12 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     const liveLegsHtml = data.legs.map(l => {
       const closeAction = l.action === 'SELL' ? 'Buy back' : 'Sell back';
       const lotsUsed = l.lots_actual || l.lots || 1;
-      const mp = mktPriceMap[l.leg_order];
+      const mp = (mktPriceMap[l.leg_order] != null && mktPriceMap[l.leg_order] > 0)
+                 ? mktPriceMap[l.leg_order] : null;
       const psrc = priceSrcMap[l.leg_order];
       const legKey = `${l.symbol}|${l.strike}|${l.option_type}`;
-      let priceDisplay = mp != null ? `\u20b9${fmt(mp)}` : '—';
-      if (psrc === 'intrinsic_fallback') priceDisplay += ' <span class="tag tag-warn" style="font-size:.65rem">intrinsic est.</span>';
+      let priceDisplay = mp != null ? `\u20b9${fmt(mp)}` : '<span class="muted">—</span>';
+      if (mp != null && psrc === 'intrinsic_fallback') priceDisplay += ' <span class="tag tag-warn" style="font-size:.65rem">intrinsic est.</span>';
       return `<div class="cf-live-leg"
                    data-leg-order="${l.leg_order}"
                    data-action="${escapeHtml(l.action)}"
@@ -2277,6 +2278,33 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     panel.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcFillPnl));
     recalcFillPnl();
     recalcLivePnl();
+
+    // Poll for fresh prices every 5 s while panel is visible (covers trades
+    // not yet in live_risk_monitor scope or where SSE arrived before form opened)
+    async function _pollLivePrices() {
+      if (panel.hidden) return;
+      try {
+        const fresh = await API(`/api/close-suggestion/${encodeURIComponent(tradeId)}`);
+        fresh.suggestions.forEach(s => {
+          const price = (s.suggested_close != null && s.suggested_close > 0) ? s.suggested_close : null;
+          if (price == null) return;
+          const leg = data.legs.find(l => l.leg_order === s.leg_order);
+          if (!leg) return;
+          const key = `${leg.symbol}|${leg.strike}|${leg.option_type}`;
+          const span = panel.querySelector(`.cf-live-price[data-leg-key="${CSS.escape(key)}"]`);
+          if (span) {
+            span.textContent = `\u20b9${fmt(price)}`;
+            span.dataset.ltp = price;
+            span.classList.add('ltp-flash');
+            setTimeout(() => span.classList.remove('ltp-flash'), 600);
+          }
+        });
+        recalcLivePnl();
+      } catch (_) { /* silent */ }
+      if (!panel.hidden) setTimeout(_pollLivePrices, 5000);
+    }
+    setTimeout(_pollLivePrices, 5000);
+
     panel.querySelector('.btn-close-submit').addEventListener('click', () =>
       submitClose(tradeId, panel));
     panel.querySelector('.btn-close-cancel').addEventListener('click', () => {
