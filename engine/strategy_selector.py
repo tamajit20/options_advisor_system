@@ -481,6 +481,13 @@ def assemble_suggestion(
     economics.edge_score_components = _components
     economics.credit_grade = _grade
 
+    from engine import entry_quality as _entry_quality
+    entry_quality_score = _entry_quality.compute(
+        edge_score=_score,
+        confidence_score=confidence.score,
+        probability_of_profit=pop,
+    )
+
     trade_name = make_trade_name(
         underlying=underlying,
         strategy=strategy,
@@ -513,6 +520,7 @@ def assemble_suggestion(
         fii_data_date=fii_data_date,
         vix_data_date=vix_data_date,
         oi_pcr_change=oi_pcr_change,
+        entry_quality_score=entry_quality_score,
     )
 
 

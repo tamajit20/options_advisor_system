@@ -554,10 +554,11 @@ class SuggestionRepo:
                probability_of_profit, estimated_charges_total, estimated_net_pnl,
                execution_window, plain_english,
                data_date, entry_date, spot_data_date, fii_data_date, vix_data_date,
-               oi_pcr_change, edge_score, credit_grade, em_calibration_warning)
+               oi_pcr_change, edge_score, credit_grade, em_calibration_warning,
+               entry_quality_score)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING',
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 s.suggestion_id, s.trade_name, s.generated_on, s.strategy, s.strategy_type,
@@ -572,6 +573,7 @@ class SuggestionRepo:
                 _safe_float(getattr(s.economics, "edge_score", None)),
                 getattr(s.economics, "credit_grade", None),
                 getattr(s, "em_calibration_warning", None),
+                getattr(s, "entry_quality_score", None),
             ],
         ).close()
 

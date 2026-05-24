@@ -119,6 +119,33 @@ class TestApiTradesOpen:
         data = resp.get_json()
         assert data is not None
 
+    def test_surfaces_entry_quality_score_from_suggestion(self, client, mocker):
+        trade_row = {
+            "trade_id": "TRD-1",
+            "suggestion_id": "SUG-1",
+            "trade_name": "NIFTY-TEST",
+            "status": "ACTIVE",
+            "executed_on": datetime(2026, 5, 20, 10, 0),
+        }
+        sug_row = {
+            "suggestion_id": "SUG-1",
+            "net_credit_suggested": 100.0,
+            "entry_quality_score": 71,
+            "edge_score": 72,
+            "confidence_score": 10,
+            "probability_of_profit": 68,
+        }
+        mocker.patch("dashboard.server.TradeRepo.open_trades", return_value=[trade_row])
+        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info", return_value=[])
+        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alert_for_trade", return_value=None)
+        mocker.patch("dashboard.server.SuggestionRepo.get", return_value=sug_row)
+        mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[])
+        resp = client.get("/api/trades/open")
+        assert resp.status_code == 200
+        trade = resp.get_json()["trades"][0]
+        assert trade["entry_quality_score"] == 71
+        assert trade["suggestion"]["entry_quality_score"] == 71
+
 
 class TestApiHistorySuggestions:
     def test_returns_array(self, client, mocker):

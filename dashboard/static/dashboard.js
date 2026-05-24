@@ -2477,7 +2477,9 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
-        ${_qualityBadge(s.edge_score, s.confidence_score, s.probability_of_profit)}
+        ${_qualityBadge(s.entry_quality_score, '', {
+          edge: s.edge_score, conf: s.confidence_score, pop: s.probability_of_profit,
+        })}
       </div>
     </div>
     <div class="card-id-row">
@@ -3455,10 +3457,7 @@ function renderTrade(t) {
     </div>`;
   }
 
-  const _sug = t.suggestion || {};
-  const _entryQualBadge = _qualityBadge(
-    _sug.edge_score, _sug.confidence_score, _sug.probability_of_profit, 'Entry quality: '
-  );
+  const _entryQualBadge = _qualityBadge(t.entry_quality_score, 'Entry quality: ');
   return `<div class="card">
     <div class="card-head">
       <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
@@ -4028,6 +4027,7 @@ function renderHistorySuggestion(s) {
         <strong class="hist-instr">${escapeHtml(s.underlying || '')}</strong>
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
         <span class="tag ${statusCls}">${escapeHtml(s.status || '')}</span>
+        ${_qualityBadge(s.entry_quality_score)}
         ${s.expiry_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(s.expiry_type)}</span>` : ''}
       </div>
       <div class="hist-card-pnl">
@@ -4096,6 +4096,7 @@ function renderHistoryTrade(t) {
         <strong class="hist-instr">${escapeHtml(s.underlying || t.trade_id)}</strong>
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
         <span class="tag ${statusCls}">${escapeHtml(t.status || '')}</span>
+        ${_qualityBadge(t.entry_quality_score, 'Entry quality: ')}
         ${t.position_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(t.position_type)}</span>` : ''}
       </div>
       <div class="hist-card-pnl ${pnlClass}">${pnl != null ? pnlSign+'₹'+fmt(pnl) : '—'}${pnl != null && t.net_credit_actual ? `<span class="hist-pnl-pct"> (${pnl >= 0 ? '+' : ''}${(pnl / Math.abs(t.net_credit_actual) * 100).toFixed(0)}% of credit)</span>` : ''}</div>
@@ -4230,13 +4231,7 @@ function escapeHtml(s) {
 }
 
 // ---------------- Suggestion Quality Score ----------------
-function _qualityScore(edge, conf, pop) {
-  // edge: 0-100, conf: 0-14 gates passed, pop: 0-100 probability
-  if (edge == null && conf == null && pop == null) return null;
-  const e = parseFloat(edge) || 0;
-  const c = conf != null ? Math.min(parseFloat(conf) / 14 * 100, 100) : 50; // 50 = neutral if missing
-  const p = parseFloat(pop) || 0;
-  const score = Math.round(e * 0.50 + c * 0.30 + p * 0.20);
+function _qualityLabelFromScore(score) {
   const cls = score >= 80 ? 'qs-excellent'
             : score >= 65 ? 'qs-good'
             : score >= 50 ? 'qs-fair'
@@ -4247,14 +4242,28 @@ function _qualityScore(edge, conf, pop) {
               : score >= 50 ? 'Fair'
               : score >= 35 ? 'Weak'
               :               'Poor';
-  const tip = `Quality score ${score}/100\nEdge score: ${e.toFixed(0)} ×50%\nConfidence gates: ${conf != null ? conf : '?'}/14 ×30%\nPoP: ${p.toFixed(0)}% ×20%`;
-  return { score, cls, label, tip };
+  return { score, cls, label };
 }
 
-function _qualityBadge(edge, conf, pop, prefix = '') {
-  const q = _qualityScore(edge, conf, pop);
-  if (!q) return '';
-  return `<span class="quality-score ${q.cls}" title="${escapeHtml(q.tip)}">${prefix}${q.score}<span class="qs-label">${q.label}</span></span>`;
+function _qualityTooltip(score, detail) {
+  let tip = `Quality score ${score}/100 (stored at suggestion generation)`;
+  if (!detail) return tip;
+  const e = detail.edge != null ? parseFloat(detail.edge) : null;
+  const c = detail.conf != null ? detail.conf : null;
+  const p = detail.pop != null ? parseFloat(detail.pop) : null;
+  if (e != null) tip += `\nEdge score: ${e.toFixed(0)}`;
+  if (c != null) tip += `\nConfidence gates: ${c}/14`;
+  if (p != null) tip += `\nPoP: ${p.toFixed(0)}%`;
+  return tip;
+}
+
+function _qualityBadge(storedScore, prefix = '', detail = null) {
+  if (storedScore == null || storedScore === '') return '';
+  const score = parseInt(storedScore, 10);
+  if (isNaN(score)) return '';
+  const q = _qualityLabelFromScore(score);
+  const tip = _qualityTooltip(score, detail);
+  return `<span class="quality-score ${q.cls}" title="${escapeHtml(tip)}">${prefix}${q.score}<span class="qs-label">${q.label}</span></span>`;
 }
 
 // ---------------- Phase 3 #3: Live MTM SSE consumer ----------------

@@ -254,6 +254,14 @@ _TABLE_DDL: List[str] = [
     )
     ALTER TABLE options_suggestions ADD credit_grade NVARCHAR(10) NULL
     """,
+    # Migration: entry_quality_score — composite 0–100 at suggestion time (display + analysis)
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'entry_quality_score'
+    )
+    ALTER TABLE options_suggestions ADD entry_quality_score INT NULL
+    """,
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_date ON options_suggestions (generated_on DESC)",
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_status ON options_suggestions (status, generated_on DESC)",
 

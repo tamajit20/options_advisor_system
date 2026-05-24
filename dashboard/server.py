@@ -347,10 +347,13 @@ def create_app() -> Flask:
                         sug_out["net_credit"] = sug_out.pop("net_credit_suggested")
                     sug_out["legs"] = [_row(l) for l in sug.legs(r["suggestion_id"])]
                     r_out["suggestion"] = sug_out
+                    r_out["entry_quality_score"] = sug_out.get("entry_quality_score")
                 else:
                     r_out["suggestion"] = None
+                    r_out["entry_quality_score"] = None
             else:
                 r_out["suggestion"] = None
+                r_out["entry_quality_score"] = None
             out.append(r_out)
         return jsonify({"trades": out})
 
@@ -840,7 +843,8 @@ def create_app() -> Flask:
             "  s.probability_of_profit AS sug_pop, "
             "  s.estimated_charges_total AS sug_est_charges, "
             "  s.estimated_net_pnl AS sug_est_net_pnl, "
-            "  s.expiry_date AS sug_expiry, s.dte AS sug_dte "
+            "  s.expiry_date AS sug_expiry, s.dte AS sug_dte, "
+            "  s.entry_quality_score AS sug_entry_quality "
             "FROM options_trades t "
             "LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
             "WHERE t.status IN ('CLOSED', 'EXPIRED') "
@@ -883,6 +887,7 @@ def create_app() -> Flask:
                 "actual_upper_be":   r["actual_upper_breakeven"],
                 "actual_lower_be":   r["actual_lower_breakeven"],
                 "actual_stop_loss":  r["actual_stop_loss_level"],
+                "entry_quality_score": r.get("sug_entry_quality"),
                 "legs":              trade_legs,
                 "suggestion": {
                     "underlying":  r.get("underlying"),
@@ -901,6 +906,7 @@ def create_app() -> Flask:
                     "est_net_pnl": r.get("sug_est_net_pnl"),
                     "expiry":      r.get("sug_expiry"),
                     "dte":         r.get("sug_dte"),
+                    "entry_quality_score": r.get("sug_entry_quality"),
                     "legs":        sug_legs,
                 } if r.get("underlying") else None,
             })

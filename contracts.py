@@ -276,6 +276,8 @@ class Suggestion:
     oi_pcr_change:    Optional[float] = None  # OI change momentum: ΣΔPut OI / ΣΔCall OI (EOD=day-over-day, LIVE=since open)
     em_calibration_warning: Optional[str] = None  # set when realised/expected median for (underlying, dte_band) deviates >threshold
     pricing_provenance:     Optional[PricingProvenance] = None  # spot+chain timestamps → DB data_as_of
+    # Composite 0–100 quality rating (edge + confidence + PoP); persisted for analysis.
+    entry_quality_score:    Optional[int] = None
 
 
 @dataclass
