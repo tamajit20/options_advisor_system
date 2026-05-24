@@ -111,8 +111,26 @@
           <select id="hist-instrument">
             <option value="">All instruments</option>
           </select>
+          <select id="hist-strategy" title="Strategy">
+            <option value="">All strategies</option>
+          </select>
+          <select id="hist-pnl" title="Net P&amp;L outcome">
+            <option value="">All outcomes</option>
+            <option value="profit">Profit</option>
+            <option value="loss">Loss</option>
+            <option value="breakeven">Breakeven</option>
+          </select>
+          <select id="hist-quality" title="Entry quality tier">
+            <option value="">Any quality</option>
+            <option value="excellent">Excellent (80+)</option>
+            <option value="good">Good (65–79)</option>
+            <option value="fair">Fair (50–64)</option>
+            <option value="weak">Weak (35–49)</option>
+            <option value="poor">Poor (&lt;35)</option>
+          </select>
           <button class="btn" id="hist-refresh">Refresh</button>
         </div>
+        <div id="hist-summary" class="hist-summary muted"></div>
         <div id="history-container" class="loading">Loading…</div>
       </div>
 
@@ -135,8 +153,20 @@
             <option>IGNORED</option>
             <option>NO_SUGGESTION</option>
           </select>
+          <select id="hsug-strategy" title="Strategy">
+            <option value="">All strategies</option>
+          </select>
+          <select id="hsug-quality" title="Entry quality tier">
+            <option value="">Any quality</option>
+            <option value="excellent">Excellent (80+)</option>
+            <option value="good">Good (65–79)</option>
+            <option value="fair">Fair (50–64)</option>
+            <option value="weak">Weak (35–49)</option>
+            <option value="poor">Poor (&lt;35)</option>
+          </select>
           <button class="btn" id="hsug-refresh">Refresh</button>
         </div>
+        <div id="hsug-summary" class="hist-summary muted"></div>
         <div id="hsug-container" class="loading">Loading…</div>
       </div>
 

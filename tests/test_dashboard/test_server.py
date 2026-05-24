@@ -62,6 +62,37 @@ class TestJsonHelpers:
         assert out["score"] == 75
 
 
+class TestHistoryFilterHelpers:
+    def test_append_quality_band_excellent(self):
+        params: list = []
+        sql = server._append_quality_band_filter("WHERE 1=1", params, "excellent")
+        assert "entry_quality_score >= ?" in sql
+        assert params == [80]
+
+    def test_append_quality_band_weak_is_bounded(self):
+        params: list = []
+        sql = server._append_quality_band_filter("WHERE 1=1", params, "weak")
+        assert "entry_quality_score >= ? AND entry_quality_score <= ?" in sql
+        assert params == [35, 49]
+
+    def test_append_quality_band_poor(self):
+        params: list = []
+        sql = server._append_quality_band_filter("WHERE 1=1", params, "poor")
+        assert "entry_quality_score < ?" in sql
+        assert params == [35]
+
+    def test_append_quality_band_unknown_is_noop(self):
+        params: list = []
+        sql = server._append_quality_band_filter("WHERE 1=1", params, "nope")
+        assert sql == "WHERE 1=1"
+        assert params == []
+
+    def test_append_trade_pnl_filter(self):
+        assert "net_pnl > 0" in server._append_trade_pnl_filter("WHERE 1=1", "profit")
+        assert "net_pnl < 0" in server._append_trade_pnl_filter("WHERE 1=1", "loss")
+        assert server._append_trade_pnl_filter("WHERE 1=1", "") == "WHERE 1=1"
+
+
 # ---------------------------------------------------------------------------
 # Routes — smoke + behaviour
 # ---------------------------------------------------------------------------

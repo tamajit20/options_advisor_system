@@ -732,7 +732,9 @@ input:focus, select:focus, textarea:focus {
 .perf-stat-lbl { font-size:.65rem; color:var(--text-dim); margin-top:2px; text-align:center; }
 
 /* ---------- History redesigned cards ---------- */
-.hist-filter-bar { align-items: flex-end; }
+.hist-filter-bar { align-items: flex-end; flex-wrap: wrap; gap: 8px 10px; }
+.hist-filter-bar select { max-width: 11rem; }
+.hist-summary { font-size: .82rem; margin: 4px 0 10px; min-height: 1.1em; }
 .hist-filter-label { font-size: .8rem; color: var(--text-dim); display: flex; flex-direction: column; gap: 2px; }
 .hist-date-input,
 #hist-instrument, #hsug-instrument, #hsug-status {

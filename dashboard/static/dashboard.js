@@ -3585,6 +3585,24 @@ function renderTrade(t) {
 
 // ---------------- Tab 3: History ----------------
 
+function _fillHistSelect(el, values, curVal, blankLabel) {
+  if (!el) return;
+  const cur = curVal != null ? curVal : el.value;
+  el.innerHTML = `<option value="">${escapeHtml(blankLabel)}</option>`;
+  (values || []).forEach(v => {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = v;
+    if (v === cur) o.selected = true;
+    el.appendChild(o);
+  });
+}
+
+function _histFilterSummary(count, noun) {
+  const n = count || 0;
+  return n === 1 ? `Showing 1 ${noun}` : `Showing ${n} ${noun}s`;
+}
+
 // ---- Sub-tab switcher ----
 let _histActiveSubtab = 'trades';
 document.querySelectorAll('.hist-subtab').forEach(btn => {
@@ -3610,6 +3628,8 @@ function loadHistory() {
 
   // Default dates: today and 30 days ago
   const fromEl = $('#hist-from'), toEl = $('#hist-to'), instrEl = $('#hist-instrument');
+  const stratEl = $('#hist-strategy'), pnlEl = $('#hist-pnl'), qualEl = $('#hist-quality');
+  const summaryEl = $('#hist-summary');
   if (!fromEl.value) { const d = new Date(); d.setDate(d.getDate()-30); fromEl.value = d.toISOString().slice(0,10); }
   if (!toEl.value)   { toEl.value = new Date().toISOString().slice(0,10); }
 
@@ -3617,23 +3637,23 @@ function loadHistory() {
   params.set('from_date', fromEl.value);
   params.set('to_date', toEl.value);
   if (instrEl.value) params.set('underlying', instrEl.value);
+  if (stratEl.value) params.set('strategy', stratEl.value);
+  if (pnlEl.value)   params.set('pnl', pnlEl.value);
+  if (qualEl.value)  params.set('quality_band', qualEl.value);
 
   API('/api/history/closed-trades?' + params).then(data => {
-    // Populate instrument dropdown (preserve selection)
-    const cur = instrEl.value;
-    instrEl.innerHTML = '<option value="">All instruments</option>';
-    (data.underlyings || []).forEach(u => {
-      const o = document.createElement('option'); o.value = u; o.textContent = u;
-      if (u === cur) o.selected = true;
-      instrEl.appendChild(o);
-    });
+    _fillHistSelect(instrEl, data.underlyings, instrEl.value, 'All instruments');
+    _fillHistSelect(stratEl, data.strategies, stratEl.value, 'All strategies');
 
     if (!data.trades.length) {
-      c.className=''; c.innerHTML='<div class="empty">No closed trades in the selected period.</div>'; return;
+      if (summaryEl) summaryEl.textContent = _histFilterSummary(0, 'trade');
+      c.className=''; c.innerHTML='<div class="empty">No closed trades match the selected filters.</div>'; return;
     }
+    if (summaryEl) summaryEl.textContent = _histFilterSummary(data.count, 'trade');
     c.className='';
     c.innerHTML = data.trades.map(renderHistoryTrade).join('');
   }).catch(e => {
+    if (summaryEl) summaryEl.textContent = '';
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   });
 }
@@ -3645,6 +3665,8 @@ async function loadHistorySuggestions() {
 
   const fromEl = $('#hsug-from'), toEl = $('#hsug-to');
   const instrEl = $('#hsug-instrument'), statusEl = $('#hsug-status');
+  const stratEl = $('#hsug-strategy'), qualEl = $('#hsug-quality');
+  const summaryEl = $('#hsug-summary');
   if (!fromEl.value) { const d = new Date(); d.setDate(d.getDate()-30); fromEl.value = d.toISOString().slice(0,10); }
   if (!toEl.value)   { toEl.value = new Date().toISOString().slice(0,10); }
 
@@ -3653,25 +3675,24 @@ async function loadHistorySuggestions() {
   params.set('to_date',   toEl.value);
   if (instrEl.value)  params.set('underlying', instrEl.value);
   if (statusEl.value) params.set('status',     statusEl.value);
+  if (stratEl.value)  params.set('strategy',   stratEl.value);
+  if (qualEl.value)   params.set('quality_band', qualEl.value);
 
   try {
     const data = await API('/api/history/suggestions?' + params);
 
-    // Populate instrument dropdown
-    const cur = instrEl.value;
-    instrEl.innerHTML = '<option value="">All instruments</option>';
-    (data.underlyings || []).forEach(u => {
-      const o = document.createElement('option'); o.value = u; o.textContent = u;
-      if (u === cur) o.selected = true;
-      instrEl.appendChild(o);
-    });
+    _fillHistSelect(instrEl, data.underlyings, instrEl.value, 'All instruments');
+    _fillHistSelect(stratEl, data.strategies, stratEl.value, 'All strategies');
 
     if (!data.suggestions.length) {
-      c.className=''; c.innerHTML='<div class="empty">No suggestions in the selected period.</div>'; return;
+      if (summaryEl) summaryEl.textContent = _histFilterSummary(0, 'suggestion');
+      c.className=''; c.innerHTML='<div class="empty">No suggestions match the selected filters.</div>'; return;
     }
+    if (summaryEl) summaryEl.textContent = _histFilterSummary(data.count, 'suggestion');
     c.className='';
     c.innerHTML = data.suggestions.map(renderHistorySuggestion).join('');
   } catch (e) {
+    if (summaryEl) summaryEl.textContent = '';
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
 }
@@ -4185,12 +4206,17 @@ $('#log-search').addEventListener('keydown', e => { if (e.key === 'Enter') loadL
 // History filter bindings — Trades sub-tab
 $('#hist-refresh').addEventListener('click', loadHistory);
 $('#hist-instrument').addEventListener('change', loadHistory);
+$('#hist-strategy').addEventListener('change', loadHistory);
+$('#hist-pnl').addEventListener('change', loadHistory);
+$('#hist-quality').addEventListener('change', loadHistory);
 $('#hist-from').addEventListener('change', loadHistory);
 $('#hist-to').addEventListener('change', loadHistory);
 
 // History filter bindings — Suggestions sub-tab
 $('#hsug-refresh').addEventListener('click', loadHistorySuggestions);
 $('#hsug-instrument').addEventListener('change', loadHistorySuggestions);
+$('#hsug-strategy').addEventListener('change', loadHistorySuggestions);
+$('#hsug-quality').addEventListener('change', loadHistorySuggestions);
 $('#hsug-status').addEventListener('change', loadHistorySuggestions);
 $('#hsug-from').addEventListener('change', loadHistorySuggestions);
 $('#hsug-to').addEventListener('change', loadHistorySuggestions);

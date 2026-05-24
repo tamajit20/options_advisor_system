@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from flask import Flask, jsonify, redirect, render_template, request
 
@@ -98,6 +98,45 @@ def _row(d: Dict[str, Any]) -> Dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def _append_quality_band_filter(
+    sql: str,
+    params: list,
+    band: str,
+    column: str = "entry_quality_score",
+) -> str:
+    """Filter entry_quality_score to one tier (matches dashboard badge bands)."""
+    band = (band or "").strip().lower()
+    if band == "excellent":
+        params.append(80)
+        return sql + f" AND {column} >= ? "
+    if band == "good":
+        params.extend([65, 79])
+        return sql + f" AND {column} >= ? AND {column} <= ? "
+    if band == "fair":
+        params.extend([50, 64])
+        return sql + f" AND {column} >= ? AND {column} <= ? "
+    if band == "weak":
+        params.extend([35, 49])
+        return sql + f" AND {column} >= ? AND {column} <= ? "
+    if band == "poor":
+        params.append(35)
+        return sql + f" AND {column} IS NOT NULL AND {column} < ? "
+    return sql
+
+
+def _append_trade_pnl_filter(sql: str, pnl: str) -> str:
+    pnl = (pnl or "").strip().lower()
+    if pnl == "profit":
+        return sql + " AND t.net_pnl > 0 "
+    if pnl == "loss":
+        return sql + " AND t.net_pnl < 0 "
+    if pnl == "breakeven":
+        return sql + " AND t.net_pnl = 0 "
+    if pnl == "unknown":
+        return sql + " AND t.net_pnl IS NULL "
+    return sql
 
 
 # ---------------------------------------------------------------------------
@@ -572,15 +611,41 @@ def create_app() -> Flask:
             # Default: show all non-trivial statuses
             filters.append("status IN ('PENDING','EXECUTED','IGNORED')")
 
+        strategy_f = request.args.get("strategy", "").strip()
+        if strategy_f:
+            filters.append("strategy = ?")
+            params.append(strategy_f)
+
+        quality_band = request.args.get("quality_band", "").strip().lower()
         where = " AND ".join(filters)
-        rows = db.fetch_all(
-            f"SELECT TOP 300 * FROM options_suggestions "
-            f"WHERE {where} ORDER BY generated_on DESC",
-            params,
+        sql = f"SELECT TOP 300 * FROM options_suggestions WHERE {where} "
+        qparams = list(params)
+        sql = _append_quality_band_filter(sql, qparams, quality_band)
+        rows = db.fetch_all(sql + " ORDER BY generated_on DESC", qparams)
+        # Facet lists for the date window (ignore outcome/quality filters)
+        facet_filters: list[str] = [
+            "CONVERT(date, generated_on) >= ?",
+            "CONVERT(date, generated_on) <= ?",
+        ]
+        facet_params: list = [from_date, to_date]
+        if status_f:
+            facet_filters.append("status = ?")
+            facet_params.append(status_f)
+        elif not request.args.get("status"):
+            facet_filters.append("status IN ('PENDING','EXECUTED','IGNORED')")
+        facet_where = " AND ".join(facet_filters)
+        facet_rows = db.fetch_all(
+            f"SELECT underlying, strategy FROM options_suggestions WHERE {facet_where}",
+            facet_params,
         )
-        # Collect unique underlyings for the dropdown
-        underlyings = sorted({r["underlying"] for r in rows if r.get("underlying")})
-        return jsonify({"suggestions": [_row(r) for r in rows], "underlyings": underlyings})
+        underlyings = sorted({r["underlying"] for r in facet_rows if r.get("underlying")})
+        strategies = sorted({r["strategy"] for r in facet_rows if r.get("strategy")})
+        return jsonify({
+            "suggestions": [_row(r) for r in rows],
+            "underlyings": underlyings,
+            "strategies": strategies,
+            "count": len(rows),
+        })
 
     @app.route("/api/history/trades")
     @_with_db
@@ -828,6 +893,9 @@ def create_app() -> Flask:
             since = datetime.utcnow() - timedelta(days=days)
             until = datetime.utcnow() + timedelta(days=1)
         underlying = request.args.get("underlying", "").strip()
+        strategy_f = request.args.get("strategy", "").strip()
+        pnl_f      = request.args.get("pnl", "").strip()
+        quality_band = request.args.get("quality_band", "").strip().lower()
 
         sql = (
             "SELECT t.trade_id, t.suggestion_id, t.trade_name, t.executed_on, t.closed_on, "
@@ -854,6 +922,11 @@ def create_app() -> Flask:
         if underlying:
             sql += " AND s.underlying = ? "
             params.append(underlying)
+        if strategy_f:
+            sql += " AND s.strategy = ? "
+            params.append(strategy_f)
+        sql = _append_trade_pnl_filter(sql, pnl_f)
+        sql = _append_quality_band_filter(sql, params, quality_band, column="s.entry_quality_score")
         sql += "ORDER BY COALESCE(t.closed_on, t.executed_on) DESC"
 
         rows = db.fetch_all(sql, params)
@@ -911,16 +984,18 @@ def create_app() -> Flask:
                 } if r.get("underlying") else None,
             })
 
-        # Distinct underlyings for the filter dropdown
-        und_rows = db.fetch_all(
-            "SELECT DISTINCT s.underlying FROM options_trades t "
+        # Distinct underlyings / strategies for filter dropdowns (date window only)
+        facet_sql = (
+            "SELECT DISTINCT s.underlying, s.strategy FROM options_trades t "
             "LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
-            "WHERE t.status IN ('CLOSED','EXPIRED') AND s.underlying IS NOT NULL "
-            "ORDER BY s.underlying",
-            [],
+            "WHERE t.status IN ('CLOSED','EXPIRED') "
+            "  AND t.executed_on >= ? AND t.executed_on < ? "
+            "  AND s.underlying IS NOT NULL"
         )
-        underlyings = [u["underlying"] for u in und_rows if u.get("underlying")]
-        return jsonify({"trades": out, "underlyings": underlyings})
+        facet_rows = db.fetch_all(facet_sql, [since, until])
+        underlyings = sorted({u["underlying"] for u in facet_rows if u.get("underlying")})
+        strategies = sorted({u["strategy"] for u in facet_rows if u.get("strategy")})
+        return jsonify({"trades": out, "underlyings": underlyings, "strategies": strategies, "count": len(out)})
 
     @app.route("/api/history/simulation/<sid>")
     @_with_db
