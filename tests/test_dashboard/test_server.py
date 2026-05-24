@@ -92,6 +92,22 @@ class TestHistoryFilterHelpers:
         assert "net_pnl < 0" in server._append_trade_pnl_filter("WHERE 1=1", "loss")
         assert server._append_trade_pnl_filter("WHERE 1=1", "") == "WHERE 1=1"
 
+    def test_normalize_quality_band_legacy_numeric(self):
+        assert server._normalize_quality_band("35", "") == "weak"
+        assert server._normalize_quality_band("", "65") == "good"
+        assert server._normalize_quality_band("nope", "") == ""
+
+    def test_parse_history_date_window_valid(self):
+        f, t = server._parse_history_date_window("2026-01-01", "2026-04-30")
+        assert f == "2026-01-01"
+        assert t == "2026-04-30"
+
+    def test_parse_history_date_window_invalid_falls_back(self, mocker):
+        mocker.patch("dashboard.server.today_ist", return_value=date(2026, 5, 24))
+        f, t = server._parse_history_date_window("BAD", "BAD", days_default=30)
+        assert f == "2026-04-24"
+        assert t == "2026-05-24"
+
 
 # ---------------------------------------------------------------------------
 # Routes — smoke + behaviour

@@ -276,13 +276,28 @@ class TestHistoryRoutes:
         fake = MagicMock()
         fake.connect = MagicMock()
         fake.close = MagicMock()
-        fake.fetch_all = MagicMock(return_value=[])
+        captured: list[tuple[str, list]] = []
+
+        def _fetch_all(sql, params=None):
+            captured.append((sql, params or []))
+            return []
+
+        fake.fetch_all = MagicMock(side_effect=_fetch_all)
         mocker.patch("dashboard.server.SQLServerConnection", return_value=fake)
+        mocker.patch("dashboard.server.TradeRepo")
+        mocker.patch("dashboard.server.SuggestionRepo")
         new_app = server.create_app()
         new_app.config["TESTING"] = True
         c = new_app.test_client()
-        resp = c.get("/api/history/closed-trades?from_date=2026-01-01&to_date=2026-04-30")
+        resp = c.get("/api/history/closed-trades?from_date=2026-01-01&to_date=2026-04-30&quality_band=good&pnl=loss")
         assert resp.status_code == 200
+        assert captured, "expected fetch_all to run"
+        main_sql, main_params = captured[0]
+        assert "CONVERT(date, COALESCE(t.closed_on, t.executed_on))" in main_sql
+        assert "s.entry_quality_score >= ? AND s.entry_quality_score <= ?" in main_sql
+        assert "t.net_pnl < 0" in main_sql
+        assert main_params[:2] == ["2026-01-01", "2026-04-30"]
+        assert 65 in main_params and 79 in main_params
 
     def test_history_closed_trades_invalid_dates(self, client, mocker):
         fake = MagicMock()

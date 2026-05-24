@@ -139,6 +139,43 @@ def _append_trade_pnl_filter(sql: str, pnl: str) -> str:
     return sql
 
 
+def _normalize_quality_band(raw_band: str, raw_min: str = "") -> str:
+    """Resolve quality_band; accept legacy ?quality_min= numeric tiers from stale UI."""
+    band = (raw_band or "").strip().lower()
+    if band in ("excellent", "good", "fair", "weak", "poor"):
+        return band
+    legacy = {"80": "excellent", "65": "good", "50": "fair", "35": "weak"}
+    if band in legacy:
+        return legacy[band]
+    qmin = (raw_min or "").strip()
+    return legacy.get(qmin, "")
+
+
+def _parse_history_date_window(
+    from_date_str: str,
+    to_date_str: str,
+    *,
+    days_default: int = 30,
+) -> tuple[str, str]:
+    """Return inclusive YYYY-MM-DD window; invalid input falls back to last N days (IST)."""
+    from_date_str = (from_date_str or "").strip()
+    to_date_str = (to_date_str or "").strip()
+    if from_date_str and to_date_str:
+        try:
+            datetime.strptime(from_date_str, "%Y-%m-%d")
+            datetime.strptime(to_date_str, "%Y-%m-%d")
+            return from_date_str, to_date_str
+        except ValueError:
+            pass
+    to_d = today_ist()
+    from_d = to_d - timedelta(days=days_default)
+    return from_d.strftime("%Y-%m-%d"), to_d.strftime("%Y-%m-%d")
+
+
+# Closed-trade history filters on close date (fallback to executed_on when unset).
+_CLOSED_TRADE_DATE_EXPR = "COALESCE(t.closed_on, t.executed_on)"
+
+
 # ---------------------------------------------------------------------------
 # Job metadata (display only) — order matches the daily pipeline
 # ---------------------------------------------------------------------------
@@ -616,7 +653,10 @@ def create_app() -> Flask:
             filters.append("strategy = ?")
             params.append(strategy_f)
 
-        quality_band = request.args.get("quality_band", "").strip().lower()
+        quality_band = _normalize_quality_band(
+            request.args.get("quality_band", ""),
+            request.args.get("quality_min", ""),
+        )
         where = " AND ".join(filters)
         sql = f"SELECT TOP 300 * FROM options_suggestions WHERE {where} "
         qparams = list(params)
@@ -879,23 +919,18 @@ def create_app() -> Flask:
     @app.route("/api/history/closed-trades")
     @_with_db
     def api_history_closed_trades(db: SQLServerConnection):
-        from_date_str = request.args.get("from_date", "").strip()
-        to_date_str   = request.args.get("to_date", "").strip()
-        if from_date_str and to_date_str:
-            try:
-                since = datetime.strptime(from_date_str, "%Y-%m-%d")
-                until = datetime.strptime(to_date_str,   "%Y-%m-%d") + timedelta(days=1)
-            except ValueError:
-                since = datetime.utcnow() - timedelta(days=30)
-                until = datetime.utcnow() + timedelta(days=1)
-        else:
-            days  = int(request.args.get("days", 30))
-            since = datetime.utcnow() - timedelta(days=days)
-            until = datetime.utcnow() + timedelta(days=1)
+        from_date_str, to_date_str = _parse_history_date_window(
+            request.args.get("from_date", ""),
+            request.args.get("to_date", ""),
+            days_default=int(request.args.get("days", 30)),
+        )
         underlying = request.args.get("underlying", "").strip()
         strategy_f = request.args.get("strategy", "").strip()
         pnl_f      = request.args.get("pnl", "").strip()
-        quality_band = request.args.get("quality_band", "").strip().lower()
+        quality_band = _normalize_quality_band(
+            request.args.get("quality_band", ""),
+            request.args.get("quality_min", ""),
+        )
 
         sql = (
             "SELECT t.trade_id, t.suggestion_id, t.trade_name, t.executed_on, t.closed_on, "
@@ -916,9 +951,10 @@ def create_app() -> Flask:
             "FROM options_trades t "
             "LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
             "WHERE t.status IN ('CLOSED', 'EXPIRED') "
-            "  AND t.executed_on >= ? AND t.executed_on < ? "
+            f"  AND CONVERT(date, {_CLOSED_TRADE_DATE_EXPR}) >= ? "
+            f"  AND CONVERT(date, {_CLOSED_TRADE_DATE_EXPR}) <= ? "
         )
-        params = [since, until]
+        params = [from_date_str, to_date_str]
         if underlying:
             sql += " AND s.underlying = ? "
             params.append(underlying)
@@ -989,10 +1025,11 @@ def create_app() -> Flask:
             "SELECT DISTINCT s.underlying, s.strategy FROM options_trades t "
             "LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
             "WHERE t.status IN ('CLOSED','EXPIRED') "
-            "  AND t.executed_on >= ? AND t.executed_on < ? "
+            f"  AND CONVERT(date, {_CLOSED_TRADE_DATE_EXPR}) >= ? "
+            f"  AND CONVERT(date, {_CLOSED_TRADE_DATE_EXPR}) <= ? "
             "  AND s.underlying IS NOT NULL"
         )
-        facet_rows = db.fetch_all(facet_sql, [since, until])
+        facet_rows = db.fetch_all(facet_sql, [from_date_str, to_date_str])
         underlyings = sorted({u["underlying"] for u in facet_rows if u.get("underlying")})
         strategies = sorted({u["strategy"] for u in facet_rows if u.get("strategy")})
         return jsonify({"trades": out, "underlyings": underlyings, "strategies": strategies, "count": len(out)})

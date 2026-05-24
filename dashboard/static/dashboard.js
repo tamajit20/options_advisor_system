@@ -3585,9 +3585,17 @@ function renderTrade(t) {
 
 // ---------------- Tab 3: History ----------------
 
+function _localDateStr(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function _fillHistSelect(el, values, curVal, blankLabel) {
   if (!el) return;
   const cur = curVal != null ? curVal : el.value;
+  const seen = new Set(values || []);
   el.innerHTML = `<option value="">${escapeHtml(blankLabel)}</option>`;
   (values || []).forEach(v => {
     const o = document.createElement('option');
@@ -3596,6 +3604,14 @@ function _fillHistSelect(el, values, curVal, blankLabel) {
     if (v === cur) o.selected = true;
     el.appendChild(o);
   });
+  // Keep the active filter visible even when facet lists omit it.
+  if (cur && !seen.has(cur)) {
+    const o = document.createElement('option');
+    o.value = cur;
+    o.textContent = cur;
+    o.selected = true;
+    el.appendChild(o);
+  }
 }
 
 function _histFilterSummary(count, noun) {
@@ -3630,8 +3646,8 @@ function loadHistory() {
   const fromEl = $('#hist-from'), toEl = $('#hist-to'), instrEl = $('#hist-instrument');
   const stratEl = $('#hist-strategy'), pnlEl = $('#hist-pnl'), qualEl = $('#hist-quality');
   const summaryEl = $('#hist-summary');
-  if (!fromEl.value) { const d = new Date(); d.setDate(d.getDate()-30); fromEl.value = d.toISOString().slice(0,10); }
-  if (!toEl.value)   { toEl.value = new Date().toISOString().slice(0,10); }
+  if (!fromEl.value) { const d = new Date(); d.setDate(d.getDate()-30); fromEl.value = _localDateStr(d); }
+  if (!toEl.value)   { toEl.value = _localDateStr(); }
 
   const params = new URLSearchParams();
   params.set('from_date', fromEl.value);
@@ -3667,8 +3683,8 @@ async function loadHistorySuggestions() {
   const instrEl = $('#hsug-instrument'), statusEl = $('#hsug-status');
   const stratEl = $('#hsug-strategy'), qualEl = $('#hsug-quality');
   const summaryEl = $('#hsug-summary');
-  if (!fromEl.value) { const d = new Date(); d.setDate(d.getDate()-30); fromEl.value = d.toISOString().slice(0,10); }
-  if (!toEl.value)   { toEl.value = new Date().toISOString().slice(0,10); }
+  if (!fromEl.value) { const d = new Date(); d.setDate(d.getDate()-30); fromEl.value = _localDateStr(d); }
+  if (!toEl.value)   { toEl.value = _localDateStr(); }
 
   const params = new URLSearchParams();
   params.set('from_date', fromEl.value);
@@ -3880,8 +3896,8 @@ async function loadPnlCharts() {
   barEl.className = 'chart-wrap loading'; barEl.textContent = '';
 
   const fromEl = $('#chart-from'), toEl = $('#chart-to');
-  if (!fromEl.value) { const d = new Date(); d.setFullYear(d.getFullYear() - 1); fromEl.value = d.toISOString().slice(0,10); }
-  if (!toEl.value)   { toEl.value = new Date().toISOString().slice(0,10); }
+  if (!fromEl.value) { const d = new Date(); d.setFullYear(d.getFullYear() - 1); fromEl.value = _localDateStr(d); }
+  if (!toEl.value)   { toEl.value = _localDateStr(); }
 
   const qs = new URLSearchParams();
   if (fromEl.value) qs.set('from_date', fromEl.value);
