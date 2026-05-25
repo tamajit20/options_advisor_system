@@ -31,7 +31,16 @@ a { color: var(--accent); text-decoration: none; }
   background: var(--accent); box-shadow: 0 0 8px var(--accent);
 }
 .brand-name { letter-spacing: .3px; }
-.header-actions { display: flex; gap: 8px; }
+.header-center {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0 10px;
+  overflow: hidden;
+}
+.header-actions { display: flex; gap: 8px; flex: 0 0 auto; }
 .icon-btn {
   background: transparent; border: 0; color: white;
   width: 44px; height: 44px; border-radius: 8px; cursor: pointer;
@@ -292,6 +301,57 @@ input:focus, select:focus, textarea:focus {
    icon actions). They flow as a horizontally-scrollable row of compact
    pills so they don't break the header height. Empty container collapses
    to zero width. */
+.index-spot-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding: 2px 0;
+  max-width: 52%;
+}
+.index-spot-strip::-webkit-scrollbar { height: 4px; }
+.index-spot-strip::-webkit-scrollbar-thumb { background: rgba(255,255,255,.25); border-radius: 4px; }
+.index-spot-strip:empty { display: none; }
+
+.idx-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: .78rem;
+  line-height: 1.1;
+  white-space: nowrap;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.22);
+  color: #fff;
+}
+.idx-chip-label { font-weight: 600; opacity: .92; }
+.idx-chip-price { font-weight: 700; font-variant-numeric: tabular-nums; }
+.idx-chip-src {
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  opacity: .85;
+}
+.idx-chip-live .idx-chip-src { color: #86efac; }
+.idx-chip-live .idx-chip-src::before {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin-right: 3px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74,222,128,.8);
+  vertical-align: middle;
+}
+.idx-chip-eod .idx-chip-src { color: rgba(255,255,255,.75); }
+.idx-chip-unavailable { opacity: .55; }
+
 .global-banners {
   display: flex;
   align-items: center;
@@ -356,7 +416,9 @@ input:focus, select:focus, textarea:focus {
    the global container becomes a wrap-row spanning the full header width. */
 @media (max-width: 900px) {
   .app-header { flex-wrap: wrap; row-gap: 6px; }
-  .global-banners { order: 3; flex-basis: 100%; margin: 4px 0 0 0; }
+  .header-center { order: 3; flex-basis: 100%; margin: 4px 0 0 0; flex-wrap: wrap; }
+  .index-spot-strip { max-width: 100%; flex: 1 1 100%; }
+  .global-banners { flex: 1 1 100%; margin: 0; }
 }
 
 /* ---------- Suggestion card legs ---------- */

@@ -549,6 +549,57 @@ async function refreshNotifBadge() {
   } catch { return []; }
 }
 
+// ---------------- Header index spot strip ----------------
+function _fmtIndexPrice(sym, price) {
+  if (price == null || isNaN(price)) return '—';
+  if (sym === 'VIX') return Number(price).toFixed(2);
+  return Number(price).toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function _indexSpotTitle(item) {
+  if (!item) return '';
+  if (item.source === 'live') {
+    return `${item.label} live${item.as_of ? ` · ${item.as_of} IST` : ''}`;
+  }
+  if (item.source === 'eod' && item.trade_date) {
+    return `${item.label} EOD close · ${item.trade_date}`;
+  }
+  return `${item.label} — no price data`;
+}
+
+async function refreshIndexSpotStrip() {
+  const host = document.getElementById('index-spot-strip');
+  if (!host) return;
+  try {
+    const data = await API('/api/indices/spot');
+    const items = data.indices || [];
+    if (!items.length) {
+      host.innerHTML = '';
+      return;
+    }
+    host.innerHTML = items.map(item => {
+      const src = (item.source || '').toLowerCase();
+      const cls = src === 'live' ? 'idx-chip-live'
+        : src === 'eod' ? 'idx-chip-eod'
+        : 'idx-chip-unavailable';
+      const srcLabel = src === 'live' ? 'Live'
+        : src === 'eod' ? 'EOD'
+        : '—';
+      const tip = _indexSpotTitle(item);
+      return `<div class="idx-chip ${cls}" title="${escapeHtml(tip)}">`
+        + `<span class="idx-chip-label">${escapeHtml(item.label || item.symbol || '')}</span>`
+        + `<span class="idx-chip-price">${escapeHtml(_fmtIndexPrice(item.symbol, item.price))}</span>`
+        + `<span class="idx-chip-src">${srcLabel}</span>`
+        + `</div>`;
+    }).join('');
+  } catch {
+    /* keep last rendered values on transient errors */
+  }
+}
+
 // ---------------- Global banners (header strip) ----------------
 // System flags (kill switch / circuit breaker / trade execution) and unread
 // CRITICAL/WARNING notification summaries live in a single #global-banners
@@ -970,6 +1021,11 @@ function renderTradeKvGrid(t, legs) {
   const estPop = t.suggestion && t.suggestion.probability_of_profit != null
                ? t.suggestion.probability_of_profit : null;
   const estDte = t.suggestion && t.suggestion.dte != null ? t.suggestion.dte : null;
+  const dteLeft = t.suggestion && t.suggestion.expiry_date
+    ? dteFromExpiry(t.suggestion.expiry_date) : null;
+  const dteDisplay = estDte != null
+    ? `${estDte}${dteLeft != null ? ` (${dteLeft} left)` : ''}`
+    : (dteLeft != null ? `${dteLeft} left` : null);
   const execWithFills = legs.filter(l => l.executed && l.fill_price != null);
   const estChg = execWithFills.length > 0
     ? estChargesFromLegs(execWithFills)
@@ -989,7 +1045,7 @@ function renderTradeKvGrid(t, legs) {
       <div><span class="k">P&amp;L</span><br><span class="v">\u20b9${fmt(t.net_pnl)}${pctHint(t.net_pnl, t.net_credit_actual, 'credit')}</span></div>
       ${estChg != null ? `<div><span class="k">Est. charges <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(estChg)}</span></div>` : '<div></div>'}
       ${estNetPnl != null ? `<div><span class="k">Est. net P&amp;L</span><br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">\u20b9${fmt(estNetPnl)}</span></div>` : '<div></div>'}
-      ${estDte != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${estDte}</span></div>` : '<div></div>'}
+      ${dteDisplay != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${escapeHtml(String(dteDisplay))}</span></div>` : '<div></div>'}
       <div><span class="k">Status</span><br><span class="v">${escapeHtml(t.status)}</span></div>
       ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}`;
 }
@@ -5068,6 +5124,9 @@ document.getElementById('nf-mark-all')?.addEventListener('click', async () => {
 // Refresh stats (header pill + sidebar badge) on boot and every 60s.
 _nfRefreshStats();
 setInterval(_nfRefreshStats, 60000);
+
+refreshIndexSpotStrip();
+setInterval(refreshIndexSpotStrip, 10000);
 
 loadZerodhaStatus();
 setInterval(loadZerodhaStatus, 60000);

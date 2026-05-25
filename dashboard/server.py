@@ -47,11 +47,12 @@ from database.models import (
     SpotEodRepo,
     SuggestionRepo,
     TradeRepo,
+    VixRepo,
 )
 from engine.exit_pricing import sanitized_close_price
 from lifecycle.resuggestion_engine import generate_resuggestion
 from lifecycle.trade_executor import close_trade_with_fills, mark_executed, supplement_trade
-from utils import now_ist, today_ist
+from utils import market_state_at, now_ist, today_ist
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +175,75 @@ def _parse_history_date_window(
 
 # Closed-trade history filters on close date (fallback to executed_on when unset).
 _CLOSED_TRADE_DATE_EXPR = "COALESCE(t.closed_on, t.executed_on)"
+
+_INDEX_LABELS: Dict[str, str] = {
+    "NIFTY": "Nifty",
+    "BANKNIFTY": "Bank Nifty",
+    "FINNIFTY": "Fin Nifty",
+    "VIX": "India VIX",
+}
+
+
+def _index_ticker_symbols() -> list[str]:
+    """All index symbols shown in the header strip (underlyings + VIX)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for sym in list(STRATEGY_CONFIG.get("underlyings") or []) + ["VIX"]:
+        key = str(sym).strip().upper()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def _load_ws_status_snapshot() -> Optional[dict]:
+    from providers.ws_monitor import default_snapshot_path
+
+    path = default_snapshot_path()
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _latest_live_index_quotes(
+    snap: dict,
+    symbols: set[str],
+) -> dict[str, dict[str, Any]]:
+    """Most recent index tick per symbol from ws_status recent_events."""
+    out: dict[str, dict[str, Any]] = {}
+    for ev in reversed(snap.get("recent_events") or []):
+        if ev.get("option_type"):
+            continue
+        sym = str(ev.get("symbol") or "").upper()
+        if sym not in symbols or sym in out:
+            continue
+        lp = ev.get("last_price")
+        if lp is None:
+            continue
+        out[sym] = {
+            "price": float(lp),
+            "as_of": ev.get("ts"),
+        }
+    return out
+
+
+def _ws_tick_age_seconds(snap: dict, now: datetime) -> Optional[float]:
+    last_tick = snap.get("last_tick_at")
+    if not last_tick:
+        return None
+    try:
+        last_dt = datetime.fromisoformat(str(last_tick))
+    except ValueError:
+        return None
+    if last_dt.tzinfo is not None:
+        from zoneinfo import ZoneInfo
+
+        last_dt = last_dt.astimezone(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+    return (now - last_dt).total_seconds()
 
 
 # ---------------------------------------------------------------------------
@@ -1332,6 +1402,113 @@ def create_app() -> Flask:
         return jsonify({"ok": True, "key": flag_key, "value": payload["value"]})
 
     # ---------- WS Monitor (Phase 2b telemetry surface) ------------------
+    @app.route("/api/indices/spot")
+    @_with_db
+    def api_indices_spot(db: SQLServerConnection):
+        """Header index strip: live Zerodha ticks when fresh, else latest EOD close."""
+        now = now_ist()
+        ms = market_state_at(now)
+        session_open = ms in ("OPEN_VOLATILE", "OPEN_STABLE", "CLOSE_AUCTION")
+        symbols = _index_ticker_symbols()
+        want = set(symbols)
+
+        snap = _load_ws_status_snapshot()
+        live_quotes = _latest_live_index_quotes(snap, want) if snap else {}
+        tick_age = _ws_tick_age_seconds(snap, now) if snap else None
+        ws_connected = bool(
+            snap
+            and snap.get("connection_state") == "connected"
+            and not snap.get("token_expired")
+        )
+        live_fresh = (
+            ws_connected
+            and tick_age is not None
+            and tick_age <= (120.0 if session_open else 1800.0)
+        )
+
+        spot_repo = SpotEodRepo(db)
+        vix_repo = VixRepo(db)
+        indices: list[dict[str, Any]] = []
+
+        for sym in symbols:
+            label = _INDEX_LABELS.get(sym, sym)
+            live = live_quotes.get(sym)
+            use_live = bool(live_fresh and live and live.get("price") is not None)
+
+            if use_live:
+                raw_ts = live.get("as_of")
+                live_as_of = None
+                if raw_ts:
+                    try:
+                        dt = datetime.fromisoformat(str(raw_ts))
+                        if dt.tzinfo is not None:
+                            from zoneinfo import ZoneInfo
+                            dt = dt.astimezone(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+                        live_as_of = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        live_as_of = str(raw_ts)
+                indices.append({
+                    "symbol": sym,
+                    "label": label,
+                    "price": round(float(live["price"]), 2),
+                    "source": "live",
+                    "as_of": live_as_of,
+                    "trade_date": None,
+                })
+                continue
+
+            if sym == "VIX":
+                row = vix_repo.latest()
+                if row:
+                    indices.append({
+                        "symbol": sym,
+                        "label": label,
+                        "price": round(float(row["close_price"]), 2),
+                        "source": "eod",
+                        "as_of": None,
+                        "trade_date": _ist_iso(row.get("trade_date")),
+                    })
+                else:
+                    indices.append({
+                        "symbol": sym,
+                        "label": label,
+                        "price": None,
+                        "source": "unavailable",
+                        "as_of": None,
+                        "trade_date": None,
+                    })
+                continue
+
+            row = spot_repo.latest(sym)
+            if row:
+                indices.append({
+                    "symbol": sym,
+                    "label": label,
+                    "price": round(float(row["close_price"]), 2),
+                    "source": "eod",
+                    "as_of": None,
+                    "trade_date": _ist_iso(row.get("trade_date")),
+                })
+            else:
+                indices.append({
+                    "symbol": sym,
+                    "label": label,
+                    "price": None,
+                    "source": "unavailable",
+                    "as_of": None,
+                    "trade_date": None,
+                })
+
+        any_live = any(i.get("source") == "live" for i in indices)
+        return jsonify({
+            "as_of": _ist_iso(now),
+            "session": ms,
+            "session_open": session_open,
+            "feed": "live" if any_live else "eod",
+            "ws_connected": ws_connected,
+            "indices": indices,
+        })
+
     @app.route("/api/ws/monitor")
     def api_ws_monitor():
         """Read-only telemetry from the WS runner.

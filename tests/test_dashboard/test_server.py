@@ -120,6 +120,54 @@ class TestApiTheme:
         assert isinstance(data, dict)
 
 
+class TestApiIndicesSpot:
+    def test_returns_live_quotes_when_ws_fresh(self, client, mocker):
+        now = datetime(2026, 5, 25, 11, 0, 0)
+        mocker.patch("dashboard.server.now_ist", return_value=now)
+        mocker.patch("dashboard.server._ws_tick_age_seconds", return_value=5.0)
+        mocker.patch("dashboard.server._load_ws_status_snapshot", return_value={
+            "connection_state": "connected",
+            "token_expired": False,
+            "recent_events": [
+                {"symbol": "NIFTY", "last_price": 24031.7, "ts": "2026-05-25T11:00:00"},
+                {"symbol": "BANKNIFTY", "last_price": 55293.65, "ts": "2026-05-25T11:00:00"},
+                {"symbol": "FINNIFTY", "last_price": 26102.15, "ts": "2026-05-25T11:00:00"},
+                {"symbol": "VIX", "last_price": 16.7, "ts": "2026-05-25T11:00:00"},
+            ],
+        })
+        resp = client.get("/api/indices/spot")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["feed"] == "live"
+        syms = {i["symbol"]: i for i in data["indices"]}
+        assert syms["NIFTY"]["source"] == "live"
+        assert syms["NIFTY"]["price"] == 24031.7
+        assert syms["VIX"]["price"] == 16.7
+
+    def test_falls_back_to_eod_when_ws_missing(self, client, mocker):
+        mocker.patch("dashboard.server._load_ws_status_snapshot", return_value=None)
+        mocker.patch(
+            "dashboard.server.SpotEodRepo.latest",
+            side_effect=lambda sym: {
+                "symbol": sym,
+                "close_price": 24000.0,
+                "trade_date": date(2026, 5, 23),
+            },
+        )
+        mocker.patch(
+            "dashboard.server.VixRepo.latest",
+            return_value={"close_price": 15.5, "trade_date": date(2026, 5, 23)},
+        )
+        resp = client.get("/api/indices/spot")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["feed"] == "eod"
+        nifty = next(i for i in data["indices"] if i["symbol"] == "NIFTY")
+        assert nifty["source"] == "eod"
+        assert nifty["price"] == 24000.0
+        assert nifty["trade_date"] == "2026-05-23"
+
+
 class TestApiSuggestionToday:
     def test_empty_suggestions(self, client, mocker):
         mocker.patch("dashboard.server.SuggestionRepo.active_pending", return_value=[])
