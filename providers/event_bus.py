@@ -7,9 +7,8 @@ Tiny in-process pub/sub bus.
 Used by:
     - `providers/zerodha/ws_runner.py` (publisher) — emits `tick` and
       `connection_state` events as ticks arrive over the WebSocket.
-    - `lifecycle/intraday_monitor.py` (subscriber) — consumes ticks and
-      decides whether to fire SL_TRIGGER / PERFECT_ENTRY / PERFECT_CLOSURE
-      notifications (Phase 2b).
+    - `lifecycle/intraday_monitor.py` (subscriber) — PERFECT_ENTRY on pending suggestions.
+    - `lifecycle/live_risk_monitor.py` (subscriber) — whole-trade MTM alerts.
 
 Design:
     - Synchronous dispatch (subscriber callbacks run on the publisher's thread).

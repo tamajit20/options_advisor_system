@@ -370,10 +370,8 @@ def _cmd_ws_runner() -> int:
         events_repo=EventCalendarRepo(db),
     )
 
-    # Phase 2b-iii — instant alerts. Subscribes to TOPIC_TICK and dispatches
-    # SL_TRIGGER / PERFECT_CLOSURE / PERFECT_ENTRY via the notification router
-    # (which itself respects sl_alerts / closure_alerts / opportunity_alerts
-    # runtime flags).
+    # Phase 2b-iii — PERFECT_ENTRY on pending suggestions (open-trade alerts
+    # are handled by LiveRiskMonitor).
     monitor = IntradayMonitor(
         notifier=build_notifier(db, provider="zerodha"),
         snapshot_loader=make_db_snapshot_loader(db),

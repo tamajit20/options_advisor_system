@@ -19,8 +19,9 @@ Category → flag mapping
 -----------------------
 The category is derived from `notif_type`:
 
-    `SL_TRIGGER`        → FLAG_SL_ALERTS
-    `PERFECT_CLOSURE`   → FLAG_CLOSURE_ALERTS
+    `SL_TRIGGER`        → FLAG_SL_ALERTS (spot stop)
+    `SHORT_LEG_STRESS`  → FLAG_SL_ALERTS
+    `TARGET_HIT`        → FLAG_CLOSURE_ALERTS
     `PERFECT_ENTRY`     → FLAG_OPPORTUNITY_ALERTS
     everything else     → no flag (always allowed)
 
@@ -46,10 +47,10 @@ logger = logging.getLogger(__name__)
 # to be dispatched. Keys are uppercase. A missing key means "no gate".
 _TYPE_TO_FLAG = {
     "SL_TRIGGER":             "sl_alerts",
+    "SHORT_LEG_STRESS":       "sl_alerts",
     "LOSS_LIMIT_HIT":         "sl_alerts",
     "PROFIT_FLOOR_HIT":       "sl_alerts",
     "PRE_BREACH_WARNING":     "sl_alerts",
-    "PERFECT_CLOSURE":        "closure_alerts",
     "TARGET_HIT":             "closure_alerts",
     "PERFECT_ENTRY":          "opportunity_alerts",
     "OPPORTUNITY_REGEN_HINT": "opportunity_alerts",

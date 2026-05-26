@@ -19,8 +19,12 @@ uses) and emits a notification when:
   (``effective_sl_rs``).
 * ``SL_TRIGGER`` — underlying spot crosses ``actual_stop_loss_level`` (when
   set). Premium-based loss uses ``LOSS_LIMIT_HIT`` instead.
-* ``TARGET_HIT`` — current PnL >= ``live_target_fraction × max_profit``,
+* ``SHORT_LEG_STRESS`` — a SHORT leg's live LTP has risen above
+  ``fill_price × short_leg_stress_multiplier`` (early per-leg warning).
+  Suppressed when whole-trade MTM is already at or past the pre-breach zone.
+* ``TARGET_HIT`` — current PnL > 0 and >= ``live_target_fraction × max_profit``,
   where ``live_target_fraction`` is interpolated by DTE (tighter at low DTE).
+  Uses the same whole-trade MTM logic as the EOD exit engine.
 
 Alerts are dispatched through the existing ``Notifier`` (which inserts into
 ``options_notifications`` and respects the ``sl_alerts`` /
@@ -119,6 +123,7 @@ class _TradeState:
     last_alert_at: Dict[str, datetime] = field(default_factory=dict)
     in_breach: Dict[str, bool] = field(default_factory=dict)
     pre_breach_alerted_today: bool = False
+    leg_stress_alerted_today: set = field(default_factory=set)  # leg_order ints
     # Phase 3 — #4 trailing SL
     trailing_pnl_floor: Optional[float] = None
     trailing_step_idx: int = 0
@@ -263,6 +268,9 @@ _DEFAULTS = {
     # Phase 3 — #5 tighter pre-breach when there is a HIGH-impact event
     # tomorrow (events_repo provides has_high_impact()).
     "event_eve_pre_breach_fraction": 0.20,
+    # Per-leg short premium blow-up early warning (moved from IntradayMonitor).
+    "short_leg_stress_enabled":     True,
+    "short_leg_stress_multiplier":  2.0,
 }
 
 
@@ -394,6 +402,8 @@ class LiveRiskMonitor:
         self._level_event_persister = level_event_persister
         self._events_repo = events_repo
         self._clock = clock
+        self._short_leg_stress_enabled = bool(cfg["short_leg_stress_enabled"])
+        self._short_leg_stress_mult = float(cfg["short_leg_stress_multiplier"])
 
         self._snapshot = _Snapshot()
         self._lock = threading.RLock()
@@ -494,6 +504,7 @@ class LiveRiskMonitor:
                     new_state.last_alert_at = dict(old.last_alert_at)
                     new_state.in_breach = dict(old.in_breach)
                     new_state.pre_breach_alerted_today = old.pre_breach_alerted_today
+                    new_state.leg_stress_alerted_today = set(old.leg_stress_alerted_today)
                     new_keys = {l.key for l in new_state.legs}
                     new_state.leg_ltps = {
                         k: v for k, v in old.leg_ltps.items() if k in new_keys}
@@ -568,7 +579,7 @@ class LiveRiskMonitor:
                     continue
                 state.leg_ltps[key] = ltp
                 state.leg_last_tick[key] = now
-                alert, mtm, trail, snap = self._evaluate_locked(state, now)
+                alert, mtm, trail, snap = self._evaluate_locked(state, now, tick_key=key)
                 if alert is not None:
                     decisions.append(alert)
                 if mtm is not None:
@@ -690,6 +701,7 @@ class LiveRiskMonitor:
 
     def _evaluate_locked(
         self, state: _TradeState, now: datetime,
+        tick_key: Optional[LegKey] = None,
     ) -> Tuple[
         Optional["_PendingAlert"], Optional[dict],
         Optional[Tuple[str, Optional[float], int]], Optional[dict],
@@ -883,8 +895,23 @@ class LiveRiskMonitor:
                 breach_key="PRE_BREACH",
             ), mtm_payload, trailing_persist, snapshot_payload
 
-        # 3. Target hit (DTE-aware fraction).
+        # 4. Short-leg premium stress (per leg, once/day; not a profit signal).
+        if self._short_leg_stress_enabled and sl_threshold > 0:
+            pre_breach_rs = active_pre_breach * sl_threshold
+            in_loss_territory = (
+                decision.decision == "SL_HIT"
+                or current_pnl <= -pre_breach_rs
+            )
+            if not in_loss_territory:
+                stress = self._short_leg_stress_alert(
+                    state, now, current_pnl, tick_key=tick_key,
+                )
+                if stress is not None:
+                    return stress, mtm_payload, trailing_persist, snapshot_payload
+
+        # 5. Target hit (DTE-aware fraction; whole-trade MTM must be positive).
         if (decision.decision == "TAKE_PROFIT"
+                and current_pnl > 0
                 and state.max_profit > 0
                 and current_pnl >= target_fraction * state.max_profit):
             return self._maybe_alert(
@@ -898,7 +925,7 @@ class LiveRiskMonitor:
                 threshold_rs=target_rs,
             ), mtm_payload, trailing_persist, snapshot_payload
 
-        # 4. Not in breach — clear so cooldown resets on re-entry.
+        # 6. Not in breach — clear so cooldown resets on re-entry.
         if decision.decision != "SL_HIT":
             self._clear_level_breach(
                 state, "LOSS_LIMIT", now, current_pnl, sl_threshold)
@@ -912,6 +939,41 @@ class LiveRiskMonitor:
         if trailing_lock_alert is not None:
             return trailing_lock_alert, mtm_payload, trailing_persist, snapshot_payload
         return None, mtm_payload, trailing_persist, snapshot_payload
+
+    def _short_leg_stress_alert(
+        self, state: _TradeState, now: datetime, current_pnl: float,
+        *, tick_key: Optional[LegKey] = None,
+    ) -> Optional["_PendingAlert"]:
+        """Fire once per short leg per IST day when premium blows up."""
+        for leg in state.legs:
+            if tick_key is not None and leg.key != tick_key:
+                continue
+            if leg.action != "SELL" or leg.fill_price <= 0:
+                continue
+            if leg.leg_order in state.leg_stress_alerted_today:
+                continue
+            ltp = state.leg_ltps.get(leg.key)
+            if ltp is None:
+                continue
+            threshold = leg.fill_price * self._short_leg_stress_mult
+            if ltp < threshold:
+                continue
+            state.leg_stress_alerted_today.add(leg.leg_order)
+            reason = (
+                f"Short leg {leg.leg_order} ({leg.strike:g} {leg.option_type}) "
+                f"now ₹{ltp:.2f} (entry ₹{leg.fill_price:.2f} × "
+                f"{self._short_leg_stress_mult:g}× = ₹{threshold:.2f}). "
+                f"Whole-trade MTM ₹{current_pnl:,.0f} — review whether to exit."
+            )
+            return _PendingAlert(
+                state=state,
+                notif_type="SHORT_LEG_STRESS",
+                severity="WARNING",
+                title=f"Short leg stress on {state.trade_name}",
+                body=self._format_pnl_body(state, current_pnl, reason),
+                breach_key=f"LEG_STRESS_{leg.leg_order}",
+            )
+        return None
 
     def _maybe_alert(
         self, state: _TradeState, notif_type: str, severity: str,
@@ -1121,6 +1183,7 @@ class LiveRiskMonitor:
         self._current_day = today
         for state in self._snapshot.trades.values():
             state.pre_breach_alerted_today = False
+            state.leg_stress_alerted_today.clear()
 
     def _write_mtm_state(self, payload: dict) -> None:
         """Write per-trade MTM to a shared file so the Flask dashboard

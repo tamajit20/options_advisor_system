@@ -884,6 +884,19 @@ function _computeTradeActionInstruction(opts) {
       cta: 'Use Close Trade below to exit.',
     };
   }
+  if (rn === 'SHORT_LEG_STRESS') {
+    return {
+      tone: 'warn',
+      verb: 'REVIEW',
+      title: 'Short leg under stress',
+      instruction: 'A short leg premium has risen to 2× entry or more. Check whole-trade MTM — '
+        + 'this is an early risk warning, not a take-profit signal.',
+      why: liveMtm != null
+        ? `Live MTM ${_fmtMtmSigned(liveMtm)} · one short leg is blowing up`
+        : 'Short-leg stress alert is active.',
+      cta: 'Review MTM and decide whether to reduce or exit.',
+    };
+  }
   if (floorBreach || rn === 'PROFIT_FLOOR_HIT') {
     return {
       tone: 'warn',
@@ -3531,6 +3544,7 @@ function renderTrade(t) {
             ra.notif_type === 'PROFIT_FLOOR_HIT'   ? 'tag tag-warn' :
             ra.notif_type === 'LOSS_LIMIT_HIT'     ? 'tag tag-err'  :
             ra.notif_type === 'SL_TRIGGER'         ? 'tag tag-err'  :
+            ra.notif_type === 'SHORT_LEG_STRESS'   ? 'tag tag-warn' :
             ra.notif_type === 'PRE_BREACH_WARNING' ? 'tag tag-warn' : 'tag';
           const icon =
             ra.notif_type === 'TARGET_HIT'         ? '\u2705 '  :
@@ -3539,6 +3553,7 @@ function renderTrade(t) {
             ra.notif_type === 'PROFIT_FLOOR_HIT'   ? '\u26a0\ufe0f ' :
             ra.notif_type === 'LOSS_LIMIT_HIT'     ? '\ud83d\uded1 ' :
             ra.notif_type === 'SL_TRIGGER'         ? '\ud83d\uded1 ' :
+            ra.notif_type === 'SHORT_LEG_STRESS'   ? '\u26a0\ufe0f ' :
             ra.notif_type === 'PRE_BREACH_WARNING' ? '\u26a0\ufe0f ' : '';
           const tip = (ra.title || ra.notif_type) +
                       (ra.body ? ` — ${ra.body}` : '');
@@ -4855,7 +4870,7 @@ const _NF_CAT_LABELS = {
 
 const _NF_TYPE_CAT = {
   SL_TRIGGER: 'sl', SL_HIT: 'sl', PRE_BREACH_WARNING: 'sl',
-  LOSS_LIMIT_HIT: 'sl', PROFIT_FLOOR_HIT: 'sl',
+  LOSS_LIMIT_HIT: 'sl', PROFIT_FLOOR_HIT: 'sl', SHORT_LEG_STRESS: 'sl',
   TARGET_HIT: 'profit', TAKE_PROFIT: 'profit', TARGET_LOCKED: 'profit',
   PROFIT_FLOOR_SET: 'profit',
   EXIT_TOMORROW: 'exit', TIME_DECAY_DONE: 'exit', EXPIRE: 'exit', AUTO_SETTLED: 'exit',

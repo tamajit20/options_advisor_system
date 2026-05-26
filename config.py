@@ -579,18 +579,19 @@ STRATEGY_CONFIG = {
         "JADE_LIZARD",
     ],
 
-    # Phase 2b-iii — intraday WS-driven SL alert
-    # Per-leg "short premium doubled" rule used by lifecycle/intraday_monitor.
-    # When a SHORT leg's live LTP rises above fill_price * intraday_sl_multiplier
-    # we fire a CRITICAL SL_TRIGGER notification (once per leg per day).
+    # Phase 2b-iii — per-leg short premium blow-up (lifecycle/live_risk_monitor).
+    # When a SHORT leg's live LTP rises above fill_price * multiplier we fire
+    # SHORT_LEG_STRESS (once per leg per IST day). Suppressed when whole-trade
+    # MTM is already in the pre-breach / loss zone.
     "intraday_sl_multiplier": 2.0,
 
     # Live trade-level risk monitor (lifecycle/live_risk_monitor.py)
     # On every WS tick that updates a leg of an ACTIVE trade we recompute the
     # whole-trade MTM via engine.exit_engine.evaluate_exit() and emit:
     #   * LOSS_LIMIT_HIT — when current_pnl <= -effective_sl_rs(strategy, max_loss)
+    #   * SHORT_LEG_STRESS — short leg premium >= intraday_sl_multiplier × entry
     #   * PROFIT_FLOOR_SET / PROFIT_FLOOR_HIT — trailing profit-lock steps
-    #   * TARGET_HIT  — when current_pnl >= live_target_fraction * max_profit
+    #   * TARGET_HIT  — when current_pnl > 0 and >= live_target_fraction × max_profit
     # Stricter than EOD take-profit (0.5) because intraday wiggle can briefly
     # cross 0.5 and reverse; 0.7 leaves room before alerting the user.
     # Re-fires every cooldown_minutes while the trade remains in breach so
@@ -624,6 +625,8 @@ STRATEGY_CONFIG = {
         # `actual_stop_loss_level` for an ACTIVE trade, fire SL_TRIGGER.
         # Independent of premium-based SL (loss >= stop_loss_fraction × max_loss).
         "spot_sl_enabled": True,
+        "short_leg_stress_enabled": True,
+        "short_leg_stress_multiplier": 2.0,
         # Optional dashboard URL prefix for action links in alerts.
         # When set, notification body will include
         # `<dashboard_url>/#/trade/<trade_id>`. Leave None / empty to disable.

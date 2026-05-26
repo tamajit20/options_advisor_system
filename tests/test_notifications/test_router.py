@@ -128,11 +128,11 @@ def test_sl_alerts_off_suppresses_dispatch_but_persists():
     assert ch.sent == []              # but dispatch suppressed
 
 
-def test_closure_alerts_off_suppresses_perfect_closure():
+def test_closure_alerts_off_suppresses_target_hit():
     ch = _CapturingChannel()
     flags = _FlagsStub(closure_alerts=False)
     Notifier(_StubRepo(), [ch], flag_repo=flags).notify(
-        "PERFECT_CLOSURE", "INFO", "leg done"
+        "TARGET_HIT", "INFO", "target reached"
     )
     assert ch.sent == []
 

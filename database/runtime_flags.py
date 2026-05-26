@@ -25,8 +25,8 @@ Flag inventory
 - `kill_switch`            (bool, default False) — master OFF for live data.
                                                    When True, the WS subscription
                                                    manager unsubscribes everything.
-- `sl_alerts`              (bool, default True)  — emit SL_TRIGGER notifications.
-- `closure_alerts`         (bool, default True)  — emit PERFECT_CLOSURE notifications.
+- `sl_alerts`              (bool, default True)  — emit loss-limit, spot-SL, pre-breach, short-leg stress.
+- `closure_alerts`         (bool, default True)  — emit TARGET_HIT (whole-trade take-profit).
 - `opportunity_alerts`     (bool, default True)  — emit PERFECT_ENTRY notifications.
 - `trade_execution_enabled`(bool, default False) — placeholder; we do not place
                                                    orders today, but the flag is
@@ -89,13 +89,13 @@ DEFAULT_FLAGS: List[_FlagSpec] = [
         key=FLAG_SL_ALERTS,
         default="true",
         type="bool",
-        description="Emit SL_TRIGGER notifications when a short premium breaches the SL multiplier.",
+        description="Emit loss-limit, spot-SL, pre-breach, and short-leg stress notifications.",
     ),
     _FlagSpec(
         key=FLAG_CLOSURE_ALERTS,
         default="true",
         type="bool",
-        description="Emit PERFECT_CLOSURE notifications when a leg reaches its target close.",
+        description="Emit TARGET_HIT notifications when whole-trade MTM reaches the live profit target.",
     ),
     _FlagSpec(
         key=FLAG_OPPORTUNITY_ALERTS,

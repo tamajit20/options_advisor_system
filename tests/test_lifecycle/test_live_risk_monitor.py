@@ -343,7 +343,8 @@ class TestCooldownResetsOnRecovery:
                     "cooldown_minutes": 60, "reload_interval_sec": 9999,
                     "session_start": "09:15", "session_end": "15:30",
                     "pre_breach_fraction": 0.99,
-                    "stale_leg_seconds": 9999},
+                    "stale_leg_seconds": 9999,
+                    "trailing_sl_steps": []},
             clock=lambda: clock["now"],
         )
         monitor._snapshot = snap
@@ -884,4 +885,81 @@ class TestLevelEventLog:
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 280.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 280.0))
         assert sum(1 for e in events if e["event_type"] == "ENTER") == 2
+
+
+def _make_bput_state():
+    """TRD-20260520-001-style bear put spread (debit)."""
+    expiry = date(2026, 6, 2)
+    legs = [
+        _LegRef(
+            leg_order=1, action="BUY", strike=23650.0, option_type="PE",
+            fill_price=267.0, lots=1, lot_size=75,
+            key=("NIFTY", expiry, 23650.0, "PE"),
+        ),
+        _LegRef(
+            leg_order=2, action="SELL", strike=23300.0, option_type="PE",
+            fill_price=150.0, lots=1, lot_size=75,
+            key=("NIFTY", expiry, 23300.0, "PE"),
+        ),
+    ]
+    return _TradeState(
+        trade_id="TRD-BPUT", trade_name="NIFTY-BPUT-JUN1-26",
+        strategy="BEAR_PUT_SPREAD", underlying="NIFTY", expiry=expiry,
+        entry_net_credit=-8775.0,
+        max_profit=17036.25, max_loss=9213.75,
+        sl_level=None, legs=legs,
+    )
+
+
+class TestUnifiedProfitAndLegStress:
+    def test_bput_short_cheap_does_not_fire_target_when_mtm_negative(self):
+        state = _make_bput_state()
+        monitor, notifier, bus = _build_monitor(
+            state, target_fraction=0.50, clock_at=datetime(2026, 5, 25, 14, 0),
+        )
+        cfg = monitor._short_leg_stress_enabled
+        assert cfg is True
+        # Short collapsed but long also down → net loss ~ -5925.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23650.0, "PE", 58.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23300.0, "PE", 20.0))
+        for call in notifier.notify.call_args_list:
+            assert call.kwargs.get("notif_type") != "TARGET_HIT"
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "PERFECT_CLOSURE" not in types
+
+    def test_short_leg_stress_fires_when_premium_doubles(self):
+        state = _make_state()
+        monitor, notifier, bus = _build_monitor(
+            state, clock_at=datetime(2026, 5, 5, 11, 0),
+        )
+        # CE at 2× entry; PE still cheap — MTM still above pre-breach zone.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 65.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 200.0))
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "SHORT_LEG_STRESS" in types
+        assert "LOSS_LIMIT_HIT" not in types
+
+    def test_short_leg_stress_suppressed_in_loss_territory(self):
+        state = _make_state(max_loss=10000.0)
+        monitor, notifier, bus = _build_monitor(
+            state,
+            clock_at=datetime(2026, 5, 5, 11, 0),
+        )
+        monitor._pre_breach_fraction = 0.30
+        # Both legs explode → deep loss; should get LOSS_LIMIT not leg stress.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 250.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 250.0))
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "LOSS_LIMIT_HIT" in types
+        assert "SHORT_LEG_STRESS" not in types
+
+    def test_target_requires_positive_mtm(self):
+        state = _make_bput_state()
+        monitor, notifier, bus = _build_monitor(
+            state, target_fraction=0.01, clock_at=datetime(2026, 5, 25, 14, 0),
+        )
+        bus.publish("tick", _q("NIFTY", state.expiry, 23650.0, "PE", 58.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23300.0, "PE", 20.0))
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "TARGET_HIT" not in types
 
