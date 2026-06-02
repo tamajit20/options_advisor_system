@@ -491,9 +491,9 @@ _TABLE_DDL: List[str] = [
 
     # ---------------- Intraday close snapshot (Phase 2b.1) ----------------
     # Captured at 15:35 IST — 5 minutes after equity F&O market close — by
-    # reading live LTP for every leg of every ACTIVE trade. The 19:35 IST
+    # reading live LTP for every leg of every ACTIVE trade. The 20:35 IST
     # drift verifier compares each row to the corresponding settled close
-    # in `options_fo_eod` (loaded by the 18:30 fo_bhav_download job) and
+    # in `options_fo_eod` (loaded by the 19:30 fo_bhav_download job) and
     # fires a WARNING notification if any leg has drifted by more than
     # `STRATEGY_CONFIG["intraday_close_drift_pct"]` (default 5%).
     #

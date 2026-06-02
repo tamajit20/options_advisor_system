@@ -811,7 +811,9 @@ class SuggestionRepo:
                      15:30, so we keep showing them until the close.
           EXECUTED — always shown for entry_date >= today so the user can see
                      what trade was placed, regardless of the time of day.
-          IGNORED  — never shown (superseded; a fresh PENDING row exists instead).
+          IGNORED  — shown for entry_date >= today so the UI can explain why
+                     execution is blocked (retired / stale). When a fresh PENDING
+                     row exists, both may appear; the IGNORED card is read-only.
 
         Fallback: legacy rows without entry_date are shown for up to 1 calendar day.
         """
@@ -819,7 +821,9 @@ class SuggestionRepo:
         now = now_ist()
         today = now.date()
         from datetime import time as _time
-        visible_until = _time(19, 0)  # 7pm IST
+        # Keep same-day PENDING visible until after the EOD suggestion_engine run
+        # (20:30 IST) plus a review buffer — see SCHEDULER_CONFIG.
+        visible_until = _time(21, 30)
 
         if now.time() <= visible_until:
             # Still within visibility window: show PENDING and EXECUTED for today and future.
@@ -839,6 +843,21 @@ class SuggestionRepo:
                 "ORDER BY generated_on DESC",
                 [today, today],
             )
+
+        # Surface today's retired rows so the Suggestions tab does not go blank
+        # when the only actionable suggestion was auto-ignored (validator / regen).
+        seen = {r["suggestion_id"] for r in rows}
+        ignored_rows = self.db.fetch_all(
+            "SELECT TOP (10) * FROM options_suggestions "
+            "WHERE status = 'IGNORED' AND entry_date >= ? "
+            "ORDER BY generated_on DESC",
+            [today],
+        )
+        for r in ignored_rows:
+            sid = r.get("suggestion_id")
+            if sid and sid not in seen:
+                rows.append(r)
+                seen.add(sid)
 
         # Fallback for legacy rows without entry_date: only show if generated
         # within the last 1 calendar day — anything older is definitively stale
@@ -1500,7 +1519,7 @@ class NotificationRepo:
 # ---------------------------------------------------------------------------
 class IntradayCloseSnapshotRepo:
     """Persistence layer for the 15:35 IST live-LTP capture used by the
-    19:35 EOD-vs-live drift verifier. See `lifecycle/snapshot_orchestrator.py`.
+    20:35 EOD-vs-live drift verifier. See `lifecycle/snapshot_orchestrator.py`.
 
     Rows are unique on `(snapshot_date, trade_id, leg_order)` so a re-run
     of the 15:35 job (or a manual trigger) cleanly replaces the day's

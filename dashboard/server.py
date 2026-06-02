@@ -37,6 +37,7 @@ def _ist_iso(dt) -> str | None:
 
 from config import DASHBOARD_CONFIG, STRATEGY_CONFIG, SCHEDULER_CONFIG
 from contracts import TradeLegFill
+from engine.execution_validator import validate_execution
 from database.connection import SQLServerConnection
 from database.log_repo import JobLogRepo, LogRepo
 from database.models import (
@@ -99,6 +100,70 @@ def _row(d: Dict[str, Any]) -> Dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+_CONFIDENCE_LEGACY_TOTAL = 7
+_CONFIDENCE_EXPANDED_TOTAL = 14
+
+
+def _confidence_counts(row: Dict[str, Any]) -> Optional[tuple[int, int]]:
+    """Return (passed, total) confidence checks for a suggestion row."""
+    cond = row.get("conditions_json")
+    if cond:
+        try:
+            parsed = json.loads(cond) if isinstance(cond, str) else cond
+            if isinstance(parsed, list) and parsed:
+                fails = sum(
+                    1 for c in parsed
+                    if c.get("status") in ("FAIL", "SOFT_FAIL")
+                )
+                total = len(parsed)
+                return total - fails, total
+        except (json.JSONDecodeError, TypeError):
+            pass
+    score = row.get("confidence_score")
+    if score is None:
+        return None
+    passed = int(score)
+    total = (
+        _CONFIDENCE_LEGACY_TOTAL
+        if passed <= _CONFIDENCE_LEGACY_TOTAL
+        else max(_CONFIDENCE_EXPANDED_TOTAL, passed)
+    )
+    return passed, total
+
+
+def _confidence_display(row: Dict[str, Any]) -> Optional[str]:
+    counts = _confidence_counts(row)
+    if not counts:
+        return None
+    passed, total = counts
+    return f"{passed}/{total}"
+
+
+def _execution_gate_label(gate, row: Dict[str, Any]) -> Optional[str]:
+    """Short UI badge for a blocked suggestion card."""
+    if gate.ok:
+        return None
+    status = (row.get("status") or "").upper()
+    if status == "IGNORED":
+        return "Retired"
+    if status == "EXECUTED":
+        return "Executed"
+    vstatus = (row.get("validator_status") or "").upper()
+    if vstatus == "STALE_0935":
+        return "Stale at open"
+    for v in gate.vetoes:
+        vl = v.lower()
+        if "generated" in vl and "ago" in vl:
+            return "Stale"
+        if "strike too close" in vl:
+            return "Strike too close"
+        if "circuit breaker" in vl:
+            return "Circuit breaker"
+    if status != "PENDING":
+        return status.title()
+    return "Cannot execute"
 
 
 def _append_quality_band_filter(
@@ -262,14 +327,8 @@ _JOB_META: Dict[str, Dict[str, str]] = {
                             "description": "Computes IV / IV-rank / IV-percentile from F&O + spot data."},
     "suggestion_engine":  {"icon": "💡", "name": "Suggestion Engine",
                             "description": "Generates today's options trade suggestion across all enabled strategies."},
-    "live_suggestion_engine":      {"icon": "💡", "name": "Live Suggestion Engine 1100",
-                            "description": "Re-runs the suggestion engine at 11:00 IST against the live Zerodha chain."},
-    "live_suggestion_engine_0945": {"icon": "💡", "name": "Live Suggestion Engine 0945",
-                            "description": "Early-session live re-run shortly after open."},
-    "live_suggestion_engine_1300": {"icon": "💡", "name": "Live Suggestion Engine 1300",
-                            "description": "Midday live re-run with a mature WS slope window."},
-    "live_suggestion_engine_1430": {"icon": "💡", "name": "Live Suggestion Engine 1430",
-                            "description": "Late-session live re-run with the full intraday context."},
+    "live_suggestion_engine": {"icon": "💡", "name": "Live Suggestion Engine",
+                            "description": "Re-runs the suggestion engine against the live Zerodha chain at 09:45, 11:00, 13:00, and 14:30 IST (Mon–Fri)."},
     "simulation_update":  {"icon": "🎯", "name": "Simulation Update",
                             "description": "Updates daily P/L simulation for past suggestions."},
     "exit_engine":        {"icon": "🚪", "name": "Exit Engine",
@@ -286,6 +345,37 @@ def _summarize_cron(cfg: Dict[str, Any]) -> str:
     """Render a SCHEDULER_CONFIG entry as a human-readable schedule string."""
     if not cfg:
         return ""
+    schedules = cfg.get("schedules")
+    if schedules:
+        slots = [
+            s for s in schedules
+            if s.get("enabled", True) and s.get("hour") is not None and s.get("minute") is not None
+        ]
+        if not slots:
+            return "—"
+        times = ", ".join(
+            f"{int(s['hour']):02d}:{int(s['minute']):02d}" for s in slots
+        )
+        dows = {str(s.get("day_of_week") or "").strip().lower() for s in slots}
+        if len(dows) == 1 and dows != {""}:
+            raw = next(iter(dows))
+            days = ", ".join(
+                _DOW_LABELS.get(d.strip().lower(), d) for d in raw.split(",")
+            )
+            return f"{days} @ {times} IST"
+        parts = []
+        for s in slots:
+            h, m = int(s["hour"]), int(s["minute"])
+            dow = s.get("day_of_week")
+            t = f"{h:02d}:{m:02d}"
+            if dow:
+                days = ", ".join(
+                    _DOW_LABELS.get(d.strip().lower(), d) for d in str(dow).split(",")
+                )
+                parts.append(f"{days} {t}")
+            else:
+                parts.append(t)
+        return "; ".join(parts) + " IST"
     h = cfg.get("hour")
     m = cfg.get("minute")
     dow = cfg.get("day_of_week")
@@ -296,6 +386,17 @@ def _summarize_cron(cfg: Dict[str, Any]) -> str:
         days = ", ".join(_DOW_LABELS.get(d.strip().lower(), d) for d in str(dow).split(","))
         return f"{days} @ {time_part}".strip(" @")
     return f"Daily @ {time_part}" if time_part else "—"
+
+
+def _next_run_for_job(sch, job_name: str):
+    """Earliest next_run_time across all APScheduler triggers for this logical job."""
+    candidates = []
+    for aps_job in sch.get_jobs():
+        jid = aps_job.id or ""
+        if jid == job_name or jid.startswith(f"{job_name}@"):
+            if aps_job.next_run_time:
+                candidates.append(aps_job.next_run_time)
+    return min(candidates) if candidates else None
 
 
 # ---------------------------------------------------------------------------
@@ -409,8 +510,8 @@ def create_app() -> Flask:
         sug = SuggestionRepo(db)
         # Return suggestions whose execution window hasn't closed yet:
         #   - entry_date > today: execute in the future (e.g. Friday→Monday)
-        #   - entry_date = today AND time ≤ 15:30 IST: still actionable today
-        # After 15:30 on the entry day the suggestion disappears automatically.
+        #   - entry_date = today: shown until 21:30 IST (see active_pending)
+        # After that, same-day PENDING is hidden; next-day EOD rows still show.
         # Falls back to legacy PENDING rows that pre-date the entry_date column.
         rows = sug.active_pending()
         # Phase 3 — #2: surface staleness so the UI can grey out / badge rows
@@ -420,15 +521,32 @@ def create_app() -> Flask:
             STRATEGY_CONFIG.get("suggestion_freshness_minutes", 30)
         )
         now = _now()
+        cb_active = False
+        try:
+            from database.runtime_flags import (
+                FLAG_CIRCUIT_BREAKER_ACTIVE,
+                RuntimeFlagsRepo,
+            )
+            cb_active = RuntimeFlagsRepo(db, cache_ttl_seconds=0).get_bool(
+                FLAG_CIRCUIT_BREAKER_ACTIVE, default=False,
+            )
+        except Exception:
+            pass
         out = []
         for r in rows:
             r_out = _row(r)
             if "net_credit_suggested" in r_out:
                 r_out["net_credit"] = r_out.pop("net_credit_suggested")
-            r_out["legs"] = [_row(l) for l in sug.legs(r["suggestion_id"])]
+            legs_out = [_row(l) for l in sug.legs(r["suggestion_id"])]
+            r_out["legs"] = legs_out
             # Add data_as_of from provenance if available
-            prov = db.fetch_one("SELECT data_as_of FROM options_suggestions WHERE suggestion_id = ?", [r["suggestion_id"]])
-            r_out["data_as_of"] = prov["data_as_of"] if prov and prov.get("data_as_of") else None
+            prov = db.fetch_one(
+                "SELECT data_as_of FROM options_suggestions WHERE suggestion_id = ?",
+                [r["suggestion_id"]],
+            )
+            r_out["data_as_of"] = (
+                prov["data_as_of"] if prov and prov.get("data_as_of") else None
+            )
             gen_on = r.get("generated_on")
             if isinstance(gen_on, datetime) and fresh_min > 0:
                 age_min = (now - gen_on).total_seconds() / 60.0
@@ -437,6 +555,17 @@ def create_app() -> Flask:
             else:
                 r_out["age_minutes"] = None
                 r_out["is_stale"] = False
+
+            gate = validate_execution(
+                r, legs_out, now=now, circuit_breaker_active=cb_active,
+            )
+            r_out["execution_gate"] = {
+                "ok": gate.ok,
+                "vetoes": list(gate.vetoes),
+                "warnings": list(gate.warnings),
+                "reason": gate.reason(),
+                "label": _execution_gate_label(gate, r),
+            }
             out.append(r_out)
         return jsonify({"suggestions": out, "freshness_minutes": fresh_min})
 
@@ -732,6 +861,11 @@ def create_app() -> Flask:
         qparams = list(params)
         sql = _append_quality_band_filter(sql, qparams, quality_band)
         rows = db.fetch_all(sql + " ORDER BY generated_on DESC", qparams)
+        suggestions = []
+        for r in rows:
+            r_out = _row(r)
+            r_out["confidence_display"] = _confidence_display(r)
+            suggestions.append(r_out)
         # Facet lists for the date window (ignore outcome/quality filters)
         facet_filters: list[str] = [
             "CONVERT(date, generated_on) >= ?",
@@ -751,10 +885,10 @@ def create_app() -> Flask:
         underlyings = sorted({r["underlying"] for r in facet_rows if r.get("underlying")})
         strategies = sorted({r["strategy"] for r in facet_rows if r.get("strategy")})
         return jsonify({
-            "suggestions": [_row(r) for r in rows],
+            "suggestions": suggestions,
             "underlyings": underlyings,
             "strategies": strategies,
-            "count": len(rows),
+            "count": len(suggestions),
         })
 
     @app.route("/api/history/trades")
@@ -1274,12 +1408,10 @@ def create_app() -> Flask:
             cfg = cfg_jobs.get(name, {}) or {}
             meta = _JOB_META.get(name, {})
 
-            # Next scheduled run from APScheduler
+            # Next scheduled run from APScheduler (earliest of multi-trigger jobs)
             next_run = None
             if sch_running:
-                aps_job = sch.get_job(name)
-                if aps_job and aps_job.next_run_time:
-                    next_run = aps_job.next_run_time
+                next_run = _next_run_for_job(sch, name)
 
             # Determine display status
             row = latest_rows.get(name) or {}

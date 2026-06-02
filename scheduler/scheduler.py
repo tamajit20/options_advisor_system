@@ -362,10 +362,23 @@ def job_iv():         _run_job("iv_calculation",     run_iv_calculation,
                                requires=["fo_bhav_download", "spot_bhav_download"])
 def job_suggestion(): _run_job("suggestion_engine",  run_suggestion_engine,
                                requires=["iv_calculation"])
-def job_live_suggestion(): _run_job("live_suggestion_engine", run_live_suggestion_engine)
-def job_live_suggestion_0945(): _run_job("live_suggestion_engine_0945", run_live_suggestion_engine)
-def job_live_suggestion_1300(): _run_job("live_suggestion_engine_1300", run_live_suggestion_engine)
-def job_live_suggestion_1430(): _run_job("live_suggestion_engine_1430", run_live_suggestion_engine)
+def _live_suggestion_window_job(window_suffix: str):
+    """One APScheduler trigger; logs under live_suggestion_engine with HHMM suffix."""
+
+    def _fn() -> None:
+        _run_job(
+            "live_suggestion_engine",
+            run_live_suggestion_engine,
+            job_id_suffix=window_suffix,
+        )
+
+    _fn.__name__ = f"job_live_suggestion_{window_suffix}"
+    return _fn
+
+
+def job_live_suggestion() -> None:
+    """Manual / default run (no window suffix)."""
+    _run_job("live_suggestion_engine", run_live_suggestion_engine)
 def job_simulation(): _run_job("simulation_update",  run_simulation_update)
 def job_exit():       _run_job("exit_engine",        run_exit_engine,
                                requires=["fo_bhav_download"])
@@ -431,14 +444,7 @@ JOB_FUNCS = {
     "fii_download":       job_fii,
     "iv_calculation":     job_iv,
     "suggestion_engine":       job_suggestion,
-    "live_suggestion_engine":  job_live_suggestion,
-    # Phase 3 — #1: extra intraday windows. Each maps to its own thin
-    # wrapper so the DB job-log row uses a distinct job_name; otherwise
-    # all four cards on the dashboard share the same row and the latest
-    # run of any window appears under every card.
-    "live_suggestion_engine_0945": job_live_suggestion_0945,
-    "live_suggestion_engine_1300": job_live_suggestion_1300,
-    "live_suggestion_engine_1430": job_live_suggestion_1430,
+    "live_suggestion_engine": job_live_suggestion,
     "simulation_update":       job_simulation,
     "exit_engine":        job_exit,
     "trade_greeks_update": job_trade_greeks,
@@ -451,12 +457,48 @@ JOB_FUNCS = {
 }
 
 
+def _schedule_window_suffix(trigger_kwargs: dict) -> str:
+    return f"{int(trigger_kwargs['hour']):02d}{int(trigger_kwargs['minute']):02d}"
+
+
 def build_scheduler() -> BackgroundScheduler:
     sch = BackgroundScheduler(timezone=SCHEDULER_CONFIG["timezone"])
     jobs = SCHEDULER_CONFIG["jobs"]
     for name, conf in jobs.items():
         if not conf.get("enabled", True):
             continue
+
+        schedules = conf.get("schedules")
+        if schedules:
+            fn = JOB_FUNCS.get(name)
+            if fn is None:
+                logger.warning("No handler for scheduled job %s", name)
+                continue
+            for slot in schedules:
+                if not slot.get("enabled", True):
+                    continue
+                trigger_kwargs = {
+                    k: v for k, v in slot.items() if k != "enabled"
+                }
+                win = _schedule_window_suffix(trigger_kwargs)
+                trigger_id = f"{name}@{win}"
+                slot_fn = (
+                    _live_suggestion_window_job(win)
+                    if name == "live_suggestion_engine"
+                    else fn
+                )
+                sch.add_job(
+                    slot_fn,
+                    CronTrigger(**trigger_kwargs),
+                    id=trigger_id,
+                    name=name,
+                    misfire_grace_time=600,
+                    max_instances=1,
+                    replace_existing=True,
+                )
+                logger.info("Scheduled %s (%s) @ %s", name, trigger_id, trigger_kwargs)
+            continue
+
         fn = JOB_FUNCS.get(name)
         if fn is None:
             logger.warning("No handler for scheduled job %s", name)

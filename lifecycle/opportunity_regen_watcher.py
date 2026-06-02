@@ -7,7 +7,7 @@ Phase 2 — opportunity-regeneration hint on tick.
 Runs alongside `IntradayMonitor` inside the WebSocket runner process. Watches
 for material intraday changes that mean *today's morning suggestions* may no
 longer be the best trade — without actually re-running the suggestion engine
-(that needs settled EOD data + IV computation, which only land at 18:30+).
+(that needs settled EOD data + IV computation, which only land at 19:30+).
 
 Each tick is checked against the day's first observation for that symbol.
 A single `OPPORTUNITY_REGEN_HINT` notification fires per (trigger, symbol)

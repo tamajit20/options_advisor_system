@@ -119,7 +119,7 @@ def get_eod_provider() -> MarketDataProvider:
     """Return the NSE EOD provider directly.
 
     Use this when you need strictly settled, historical data (e.g. IV-rank,
-    indicator backfills, the 19:35 verification job). Bypasses the live cache
+    indicator backfills, the 20:35 verification job). Bypasses the live cache
     even when Mode B is active.
     """
     global _EOD_FALLBACK

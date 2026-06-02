@@ -203,6 +203,49 @@ class TestApiSuggestionToday:
         assert "net_credit" in s
         assert "net_credit_suggested" not in s
         assert len(s["legs"]) == 1
+        assert "execution_gate" in s
+        assert s["execution_gate"]["ok"] is True
+
+    def test_surfaces_execution_gate_when_blocked(self, client, mocker):
+        from datetime import timedelta
+        from utils import now_ist
+
+        now = now_ist()
+        old_gen = now - timedelta(minutes=90)
+        sug_row = {
+            "suggestion_id": "SUG-STALE",
+            "underlying": "NIFTY",
+            "strategy": "BULL_PUT_SPREAD",
+            "status": "IGNORED",
+            "data_source": "LIVE",
+            "generated_on": old_gen,
+            "entry_date": now.date(),
+            "spot_at_generation": 23000.0,
+            "net_credit_suggested": 100.0,
+        }
+        leg_row = {
+            "leg_order": 1, "strike": 22800.0, "option_type": "PE",
+            "action": "SELL", "lots": 1, "lot_size": 75,
+            "suggested_price": 50.0,
+        }
+        mocker.patch(
+            "dashboard.server.SuggestionRepo.active_pending",
+            return_value=[sug_row],
+        )
+        mocker.patch(
+            "dashboard.server.SuggestionRepo.legs",
+            return_value=[leg_row],
+        )
+        mocker.patch(
+            "database.runtime_flags.RuntimeFlagsRepo",
+            return_value=mocker.Mock(get_bool=mocker.Mock(return_value=False)),
+        )
+        resp = client.get("/api/suggestion/today")
+        assert resp.status_code == 200
+        s = resp.get_json()["suggestions"][0]
+        assert s["execution_gate"]["ok"] is False
+        assert s["execution_gate"]["label"] == "Retired"
+        assert any("IGNORED" in v for v in s["execution_gate"]["vetoes"])
 
 
 class TestApiTradesOpen:
@@ -247,6 +290,24 @@ class TestApiHistorySuggestions:
         mocker.patch("dashboard.server.SuggestionRepo.by_date", return_value=[])
         resp = client.get("/api/history/suggestions")
         assert resp.status_code == 200
+
+    def test_confidence_display_uses_conditions_json_length(self, mocker):
+        from dashboard.server import _confidence_display
+
+        checks = [{"label": f"g{i}", "status": "PASS"} for i in range(11)]
+        checks.extend([
+            {"label": "bad1", "status": "SOFT_FAIL"},
+            {"label": "bad2", "status": "SOFT_FAIL"},
+            {"label": "bad3", "status": "SOFT_FAIL"},
+        ])
+        row = {"confidence_score": 11, "conditions_json": json.dumps(checks)}
+        assert _confidence_display(row) == "11/14"
+
+    def test_confidence_display_legacy_score_only(self):
+        from dashboard.server import _confidence_display
+
+        assert _confidence_display({"confidence_score": 6}) == "6/7"
+        assert _confidence_display({"confidence_score": 11}) == "11/14"
 
 
 class TestApiLogs:

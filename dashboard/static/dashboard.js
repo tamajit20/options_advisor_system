@@ -617,7 +617,7 @@ async function refreshGlobalBanners() {
   try {
     const st = await API('/api/system-status');
     if (st.circuit_breaker_active) {
-      banners.push(`<div class="sys-banner sys-banner-err" title="Daily P&L circuit breaker is ACTIVE — new executions are blocked until reset. This flag re-triggers tonight at 19:50 IST if aggregate open-trade losses still breach the limit.">\ud83d\udea8 P&amp;L breaker <strong>ACTIVE</strong> <button type="button" class="btn btn-ghost btn-flag-reset" data-flag-key="circuit_breaker_active" data-flag-value="false">Reset</button></div>`);
+      banners.push(`<div class="sys-banner sys-banner-err" title="Daily P&L circuit breaker is ACTIVE — new executions are blocked until reset. This flag re-triggers tonight at 20:50 IST if aggregate open-trade losses still breach the limit.">\ud83d\udea8 P&amp;L breaker <strong>ACTIVE</strong> <button type="button" class="btn btn-ghost btn-flag-reset" data-flag-key="circuit_breaker_active" data-flag-value="false">Reset</button></div>`);
     }
     if (st.kill_switch) {
       banners.push(`<div class="sys-banner sys-banner-err" title="Kill switch is ON — all alerts and execution are paused.">\ud83d\uded1 Kill switch <strong>ON</strong> <button type="button" class="btn btn-ghost btn-flag-reset" data-flag-key="kill_switch" data-flag-value="false">Disable</button></div>`);
@@ -1356,25 +1356,60 @@ function legTargetCloseHint(action, entry, strategy, dte, legOrder) {
 }
 
 // ── Confidence checks breakdown ──────────────────────────────────────────────
-// conditions_json is now always [{label, passed, detail}, ...] (array format).
+// conditions_json is always [{label, status, detail}, ...] (array format).
 // Legacy {conditions:[...strings...]} kept as safety fallback.
-function renderConfidenceChecks(s) {
-  let raw = s.conditions_json;
-  if (!raw) return '';
-  if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { return ''; } }
+const CONFIDENCE_LEGACY_TOTAL = 7;
+const CONFIDENCE_EXPANDED_TOTAL = 14; // sync with engine/confidence.py gate count
 
-  let checks = [];
-  if (Array.isArray(raw)) {
-    checks = raw.map(c => ({
-      label:  c.label  || '',
-      status: c.status || (c.passed === true ? 'PASS' : c.passed === false ? 'FAIL' : 'PASS'),
-      detail: c.detail || '',
-    }));
-  } else if (raw.conditions && Array.isArray(raw.conditions)) {
-    // Legacy fallback — DB row not yet migrated
-    checks = raw.conditions.map(lbl => ({ label: lbl, status: 'PASS', detail: '(legacy format — no detail stored)' }));
+function parseConditionsJson(s) {
+  if (!s || !s.conditions_json) return null;
+  let raw = s.conditions_json;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch { return null; }
   }
-  if (!checks.length) return '';
+  if (!Array.isArray(raw) || !raw.length) {
+    if (raw && raw.conditions && Array.isArray(raw.conditions) && raw.conditions.length) {
+      return raw.conditions.map(lbl => ({
+        label: lbl,
+        status: 'PASS',
+        detail: '(legacy format — no detail stored)',
+      }));
+    }
+    return null;
+  }
+  return raw.map(c => ({
+    label:  c.label  || '',
+    status: c.status || (c.passed === true ? 'PASS' : c.passed === false ? 'FAIL' : 'PASS'),
+    detail: c.detail || '',
+  }));
+}
+
+/** Passed/total check counts — uses conditions_json when present, else DB score. */
+function confidenceCounts(s) {
+  const checks = parseConditionsJson(s);
+  if (checks) {
+    const nFail = checks.filter(c => c.status === 'FAIL').length;
+    const nSoftFail = checks.filter(c => c.status === 'SOFT_FAIL').length;
+    const total = checks.length;
+    return { passed: total - nFail - nSoftFail, total };
+  }
+  const score = s?.confidence_score ?? s?.confidence;
+  if (score == null) return null;
+  const passed = score;
+  const total = passed <= CONFIDENCE_LEGACY_TOTAL
+    ? CONFIDENCE_LEGACY_TOTAL
+    : Math.max(CONFIDENCE_EXPANDED_TOTAL, passed);
+  return { passed, total };
+}
+
+function formatConfidence(s) {
+  const c = confidenceCounts(s);
+  return c ? `${c.passed}/${c.total}` : '';
+}
+
+function renderConfidenceChecks(s) {
+  const checks = parseConditionsJson(s);
+  if (!checks || !checks.length) return '';
 
   const STATUS_CLASS = { PASS: 'conf-pass', FAIL: 'conf-fail', SOFT_FAIL: 'conf-soft-fail', PASS_WARN: 'conf-warn', PASS_ERROR: 'conf-error' };
   const STATUS_ICON  = { PASS: '\u2713', FAIL: '\u2717', SOFT_FAIL: '\u2717', PASS_WARN: '\u26a0', PASS_ERROR: '\u26a1' };
@@ -1591,22 +1626,17 @@ function renderPlainEnglishStructured(s) {
     chips.push(`<span class="${cls}" title="${escapeHtml(tip)}">OI\u0394 PCR ${escapeHtml(label)}</span>`);
   }
   if (s.confidence_score != null) {
-    let _warnCount = 0, _errorCount = 0, _failCount = 0, _softFailCount = 0, _total = 7, _passCount = null;
-    if (s.conditions_json) {
-      let _raw = s.conditions_json;
-      if (typeof _raw === 'string') { try { _raw = JSON.parse(_raw); } catch { _raw = null; } }
-      if (Array.isArray(_raw)) {
-        _warnCount     = _raw.filter(c => c.status === 'PASS_WARN').length;
-        _errorCount    = _raw.filter(c => c.status === 'PASS_ERROR').length;
-        _failCount     = _raw.filter(c => c.status === 'FAIL').length;
-        _softFailCount = _raw.filter(c => c.status === 'SOFT_FAIL').length;
-        _total         = _raw.length;
-        // Derive pass count from conditions_json so chip and panel are always consistent
-        _passCount     = _total - _failCount - _softFailCount;
-      }
+    const cc = confidenceCounts(s);
+    let _warnCount = 0, _errorCount = 0, _failCount = 0, _softFailCount = 0;
+    const checks = parseConditionsJson(s);
+    if (checks) {
+      _warnCount     = checks.filter(c => c.status === 'PASS_WARN').length;
+      _errorCount    = checks.filter(c => c.status === 'PASS_ERROR').length;
+      _failCount     = checks.filter(c => c.status === 'FAIL').length;
+      _softFailCount = checks.filter(c => c.status === 'SOFT_FAIL').length;
     }
-    // Fall back to DB column only if conditions_json is absent/unparseable
-    const displayScore = _passCount !== null ? _passCount : s.confidence_score;
+    const displayScore = cc ? cc.passed : s.confidence_score;
+    const _total = cc ? cc.total : CONFIDENCE_LEGACY_TOTAL;
     const hasIssues  = _warnCount > 0 || _errorCount > 0 || _softFailCount > 0;
     const chipClass  = _failCount > 0      ? 'ctx-chip ctx-fail conf-chip'
                      : _softFailCount > 0  ? 'ctx-chip ctx-warn conf-chip'
@@ -1616,7 +1646,7 @@ function renderPlainEnglishStructured(s) {
       ? ` \u26a1 ${_errorCount} error${_errorCount > 1 ? 's' : ''}`
       : _softFailCount > 0 ? ` \u26a0 ${_softFailCount} soft fail${_softFailCount > 1 ? 's' : ''}`
       : _warnCount > 0 ? ` \u26a0 ${_warnCount} warned` : '';
-    chips.push(`<span class="${chipClass}" data-sug-id="${escapeHtml(s.suggestion_id||'')}" style="cursor:pointer" title="Click to see all checks">${displayScore}/${_total} checks \u2713${warnSuffix} <span style="font-size:.7rem;opacity:.7">\u25bc</span></span><span class="conf-logic-info" tabindex="0" aria-label="Confidence gate logic">\u24d8<span class="conf-logic-popup"><strong>How gating works</strong><br><br><span style="color:#f87171">\u2717 Hard gate</span> &mdash; always blocks:<br>&nbsp;&bull; DTE within target band<br><br><span style="color:#fbbf24">\u2717 Soft gates</span> &mdash; need \u22655 of 7:<br>&nbsp;&bull; IV Rank in actionable zone<br>&nbsp;&bull; VIX stable or falling<br>&nbsp;&bull; PCR in neutral band<br>&nbsp;&bull; OI walls visible<br>&nbsp;&bull; Trend identifiable<br>&nbsp;&bull; IV premium vs realised vol (HV-20)<br>&nbsp;&bull; FII positioning aligned with trend<br><br><span style="color:#fbbf24">\u26a0 Warning (never blocks):</span><br>&nbsp;&bull; High-impact event this week<br><br><span style="opacity:.6;font-size:.72rem">1\u20132 soft gate misses = trade proceeds with caution<br>3+ soft gate misses = blocked</span><br><br><span style="opacity:.5;font-size:.72rem">\u26a0 = data unavailable &nbsp;\u26a1 = gate error</span></span></span>`);
+    chips.push(`<span class="${chipClass}" data-sug-id="${escapeHtml(s.suggestion_id||'')}" style="cursor:pointer" title="Click to see all checks">${displayScore}/${_total} checks \u2713${warnSuffix} <span style="font-size:.7rem;opacity:.7">\u25bc</span></span><span class="conf-logic-info" tabindex="0" aria-label="Confidence gate logic">\u24d8<span class="conf-logic-popup"><strong>How gating works</strong><br><br><span style="color:#f87171">\u2717 Hard gate</span> &mdash; always blocks:<br>&nbsp;&bull; DTE within target band<br>&nbsp;&bull; ATM strikes liquid (spread within budget)<br><br><span style="color:#fbbf24">\u2717 Soft gates</span> &mdash; need \u22655 of 8:<br>&nbsp;&bull; IV Rank in actionable zone<br>&nbsp;&bull; VIX stable or falling<br>&nbsp;&bull; PCR in neutral band<br>&nbsp;&bull; OI walls visible<br>&nbsp;&bull; Trend identifiable<br>&nbsp;&bull; IV premium vs realised vol (HV-20)<br>&nbsp;&bull; FII positioning aligned with trend<br>&nbsp;&bull; OI change conviction aligned with trend<br><br><span style="color:#fbbf24">\u26a0 Advisory (live mode):</span><br>&nbsp;&bull; ATM IV trajectory<br>&nbsp;&bull; OI PCR momentum<br>&nbsp;&bull; IV Rank vs IV/HV alignment<br><br><span style="opacity:.6;font-size:.72rem">1\u20132 soft gate misses = trade proceeds with caution<br>3+ soft gate misses = blocked</span><br><br><span style="opacity:.5;font-size:.72rem">\u26a0 = data unavailable &nbsp;\u26a1 = gate error</span></span></span>`);
   }
   // Edge score (0-100) — composite quality blend; display + ranking only.
   if (s.edge_score != null) {
@@ -2446,6 +2476,35 @@ function legRoleNote(strategy, leg) {
 
 // Build the per-card suggestion render output.
 // readOnly=true: static view used inside trade cards (no inputs, no action buttons)
+function suggestionCanExecute(s) {
+  const status = (s.status || '').toUpperCase();
+  if (status !== 'PENDING') return false;
+  if (s.execution_gate) return !!s.execution_gate.ok;
+  return !s.is_stale;
+}
+
+function renderExecutionGateBanner(s) {
+  const status = (s.status || '').toUpperCase();
+  if (status === 'EXECUTED') {
+    return `<div class="suggestion-gate-banner suggestion-gate-info">
+      <span class="tag tag-ok">EXECUTED</span>
+      <span>This suggestion was already acted on.</span>
+    </div>`;
+  }
+  const gate = s.execution_gate;
+  if (!gate || gate.ok) return '';
+  const label = gate.label || 'Cannot execute';
+  const detail = (gate.reason && gate.reason !== 'OK') ? gate.reason : '';
+  return `<div class="suggestion-gate-banner suggestion-gate-blocked" role="alert">
+    <div class="suggestion-gate-head">
+      <span class="tag tag-warn">${escapeHtml(label.toUpperCase())}</span>
+      <strong>Execution blocked</strong>
+    </div>
+    ${detail ? `<p class="suggestion-gate-detail">${escapeHtml(detail)}</p>` : ''}
+    <p class="suggestion-gate-hint muted">Run <strong>Live Suggestion Engine</strong> from the Jobs tab for a fresh PENDING suggestion.</p>
+  </div>`;
+}
+
 function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader = false) {
   const isNoSug = s.strategy === 'NONE' || s.status === 'NO_SUGGESTION';
   if (isNoSug) {
@@ -2455,7 +2514,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
         <span class="tag tag-warn">SKIPPED</span>
       </div>
       <p class="muted">${escapeHtml(s.no_suggestion_reason || '')}</p>
-      <p class="muted" style="font-size:.85rem">Confidence: ${s.confidence_score}/7</p>
+      <p class="muted" style="font-size:.85rem">Confidence: ${formatConfidence(s) || `${s.confidence_score} passed`}</p>
     </div>`;
   }
   const econ = {
@@ -2540,12 +2599,22 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       </div>${fillColHtml}
     </div>`;
   }).join('');
+  const sugStatus = (s.status || '').toUpperCase();
+  const canExecute = !readOnly && suggestionCanExecute(s);
+  const gateLabel = s.execution_gate?.label
+    || (s.is_stale ? 'Stale' : null)
+    || (sugStatus === 'IGNORED' ? 'Retired' : null);
+  const gateBanner = readOnly ? '' : renderExecutionGateBanner(s);
   // attach live lot-count recalc after DOM insert — see bindSuggestionActions
   const innerHtml = `
+    ${gateBanner}
     <div class="card-head">
       <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
+        ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn" title="Cannot mark executed">${escapeHtml(gateLabel)}</span>` : ''}
+        ${sugStatus === 'IGNORED' ? '<span class="tag tag-warn">Retired</span>' : ''}
+        ${s.is_stale && sugStatus === 'PENDING' && !gateLabel ? '<span class="tag tag-warn">Stale</span>' : ''}
         ${_qualityBadge(s.entry_quality_score, '', {
           edge: s.edge_score, conf: s.confidence_score, pop: s.probability_of_profit,
         })}
@@ -2608,7 +2677,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     ${execOrderBanner(s.legs, s.strategy, 'entry')}
     <div class="legs-grid">${legsHtml}</div>
     ${creditBreakdownHtml(s.legs, 'suggest')}
-    ${readOnly ? '' : `
+    ${readOnly ? '' : (canExecute ? `
     <div class="exec-spot-bar">
       <div class="sl-monitor-label" style="margin-bottom:6px">Nifty spot at execution</div>
       <div class="exec-spot-row">
@@ -2627,7 +2696,11 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     <div class="btn-row" style="margin-top:12px">
       <button class="btn btn-accent btn-mark-exec">Mark Executed</button>
       <button class="btn btn-ghost btn-ignore">Ignore</button>
-    </div>`}`;
+    </div>` : (sugStatus === 'PENDING' ? `
+    <div class="btn-row" style="margin-top:12px">
+      <button class="btn btn-accent btn-mark-exec" disabled title="Execution blocked — see notice above">Mark Executed</button>
+      <button class="btn btn-ghost btn-ignore">Ignore</button>
+    </div>` : ''))}`;
 
   if (readOnly) {
     const detailsCls = inlineHeader
@@ -2639,7 +2712,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       <div class="orig-sug-body">${innerHtml}</div>
     </details>`;
   }
-  return `<div class="card"
+  return `<div class="card${canExecute ? '' : (readOnly ? '' : ' suggestion-not-executable')}"
     data-sug-id="${escapeHtml(s.suggestion_id)}"
     data-strategy="${escapeHtml(s.strategy || '')}"
     data-dte="${s.dte != null ? parseInt(s.dte, 10) : ''}"
@@ -2669,7 +2742,7 @@ function bindFlagResetButtons() {
       const val = btn.dataset.flagValue === 'true';
       if (!key) return;
       const confirmMsg = key === 'circuit_breaker_active'
-        ? 'Reset the daily P&L circuit breaker?\n\nThis will re-enable executions. The flag will re-trigger tonight at 19:50 IST if aggregate open-trade losses still breach the limit.'
+        ? 'Reset the daily P&L circuit breaker?\n\nThis will re-enable executions. The flag will re-trigger tonight at 20:50 IST if aggregate open-trade losses still breach the limit.'
         : `Set runtime flag "${key}" to ${val}?`;
       if (!window.confirm(confirmMsg)) return;
       btn.disabled = true;
@@ -2825,6 +2898,7 @@ function bindSuggestionActions() {
 
   $$('.btn-mark-exec').forEach(b => b.addEventListener('click', async (e) => {
     const btn  = e.currentTarget;
+    if (btn.disabled) return;
     const card = btn.closest('.card');
     const sid  = card.dataset.sugId;
 
@@ -4128,6 +4202,12 @@ function renderHistorySuggestion(s) {
                   : s.status === 'IGNORED'  ? 'tag-warn'
                   : s.status === 'PENDING'  ? 'tag-acc'
                   : 'tag-muted';
+  const confLabel = s.confidence_display || formatConfidence(s);
+  const confHtml = confLabel
+    ? `<span class="muted" style="font-size:.85rem">${escapeHtml(confLabel)} checks passed</span>`
+    : (s.confidence_score != null
+      ? `<span class="muted" style="font-size:.85rem">${s.confidence_score} checks passed</span>`
+      : '');
   return `
   <div class="hist-card" style="border-left-color: var(--accent)">
     <div class="hist-card-head">
@@ -4139,7 +4219,7 @@ function renderHistorySuggestion(s) {
         ${s.expiry_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(s.expiry_type)}</span>` : ''}
       </div>
       <div class="hist-card-pnl">
-        ${s.confidence_score != null ? `<span class="muted" style="font-size:.85rem">Confidence ${s.confidence_score}/7</span>` : ''}
+        ${confHtml}
       </div>
     </div>
     <div class="hist-card-meta muted">
@@ -4233,7 +4313,7 @@ function renderHistoryTrade(t) {
       ${cmp('Lower breakeven',   s.lower_be != null ? fmt(s.lower_be) : '—',  t.actual_lower_be != null ? fmt(t.actual_lower_be) : '—')}
       ${cmp('Stop loss level',   s.stop_loss != null ? fmt(s.stop_loss) : '—',  t.actual_stop_loss != null ? fmt(t.actual_stop_loss) : '—')}
       ${s.pop != null ? cmp('Prob. of profit', fmtPct(s.pop), '—') : ''}
-      ${s.confidence != null ? cmp('Confidence', s.confidence+'/7', '—') : ''}
+      ${s.confidence != null ? cmp('Confidence', formatConfidence({ confidence_score: s.confidence }) || `${s.confidence} passed`, '—') : ''}
       ${t.exit_instruction ? cmp('Exit reason', '—', `<span class="muted">${escapeHtml(t.exit_instruction)}</span>`) : ''}
     </div>
 

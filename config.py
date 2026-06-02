@@ -76,37 +76,27 @@ DATABASE_CONFIG = {
 SCHEDULER_CONFIG = {
     "timezone": "Asia/Kolkata",
     "jobs": {
-        # Data downloads (post-market)
-        "fo_bhav_download":   {"hour": 18, "minute": 30, "enabled": True},
-        "spot_bhav_download": {"hour": 18, "minute": 35, "enabled": True},
-        "vix_download":       {"hour": 18, "minute": 40, "enabled": True},
-        "fii_download":       {"hour": 18, "minute": 45, "enabled": True},
+        # Data downloads (post-market) — NSE bhav copies often land after 18:30 IST.
+        "fo_bhav_download":   {"hour": 19, "minute": 30, "enabled": True},
+        "spot_bhav_download": {"hour": 19, "minute": 35, "enabled": True},
+        "vix_download":       {"hour": 19, "minute": 40, "enabled": True},
+        "fii_download":       {"hour": 19, "minute": 45, "enabled": True},
         # Calculations
-        "iv_calculation":     {"hour": 19, "minute":  0, "enabled": True},
+        "iv_calculation":     {"hour": 20, "minute":  0, "enabled": True},
         # Suggestions + lifecycle
-        "suggestion_engine":  {"hour": 19, "minute": 30, "enabled": True},
+        "suggestion_engine":  {"hour": 20, "minute": 30, "enabled": True},
         # Live suggestion: re-evaluate with live Zerodha chain during market hours.
-        # Requires OPT_PROVIDERS=zerodha.  Runs at 11:00 IST — gives the WS
-        # 5-min aggregator ~20 samples (90 min from 09:30 open) for slope
-        # estimation while still leaving plenty of session for execution.
-        # Retires the stale EOD suggestion and replaces it with a fresh
-        # suggestion based on current spot, chain, IV, and trajectory metrics.
-        # No-op (logged + skipped) when Zerodha is unavailable.
+        # Requires OPT_PROVIDERS=zerodha. Multiple intraday windows (one dashboard
+        # job tile; each window logs job_id suffix HHMM under job_name
+        # live_suggestion_engine). No-op when Zerodha is unavailable.
         "live_suggestion_engine": {
-            "day_of_week": "mon-fri", "hour": 11, "minute": 0, "enabled": True,
-        },
-        # Phase 3 — #1 / #13. Additional live-suggest windows so users get
-        # multiple refreshed suggestions per session instead of one fixed
-        # 11:00 run. Each entry registers as its own scheduled job.
-        # Set "enabled": False on any window to skip.
-        "live_suggestion_engine_0945": {
-            "day_of_week": "mon-fri", "hour": 9, "minute": 45, "enabled": True,
-        },
-        "live_suggestion_engine_1300": {
-            "day_of_week": "mon-fri", "hour": 13, "minute": 0, "enabled": True,
-        },
-        "live_suggestion_engine_1430": {
-            "day_of_week": "mon-fri", "hour": 14, "minute": 30, "enabled": True,
+            "enabled": True,
+            "schedules": [
+                {"day_of_week": "mon-fri", "hour": 9,  "minute": 45},
+                {"day_of_week": "mon-fri", "hour": 11, "minute":  0},
+                {"day_of_week": "mon-fri", "hour": 13, "minute":  0},
+                {"day_of_week": "mon-fri", "hour": 14, "minute": 30},
+            ],
         },
         # Phase 3 — #5. Event-eve review: at 14:30 IST, if there is a HIGH-impact
         # event scheduled for tomorrow (or today afternoon), post one
@@ -115,20 +105,20 @@ SCHEDULER_CONFIG = {
         "event_eve_review": {
             "day_of_week": "mon-fri", "hour": 14, "minute": 30, "enabled": True,
         },
-        "simulation_update":  {"hour": 19, "minute": 45, "enabled": True},
-        "exit_engine":        {"hour": 19, "minute": 50, "enabled": True},
+        "simulation_update":  {"hour": 20, "minute": 45, "enabled": True},
+        "exit_engine":        {"hour": 20, "minute": 50, "enabled": True},
         # C6 — Greek drift: recompute delta/vega/theta for open trades after EOD data
-        "trade_greeks_update": {"hour": 20, "minute": 0, "enabled": True},
+        "trade_greeks_update": {"hour": 21, "minute": 0, "enabled": True},
         # Phase 2b.1 — live-vs-settled drift detection
         # 15:35 IST: capture live LTP for every leg of every ACTIVE trade.
-        # 19:35 IST: compare to today's settled close (loaded by fo_bhav at
-        #            18:30) and fire a DRIFT_WARNING for legs that diverge
+        # 20:35 IST: compare to today's settled close (loaded by fo_bhav at
+        #            19:30) and fire a DRIFT_WARNING for legs that diverge
         #            beyond STRATEGY_CONFIG["intraday_close_drift_pct"].
         "intraday_close_snapshot": {
             "day_of_week": "mon-fri", "hour": 15, "minute": 35, "enabled": True,
         },
         "drift_verifier": {
-            "day_of_week": "mon-fri", "hour": 19, "minute": 35, "enabled": True,
+            "day_of_week": "mon-fri", "hour": 20, "minute": 35, "enabled": True,
         },
         # 09:35 IST: re-validate today's PENDING suggestions against live
         # opening chain. Avoids 09:30 by 5 min so the worst of opening-tick
@@ -154,10 +144,7 @@ SCHEDULER_CONFIG = {
         # Live-suggestion windows: short timeout because they fan out
         # to several HTTP fetches; if any one stalls we want the row
         # to FAIL fast so the next window isn't blocked.
-        "live_suggestion_engine":      300,
-        "live_suggestion_engine_0945": 300,
-        "live_suggestion_engine_1300": 300,
-        "live_suggestion_engine_1430": 300,
+        "live_suggestion_engine": 300,
         "simulation_update":  600,
         "exit_engine":        300,
         "events_seed":        300,
@@ -680,7 +667,7 @@ STRATEGY_CONFIG = {
     },
 
     # Phase 2b.1 — drift verifier threshold (%)
-    # The 19:35 drift verifier compares each 15:35 live LTP capture to the
+    # The 20:35 drift verifier compares each 15:35 live LTP capture to the
     # corresponding settled close from the EOD bhav. Any leg whose abs
     # drift exceeds this percentage fires a single rolled-up DRIFT_WARNING
     # notification. 5% is calibrated to be loud only on real feed problems.

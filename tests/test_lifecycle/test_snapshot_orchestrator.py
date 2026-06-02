@@ -2,7 +2,7 @@
 tests/test_lifecycle/test_snapshot_orchestrator.py
 ==================================================
 
-Phase 2b.1 — 15:35 IST live-LTP capture and 19:35 IST drift verifier.
+Phase 2b.1 — 15:35 IST live-LTP capture and 20:35 IST drift verifier.
 """
 
 from __future__ import annotations
@@ -129,7 +129,7 @@ class TestRunIntradayCloseSnapshot:
 
 
 # ---------------------------------------------------------------------------
-# 19:35 drift verifier
+# 20:35 drift verifier
 # ---------------------------------------------------------------------------
 class TestRunDriftVerifier:
     def test_no_snapshot_returns_zero(self, mock_db, mocker):

@@ -10,7 +10,7 @@ Phase 2b.1 — Two scheduled jobs that work as a pair:
   `options_intraday_close_snapshot`. Tiny by volume (~5 KB/day at full
   open-trade load).
 
-* `run_drift_verifier` (19:35 IST, after `fo_bhav_download` at 18:30) —
+* `run_drift_verifier` (20:35 IST, after `fo_bhav_download` at 19:30) —
   load today's snapshot rows, compare each LTP to the matching settled
   close in `options_fo_eod`, and fire a `DRIFT_WARNING` notification
   (severity WARNING) for any leg whose drift exceeds
@@ -173,7 +173,7 @@ def run_intraday_close_snapshot(
 
 
 # ---------------------------------------------------------------------------
-# Job 2 — verify live LTP vs settled close at 19:35 IST
+# Job 2 — verify live LTP vs settled close at 20:35 IST
 # ---------------------------------------------------------------------------
 def run_drift_verifier(
     db: SQLServerConnection,

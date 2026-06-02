@@ -114,6 +114,45 @@ a { color: var(--accent); text-decoration: none; }
 }
 .card h3 { margin: 0 0 4px; font-size: 1rem; }
 .card-id-row { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+
+.suggestion-gate-banner {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: .88rem;
+  line-height: 1.45;
+}
+.suggestion-gate-blocked {
+  background: rgba(245, 158, 11, .1);
+  border: 1px solid rgba(245, 158, 11, .35);
+}
+.suggestion-gate-info {
+  background: rgba(34, 197, 94, .08);
+  border: 1px solid rgba(34, 197, 94, .25);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.suggestion-gate-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.suggestion-gate-detail {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: .84rem;
+}
+.suggestion-gate-hint {
+  margin: 0;
+  font-size: .78rem;
+}
+.card.suggestion-not-executable {
+  border-color: rgba(245, 158, 11, .25);
+}
+
 .id-chip {
   font-size: .72rem; font-family: 'Courier New', monospace;
   color: var(--text-dim); background: rgba(255,255,255,.05);

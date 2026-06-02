@@ -95,26 +95,19 @@ class TestJobFuncsRegistry:
             assert callable(fn), f"{name} is not callable"
 
 
-def test_multi_window_live_suggestion_jobs_registered():
-    """Phase 3 — #1: extra intraday windows (09:45, 13:00, 14:30) must
-    all register and dispatch the live-suggestion engine. Each variant
-    has its own thin wrapper so the DB job-log row uses a distinct
-    job_name (otherwise all four dashboard cards share the same row)."""
-    keys = {
-        "live_suggestion_engine_0945",
-        "live_suggestion_engine_1300",
-        "live_suggestion_engine_1430",
+def test_live_suggestion_single_job_multi_triggers():
+    """One logical job, four cron triggers — one dashboard tile."""
+    assert "live_suggestion_engine" in sched.JOB_FUNCS
+    assert "live_suggestion_engine_0945" not in sched.JOB_FUNCS
+    sch = sched.build_scheduler()
+    live = [j for j in sch.get_jobs() if (j.id or "").startswith("live_suggestion_engine")]
+    assert len(live) == 4
+    assert {j.id for j in live} == {
+        "live_suggestion_engine@0945",
+        "live_suggestion_engine@1100",
+        "live_suggestion_engine@1300",
+        "live_suggestion_engine@1430",
     }
-    assert keys.issubset(set(sched.JOB_FUNCS.keys()))
-    # Each variant must be a *distinct* callable wired to its own
-    # _run_job(name=...) so it logs under its own job_id.
-    for k in keys:
-        assert sched.JOB_FUNCS[k] is not sched.job_live_suggestion
-        assert callable(sched.JOB_FUNCS[k])
-    # And the four entries must all be unique to one another.
-    callables = {sched.JOB_FUNCS[k] for k in keys}
-    callables.add(sched.job_live_suggestion)
-    assert len(callables) == 4
 
 
 def test_event_eve_review_job_registered():
