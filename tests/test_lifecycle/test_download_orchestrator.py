@@ -84,9 +84,9 @@ class TestRunSpotBhav:
 
 class TestRunVix:
     def test_seeds_from_bundled_csv_when_table_nearly_empty(self, mock_db, mocker):
-        # VixRepo.count() returns 5 < 30 → seed path
+        # VixRepo.count() returns 5 < 30 → seed path (no bundled rows on disk)
         mock_db.fetch_one.return_value = {"n": 5}
-        mocker.patch("lifecycle.download_orchestrator.os.path.exists", return_value=False)
+        mocker.patch("lifecycle.download_orchestrator.load_bundled_vix_rows", return_value=[])
         mocker.patch("lifecycle.download_orchestrator.download_vix_history", return_value=[])
         with pytest.raises(NoDataError, match="VIX history download returned no rows"):
             orch.run_vix(mock_db)
@@ -98,3 +98,21 @@ class TestRunVix:
         n = orch.run_vix(mock_db)
         assert n == 1
         mock_db.commit.assert_called_once()
+
+    def test_trade_date_override_uses_per_date_download(self, mock_db, mocker):
+        mock_db.fetch_one.return_value = {"n": 200}
+        mocker.patch(
+            "lifecycle.download_orchestrator.download_vix_for_date",
+            return_value=[VixRow(date(2026, 4, 30), 15.0, 15.5, 14.8, 15.2)],
+        )
+        hist = mocker.patch("lifecycle.download_orchestrator.download_vix_history")
+        n = orch.run_vix(mock_db, date(2026, 4, 30))
+        assert n == 1
+        hist.assert_not_called()
+        mock_db.commit.assert_called_once()
+
+    def test_trade_date_override_raises_when_missing(self, mock_db, mocker):
+        mock_db.fetch_one.return_value = {"n": 200}
+        mocker.patch("lifecycle.download_orchestrator.download_vix_for_date", return_value=[])
+        with pytest.raises(NoDataError, match="VIX data not available for 2026-04-30"):
+            orch.run_vix(mock_db, date(2026, 4, 30))

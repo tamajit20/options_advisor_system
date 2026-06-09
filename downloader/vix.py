@@ -17,6 +17,7 @@ import csv
 import io
 import json
 import logging
+import os
 from datetime import date, datetime
 from typing import List, Optional
 
@@ -110,6 +111,73 @@ def _fetch_live_vix(session) -> Optional[VixRow]:
             )
     logger.warning("VIX live: 'INDIA VIX' not found in allIndices payload")
     return None
+
+
+def bundled_vix_csv_path() -> str:
+    return os.path.normpath(
+        os.path.join(os.path.dirname(__file__), "hist_india_vix_-30-04-2025-to-30-04-2026.csv")
+    )
+
+
+def load_bundled_vix_rows() -> List[VixRow]:
+    """Parse the repo-bundled India VIX history CSV (if present)."""
+    csv_path = bundled_vix_csv_path()
+    if not os.path.exists(csv_path):
+        return []
+    out: List[VixRow] = []
+    with open(csv_path, newline="", encoding="utf-8-sig") as fh:
+        reader = csv.DictReader(fh)
+        for rec in reader:
+            raw_date = (rec.get("Date") or "").strip()
+            if not raw_date:
+                continue
+            try:
+                dt = _parse_date(raw_date)
+            except ValueError:
+                logger.debug("VIX bundled: unparseable date %r — skipping", raw_date)
+                continue
+            close = safe_float((rec.get("Close") or "").replace(",", ""))
+            if close is None or close <= 0:
+                continue
+            opn = safe_float((rec.get("Open") or "").replace(",", ""), close) or close
+            high = safe_float((rec.get("High") or "").replace(",", ""), close) or close
+            low = safe_float((rec.get("Low") or "").replace(",", ""), close) or close
+            out.append(VixRow(
+                trade_date=dt,
+                open_price=opn,
+                high_price=high,
+                low_price=low,
+                close_price=close,
+            ))
+    return out
+
+
+def download_vix_for_date(trade_date: date) -> List[VixRow]:
+    """Return VIX OHLC for a single trade date (manual backfill / date override)."""
+    for row in load_bundled_vix_rows():
+        if row.trade_date == trade_date:
+            logger.info("VIX bundled CSV: 1 row for %s", trade_date)
+            return [row]
+
+    session = make_session()
+    if trade_date == today_ist():
+        live = _fetch_live_vix(session)
+        if live is not None and live.trade_date == trade_date:
+            return [live]
+
+    url = NSE_CONFIG.get("vix_archive_url")
+    if url:
+        try:
+            resp = fetch_with_retry(session, url, accept_404=True)
+            if resp is not None and _looks_like_csv(resp.text):
+                matched = [r for r in _parse_rows(resp.text) if r.trade_date == trade_date]
+                if matched:
+                    logger.info("VIX archive: 1 row for %s", trade_date)
+                    return matched
+        except Exception as exc:
+            logger.warning("VIX archive fetch for %s failed (%s)", trade_date, exc)
+
+    return []
 
 
 def download_vix_history() -> List[VixRow]:

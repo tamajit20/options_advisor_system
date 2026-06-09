@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 
-from downloader.vix import _parse_date, _parse_rows
+from downloader.vix import _parse_date, _parse_rows, download_vix_for_date, load_bundled_vix_rows
 
 
 class TestParseDate:
@@ -68,3 +68,20 @@ class TestParseRows:
         rows = _parse_rows(csv)
         assert len(rows) == 2
         assert rows[0].trade_date == date(2026, 4, 29)
+
+
+class TestDownloadVixForDate:
+    def test_loads_from_bundled_csv_when_date_present(self):
+        rows = load_bundled_vix_rows()
+        if not rows:
+            pytest.skip("bundled VIX CSV not present in workspace")
+        sample = rows[0].trade_date
+        got = download_vix_for_date(sample)
+        assert len(got) == 1
+        assert got[0].trade_date == sample
+
+    def test_missing_date_returns_empty_without_network(self, mocker):
+        mocker.patch("downloader.vix.load_bundled_vix_rows", return_value=[])
+        mocker.patch("downloader.vix.today_ist", return_value=date(2099, 1, 1))
+        mocker.patch("downloader.vix.NSE_CONFIG", {"vix_archive_url": None})
+        assert download_vix_for_date(date(2000, 1, 1)) == []

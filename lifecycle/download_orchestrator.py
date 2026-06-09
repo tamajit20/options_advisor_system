@@ -12,10 +12,8 @@ Each function is callable independently by the scheduler.
 
 from __future__ import annotations
 
-import csv
 import logging
-import os
-from datetime import date, datetime
+from datetime import date
 
 from config import STRATEGY_CONFIG
 from contracts import SpotBhavRow, VixRow
@@ -27,7 +25,7 @@ from downloader.index_spot_nse import download_nse_index_spot
 from downloader.spot_bhav import download_spot_bhav
 from exceptions import NoDataError
 from lifecycle.spot_bhav_merge import merge_spot_bhav_rows
-from downloader.vix import download_vix_history
+from downloader.vix import download_vix_for_date, download_vix_history, load_bundled_vix_rows
 from utils import today_ist
 
 logger = logging.getLogger(__name__)
@@ -115,48 +113,8 @@ def run_spot_bhav(db: SQLServerConnection, trade_date: date | None = None) -> in
 
 def _seed_vix_from_bundled_csv(db: SQLServerConnection) -> int:
     """Seed options_vix_history from the bundled historical VIX CSV when the
-    table has fewer than 30 rows (cold-start or fresh DB).  The file lives at
-    downloader/hist_india_vix_-30-04-2025-to-30-04-2026.csv.
-
-    CSV format: Date, Open, High, Low, Close, Prev. Close, Change, % Change
-    Date format: 30-APR-2025  (dd-MMM-yyyy, uppercase month abbreviation)
-    """
-    csv_path = os.path.join(
-        os.path.dirname(__file__),
-        "..", "downloader",
-        "hist_india_vix_-30-04-2025-to-30-04-2026.csv",
-    )
-    csv_path = os.path.normpath(csv_path)
-    if not os.path.exists(csv_path):
-        logger.warning("VIX seed: bundled CSV not found at %s", csv_path)
-        return 0
-
-    rows: list[VixRow] = []
-    with open(csv_path, newline="", encoding="utf-8-sig") as fh:
-        reader = csv.DictReader(fh)
-        for rec in reader:
-            raw_date = rec.get("Date", "").strip()
-            if not raw_date:
-                continue
-            try:
-                dt = datetime.strptime(raw_date, "%d-%b-%Y").date()
-            except ValueError:
-                try:
-                    dt = datetime.strptime(raw_date, "%d-%m-%Y").date()
-                except ValueError:
-                    logger.debug("VIX seed: unparseable date %r — skipping", raw_date)
-                    continue
-            try:
-                rows.append(VixRow(
-                    trade_date=dt,
-                    open_price=float(rec.get("Open", "0").replace(",", "") or 0),
-                    high_price=float(rec.get("High", "0").replace(",", "") or 0),
-                    low_price=float(rec.get("Low", "0").replace(",", "") or 0),
-                    close_price=float(rec.get("Close", "0").replace(",", "") or 0),
-                ))
-            except (ValueError, KeyError) as exc:
-                logger.debug("VIX seed: skipping row %r: %s", raw_date, exc)
-
+    table has fewer than 30 rows (cold-start or fresh DB)."""
+    rows = load_bundled_vix_rows()
     if not rows:
         return 0
     n = VixRepo(db).upsert_many(rows)
@@ -165,22 +123,30 @@ def _seed_vix_from_bundled_csv(db: SQLServerConnection) -> int:
     return n
 
 
-def run_vix(db: SQLServerConnection) -> int:
+def run_vix(db: SQLServerConnection, trade_date: date | None = None) -> int:
     # Auto-seed from bundled CSV when table is nearly empty (cold start / fresh DB)
     vix_repo = VixRepo(db)
-    if vix_repo.count() < 30:
+    if trade_date is None and vix_repo.count() < 30:
         logger.info("VIX table has < 30 rows — seeding from bundled historical CSV")
         _seed_vix_from_bundled_csv(db)
 
-    rows = download_vix_history()
-    if not rows:
-        raise NoDataError(
-            "VIX history download returned no rows — "
-            "NSE may not have published today's VIX data yet"
-        )
+    if trade_date is not None:
+        rows = download_vix_for_date(trade_date)
+        if not rows:
+            raise NoDataError(
+                f"VIX data not available for {trade_date} — "
+                "not in bundled history and NSE live/archive had no match"
+            )
+    else:
+        rows = download_vix_history()
+        if not rows:
+            raise NoDataError(
+                "VIX history download returned no rows — "
+                "NSE may not have published today's VIX data yet"
+            )
     n = vix_repo.upsert_many(rows)
     db.commit()
-    logger.info("VIX: upserted %d rows", n)
+    logger.info("VIX %s: upserted %d rows", trade_date or "latest", n)
     return n
 
 
