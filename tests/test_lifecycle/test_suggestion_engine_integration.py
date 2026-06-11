@@ -303,3 +303,37 @@ class TestLongStrangleRouting:
         # EM ≈ 300 (from indicators), so strikes should be ≥ 23250 / ≤ 22750
         assert call_leg.strike >= 23250
         assert put_leg.strike  <= 22750
+
+
+class TestCalendarSpreadAssembly:
+    def test_calendar_spread_with_calendar_legs(self):
+        near = date(2026, 5, 29)
+        far = date(2026, 6, 26)
+        near_chain = _chain()
+        far_chain = _chain(spot=23000.0)
+        ind = _indicators(trend="SIDEWAYS", iv_premium=1.05, adx=18.0)
+        sug = assemble_suggestion(
+            suggestion_id="SUG-20260520-CAL",
+            underlying="NIFTY",
+            expiry=near,
+            expiry_type="Weekly",
+            dte=9,
+            spot=23000.0,
+            chain=near_chain,
+            indicators=ind,
+            confidence=_conf_result(True, score=12),
+            iv_rank=40.0,
+            atm_iv=0.16,
+            lots=1,
+            lot_size=75,
+            calendar_legs={
+                "near_expiry": near,
+                "far_expiry": far,
+                "near_chain": near_chain,
+                "far_chain": far_chain,
+            },
+        )
+        assert sug.strategy == "CALENDAR_SPREAD"
+        assert len(sug.legs) == 2
+        expiries = {l.expiry_date for l in sug.legs}
+        assert near in expiries and far in expiries

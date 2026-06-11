@@ -336,9 +336,9 @@
         <h3 style="margin:0 0 .5rem 0;font-size:1rem;">Zerodha Session</h3>
         <div id="zerodha-status" class="muted">Checking…</div>
         <ol style="margin:.6rem 0 .4rem 1.1rem;padding:0;font-size:.88rem;line-height:1.5;">
-          <li>Click <a href="/zerodha/login" target="_blank" rel="noopener"><strong>Open Kite Login ↗</strong></a>, complete login + 2FA.</li>
-          <li>Kite redirects to <code>http://localhost:5001/?...&amp;request_token=XYZ&amp;...</code> (the page won't load &mdash; that's fine).</li>
-          <li>Copy the <strong>full URL</strong> from the address bar (or just the <code>request_token</code> value) and paste below.</li>
+          <li>In <a href="https://developers.kite.trade/" target="_blank" rel="noopener">Kite Developer</a>, set Redirect URL to <code>http://localhost:5001/zerodha/callback</code>.</li>
+          <li>Click <a href="/zerodha/login"><strong>Open Kite Login</strong></a>, complete login + 2FA — you'll return here automatically.</li>
+          <li>If Kite redirects to <code>/?request_token=…</code> instead, the token is auto-submitted; otherwise paste below.</li>
         </ol>
         <div style="display:flex;gap:.4rem;align-items:center;margin-top:.5rem;flex-wrap:wrap;">
           <input id="zerodha-token-input" type="text" placeholder="Paste redirect URL or request_token…"

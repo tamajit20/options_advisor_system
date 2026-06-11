@@ -115,6 +115,32 @@ a { color: var(--accent); text-decoration: none; }
 .card h3 { margin: 0 0 4px; font-size: 1rem; }
 .card-id-row { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 
+.sit-out-summary {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(59, 130, 246, .08);
+  border: 1px solid rgba(59, 130, 246, .28);
+  font-size: .9rem;
+  line-height: 1.5;
+}
+.sit-out-summary-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.sit-out-summary-body { margin: 0 0 6px; }
+.sit-out-summary-note { margin: 0; font-size: .84rem; }
+.sit-out-card {
+  border-left: 3px solid rgba(245, 158, 11, .55);
+}
+.sit-out-regime { margin: 0 0 8px; font-size: .9rem; }
+.sit-out-reason { margin: 0 0 6px; font-size: .86rem; word-break: break-word; }
+.sit-out-conf { margin: 0 0 4px; }
+.sit-out-hint { margin: 8px 0 0; }
+
 .suggestion-gate-banner {
   margin-bottom: 12px;
   padding: 10px 12px;

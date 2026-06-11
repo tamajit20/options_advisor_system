@@ -872,6 +872,35 @@ class SuggestionRepo:
             )
         return rows
 
+    def active_sit_out_today(self) -> List[dict]:
+        """Latest NO_SUGGESTION row per underlying for today's IST calendar day.
+
+        Shown on the Suggestions tab so an empty PENDING list still explains why
+        the engine sat out (capital preservation — gates unchanged).
+        """
+        from datetime import datetime, time, timedelta
+        from utils import today_ist
+
+        today = today_ist()
+        day_start = datetime.combine(today, time.min)
+        day_end = day_start + timedelta(days=1)
+        rows = self.db.fetch_all(
+            "SELECT * FROM options_suggestions "
+            "WHERE status = 'NO_SUGGESTION' "
+            "AND generated_on >= ? AND generated_on < ? "
+            "ORDER BY generated_on DESC",
+            [day_start, day_end],
+        )
+        seen: set[str] = set()
+        out: List[dict] = []
+        for r in rows:
+            underlying = r.get("underlying")
+            if not underlying or underlying in seen:
+                continue
+            seen.add(underlying)
+            out.append(r)
+        return out
+
     def delete_older_than(self, cutoff: date) -> int:
         cur = self.db.execute(
             "DELETE FROM options_suggestion_legs WHERE suggestion_id IN "

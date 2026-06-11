@@ -171,11 +171,41 @@ class TestApiIndicesSpot:
 class TestApiSuggestionToday:
     def test_empty_suggestions(self, client, mocker):
         mocker.patch("dashboard.server.SuggestionRepo.active_pending", return_value=[])
+        mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today", return_value=[])
         resp = client.get("/api/suggestion/today")
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["suggestions"] == []
+        assert data["sit_out"] == []
+        assert data["market_summary"] is None
         assert "freshness_minutes" in data
+
+    def test_surfaces_sit_out_when_no_pending(self, client, mocker):
+        sit_row = {
+            "suggestion_id": "SUG-NS-1",
+            "underlying": "NIFTY",
+            "strategy": "NONE",
+            "status": "NO_SUGGESTION",
+            "generated_on": datetime(2026, 5, 4, 20, 30),
+            "confidence_score": 13,
+            "no_suggestion_reason": "Strategy veto: IV/HV too rich",
+            "conditions_json": (
+                '[{"label":"IV Rank in actionable zone",'
+                '"detail":"IV Rank 38.0 (need >50 or <30)"}]'
+            ),
+        }
+        mocker.patch("dashboard.server.SuggestionRepo.active_pending", return_value=[])
+        mocker.patch(
+            "dashboard.server.SuggestionRepo.active_sit_out_today",
+            return_value=[sit_row],
+        )
+        resp = client.get("/api/suggestion/today")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data["sit_out"]) == 1
+        assert data["sit_out"][0]["underlying"] == "NIFTY"
+        assert data["sit_out"][0]["market_regime"]["id"] == "dead_zone"
+        assert data["market_summary"] is not None
 
     def test_returns_suggestion_with_legs(self, client, mocker):
         sug_row = {
@@ -192,6 +222,8 @@ class TestApiSuggestionToday:
         }
         mocker.patch("dashboard.server.SuggestionRepo.active_pending",
                      return_value=[sug_row])
+        mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today",
+                     return_value=[])
         mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[leg_row])
         resp = client.get("/api/suggestion/today")
         assert resp.status_code == 200
@@ -231,6 +263,10 @@ class TestApiSuggestionToday:
         mocker.patch(
             "dashboard.server.SuggestionRepo.active_pending",
             return_value=[sug_row],
+        )
+        mocker.patch(
+            "dashboard.server.SuggestionRepo.active_sit_out_today",
+            return_value=[],
         )
         mocker.patch(
             "dashboard.server.SuggestionRepo.legs",
@@ -315,6 +351,26 @@ class TestApiLogs:
         mocker.patch("dashboard.server.LogRepo.fetch", return_value=[])
         resp = client.get("/api/logs")
         assert resp.status_code == 200
+
+
+class TestZerodhaCallback:
+    def test_callback_exchanges_token_and_redirects(self, client, mocker):
+        mocker.patch(
+            "providers.zerodha.session.exchange_request_token",
+            return_value=mocker.Mock(user_id="AB12", generated_at=None),
+        )
+        resp = client.get(
+            "/zerodha/callback?status=success&request_token=abc123",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert "tab=config" in resp.headers["Location"]
+        assert "zerodha=ok" in resp.headers["Location"]
+
+    def test_callback_missing_token_redirects_with_error(self, client):
+        resp = client.get("/zerodha/callback?status=success", follow_redirects=False)
+        assert resp.status_code == 302
+        assert "zerodha_error=missing_request_token" in resp.headers["Location"]
 
 
 class TestApiMarkExecuted:

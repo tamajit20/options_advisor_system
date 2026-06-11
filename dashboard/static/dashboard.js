@@ -651,6 +651,35 @@ async function refreshGlobalBanners() {
 }
 
 // ---------------- Tab 1: Suggestion ----------------
+function renderMarketSitOutSummary(summary) {
+  if (!summary) return '';
+  return `<div class="sit-out-summary" role="status">
+    <div class="sit-out-summary-head">
+      <span class="tag tag-info">CAPITAL PRESERVATION</span>
+      <strong>${escapeHtml(summary.title)}</strong>
+    </div>
+    <p class="sit-out-summary-body">${escapeHtml(summary.summary)}</p>
+    <p class="sit-out-summary-note muted">${escapeHtml(summary.profit_note)}</p>
+  </div>`;
+}
+
+function renderSitOutCard(s) {
+  const regime = s.market_regime || {};
+  const regimeTitle = regime.title ? escapeHtml(regime.title) : 'Sitting out';
+  const reason = s.no_suggestion_reason || s.reason || '';
+  const confLabel = s.confidence_display || formatConfidence(s) || `${s.confidence_score || '—'} passed`;
+  return `<div class="card sit-out-card">
+    <div class="card-head">
+      <h3>${escapeHtml(s.underlying)} — No trade today</h3>
+      <span class="tag tag-warn">SITTING OUT</span>
+    </div>
+    <p class="sit-out-regime"><strong>${regimeTitle}</strong></p>
+    <p class="muted sit-out-reason">${escapeHtml(reason)}</p>
+    <p class="muted sit-out-conf" style="font-size:.85rem">Confidence: ${escapeHtml(confLabel)}</p>
+    <p class="muted sit-out-hint" style="font-size:.82rem">Gates unchanged — the engine waits for a high-edge setup rather than forcing a marginal trade.</p>
+  </div>`;
+}
+
 async function loadSuggestion() {
   const c = $('#suggestion-container');
   c.className = 'loading'; c.textContent = 'Loading…';
@@ -660,13 +689,24 @@ async function loadSuggestion() {
   try {
     const data = await API('/api/suggestion/today');
     const list = data.suggestions || [];
-    if (!list.length) {
+    const sitOut = data.sit_out || [];
+    const parts = [];
+    if (data.market_summary && (sitOut.length || !list.length)) {
+      parts.push(renderMarketSitOutSummary(data.market_summary));
+    }
+    if (list.length) {
+      parts.push(list.map(s => renderSuggestion(s, false, list)).join(''));
+    }
+    if (sitOut.length) {
+      parts.push(sitOut.map(s => renderSitOutCard(s)).join(''));
+    }
+    if (!parts.length) {
       c.className = '';
-      c.innerHTML = '<div class="empty">No suggestion yet.</div>';
+      c.innerHTML = '<div class="empty">No suggestion yet — run the suggestion engine after EOD data is ready.</div>';
       return;
     }
     c.className = '';
-    c.innerHTML = list.map(s => renderSuggestion(s, false, list)).join('');
+    c.innerHTML = parts.join('');
     bindSuggestionActions();
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
@@ -2508,14 +2548,7 @@ function renderExecutionGateBanner(s) {
 function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader = false) {
   const isNoSug = s.strategy === 'NONE' || s.status === 'NO_SUGGESTION';
   if (isNoSug) {
-    return `<div class="card">
-      <div class="card-head">
-        <h3>${escapeHtml(s.underlying)} — No suggestion</h3>
-        <span class="tag tag-warn">SKIPPED</span>
-      </div>
-      <p class="muted">${escapeHtml(s.no_suggestion_reason || '')}</p>
-      <p class="muted" style="font-size:.85rem">Confidence: ${formatConfidence(s) || `${s.confidence_score} passed`}</p>
-    </div>`;
+    return renderSitOutCard(s);
   }
   const econ = {
     np: s.net_credit, mp: s.max_profit, ml: s.max_loss,
@@ -5227,34 +5260,33 @@ loadZerodhaStatus();
 setInterval(loadZerodhaStatus, 60000);
 setInterval(_refreshAllFeedTags, 30000);
 
-// Auto-capture: when Kite redirects back to http://localhost:5001/?...&request_token=XYZ
-// the dashboard itself loads with the token in the URL. Pre-fill the input,
-// scrub the URL (so reloads don't try to reuse a single-use token), switch
-// to the Config tab and surface the card so the user just clicks Submit.
-(function _autoCaptureRequestToken() {
+// Return from /zerodha/callback server-side exchange (?tab=config&zerodha=ok).
+(function _handleZerodhaOAuthReturn() {
   try {
     const params = new URLSearchParams(window.location.search);
-    const rt = params.get('request_token');
-    if (!rt) return;
-    const apply = () => {
-      const inp = document.getElementById('zerodha-token-input');
-      if (!inp) return false;
-      inp.value = rt;
-      // Strip query string so a refresh doesn't reuse the (single-use) token.
-      const clean = window.location.pathname + window.location.hash;
-      window.history.replaceState({}, document.title, clean);
-      const card = document.getElementById('zerodha-session-card');
-      const tab = document.querySelector('[data-tab="config"], a[href="#config"], button[data-tab-target="config"]');
-      if (tab) tab.click();
-      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      const msg = document.getElementById('zerodha-submit-msg');
-      if (msg) { msg.textContent = '↑ request_token captured from redirect — click Submit Token.'; msg.style.color = ''; }
-      inp.focus();
-      return true;
+    const tab = params.get('tab');
+    const ok = params.get('zerodha') === 'ok';
+    const err = params.get('zerodha_error');
+    if (!tab && !ok && !err) return;
+    const finish = () => {
+      if (tab === 'config') switchTab('config');
+      if (ok) {
+        toast('Zerodha session saved — live feed should connect shortly.', 'ok');
+        loadZerodhaStatus();
+        const card = document.getElementById('zerodha-session-card');
+        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      if (err) {
+        toast('Zerodha login failed: ' + decodeURIComponent(err), 'err');
+        const inp = document.getElementById('zerodha-token-input');
+        if (inp) inp.focus();
+      }
+      window.history.replaceState({}, document.title, window.location.pathname + '#config');
     };
-    if (!apply()) {
-      // DOM not ready yet — retry after load.
-      window.addEventListener('DOMContentLoaded', apply, { once: true });
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', finish, { once: true });
+    } else {
+      finish();
     }
   } catch (e) { /* non-fatal */ }
 })();
@@ -5274,38 +5306,73 @@ function _extractRequestToken(raw) {
   return '';
 }
 
-// Submit handler — parses paste, posts to /api/zerodha/exchange.
-document.addEventListener('click', async (ev) => {
-  const btn = ev.target.closest('#zerodha-submit-btn');
-  if (!btn) return;
+async function _submitZerodhaRequestToken(rt) {
   const inp = document.getElementById('zerodha-token-input');
   const msg = document.getElementById('zerodha-submit-msg');
-  const rt = _extractRequestToken(inp ? inp.value : '');
-  if (!rt) {
+  const btn = document.getElementById('zerodha-submit-btn');
+  const token = _extractRequestToken(rt);
+  if (!token) {
     if (msg) { msg.textContent = '⚠ Could not find request_token. Paste the full redirect URL or just the token value.'; msg.style.color = '#c00'; }
-    return;
+    return false;
   }
-  btn.disabled = true;
+  if (inp) inp.value = token;
+  if (btn) btn.disabled = true;
   if (msg) { msg.textContent = 'Exchanging request_token…'; msg.style.color = ''; }
   try {
     const r = await fetch('/api/zerodha/exchange', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ request_token: rt }),
+      body: JSON.stringify({ request_token: token }),
     });
     const d = await r.json();
     if (d.ok) {
       if (msg) { msg.textContent = `✓ Logged in as ${d.user_id} at ${d.generated_at}`; msg.style.color = '#0a0'; }
       if (inp) inp.value = '';
       loadZerodhaStatus();
-    } else {
-      if (msg) { msg.textContent = '✗ ' + (d.error || 'exchange failed'); msg.style.color = '#c00'; }
+      toast('Zerodha session saved — live feed should connect shortly.', 'ok');
+      return true;
     }
+    if (msg) { msg.textContent = '✗ ' + (d.error || 'exchange failed'); msg.style.color = '#c00'; }
+    return false;
   } catch (e) {
     if (msg) { msg.textContent = '✗ ' + e; msg.style.color = '#c00'; }
+    return false;
   } finally {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
   }
+}
+
+// Legacy redirect to /?request_token=… — show on Config, then auto-submit.
+(function _autoCaptureRequestToken() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const rt = params.get('request_token');
+    if (!rt) return;
+    const apply = async () => {
+      switchTab('config');
+      const card = document.getElementById('zerodha-session-card');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Strip query string before exchange so refresh can't reuse the token.
+      window.history.replaceState({}, document.title, window.location.pathname + '#config');
+      const msg = document.getElementById('zerodha-submit-msg');
+      if (msg) { msg.textContent = 'request_token captured from URL — submitting…'; msg.style.color = ''; }
+      await _submitZerodhaRequestToken(rt);
+      return true;
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => { apply(); }, { once: true });
+    } else {
+      apply();
+    }
+  } catch (e) { /* non-fatal */ }
+})();
+
+// Submit handler — parses paste, posts to /api/zerodha/exchange.
+document.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('#zerodha-submit-btn');
+  if (!btn) return;
+  const inp = document.getElementById('zerodha-token-input');
+  await _submitZerodhaRequestToken(inp ? inp.value : '');
 });
 
 // Logout handler — wires up the button on the Config card.

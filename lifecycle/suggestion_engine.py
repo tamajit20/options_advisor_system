@@ -54,7 +54,7 @@ from engine.market_data_provenance import (
 )
 from engine.iv_calculator import implied_vol
 from engine.iv_rank import iv_rank as compute_iv_rank, pick_atm_iv
-from engine.strategy_selector import assemble_suggestion
+from engine.strategy_selector import assemble_suggestion, select_strategy
 from exceptions import StrategyVeto
 from lifecycle.chain_aggregator import load_trajectory
 from lifecycle.session_spot import build_session_bar
@@ -230,6 +230,58 @@ def _pick_expiries_in_band(
         result.append((chosen_weekly, "Weekly"))
 
     return result
+
+
+def _resolve_calendar_legs(
+    fo: FoEodRepo,
+    symbol: str,
+    trade_date: date,
+    entry_day: date,
+    *,
+    chain_provider=None,
+    live_today: Optional[date] = None,
+) -> Optional[dict]:
+    """Near/far expiries and chains for CALENDAR_SPREAD (P4 config bands)."""
+    near_dte_max = int(STRATEGY_CONFIG.get("calendar_near_dte_max", 10))
+    far_dte_min = int(STRATEGY_CONFIG.get("calendar_far_dte_min", 15))
+    dte_min = int(STRATEGY_CONFIG["dte_min"])
+
+    expiries = sorted(fo.expiries_for(symbol, trade_date))
+    near_candidates = [
+        e for e in expiries
+        if dte_min <= days_between(entry_day, e) <= near_dte_max
+    ]
+    if not near_candidates:
+        return None
+
+    near_expiry = near_candidates[0]
+    far_candidates = [
+        e for e in expiries
+        if e > near_expiry and days_between(entry_day, e) >= far_dte_min
+    ]
+    if not far_candidates:
+        return None
+    far_expiry = far_candidates[0]
+
+    _live = chain_provider is not None
+    if _live:
+        if live_today is None:
+            return None
+        near_chain = chain_provider.get_chain(symbol, live_today, near_expiry)
+        far_chain = chain_provider.get_chain(symbol, live_today, far_expiry)
+    else:
+        near_chain = fo.get_chain(symbol, trade_date, near_expiry)
+        far_chain = fo.get_chain(symbol, trade_date, far_expiry)
+
+    if not near_chain or not far_chain:
+        return None
+
+    return {
+        "near_expiry": near_expiry,
+        "far_expiry": far_expiry,
+        "near_chain": near_chain,
+        "far_chain": far_chain,
+    }
 
 
 def _compute_live_atm_iv_rank(
@@ -485,13 +537,77 @@ def _evaluate_underlying(
             events_calendar_row_count=events_total,
         )
 
-        if not confidence.all_passed:
+        calendar_legs: Optional[dict] = None
+        use_expiry = expiry
+        use_chain = chain
+        use_dte = entry_dte
+        use_indicators = indicators
+        use_confidence = confidence
+
+        if iv_rank is not None:
+            picked = select_strategy(
+                iv_rank=iv_rank,
+                trend=indicators.trend,
+                indicators=indicators,
+            )
+            if picked == "CALENDAR_SPREAD":
+                calendar_legs = _resolve_calendar_legs(
+                    fo, symbol, trade_date, entry_day,
+                    chain_provider=chain_provider,
+                    live_today=live_today,
+                )
+                if calendar_legs is None:
+                    no_suggestions.append(NoSuggestion(
+                        generated_on=now_ist(),
+                        underlying=symbol,
+                        confidence=confidence,
+                        reason=(
+                            f"[{expiry_type} {expiry}] Strategy veto: no suitable "
+                            f"calendar expiries (near ≤ "
+                            f"{STRATEGY_CONFIG.get('calendar_near_dte_max', 10)} DTE, "
+                            f"far ≥ {STRATEGY_CONFIG.get('calendar_far_dte_min', 15)} DTE)"
+                        ),
+                    ))
+                    continue
+                use_expiry = calendar_legs["near_expiry"]
+                use_chain = calendar_legs["near_chain"]
+                use_dte = max(days_between(entry_day, use_expiry), 0)
+                if use_expiry != expiry or use_dte != entry_dte:
+                    use_indicators = build_indicators(
+                        symbol=symbol,
+                        as_of=_trend_as_of,
+                        spot=spot,
+                        chain_rows=use_chain,
+                        spot_history=spot_history,
+                        vix_history=vix_history,
+                        atm_iv=atm_iv,
+                        dte=use_dte,
+                        fii_net_futures=fii_net_futures,
+                        oi_chain_rows=oi_abs_rows,
+                        oi_change_rows=oi_change_rows,
+                        trajectory=load_trajectory(
+                            db, symbol=symbol, expiry=use_expiry,
+                        ) if _live_mode else None,
+                        session_bar=_session_bar,
+                        live_mode=_live_mode,
+                    )
+                    use_confidence = evaluate_confidence(
+                        iv_rank=iv_rank,
+                        indicators=use_indicators,
+                        dte=use_dte,
+                        has_high_impact_event_this_week=has_event,
+                        high_impact_event_description=event_desc,
+                        events_calendar_row_count=events_total,
+                    )
+
+        if not use_confidence.all_passed:
             no_suggestions.append(NoSuggestion(
                 generated_on=now_ist(),
                 underlying=symbol,
-                confidence=confidence,
-                reason=f"[{expiry_type} {expiry}] Confidence {confidence.score}/{confidence.total}: "
-                       + "; ".join(confidence.failed_reasons),
+                confidence=use_confidence,
+                reason=f"[{expiry_type} {use_expiry}] Confidence "
+                       f"{use_confidence.score}/{use_confidence.total}: "
+                       + "; ".join(use_confidence.failed_reasons),
             ))
             continue
 
@@ -504,56 +620,17 @@ def _evaluate_underlying(
             _risk_pct = float(STRATEGY_CONFIG.get("risk_per_trade_pct", 0.02))
             _max_lots = int(STRATEGY_CONFIG.get("max_lots_cap", 3))
             _computed_lots = 1
-            if _capital > 0:
-                try:
-                    _test_sug = assemble_suggestion(
-                        suggestion_id=suggestion_id,
-                        underlying=symbol,
-                        expiry=expiry,
-                        expiry_type=expiry_type,
-                        dte=entry_dte,
-                        spot=spot,
-                        chain=chain,
-                        indicators=indicators,
-                        confidence=confidence,
-                        iv_rank=iv_rank,
-                        atm_iv=atm_iv,
-                        lots=1,
-                        lot_size=lot_size,
-                        existing_trade_names=existing_names,
-                        generated_on=now_ist(),
-                        execution_window=execution_window,
-                        data_date=trade_date,
-                        entry_date=entry_day,
-                        spot_data_date=actual_spot_date,
-                        fii_data_date=actual_fii_date,
-                        vix_data_date=actual_vix_date,
-                        oi_pcr_change=indicators.oi_pcr_change,
-                    )
-                    _ml = float(_test_sug.economics.max_loss or 0.0)
-                    if _ml > 0:
-                        _computed_lots = max(1, min(_max_lots, int(_math.floor(
-                            _capital * _risk_pct / _ml
-                        ))))
-                except Exception:
-                    logger.debug(
-                        "Position sizing dry-run failed for %s %s — using 1 lot",
-                        symbol, expiry,
-                    )
-
-            primary_suggestion = assemble_suggestion(
-                suggestion_id=suggestion_id,
+            _assemble_kw = dict(
                 underlying=symbol,
-                expiry=expiry,
+                expiry=use_expiry,
                 expiry_type=expiry_type,
-                dte=entry_dte,
+                dte=use_dte,
                 spot=spot,
-                chain=chain,
-                indicators=indicators,
-                confidence=confidence,
+                chain=use_chain,
+                indicators=use_indicators,
+                confidence=use_confidence,
                 iv_rank=iv_rank,
                 atm_iv=atm_iv,
-                lots=_computed_lots,
                 lot_size=lot_size,
                 existing_trade_names=existing_names,
                 generated_on=now_ist(),
@@ -563,7 +640,31 @@ def _evaluate_underlying(
                 spot_data_date=actual_spot_date,
                 fii_data_date=actual_fii_date,
                 vix_data_date=actual_vix_date,
-                oi_pcr_change=indicators.oi_pcr_change,
+                oi_pcr_change=use_indicators.oi_pcr_change,
+                calendar_legs=calendar_legs,
+            )
+            if _capital > 0:
+                try:
+                    _test_sug = assemble_suggestion(
+                        suggestion_id=suggestion_id,
+                        lots=1,
+                        **_assemble_kw,
+                    )
+                    _ml = float(_test_sug.economics.max_loss or 0.0)
+                    if _ml > 0:
+                        _computed_lots = max(1, min(_max_lots, int(_math.floor(
+                            _capital * _risk_pct / _ml
+                        ))))
+                except Exception:
+                    logger.debug(
+                        "Position sizing dry-run failed for %s %s — using 1 lot",
+                        symbol, use_expiry,
+                    )
+
+            primary_suggestion = assemble_suggestion(
+                suggestion_id=suggestion_id,
+                lots=_computed_lots,
+                **_assemble_kw,
             )
             primary_suggestion.pricing_provenance = provenance
             suggestions.append(primary_suggestion)
@@ -573,8 +674,8 @@ def _evaluate_underlying(
             no_suggestions.append(NoSuggestion(
                 generated_on=now_ist(),
                 underlying=symbol,
-                confidence=confidence,
-                reason=f"[{expiry_type} {expiry}] Strategy veto: {veto}",
+                confidence=use_confidence,
+                reason=f"[{expiry_type} {use_expiry}] Strategy veto: {veto}",
             ))
 
         # When the primary is IC or IB, also generate BPS and BCS as cheaper

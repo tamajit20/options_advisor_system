@@ -18,6 +18,7 @@ import json
 import logging
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 from flask import Flask, jsonify, redirect, render_template, request
 
@@ -432,11 +433,13 @@ def create_app() -> Flask:
     # Two endpoints work together so the operator can re-mint a Kite
     # access_token without dropping into a shell:
     #   GET  /zerodha/login        — 302 redirect to Kite's OAuth login URL
-    #   POST /api/zerodha/exchange — JSON {request_token}; the dashboard's
-    #                                Config card collects the token (raw or
-    #                                pasted as a redirect URL) and posts it.
+    #   GET  /zerodha/callback     — Kite redirect target; exchanges request_token
+    #   POST /api/zerodha/exchange — JSON {request_token}; manual fallback
     #   GET  /api/zerodha/status   — JSON snapshot of current session validity.
     #   POST /api/zerodha/logout   — clear persisted session (ws_runner exits).
+    #
+    # Kite Developer Console redirect URL must be:
+    #   http://localhost:5001/zerodha/callback
     @app.route("/zerodha/login")
     def zerodha_login_redirect():
         try:
@@ -445,6 +448,25 @@ def create_app() -> Flask:
         except (RuntimeError, ImportError) as exc:
             return jsonify({"ok": False, "error": str(exc)}), 500
         return redirect(url, code=302)
+
+    @app.route("/zerodha/callback")
+    def zerodha_callback():
+        """OAuth return URL — exchange request_token server-side, then redirect."""
+        rt = (request.args.get("request_token") or "").strip()
+        status = (request.args.get("status") or "").strip().lower()
+        kite_err = (request.args.get("error") or request.args.get("error_message") or "").strip()
+        if kite_err or (status and status != "success"):
+            msg = kite_err or f"Kite login status={status or 'unknown'}"
+            return redirect(f"/?tab=config&zerodha_error={quote(msg[:200])}")
+        if not rt:
+            return redirect("/?tab=config&zerodha_error=missing_request_token")
+        try:
+            from providers.zerodha.session import exchange_request_token
+            exchange_request_token(rt)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("zerodha callback exchange failed")
+            return redirect(f"/?tab=config&zerodha_error={quote(str(exc)[:200])}")
+        return redirect("/?tab=config&zerodha=ok")
 
     @app.route("/api/zerodha/exchange", methods=["POST"])
     def api_zerodha_exchange():
@@ -567,7 +589,27 @@ def create_app() -> Flask:
                 "label": _execution_gate_label(gate, r),
             }
             out.append(r_out)
-        return jsonify({"suggestions": out, "freshness_minutes": fresh_min})
+        from engine.market_regime import regime_from_sit_out_row, summarize_market_sit_out
+
+        pending_underlyings = {r.get("underlying") for r in out if r.get("underlying")}
+        sit_out_raw = sug.active_sit_out_today()
+        sit_out: list = []
+        for r in sit_out_raw:
+            if r.get("underlying") in pending_underlyings:
+                continue
+            r_out = _row(r)
+            r_out["confidence_display"] = _confidence_display(r)
+            r_out["market_regime"] = regime_from_sit_out_row(r_out)
+            sit_out.append(r_out)
+
+        market_summary = summarize_market_sit_out(sit_out)
+
+        return jsonify({
+            "suggestions": out,
+            "sit_out": sit_out,
+            "market_summary": market_summary,
+            "freshness_minutes": fresh_min,
+        })
 
     @app.route("/api/suggestion/<sid>/mark-executed", methods=["POST"])
     @_with_db
