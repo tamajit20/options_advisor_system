@@ -1852,6 +1852,38 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .cb-status-warn { color: var(--warn); }
 
 /* ---------- WS Monitor (Phase 2b telemetry surface) ---------- */
+.wsmon-config-card {
+  margin: 0 0 12px 0;
+  padding: 1rem;
+  border: 1px solid var(--border, #2a3744);
+  border-radius: 8px;
+}
+.wsmon-config-title { margin: 0 0 .5rem 0; font-size: 1rem; }
+.wsmon-config-steps {
+  margin: .6rem 0 .4rem 1.1rem;
+  padding: 0;
+  font-size: .88rem;
+  line-height: 1.5;
+}
+.wsmon-config-actions {
+  display: flex;
+  gap: .4rem;
+  align-items: center;
+  margin-top: .5rem;
+  flex-wrap: wrap;
+}
+.wsmon-token-input {
+  flex: 1;
+  min-width: 240px;
+  padding: .4rem .6rem;
+  border: 1px solid var(--border, #2a3744);
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: .85rem;
+  background: var(--surface);
+  color: var(--text);
+}
+.wsmon-config-hint { margin-top: .4rem; font-size: .82rem; }
 .wsmon-summary { margin-bottom: 8px; }
 .wsmon-cards {
   display: grid;

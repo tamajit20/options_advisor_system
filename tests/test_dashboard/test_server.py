@@ -364,7 +364,7 @@ class TestZerodhaCallback:
             follow_redirects=False,
         )
         assert resp.status_code == 302
-        assert "tab=config" in resp.headers["Location"]
+        assert "tab=wsmon" in resp.headers["Location"]
         assert "zerodha=ok" in resp.headers["Location"]
 
     def test_callback_missing_token_redirects_with_error(self, client):

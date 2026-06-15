@@ -457,16 +457,16 @@ def create_app() -> Flask:
         kite_err = (request.args.get("error") or request.args.get("error_message") or "").strip()
         if kite_err or (status and status != "success"):
             msg = kite_err or f"Kite login status={status or 'unknown'}"
-            return redirect(f"/?tab=config&zerodha_error={quote(msg[:200])}")
+            return redirect(f"/?tab=wsmon&zerodha_error={quote(msg[:200])}")
         if not rt:
-            return redirect("/?tab=config&zerodha_error=missing_request_token")
+            return redirect("/?tab=wsmon&zerodha_error=missing_request_token")
         try:
             from providers.zerodha.session import exchange_request_token
             exchange_request_token(rt)
         except Exception as exc:  # noqa: BLE001
             logger.exception("zerodha callback exchange failed")
-            return redirect(f"/?tab=config&zerodha_error={quote(str(exc)[:200])}")
-        return redirect("/?tab=config&zerodha=ok")
+            return redirect(f"/?tab=wsmon&zerodha_error={quote(str(exc)[:200])}")
+        return redirect("/?tab=wsmon&zerodha=ok")
 
     @app.route("/api/zerodha/exchange", methods=["POST"])
     def api_zerodha_exchange():

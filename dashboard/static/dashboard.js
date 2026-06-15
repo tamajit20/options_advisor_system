@@ -1349,7 +1349,14 @@ function longPremiumTargetMult(dte) {
 
 function isDebitStrategy(strategy) {
   return ['LONG_STRADDLE', 'LONG_STRANGLE', 'LONG_CALL', 'LONG_PUT',
-          'BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(strategy || '');
+          'BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD', 'CALENDAR_SPREAD'].includes(strategy || '');
+}
+
+/** Credit structures with a persisted Nifty spot stop band (not MTM-only exits). */
+function usesSpotStopLoss(strategy, slLevel) {
+  if (isDebitStrategy(strategy)) return false;
+  const sl = slLevel != null ? parseFloat(slLevel) : NaN;
+  return !isNaN(sl) && sl > 0;
 }
 
 /** Exit price hint for one leg. SELL shorts: buy back lower. BUY longs: sell higher. */
@@ -2670,12 +2677,12 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       ${econ.lb != null ? `<div><span class="k">Lower BE</span><br><span class="v econ-lb">₹${fmt(econ.lb)}${spotDist(econ.lb, s.spot_at_generation)}</span></div>` : ''}
       ${(() => {
         const twoSided = ['IRON_CONDOR', 'IRON_BUTTERFLY'].includes(s.strategy);
-        const debitSpread = ['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(s.strategy);
-        if (debitSpread || econ.sl == null) {
-          const mtmNote = debitSpread
-            ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">Spot SL not used — exit on 50% of max debit (MTM)</span>`
+        const debitOrMtm = isDebitStrategy(s.strategy) || econ.sl == null;
+        if (debitOrMtm) {
+          const mtmNote = isDebitStrategy(s.strategy)
+            ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">Spot SL not used — ${slExitPlanText(s.strategy, econ.ml)}</span>`
             : '';
-          return `<div><span class="k">Stop loss</span><br><span class="v">${debitSpread ? 'MTM-based' : '—'}${mtmNote}</span></div>`;
+          return `<div><span class="k">Stop loss</span><br><span class="v">MTM-based${mtmNote}</span></div>`;
         }
         if (!twoSided) {
           return `<div><span class="k">Stop loss</span><br><span class="v">₹${fmt(econ.sl)}${spotDist(econ.sl, s.spot_at_generation)}</span></div>`;
@@ -2715,15 +2722,21 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       <div class="sl-monitor-label" style="margin-bottom:6px">Nifty spot at execution</div>
       <div class="exec-spot-row">
         <div class="sl-field">
-          <label class="sl-label">Your actual Nifty spot <span class="muted" style="font-size:.7rem">(used ₹${fmt(s.spot_at_generation)})</span></label>
+          <label class="sl-label">Your actual Nifty spot <span class="muted" style="font-size:.7rem">(suggested ₹${fmt(s.spot_at_generation)})</span></label>
           <input type="number" step="1" class="sl-input exec-spot-input"
                  placeholder="e.g. ${Math.round(s.spot_at_generation || 0)}">
         </div>
+        ${usesSpotStopLoss(s.strategy, econ.sl) ? `
         <div class="sl-field">
           <label class="sl-label">Adjusted SL level</label>
           <span class="sl-prem-val exec-adj-sl">₹${fmt(econ.sl)}</span>
           <span class="muted exec-adj-note" style="font-size:.72rem">(suggested, fill spot to adjust)</span>
-        </div>
+        </div>` : `
+        <div class="sl-field">
+          <label class="sl-label">Exit on loss</label>
+          <span class="sl-prem-val">MTM-based</span>
+          <span class="muted exec-adj-note" style="font-size:.72rem">${escapeHtml(slExitPlanText(s.strategy, econ.ml))}</span>
+        </div>`}
       </div>
     </div>
     <div class="btn-row" style="margin-top:12px">
@@ -2910,11 +2923,13 @@ function bindSuggestionActions() {
         recalc();
       }
       if (inp.classList.contains('exec-spot-input')) {
+        if (!usesSpotStopLoss(card.dataset.strategy, card.dataset.baseSl)) return;
         const spot = parseFloat(inp.value);
         const sugSl   = parseFloat(card.dataset.baseSl)    || 0;
         const sugSpot = parseFloat(card.dataset.spotAtGen) || 0;
         const adjSlEl  = card.querySelector('.exec-adj-sl');
         const noteEl   = card.querySelector('.exec-adj-note');
+        if (!adjSlEl || !noteEl) return;
         if (!isNaN(spot) && spot > 0 && sugSl > 0) {
           const delta = spot - sugSpot;
           adjSlEl.textContent = `\u20b9${fmt(sugSl + delta)}`;
@@ -2994,7 +3009,8 @@ function bindSuggestionActions() {
     });
     const sugSl   = parseFloat(card.dataset.baseSl)    || 0;
     const sugSpot = parseFloat(card.dataset.spotAtGen) || 0;
-    const adjSl = (spotVal != null && !isNaN(spotVal) && spotVal > 0 && sugSl > 0)
+    const spotSlStrategy = usesSpotStopLoss(card.dataset.strategy, sugSl);
+    const adjSl = (spotSlStrategy && spotVal != null && !isNaN(spotVal) && spotVal > 0 && sugSl > 0)
       ? sugSl + (spotVal - sugSpot) : null;
     try {
       const r = await API(`/api/suggestion/${sid}/mark-executed`, {
@@ -4423,8 +4439,6 @@ $('#hsug-to').addEventListener('change', loadHistorySuggestions);
 
 // ---------------- Tab 5: Config ----------------
 async function loadConfig() {
-  // Fire-and-forget refresh of the Zerodha session card.
-  loadZerodhaStatus();
   const c = $('#config-container');
   c.className='loading'; c.textContent='Loading…';
   try {
@@ -4753,6 +4767,7 @@ function _wsmonStateClass(state) {
 }
 
 async function loadWsMonitor({ silent = false } = {}) {
+  if (!silent) loadZerodhaStatus();
   const summary = $('#wsmon-summary');
   const eventsEl = $('#wsmon-events');
   if (!silent && summary) summary.classList.add('loading');
@@ -5260,7 +5275,7 @@ loadZerodhaStatus();
 setInterval(loadZerodhaStatus, 60000);
 setInterval(_refreshAllFeedTags, 30000);
 
-// Return from /zerodha/callback server-side exchange (?tab=config&zerodha=ok).
+// Return from /zerodha/callback server-side exchange (?tab=wsmon&zerodha=ok).
 (function _handleZerodhaOAuthReturn() {
   try {
     const params = new URLSearchParams(window.location.search);
@@ -5269,7 +5284,7 @@ setInterval(_refreshAllFeedTags, 30000);
     const err = params.get('zerodha_error');
     if (!tab && !ok && !err) return;
     const finish = () => {
-      if (tab === 'config') switchTab('config');
+      if (tab === 'wsmon' || tab === 'config') switchTab('wsmon');
       if (ok) {
         toast('Zerodha session saved — live feed should connect shortly.', 'ok');
         loadZerodhaStatus();
@@ -5281,7 +5296,7 @@ setInterval(_refreshAllFeedTags, 30000);
         const inp = document.getElementById('zerodha-token-input');
         if (inp) inp.focus();
       }
-      window.history.replaceState({}, document.title, window.location.pathname + '#config');
+      window.history.replaceState({}, document.title, window.location.pathname + '#wsmon');
     };
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', finish, { once: true });
@@ -5342,18 +5357,18 @@ async function _submitZerodhaRequestToken(rt) {
   }
 }
 
-// Legacy redirect to /?request_token=… — show on Config, then auto-submit.
+// Legacy redirect to /?request_token=… — show on WS Monitor, then auto-submit.
 (function _autoCaptureRequestToken() {
   try {
     const params = new URLSearchParams(window.location.search);
     const rt = params.get('request_token');
     if (!rt) return;
     const apply = async () => {
-      switchTab('config');
+      switchTab('wsmon');
       const card = document.getElementById('zerodha-session-card');
       if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
       // Strip query string before exchange so refresh can't reuse the token.
-      window.history.replaceState({}, document.title, window.location.pathname + '#config');
+      window.history.replaceState({}, document.title, window.location.pathname + '#wsmon');
       const msg = document.getElementById('zerodha-submit-msg');
       if (msg) { msg.textContent = 'request_token captured from URL — submitting…'; msg.style.color = ''; }
       await _submitZerodhaRequestToken(rt);
@@ -5375,7 +5390,7 @@ document.addEventListener('click', async (ev) => {
   await _submitZerodhaRequestToken(inp ? inp.value : '');
 });
 
-// Logout handler — wires up the button on the Config card.
+// Logout handler — wires up the button on the WS Monitor session card.
 document.addEventListener('click', async (ev) => {
   const btn = ev.target.closest('#zerodha-logout-btn');
   if (!btn) return;

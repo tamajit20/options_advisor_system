@@ -425,6 +425,8 @@ def _evaluate_underlying(
 
     suggestions: list[Suggestion] = []
     no_suggestions: list[NoSuggestion] = []
+    # LIVE: ID reflects the tick session day; EOD: ID reflects the bhav/IV data date.
+    _id_date = live_today if (_live_mode and live_today is not None) else trade_date
 
     for expiry, expiry_type in expiry_candidates:
         # entry_dte: calendar days from the actual entry day to expiry.
@@ -611,7 +613,7 @@ def _evaluate_underlying(
             ))
             continue
 
-        suggestion_id = sug_repo.next_suggestion_id(trade_date)
+        suggestion_id = sug_repo.next_suggestion_id(_id_date)
         primary_suggestion: Optional[Suggestion] = None
         try:
             # P2: Dynamic lot sizing — dry-run at 1 lot to discover max_loss, then scale.
@@ -694,7 +696,7 @@ def _evaluate_underlying(
             # Both BPS (put side) and BCS (call side) are valid for a SIDEWAYS market.
             for companion_strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
                 try:
-                    comp_id = sug_repo.next_suggestion_id(trade_date)
+                    comp_id = sug_repo.next_suggestion_id(_id_date)
                     comp = assemble_suggestion(
                         suggestion_id=comp_id,
                         underlying=symbol,
