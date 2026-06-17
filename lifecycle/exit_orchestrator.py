@@ -192,16 +192,21 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
                 max_loss_rs=max_loss_rs,
                 strategy=strategy,
             )
-            if advice is not None:
+            _long_vol = frozenset(
+                (STRATEGY_CONFIG.get("long_premium_thesis_exit") or {}).get("strategies")
+                or ["LONG_STRADDLE", "LONG_STRANGLE"]
+            )
+            if advice is not None and strategy not in _long_vol:
                 notif.insert(Notification(
                     created_at=now_ist(),
                     notif_type="ADVERSE_MOVE_WARNING",
-                    severity="WARNING",
+                    severity="INFO",
                     title=(
                         f"{trade.get('trade_name') or trade_id}: "
                         f"{advice.headline}"
                     ),
-                    body=advice.recovery_hint,
+                    body=advice.recovery_hint
+                           + "\n[INFO ONLY — no mandatory exit; act only on loss limit or sell signal.]",
                     related_trade_id=trade_id,
                 ))
         else:
@@ -338,7 +343,7 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
             #   WARNING  — needs attention within a day:
             #              EXIT_TOMORROW, TIME_DECAY_DONE.
             #   INFO     — informational HOLD outcomes never reach this branch.
-            crit_kinds = {"EXPIRE", "SL_HIT", "TAKE_PROFIT"}
+            crit_kinds = {"EXPIRE", "SL_HIT", "TAKE_PROFIT", "THESIS_FAIL"}
             warn_kinds = {"EXIT_TOMORROW", "TIME_DECAY_DONE"}
             if decision.decision in crit_kinds:
                 sev = "CRITICAL"

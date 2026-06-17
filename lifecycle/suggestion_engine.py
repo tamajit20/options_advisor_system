@@ -615,6 +615,10 @@ def _evaluate_underlying(
 
         suggestion_id = sug_repo.next_suggestion_id(_id_date)
         primary_suggestion: Optional[Suggestion] = None
+        _lv_gate = STRATEGY_CONFIG.get("long_vol_entry_gate") or {}
+        _lv_lookahead = int(_lv_gate.get("catalyst_lookahead_days", 14))
+        _catalyst_end = min(entry_day + timedelta(days=_lv_lookahead), use_expiry)
+        _has_lv_catalyst = event_repo.has_high_impact(entry_day, _catalyst_end)
         try:
             # P2: Dynamic lot sizing — dry-run at 1 lot to discover max_loss, then scale.
             import math as _math
@@ -644,6 +648,7 @@ def _evaluate_underlying(
                 vix_data_date=actual_vix_date,
                 oi_pcr_change=use_indicators.oi_pcr_change,
                 calendar_legs=calendar_legs,
+                has_long_vol_catalyst=_has_lv_catalyst,
             )
             if _capital > 0:
                 try:

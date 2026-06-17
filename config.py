@@ -514,10 +514,37 @@ STRATEGY_CONFIG = {
         "absolute_cap_rs":      10_000.0,
         "cap_min_max_loss_rs":  None,
     },
+    # Short-premium structures — event-eve pre-breach tightening and gap-risk
+    # advisories apply only to these (not long straddle/strangle).
+    "short_premium_strategies": [
+        "IRON_CONDOR", "IRON_BUTTERFLY", "BULL_PUT_SPREAD",
+        "BEAR_CALL_SPREAD", "JADE_LIZARD",
+    ],
+
+    # Long-vol entry gate (profit-first): block straddle/strangle when IV rank is
+    # dead AND there is no HIGH-impact catalyst before expiry, or when IV/HV shows
+    # no real vol-buying edge (options overpriced vs realised vol).
+    "long_vol_entry_gate": {
+        "enabled": True,
+        "strategies": ["LONG_STRADDLE", "LONG_STRANGLE"],
+        "iv_rank_min_without_catalyst": 15.0,
+        "iv_premium_max": 1.00,
+        "catalyst_lookahead_days": 14,
+    },
+
+    # Long-premium thesis exit: near expiry, still losing with no payoff — exit
+    # before theta grinds further (fires before hard SL when conditions met).
+    "long_premium_thesis_exit": {
+        "strategies": ["LONG_STRADDLE", "LONG_STRANGLE"],
+        "dte": 5,
+        "min_loss_fraction": 0.20,
+    },
+
     "strategy_sl_limits": {
-        # Long premium — tight protection on expensive debits
-        "LONG_STRADDLE":    {"loss_fraction": 0.30, "absolute_cap_rs": 10_000},
-        "LONG_STRANGLE":    {"loss_fraction": 0.30, "absolute_cap_rs": 10_000},
+        # Long straddle/strangle — wider MTM room (theta bleed is normal); naked
+        # longs stay tighter (single-leg leverage).
+        "LONG_STRADDLE":    {"loss_fraction": 0.50, "absolute_cap_rs": 10_000},
+        "LONG_STRANGLE":    {"loss_fraction": 0.50, "absolute_cap_rs": 10_000},
         "LONG_CALL":        {"loss_fraction": 0.30, "absolute_cap_rs": 10_000},
         "LONG_PUT":         {"loss_fraction": 0.30, "absolute_cap_rs": 10_000},
         # Credit spreads — fraction-first on smaller trades; ₹15k cap on large
@@ -641,9 +668,11 @@ STRATEGY_CONFIG = {
         # Event-eve tightening (Phase 3 — #5).
         # When events_repo reports a HIGH-impact event for tomorrow, the live
         # monitor uses this tighter pre-breach fraction (default 0.20)
-        # instead of `pre_breach_fraction` (default 0.30) so the user gets
-        # earlier warnings on event-eve.
+        # instead of `pre_breach_fraction` for short-premium trades only.
         "event_eve_pre_breach_fraction": 0.20,
+        # Long-vol trades keep the standard pre_breach_fraction on event eve —
+        # the event is often the thesis, not gap risk to flee.
+        "event_eve_credit_only": True,
     },
 
     # Suggestion freshness (Phase 3 — #2).

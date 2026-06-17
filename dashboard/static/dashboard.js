@@ -897,12 +897,14 @@ function _computeTradeActionInstruction(opts) {
       cta: 'Use Close Trade below and record exit prices.',
     };
   }
-  if (lossHit || rn === 'LOSS_LIMIT_HIT') {
+  if (lossHit || rn === 'LOSS_LIMIT_HIT' || rn === 'THESIS_FAIL' || rn === 'EXIT_THESIS_FAIL') {
     return {
       tone: 'critical',
       verb: 'CLOSE NOW',
-      title: 'Close the entire trade',
-      instruction: 'Buy back every short leg and sell every long leg — exit the full position. '
+      title: rn.includes('THESIS') ? 'Close — thesis failed' : 'Close the entire trade',
+      instruction: rn.includes('THESIS')
+        ? 'Long-vol thesis window closed (near expiry, still losing). Exit the full position.'
+        : 'Buy back every short leg and sell every long leg — exit the full position. '
         + 'This is your MTM stop loss.',
       why: liveMtm != null && lossRs != null
         ? `Live MTM ${_fmtMtmSigned(liveMtm)} · loss limit −₹${fmt(lossRs)}`
@@ -966,13 +968,25 @@ function _computeTradeActionInstruction(opts) {
   if (preBreachNear || rn === 'PRE_BREACH_WARNING') {
     return {
       tone: 'watch',
-      verb: 'WATCH',
-      title: 'Approaching loss limit — prepare to exit',
-      instruction: 'Do not add size. Decide your exit plan now; close if MTM falls to the loss limit.',
+      verb: 'INFO ONLY',
+      title: 'Approaching loss limit — monitor only',
+      instruction: 'Informational early warning. Do NOT exit on this alone — wait for '
+        + 'LOSS LIMIT HIT, THESIS FAIL, or an explicit sell signal from the system.',
       why: liveMtm != null && lossRs != null
         ? `Live MTM ${_fmtMtmSigned(liveMtm)} · loss limit −₹${fmt(lossRs)}`
         : 'Pre-breach warning fired today.',
-      cta: 'No action yet unless loss limit hits.',
+      cta: 'No mandatory action.',
+    };
+  }
+  if (rn === 'ADVERSE_MOVE_WARNING' || rn === 'EXIT_ADVERSE_MOVE_WARNING') {
+    return {
+      tone: 'watch',
+      verb: 'INFO ONLY',
+      title: 'Adverse move — EOD advisory',
+      instruction: 'End-of-day heads-up only. Long-vol and credit trades: do not treat this '
+        + 'as a mandatory exit unless loss limit or thesis-fail fires.',
+      why: 'From the daily exit engine (not a live stop).',
+      cta: 'No mandatory action.',
     };
   }
   if (exitInstruction && /exit|close/i.test(exitInstruction)) {
@@ -3666,18 +3680,20 @@ function renderTrade(t) {
             ra.notif_type === 'PROFIT_FLOOR_SET'   ? 'tag tag-ok'   :
             ra.notif_type === 'PROFIT_FLOOR_HIT'   ? 'tag tag-warn' :
             ra.notif_type === 'LOSS_LIMIT_HIT'     ? 'tag tag-err'  :
+            ra.notif_type === 'THESIS_FAIL'        ? 'tag tag-err'  :
             ra.notif_type === 'SL_TRIGGER'         ? 'tag tag-err'  :
             ra.notif_type === 'SHORT_LEG_STRESS'   ? 'tag tag-warn' :
-            ra.notif_type === 'PRE_BREACH_WARNING' ? 'tag tag-warn' : 'tag';
+            ra.notif_type === 'PRE_BREACH_WARNING' ? 'tag tag-muted' : 'tag';
           const icon =
             ra.notif_type === 'TARGET_HIT'         ? '\u2705 '  :
             ra.notif_type === 'TARGET_LOCKED'      ? '\ud83d\udd12 ' :
             ra.notif_type === 'PROFIT_FLOOR_SET'   ? '\ud83d\udd12 ' :
             ra.notif_type === 'PROFIT_FLOOR_HIT'   ? '\u26a0\ufe0f ' :
             ra.notif_type === 'LOSS_LIMIT_HIT'     ? '\ud83d\uded1 ' :
+            ra.notif_type === 'THESIS_FAIL'        ? '\ud83d\uded1 ' :
             ra.notif_type === 'SL_TRIGGER'         ? '\ud83d\uded1 ' :
             ra.notif_type === 'SHORT_LEG_STRESS'   ? '\u26a0\ufe0f ' :
-            ra.notif_type === 'PRE_BREACH_WARNING' ? '\u26a0\ufe0f ' : '';
+            ra.notif_type === 'PRE_BREACH_WARNING' ? '\u2139\ufe0f ' : '';
           const tip = (ra.title || ra.notif_type) +
                       (ra.body ? ` — ${ra.body}` : '');
           return `<span class="${cls} risk-alert-static" title="${escapeHtml(tip)}">${icon}${escapeHtml(ra.notif_type.replace(/_/g, ' '))}</span>`;
@@ -4998,7 +5014,7 @@ const _NF_CAT_LABELS = {
 
 const _NF_TYPE_CAT = {
   SL_TRIGGER: 'sl', SL_HIT: 'sl', PRE_BREACH_WARNING: 'sl',
-  LOSS_LIMIT_HIT: 'sl', PROFIT_FLOOR_HIT: 'sl', SHORT_LEG_STRESS: 'sl',
+  LOSS_LIMIT_HIT: 'sl', THESIS_FAIL: 'sl', PROFIT_FLOOR_HIT: 'sl', SHORT_LEG_STRESS: 'sl',
   TARGET_HIT: 'profit', TAKE_PROFIT: 'profit', TARGET_LOCKED: 'profit',
   PROFIT_FLOOR_SET: 'profit',
   EXIT_TOMORROW: 'exit', TIME_DECAY_DONE: 'exit', EXPIRE: 'exit', AUTO_SETTLED: 'exit',

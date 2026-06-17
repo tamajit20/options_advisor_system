@@ -95,8 +95,37 @@ class TestExitEngine:
         assert result.decision == "HOLD"
 
 
-def test_long_straddle_sl_at_hybrid_cap_not_50pct_debit():
-    """LONG_STRADDLE SL binds at min(30% debit, ₹10k cap) → ₹10k on BNIFTY-sized debit."""
+def test_long_straddle_thesis_fail_near_expiry():
+    """LONG_STRANGLE thesis exit when DTE low and losing ≥ min_loss_fraction."""
+    legs = [
+        {"action": "BUY", "strike": 23000.0, "option_type": "CE",
+         "fill_price": 100.0, "lots": 1, "lot_size": 50},
+        {"action": "BUY", "strike": 23000.0, "option_type": "PE",
+         "fill_price": 100.0, "lots": 1, "lot_size": 50},
+    ]
+    entry_debit = -(100 + 100) * 50
+    max_loss = abs(entry_debit)
+    chain = [
+        {"strike": 23000.0, "option_type": "CE", "mid_price": 75.0},
+        {"strike": 23000.0, "option_type": "PE", "mid_price": 75.0},
+    ]
+    result = evaluate_exit(
+        trade_id="T-THESIS",
+        legs=legs,
+        current_chain=chain,
+        entry_net_credit=entry_debit,
+        max_profit_rs=float("inf"),
+        max_loss_rs=max_loss,
+        sl_level_per_share=None,
+        days_to_expiry=4,
+        strategy="LONG_STRANGLE",
+    )
+    assert result.decision == "THESIS_FAIL"
+    assert "thesis window closed" in result.reason
+
+
+def test_long_straddle_sl_at_hybrid_cap():
+    """LONG_STRADDLE SL binds at min(50% debit, ₹10k cap) → ₹10k on BNIFTY-sized debit."""
     legs = [
         {"action": "BUY", "strike": 54900.0, "option_type": "CE",
          "fill_price": 1178.0, "lots": 1, "lot_size": 35},

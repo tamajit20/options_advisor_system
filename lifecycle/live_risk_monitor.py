@@ -268,6 +268,7 @@ _DEFAULTS = {
     # Phase 3 — #5 tighter pre-breach when there is a HIGH-impact event
     # tomorrow (events_repo provides has_high_impact()).
     "event_eve_pre_breach_fraction": 0.20,
+    "event_eve_credit_only":         True,
     # Per-leg short premium blow-up early warning (moved from IntradayMonitor).
     "short_leg_stress_enabled":     True,
     "short_leg_stress_multiplier":  2.0,
@@ -382,6 +383,13 @@ class LiveRiskMonitor:
         self._stale_window = timedelta(seconds=cfg["stale_leg_seconds"])
         self._pre_breach_fraction = cfg["pre_breach_fraction"]
         self._event_eve_pre_breach = cfg["event_eve_pre_breach_fraction"]
+        self._event_eve_credit_only = bool(cfg.get("event_eve_credit_only", True))
+        self._event_eve_tighten_strats = frozenset(
+            STRATEGY_CONFIG.get("short_premium_strategies") or [
+                "IRON_CONDOR", "IRON_BUTTERFLY", "BULL_PUT_SPREAD",
+                "BEAR_CALL_SPREAD", "JADE_LIZARD",
+            ]
+        )
         self._target_min_dte = cfg["target_min_dte"]
         self._target_max_dte = cfg["target_max_dte"]
         self._target_min = cfg["target_fraction_at_min_dte"]
@@ -759,7 +767,7 @@ class LiveRiskMonitor:
 
         current_pnl = self._current_pnl(state)
         target_fraction = self._dte_target_fraction(dte)
-        active_pre_breach = self._active_pre_breach_fraction(now)
+        active_pre_breach = self._active_pre_breach_fraction(now, state.strategy)
         sl_threshold, sl_label = effective_sl_rs(
             strategy=state.strategy, max_loss_rs=state.max_loss)
         target_rs = (
@@ -862,6 +870,19 @@ class LiveRiskMonitor:
             )
             return alert, mtm_payload, trailing_persist, snapshot_payload
 
+        # 1a-ii. Long-premium thesis fail (near expiry, no payoff).
+        if decision.decision == "THESIS_FAIL":
+            alert = self._maybe_alert(
+                state, "THESIS_FAIL", "CRITICAL",
+                title=f"Thesis failed on {state.trade_name}",
+                body=self._format_pnl_body(
+                    state, current_pnl, decision.reason,
+                ),
+                breach_key="THESIS_FAIL", now=now,
+                threshold_rs=sl_threshold,
+            )
+            return alert, mtm_payload, trailing_persist, snapshot_payload
+
         # 1b. Trailing profit floor breach (separate breach bucket / cooldown).
         if trailing_breach:
             reason = (
@@ -889,9 +910,10 @@ class LiveRiskMonitor:
             state.in_breach["PRE_BREACH"] = True
             state.last_alert_at["PRE_BREACH"] = now
             return _PendingAlert(
-                state=state, notif_type="PRE_BREACH_WARNING", severity="WARNING",
-                title=f"Approaching SL on {state.trade_name}",
-                body=self._format_pnl_body(state, current_pnl, reason),
+                state=state, notif_type="PRE_BREACH_WARNING", severity="INFO",
+                title=f"Approaching SL on {state.trade_name} (info only)",
+                body=self._format_pnl_body(state, current_pnl, reason)
+                       + " [INFO ONLY — no exit until loss limit or explicit sell.]",
                 breach_key="PRE_BREACH",
             ), mtm_payload, trailing_persist, snapshot_payload
 
@@ -1111,14 +1133,14 @@ class LiveRiskMonitor:
         f = (dte - self._target_min_dte) / span
         return self._target_min + f * (self._target_max - self._target_min)
 
-    def _active_pre_breach_fraction(self, now: datetime) -> float:
+    def _active_pre_breach_fraction(self, now: datetime, strategy: str = "") -> float:
         """Returns the pre-breach loss fraction to use right now.
 
         Falls back to the standard ``pre_breach_fraction`` unless an
         ``events_repo`` was supplied AND it reports a HIGH-impact event
         scheduled for tomorrow (today + 1). In that case the tighter
-        ``event_eve_pre_breach_fraction`` applies. Cached per IST day to
-        keep the hot tick path off the DB."""
+        ``event_eve_pre_breach_fraction`` applies for short-premium trades
+        only when ``event_eve_credit_only`` is enabled. Cached per IST day."""
         if self._events_repo is None:
             return self._pre_breach_fraction
         today = now.date()
@@ -1132,7 +1154,12 @@ class LiveRiskMonitor:
                 logger.exception("LiveRiskMonitor: events_repo lookup failed")
                 has_event = False
             self._event_eve_cache = (today, has_event)
-        return self._event_eve_pre_breach if has_event else self._pre_breach_fraction
+        if has_event:
+            if (self._event_eve_credit_only
+                    and strategy not in self._event_eve_tighten_strats):
+                return self._pre_breach_fraction
+            return self._event_eve_pre_breach
+        return self._pre_breach_fraction
 
     def _persist_trailing(
         self, trade_id: str, floor: Optional[float], step_idx: int,

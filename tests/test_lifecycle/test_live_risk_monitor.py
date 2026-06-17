@@ -386,7 +386,7 @@ class TestPreBreachWarning:
         assert notifier.notify.call_count == 1
         kwargs = notifier.notify.call_args.kwargs
         assert kwargs["notif_type"] == "PRE_BREACH_WARNING"
-        assert kwargs["severity"] == "WARNING"
+        assert kwargs["severity"] == "INFO"
 
     def test_pre_breach_fires_only_once_per_day(self):
         state = _make_state(max_loss=10000.0)
@@ -808,6 +808,7 @@ class TestEventEvePreBreach:
             # Standard pre-breach is 30%, event-eve 20%.
             "pre_breach_fraction": 0.30,
             "event_eve_pre_breach_fraction": 0.20,
+            "event_eve_credit_only": True,
             "stale_leg_seconds": 600,
             "trailing_sl_steps": [],
         }
@@ -831,6 +832,18 @@ class TestEventEvePreBreach:
     def test_no_event_uses_standard_fraction(self):
         # MTM ≈ -1200; standard pre_breach 30%×SL(5k)=₹1.5k → no warning yet.
         m, notifier, bus, state, _ = self._build(has_event_tomorrow=False)
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 112.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 112.0))
+        warns = [c for c in notifier.notify.call_args_list
+                 if c.kwargs.get("notif_type") == "PRE_BREACH_WARNING"]
+        assert len(warns) == 0
+
+    def test_event_eve_does_not_tighten_long_vol(self):
+        """LONG_STRANGLE keeps standard pre-breach on event eve (credit_only)."""
+        m, notifier, bus, state, _ = self._build(has_event_tomorrow=True)
+        state.strategy = "LONG_STRANGLE"
+        # MTM ≈ -1200; event-eve 20%×SL(5k)=₹1k would fire for credit;
+        # long-vol uses 30%×5k=₹1.5k → no warning.
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 112.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 112.0))
         warns = [c for c in notifier.notify.call_args_list

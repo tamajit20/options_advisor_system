@@ -179,7 +179,7 @@ class TestPerStrategyIvPremiumCap:
                                                             sample_chain):
         # Buying regime (iv_rank=15) + iv_premium=1.30 > 1.20 cap → veto
         ind = self._ind(iv_premium=1.30, trend="SIDEWAYS")
-        with pytest.raises(StrategyVeto, match="strategy_iv_premium_buy_max"):
+        with pytest.raises(StrategyVeto, match="long-vol ceiling"):
             ss.assemble_suggestion(
                 suggestion_id="S-LS-1", underlying="NIFTY",
                 expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
@@ -193,12 +193,10 @@ class TestPerStrategyIvPremiumCap:
     def test_long_straddle_passes_when_iv_premium_within_cap(self,
                                                               sample_chain,
                                                               mocker):
-        # Buying regime + iv_premium=1.10 ≤ 1.20 cap → no veto from old cap.
-        # Patch out the new per-strategy buy_pass map so this test continues to
-        # exercise ONLY the legacy `strategy_iv_premium_buy_max` gate.
+        # Buying regime + iv_premium=0.95 ≤ long-vol ceiling 1.00 → passes gate.
         from config import STRATEGY_CONFIG
         mocker.patch.dict(STRATEGY_CONFIG, {"strategy_iv_premium_buy_pass": {}})
-        ind = self._ind(iv_premium=1.10, trend="SIDEWAYS")
+        ind = self._ind(iv_premium=0.95, trend="SIDEWAYS")
         sug = ss.assemble_suggestion(
             suggestion_id="S-LS-2", underlying="NIFTY",
             expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
@@ -296,8 +294,8 @@ class TestPerStrategyBuyPassVeto:
         return _make_indicators(trend=trend, iv_premium=iv_premium)
 
     def test_long_straddle_vetoed_above_buy_pass_threshold(self, sample_chain):
-        # buy_pass=0.85, tolerance=0.15 → ceiling = 0.978. iv_premium=1.05 > ceiling.
-        ind = self._ind(iv_premium=1.05, trend="SIDEWAYS")
+        # buy_pass=0.85, tolerance=0.15 → ceiling ≈ 0.978. iv_premium=0.98 > ceiling.
+        ind = self._ind(iv_premium=0.98, trend="SIDEWAYS")
         with pytest.raises(StrategyVeto, match="buy_pass threshold"):
             ss.assemble_suggestion(
                 suggestion_id="S-BP-1", underlying="NIFTY",
@@ -310,8 +308,8 @@ class TestPerStrategyBuyPassVeto:
             )
 
     def test_long_straddle_passes_at_buy_pass_threshold(self, sample_chain):
-        # iv_premium=0.95 < 0.978 ceiling → no veto.
-        ind = self._ind(iv_premium=0.95, trend="SIDEWAYS")
+        # iv_premium=0.90 < 0.935 buy_pass ceiling → no veto.
+        ind = self._ind(iv_premium=0.90, trend="SIDEWAYS")
         sug = ss.assemble_suggestion(
             suggestion_id="S-BP-2", underlying="NIFTY",
             expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
@@ -576,6 +574,49 @@ class TestPerStrategyAdxBand:
             iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
         )
         assert sug.strategy == "BULL_PUT_SPREAD"
+
+
+# ---------------------------------------------------------------------------
+class TestLongVolEntryGate:
+    """Profit-first long straddle/strangle entry gate."""
+
+    def _assemble_kw(self, sample_chain, sample_indicators, **extra):
+        base = dict(
+            suggestion_id="S-LV", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=sample_indicators,
+            confidence=_all_pass_confidence(),
+            iv_rank=25.0, atm_iv=0.18, lots=1, lot_size=75,
+        )
+        base.update(extra)
+        return base
+
+    def test_vetoes_dead_iv_without_catalyst(self, sample_chain):
+        ind = _make_indicators(trend="SIDEWAYS", iv_premium=0.90)
+        with pytest.raises(StrategyVeto, match="catalyst"):
+            ss.assemble_suggestion(
+                **self._assemble_kw(sample_chain, ind, iv_rank=5.0),
+                has_long_vol_catalyst=False,
+            )
+
+    def test_allows_dead_iv_with_catalyst(self, sample_chain, mocker):
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})
+        ind = _make_indicators(trend="SIDEWAYS", iv_premium=0.90)
+        sug = ss.assemble_suggestion(
+            **self._assemble_kw(sample_chain, ind, iv_rank=5.0),
+            has_long_vol_catalyst=True,
+        )
+        assert sug.strategy == "LONG_STRADDLE"
+
+    def test_vetoes_when_iv_premium_above_ceiling(self, sample_chain):
+        ind = _make_indicators(trend="BULLISH", iv_premium=1.15, pcr=0.8)
+        with pytest.raises(StrategyVeto, match="long-vol ceiling"):
+            ss.assemble_suggestion(
+                **self._assemble_kw(sample_chain, ind, iv_rank=25.0),
+                has_long_vol_catalyst=True,
+            )
 
 
 # ---------------------------------------------------------------------------

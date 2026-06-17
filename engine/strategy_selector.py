@@ -164,6 +164,41 @@ _CREDIT_STRATEGIES = frozenset({
     "IRON_CONDOR", "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD",
     "IRON_BUTTERFLY", "JADE_LIZARD",
 })
+_LONG_VOL_STRATEGIES = frozenset({"LONG_STRADDLE", "LONG_STRANGLE"})
+
+
+def _enforce_long_vol_entry_gate(
+    *,
+    strategy: str,
+    iv_rank: float,
+    indicators: MarketIndicators,
+    has_long_vol_catalyst: bool,
+) -> None:
+    """Profit-first gate for long straddle/strangle entries."""
+    gate = STRATEGY_CONFIG.get("long_vol_entry_gate") or {}
+    if not gate.get("enabled", True):
+        return
+    gated = frozenset(gate.get("strategies") or list(_LONG_VOL_STRATEGIES))
+    if strategy not in gated:
+        return
+    iv_buying_max = float(STRATEGY_CONFIG["iv_rank_buying_max"])
+    if iv_rank >= iv_buying_max:
+        return
+    iv_min = float(gate.get("iv_rank_min_without_catalyst", 15.0))
+    if iv_rank < iv_min and not has_long_vol_catalyst:
+        raise StrategyVeto(
+            f"{strategy} vetoed: IV rank {iv_rank:.0f} below {iv_min:.0f} "
+            f"with no HIGH-impact catalyst within the hold window — "
+            f"sitting out low-edge long-vol"
+        )
+    iv_prem_max = gate.get("iv_premium_max")
+    if iv_prem_max is not None:
+        iv_prem = getattr(indicators, "iv_premium", None)
+        if iv_prem is not None and iv_prem > float(iv_prem_max):
+            raise StrategyVeto(
+                f"{strategy} vetoed: IV/HV {iv_prem:.2f}\u00d7 exceeds long-vol "
+                f"ceiling {float(iv_prem_max):.2f}\u00d7 — no real vol-buying edge"
+            )
 # Strategies that produce net debit (max_loss = debit, SL = 50% of debit)
 _DEBIT_STRATEGIES = frozenset({
     "LONG_STRADDLE", "LONG_STRANGLE", "LONG_CALL", "LONG_PUT",
@@ -198,6 +233,7 @@ def assemble_suggestion(
     vix_data_date: date | None = None,
     oi_pcr_change: float | None = None,
     calendar_legs: dict | None = None,
+    has_long_vol_catalyst: bool = False,
 ) -> Suggestion:
     """Top-level: select strategy, build legs, compute economics, return Suggestion.
 
@@ -216,6 +252,13 @@ def assemble_suggestion(
         iv_rank=iv_rank,
         trend=indicators.trend,
         indicators=indicators,
+    )
+
+    _enforce_long_vol_entry_gate(
+        strategy=strategy,
+        iv_rank=iv_rank,
+        indicators=indicators,
+        has_long_vol_catalyst=has_long_vol_catalyst,
     )
 
     # Phase 3: strategy-aware soft-gate threshold.

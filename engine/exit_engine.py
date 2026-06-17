@@ -17,6 +17,7 @@ Decision codes:
     EXPIRE           — DTE = 0
     TAKE_PROFIT      — current profit ≥ take_profit_fraction × max_profit (strategy-aware)
     TIME_DECAY_DONE  — DTE ≤ time_decay_exit_dte for credit spread; theta extracted, gamma risk
+    THESIS_FAIL      — long premium near expiry, still losing; catalyst window closed
 """
 
 from __future__ import annotations
@@ -93,6 +94,27 @@ def evaluate_exit(
                    f"₹{current_pnl:.0f} ≤ ₹{-sl_threshold:.0f}",
             as_of=as_of,
         )
+
+    # Long-premium thesis fail — near expiry, losing, no payoff materialized.
+    lp_cfg = STRATEGY_CONFIG.get("long_premium_thesis_exit") or {}
+    lp_strats = lp_cfg.get("strategies") or []
+    if strategy in lp_strats and days_to_expiry > 0:
+        thesis_dte = int(lp_cfg.get("dte", 5))
+        min_loss_frac = float(lp_cfg.get("min_loss_fraction", 0.20))
+        if (days_to_expiry <= thesis_dte
+                and current_pnl < 0
+                and max_loss_rs > 0
+                and abs(current_pnl) >= min_loss_frac * max_loss_rs):
+            pct = abs(current_pnl) / max_loss_rs * 100.0
+            return ExitDecision(
+                trade_id=trade_id, decision="THESIS_FAIL",
+                reason=(
+                    f"DTE={days_to_expiry} (≤{thesis_dte}) for {strategy} — "
+                    f"still losing ₹{current_pnl:.0f} ({pct:.0f}% of max loss); "
+                    f"thesis window closed with no payoff"
+                ),
+                as_of=as_of,
+            )
 
     if days_to_expiry <= 1:
         return ExitDecision(
