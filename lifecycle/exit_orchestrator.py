@@ -17,6 +17,7 @@ import logging
 from datetime import date
 
 from contracts import Notification
+from config import STRATEGY_CONFIG
 from database.connection import SQLServerConnection
 from database.models import EventCalendarRepo, FoEodRepo, NotificationRepo, SpotEodRepo, TradeRepo
 from database.runtime_flags import FLAG_CIRCUIT_BREAKER_ACTIVE, RuntimeFlagsRepo
