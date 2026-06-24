@@ -84,20 +84,25 @@ class TestRunSpotBhav:
 
 class TestRunVix:
     def test_seeds_from_bundled_csv_when_table_nearly_empty(self, mock_db, mocker):
-        # VixRepo.count() returns 5 < 30 → seed path (no bundled rows on disk)
         mock_db.fetch_one.return_value = {"n": 5}
         mocker.patch("lifecycle.download_orchestrator.load_bundled_vix_rows", return_value=[])
+        mocker.patch("lifecycle.data_backfill.dates_to_process", return_value=[])
         mocker.patch("lifecycle.download_orchestrator.download_vix_history", return_value=[])
         with pytest.raises(NoDataError, match="VIX history download returned no rows"):
             orch.run_vix(mock_db)
 
     def test_normal_path_when_history_already_seeded(self, mock_db, mocker):
-        mock_db.fetch_one.return_value = {"n": 200}  # >= 30, skip seed
-        mocker.patch("lifecycle.download_orchestrator.download_vix_history",
-                     return_value=[VixRow(date(2026, 4, 30), 15.0, 15.5, 14.8, 15.2)])
+        mock_db.fetch_one.return_value = {"n": 200}
+        mocker.patch("lifecycle.data_backfill.dates_to_process",
+                     return_value=[date(2026, 4, 30)])
+        mocker.patch(
+            "lifecycle.download_orchestrator._run_vix_for_date",
+            return_value=1,
+        )
+        hist = mocker.patch("lifecycle.download_orchestrator.download_vix_history")
         n = orch.run_vix(mock_db)
         assert n == 1
-        mock_db.commit.assert_called_once()
+        hist.assert_not_called()
 
     def test_trade_date_override_uses_per_date_download(self, mock_db, mocker):
         mock_db.fetch_one.return_value = {"n": 200}
@@ -116,3 +121,14 @@ class TestRunVix:
         mocker.patch("lifecycle.download_orchestrator.download_vix_for_date", return_value=[])
         with pytest.raises(NoDataError, match="VIX data not available for 2026-04-30"):
             orch.run_vix(mock_db, date(2026, 4, 30))
+
+    def test_auto_mode_backfills_missing_dates(self, mock_db, mocker):
+        mocker.patch("lifecycle.data_backfill.dates_to_process",
+                     return_value=[date(2026, 4, 28), date(2026, 4, 30)])
+        single = mocker.patch(
+            "lifecycle.download_orchestrator._run_fo_bhav_for_date",
+            side_effect=[5, 7],
+        )
+        n = orch.run_fo_bhav(mock_db)
+        assert n == 12
+        assert single.call_count == 2

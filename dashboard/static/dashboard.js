@@ -4664,38 +4664,13 @@ function renderJobCard(j) {
   </div>`;
 }
 
-// Jobs that support an explicit data date override
-const DATE_OVERRIDE_JOBS = new Set([
-  'fo_bhav_download','spot_bhav_download','vix_download','fii_download',
-  'iv_calculation','suggestion_engine','exit_engine',
-]);
-
 async function triggerJob(jobName) {
   if (!jobName) return;
-
-  let tradeDate = '';
-  if (DATE_OVERRIDE_JOBS.has(jobName)) {
-    const input = prompt(
-      `Run "${jobName}"\n\nEnter data date (YYYY-MM-DD) to use specific day's data,\nor leave blank to auto-detect the latest available date:`,
-      ''
-    );
-    if (input === null) return;   // user cancelled
-    if (input.trim() !== '') {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(input.trim())) {
-        toast('Invalid date format — use YYYY-MM-DD', 'err');
-        return;
-      }
-      tradeDate = input.trim();
-    }
-  } else {
-    if (!confirm(`Trigger "${jobName}" now?`)) return;
-  }
+  if (!confirm(`Trigger "${jobName}" now?\n\nMissing weekdays in the last month will be filled automatically.`)) return;
 
   try {
-    const body = tradeDate ? JSON.stringify({ trade_date: tradeDate }) : undefined;
-    const headers = tradeDate ? { 'Content-Type': 'application/json' } : {};
-    await API(`/api/jobs/${encodeURIComponent(jobName)}/trigger`, { method: 'POST', headers, body });
-    toast(`Job queued: ${jobName}${tradeDate ? ' (' + tradeDate + ')' : ' (auto-date)'}`, 'ok');
+    await API(`/api/jobs/${encodeURIComponent(jobName)}/trigger`, { method: 'POST' });
+    toast(`Job queued: ${jobName} (auto backfill)`, 'ok');
     setTimeout(() => loadJobs(true), 600);
   } catch (e) {
     toast(`Trigger failed: ${e.message}`, 'err');

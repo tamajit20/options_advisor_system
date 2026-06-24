@@ -147,6 +147,13 @@ class FoEodRepo:
         v = self.db.scalar("SELECT MAX(trade_date) FROM options_fo_eod")
         return v
 
+    def has_trade_date(self, trade_date: date) -> bool:
+        n = self.db.scalar(
+            "SELECT COUNT(1) FROM options_fo_eod WHERE trade_date = ?",
+            [trade_date],
+        )
+        return bool(n and int(n) > 0)
+
     def expiries_for(self, symbol: str, trade_date: date) -> List[date]:
         rows = self.db.fetch_all(
             "SELECT DISTINCT expiry_date FROM options_fo_eod "
@@ -202,6 +209,13 @@ class SpotEodRepo:
             [symbol],
         )
 
+    def has_trade_date(self, trade_date: date, symbol: str = "NIFTY") -> bool:
+        n = self.db.scalar(
+            "SELECT COUNT(1) FROM options_spot_eod WHERE trade_date = ? AND symbol = ?",
+            [trade_date, symbol],
+        )
+        return bool(n and int(n) > 0)
+
     def for_date(self, symbol: str, trade_date: date) -> Optional[dict]:
         """Return spot row for the exact trade_date, falling back to the most
         recent row on or before that date (never a future date)."""
@@ -256,6 +270,13 @@ class VixRepo:
 
     def latest(self) -> Optional[dict]:
         return self.db.fetch_one("SELECT TOP 1 * FROM options_vix_history ORDER BY trade_date DESC")
+
+    def has_trade_date(self, trade_date: date) -> bool:
+        n = self.db.scalar(
+            "SELECT COUNT(1) FROM options_vix_history WHERE trade_date = ?",
+            [trade_date],
+        )
+        return bool(n and int(n) > 0)
 
     def count(self) -> int:
         row = self.db.fetch_one("SELECT COUNT(*) AS n FROM options_vix_history")
@@ -317,6 +338,13 @@ class FiiRepo:
         return self.db.fetch_all(
             "SELECT * FROM options_fii_data WHERE trade_date = ?", [last_dt]
         )
+
+    def has_trade_date(self, trade_date: date) -> bool:
+        n = self.db.scalar(
+            "SELECT COUNT(1) FROM options_fii_data WHERE trade_date = ?",
+            [trade_date],
+        )
+        return bool(n and int(n) > 0)
 
     def for_date(self, trade_date: date) -> List[dict]:
         """Return FII rows for the most recent date on or before trade_date.
@@ -394,6 +422,13 @@ class IvHistoryRepo:
     def latest_trade_date(self) -> Optional[date]:
         v = self.db.scalar("SELECT MAX(trade_date) FROM options_iv_history")
         return v
+
+    def has_trade_date(self, trade_date: date) -> bool:
+        n = self.db.scalar(
+            "SELECT COUNT(1) FROM options_iv_history WHERE trade_date = ?",
+            [trade_date],
+        )
+        return bool(n and int(n) > 0)
 
     def latest_for(self, symbol: str, trade_date: date) -> List[dict]:
         return self.db.fetch_all(

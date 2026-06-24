@@ -14,9 +14,9 @@ class TestRunIvCalculationHappyPath:
         td = date(2026, 4, 30)
         exp = date(2026, 5, 14)
 
-        mocker.patch("lifecycle.iv_orchestrator.FoEodRepo.latest_trade_date",
-                     return_value=td)
-        mocker.patch("lifecycle.iv_orchestrator.SpotEodRepo.latest",
+        mocker.patch("lifecycle.iv_orchestrator.FoEodRepo.has_trade_date",
+                     return_value=True)
+        mocker.patch("lifecycle.iv_orchestrator.SpotEodRepo.for_date",
                      return_value={"close_price": 23000.0,
                                    "trade_date": td})
         mocker.patch("lifecycle.iv_orchestrator.FoEodRepo.expiries_for",
@@ -43,9 +43,9 @@ class TestRunIvCalculationHappyPath:
         mock_db.commit.assert_called()
 
     def test_skips_when_no_spot(self, mock_db, mocker):
-        mocker.patch("lifecycle.iv_orchestrator.FoEodRepo.latest_trade_date",
-                     return_value=date(2026, 4, 30))
-        mocker.patch("lifecycle.iv_orchestrator.SpotEodRepo.latest",
+        mocker.patch("lifecycle.iv_orchestrator.FoEodRepo.has_trade_date",
+                     return_value=True)
+        mocker.patch("lifecycle.iv_orchestrator.SpotEodRepo.for_date",
                      return_value=None)
         mocker.patch.dict("config.STRATEGY_CONFIG",
                           {"underlyings": ["NIFTY"]})
@@ -54,9 +54,9 @@ class TestRunIvCalculationHappyPath:
 
     def test_skips_when_zero_dte(self, mock_db, mocker):
         td = date(2026, 4, 30)
-        mocker.patch("lifecycle.iv_orchestrator.FoEodRepo.latest_trade_date",
-                     return_value=td)
-        mocker.patch("lifecycle.iv_orchestrator.SpotEodRepo.latest",
+        mocker.patch("lifecycle.iv_orchestrator.FoEodRepo.has_trade_date",
+                     return_value=True)
+        mocker.patch("lifecycle.iv_orchestrator.SpotEodRepo.for_date",
                      return_value={"close_price": 23000.0, "trade_date": td})
         # Same-day expiry → dte=0 → skip
         mocker.patch("lifecycle.iv_orchestrator.FoEodRepo.expiries_for",

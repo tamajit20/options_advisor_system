@@ -2,53 +2,69 @@
 lifecycle/iv_orchestrator.py
 ============================
 
-For each (symbol, expiry, strike, option_type) on the latest trade date:
+For each (symbol, expiry, strike, option_type) on a trade date:
     1. Fetch market price from F&O EOD
     2. Fetch spot from spot EOD
     3. Compute IV (Black-Scholes bisection)
     4. Compute ATM IV per (symbol, expiry)
     5. Compute IV Rank (52w window) per (symbol, expiry, atm)
     6. Upsert into options_iv_history
+
+When ``trade_date`` is omitted, recalculates IV for every weekday in the
+lookback window where FO bhav exists but IV history is missing, and always
+refreshes today when FO data is present.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from config import STRATEGY_CONFIG
 from database.connection import SQLServerConnection
 from database.models import FoEodRepo, IvHistoryRepo, SpotEodRepo
 from engine.iv_calculator import implied_vol
 from engine.iv_rank import iv_percentile, iv_rank as compute_iv_rank, pick_atm_iv
+from lifecycle.data_backfill import (
+    backfill_lookback_days,
+    run_dates_backfill,
+    weekdays_in_range,
+)
 from utils import days_between, today_ist
 
 logger = logging.getLogger(__name__)
 
 
-def run_iv_calculation(
-    db: SQLServerConnection,
-    trade_date: date | None = None,
-) -> int:
-    trade_date = trade_date or today_ist()
+def _iv_dates_to_process(db: SQLServerConnection, end: Optional[date] = None) -> List[date]:
+    """Weekdays with FO data but missing/stale IV, plus today when FO is ready."""
+    end = end or today_ist()
+    fo = FoEodRepo(db)
+    iv = IvHistoryRepo(db)
+    start = end - timedelta(days=backfill_lookback_days())
+    pending: set[date] = set()
+    for d in weekdays_in_range(start, end):
+        if fo.has_trade_date(d) and not iv.has_trade_date(d):
+            pending.add(d)
+    if end.weekday() < 5 and fo.has_trade_date(end):
+        pending.add(end)
+    return sorted(pending)
+
+
+def _run_iv_for_date(db: SQLServerConnection, trade_date: date) -> int:
     fo = FoEodRepo(db)
     sp = SpotEodRepo(db)
     iv_repo = IvHistoryRepo(db)
 
-    # If no fo data for trade_date, try the latest available
-    if fo.latest_trade_date() != trade_date:
-        latest = fo.latest_trade_date()
-        if latest is None:
-            logger.warning("No FO data — skipping IV calc")
-            return 0
-        trade_date = latest
+    if not fo.has_trade_date(trade_date):
+        logger.warning("IV: no FO data for %s — skipping", trade_date)
+        return 0
 
     total_rows = 0
     underlyings: List[str] = STRATEGY_CONFIG["underlyings"]
 
     for symbol in underlyings:
-        spot_row = sp.latest(symbol)
+        spot_row = sp.for_date(symbol, trade_date)
         if not spot_row or float(spot_row["close_price"]) <= 0:
             logger.warning("IV: no spot for %s on %s", symbol, trade_date)
             continue
@@ -67,7 +83,6 @@ def run_iv_calculation(
             if not chain:
                 continue
 
-            # Compute IV for every option
             rows: List[Dict] = []
             triplets: List[tuple[float, str, float]] = []
             for r in chain:
@@ -96,7 +111,7 @@ def run_iv_calculation(
                     "market_price": market_price,
                     "iv":           iv,
                     "converged":    converged,
-                    "atm_iv":       None,    # filled below
+                    "atm_iv":       None,
                     "iv_rank":      None,
                     "iv_percentile": None,
                 })
@@ -104,10 +119,8 @@ def run_iv_calculation(
             if not rows:
                 continue
 
-            # ATM IV for this expiry
             atm_iv = pick_atm_iv(triplets, spot)
 
-            # IV Rank: needs 52w history of ATM IV for this expiry
             since = trade_date - timedelta(days=365)
             history_rows = iv_repo.atm_iv_history(symbol, since)
             history_values = [float(h["atm_iv"]) for h in history_rows
@@ -116,7 +129,6 @@ def run_iv_calculation(
             ivr = compute_iv_rank(atm_iv or 0.0, history_values) if atm_iv else 0.0
             ivp = iv_percentile(atm_iv or 0.0, history_values) if atm_iv else 0.0
 
-            # Stamp atm_iv / iv_rank / iv_percentile on every row for this expiry
             for r in rows:
                 r["atm_iv"] = atm_iv
                 r["iv_rank"] = ivr
@@ -128,5 +140,21 @@ def run_iv_calculation(
                         symbol, expiry, n, atm_iv or 0.0, ivr)
 
     db.commit()
-    logger.info("IV calc total rows: %d", total_rows)
+    logger.info("IV calc %s total rows: %d", trade_date, total_rows)
     return total_rows
+
+
+def run_iv_calculation(
+    db: SQLServerConnection,
+    trade_date: date | None = None,
+) -> int:
+    if trade_date is not None:
+        return _run_iv_for_date(db, trade_date)
+
+    dates = _iv_dates_to_process(db)
+    return run_dates_backfill(
+        dates,
+        lambda d: _run_iv_for_date(db, d),
+        label="IV calc",
+        fail_if_today_missing=False,
+    )

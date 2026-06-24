@@ -7,6 +7,10 @@ Daily data-download orchestrator. Each function:
     2. Upserts rows via repo (caller commits)
     3. Returns rows_processed for job logging
 
+When ``trade_date`` is omitted, each job backfills missing weekdays in the
+configured lookback window (default 30 calendar days) and always refreshes
+today's session.
+
 Each function is callable independently by the scheduler.
 """
 
@@ -24,6 +28,7 @@ from downloader.fo_bhav import download_fo_bhav, extract_index_spots
 from downloader.index_spot_nse import download_nse_index_spot
 from downloader.spot_bhav import download_spot_bhav
 from exceptions import NoDataError
+from lifecycle.data_backfill import run_or_backfill
 from lifecycle.spot_bhav_merge import merge_spot_bhav_rows
 from downloader.vix import download_vix_for_date, download_vix_history, load_bundled_vix_rows
 from utils import today_ist
@@ -31,8 +36,7 @@ from utils import today_ist
 logger = logging.getLogger(__name__)
 
 
-def run_fo_bhav(db: SQLServerConnection, trade_date: date | None = None) -> int:
-    trade_date = trade_date or today_ist()
+def _run_fo_bhav_for_date(db: SQLServerConnection, trade_date: date) -> int:
     rows = download_fo_bhav(trade_date)
     if not rows:
         raise NoDataError(
@@ -49,9 +53,6 @@ def run_fo_bhav(db: SQLServerConnection, trade_date: date | None = None) -> int:
     db.commit()
     logger.info("FO bhav %s: upserted %d rows", trade_date, n)
 
-    # Settle-time hook for review item #10 — record realised vs expected
-    # moves for every suggestion that just expired.  Best-effort: a
-    # failure here must NOT roll back the bhav upsert above.
     try:
         from lifecycle.em_calibration_recorder import record_settled_expiries
         recorded = record_settled_expiries(db, trade_date)
@@ -66,11 +67,21 @@ def run_fo_bhav(db: SQLServerConnection, trade_date: date | None = None) -> int:
     return n
 
 
-def run_spot_bhav(db: SQLServerConnection, trade_date: date | None = None) -> int:
+def run_fo_bhav(db: SQLServerConnection, trade_date: date | None = None) -> int:
+    fo = FoEodRepo(db)
+    return run_or_backfill(
+        db,
+        trade_date,
+        label="FO bhav",
+        has_date=fo.has_trade_date,
+        single_date_fn=_run_fo_bhav_for_date,
+    )
+
+
+def _run_spot_bhav_for_date(db: SQLServerConnection, trade_date: date) -> int:
     """Cash bhav for stocks; NSE ``ind_close_all`` for index OHLC; F&O
     ``UndrlygPric`` only when index OHLC is unavailable (never overwrites
     real high/low)."""
-    trade_date = trade_date or today_ist()
     stock_rows = list(download_spot_bhav(trade_date))
 
     indices = [u for u in STRATEGY_CONFIG["underlyings"] if u in {
@@ -111,6 +122,17 @@ def run_spot_bhav(db: SQLServerConnection, trade_date: date | None = None) -> in
     return n
 
 
+def run_spot_bhav(db: SQLServerConnection, trade_date: date | None = None) -> int:
+    sp = SpotEodRepo(db)
+    return run_or_backfill(
+        db,
+        trade_date,
+        label="Spot bhav",
+        has_date=sp.has_trade_date,
+        single_date_fn=_run_spot_bhav_for_date,
+    )
+
+
 def _seed_vix_from_bundled_csv(db: SQLServerConnection) -> int:
     """Seed options_vix_history from the bundled historical VIX CSV when the
     table has fewer than 30 rows (cold-start or fresh DB)."""
@@ -123,35 +145,52 @@ def _seed_vix_from_bundled_csv(db: SQLServerConnection) -> int:
     return n
 
 
-def run_vix(db: SQLServerConnection, trade_date: date | None = None) -> int:
-    # Auto-seed from bundled CSV when table is nearly empty (cold start / fresh DB)
-    vix_repo = VixRepo(db)
-    if trade_date is None and vix_repo.count() < 30:
-        logger.info("VIX table has < 30 rows — seeding from bundled historical CSV")
-        _seed_vix_from_bundled_csv(db)
-
-    if trade_date is not None:
-        rows = download_vix_for_date(trade_date)
-        if not rows:
-            raise NoDataError(
-                f"VIX data not available for {trade_date} — "
-                "not in bundled history and NSE live/archive had no match"
-            )
-    else:
-        rows = download_vix_history()
-        if not rows:
-            raise NoDataError(
-                "VIX history download returned no rows — "
-                "NSE may not have published today's VIX data yet"
-            )
-    n = vix_repo.upsert_many(rows)
+def _run_vix_for_date(db: SQLServerConnection, trade_date: date) -> int:
+    rows = download_vix_for_date(trade_date)
+    if not rows:
+        raise NoDataError(
+            f"VIX data not available for {trade_date} — "
+            "not in bundled history and NSE live/archive had no match"
+        )
+    n = VixRepo(db).upsert_many(rows)
     db.commit()
-    logger.info("VIX %s: upserted %d rows", trade_date or "latest", n)
+    logger.info("VIX %s: upserted %d rows", trade_date, n)
     return n
 
 
-def run_fii(db: SQLServerConnection, trade_date: date | None = None) -> int:
-    trade_date = trade_date or today_ist()
+def run_vix(db: SQLServerConnection, trade_date: date | None = None) -> int:
+    vix_repo = VixRepo(db)
+    if trade_date is not None:
+        return _run_vix_for_date(db, trade_date)
+
+    if vix_repo.count() < 30:
+        logger.info("VIX table has < 30 rows — seeding from bundled historical CSV")
+        _seed_vix_from_bundled_csv(db)
+
+    total = run_or_backfill(
+        db,
+        None,
+        label="VIX",
+        has_date=vix_repo.has_trade_date,
+        single_date_fn=_run_vix_for_date,
+    )
+    if total > 0:
+        return total
+
+    # Last resort for today when per-date sources are empty (live API / archive).
+    rows = download_vix_history()
+    if not rows:
+        raise NoDataError(
+            "VIX history download returned no rows — "
+            "NSE may not have published today's VIX data yet"
+        )
+    n = vix_repo.upsert_many(rows)
+    db.commit()
+    logger.info("VIX latest fallback: upserted %d rows", n)
+    return n
+
+
+def _run_fii_for_date(db: SQLServerConnection, trade_date: date) -> int:
     rows = download_fii_oi(trade_date)
     if not rows:
         raise NoDataError(
@@ -162,3 +201,14 @@ def run_fii(db: SQLServerConnection, trade_date: date | None = None) -> int:
     db.commit()
     logger.info("FII OI %s: upserted %d rows", trade_date, n)
     return n
+
+
+def run_fii(db: SQLServerConnection, trade_date: date | None = None) -> int:
+    fii = FiiRepo(db)
+    return run_or_backfill(
+        db,
+        trade_date,
+        label="FII OI",
+        has_date=fii.has_trade_date,
+        single_date_fn=_run_fii_for_date,
+    )

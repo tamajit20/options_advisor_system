@@ -75,6 +75,9 @@ DATABASE_CONFIG = {
 # ---------------------------------------------------------------------------
 SCHEDULER_CONFIG = {
     "timezone": "Asia/Kolkata",
+    # When EOD download / IV calc jobs run without an explicit trade_date,
+    # fill any missing weekdays in this calendar-day window (plus refresh today).
+    "data_backfill_lookback_days": 30,
     "jobs": {
         # Data downloads (post-market) — NSE bhav copies often land after 18:30 IST.
         "fo_bhav_download":   {"hour": 19, "minute": 30, "enabled": True},
@@ -135,11 +138,11 @@ SCHEDULER_CONFIG = {
     # `_run_job` via a watchdog thread that closes the DB connection on
     # expiry (severs SQL Server locks) and marks the row FAILED.
     "job_timeout_seconds": {
-        "fo_bhav_download":   600,
-        "spot_bhav_download": 300,
-        "vix_download":       180,
-        "fii_download":       300,
-        "iv_calculation":     900,
+        "fo_bhav_download":   1800,
+        "spot_bhav_download": 900,
+        "vix_download":       600,
+        "fii_download":       900,
+        "iv_calculation":     1800,
         "suggestion_engine":  600,
         # Live-suggestion windows: short timeout because they fan out
         # to several HTTP fetches; if any one stalls we want the row
