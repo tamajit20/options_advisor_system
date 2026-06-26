@@ -383,6 +383,84 @@ class TestPerStrategyBuyPassVeto:
 
 
 # ---------------------------------------------------------------------------
+# Minimum-PoP floor (strategy_min_pop). Vetoes structurally low-probability
+# debit structures after PoP is computed. Production evidence: 6 LONG_STRANGLE
+# trades at ~23% PoP went 0/6 for ~-₹40k. The synthetic chain produces an even
+# lower PoP (~2%), so the default 30% floor reliably vetoes a strangle here.
+# ---------------------------------------------------------------------------
+class TestPerStrategyMinPop:
+    def _ind(self, trend="BULLISH", pcr=0.8):
+        # iv_premium low so the buying-regime IV/HV gates don't pre-empt the veto.
+        return _make_indicators(trend=trend, pcr=pcr, iv_premium=0.6)
+
+    def test_long_strangle_vetoed_below_pop_floor(self, sample_chain, mocker):
+        """A LONG_STRANGLE whose PoP is below the strategy_min_pop floor is
+        vetoed with a PoP message. Floor is pinned high (99%) so the veto is
+        deterministic regardless of the configured strike multiplier."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {"strategy_min_pop": {"LONG_STRANGLE": 99.0}})
+        with pytest.raises(StrategyVeto, match="probability of profit"):
+            ss.assemble_suggestion(
+                suggestion_id="S-POP-1", underlying="NIFTY",
+                expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=sample_chain,
+                indicators=self._ind(),
+                confidence=_all_pass_confidence(),
+                iv_rank=25.0, atm_iv=0.18, lots=1, lot_size=75,
+                strategy_override="LONG_STRANGLE",
+            )
+
+    def test_long_strangle_passes_when_floor_disabled(self, sample_chain, mocker):
+        """With the floor removed for the strategy, the strangle builds normally —
+        proves the veto is the only thing blocking it."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {"strategy_min_pop": {}})
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-POP-2", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=self._ind(),
+            confidence=_all_pass_confidence(),
+            iv_rank=25.0, atm_iv=0.18, lots=1, lot_size=75,
+            strategy_override="LONG_STRANGLE",
+        )
+        assert sug.strategy == "LONG_STRANGLE"
+
+    def test_long_straddle_not_gated_by_default(self, sample_chain):
+        """LONG_STRADDLE is intentionally NOT in strategy_min_pop, so even a very
+        low synthetic PoP does not veto it (strategy isolation)."""
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-POP-3", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=self._ind(trend="SIDEWAYS", pcr=1.0),
+            confidence=_all_pass_confidence(),
+            iv_rank=15.0, atm_iv=0.18, lots=1, lot_size=75,
+            strategy_override="LONG_STRADDLE",
+        )
+        assert sug.strategy == "LONG_STRADDLE"
+
+    def test_iron_condor_unaffected_by_pop_floor(self, sample_chain, mocker):
+        """Credit strategies are not in the map → no PoP veto even if a floor is
+        added for a long strategy."""
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+            "strategy_min_pop": {"LONG_STRANGLE": 30.0},
+        })
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-POP-IC", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=_make_indicators(trend="SIDEWAYS", iv_premium=1.10),
+            confidence=_all_pass_confidence(),
+            iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+        )
+        assert sug.strategy == "IRON_CONDOR"
+
+
+# ---------------------------------------------------------------------------
 # Fix D — Per-strategy IV/HV FLOOR in the writing regime.
 # Mirrors strategy_iv_premium_buy_max but for sellers. Promotes the regime-wide
 # SOFT_FAIL emitted by confidence._iv_premium_gate to a HARD VETO for listed

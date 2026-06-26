@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from unittest.mock import patch
 
 import pytest
 
@@ -274,25 +275,38 @@ class TestEconomicsPrimitives:
 # FUTURE-SCOPE PLACEHOLDERS — see FUTURE_ENHANCEMENT_SCOPES.md
 # ---------------------------------------------------------------------------
 
-def test_long_strangle_uses_full_expected_move(sample_chain, expiry_date):
-    """LONG_STRANGLE strikes must sit at ±1.0×EM from spot (P1 fix, C3 coverage).
+def test_long_strangle_strike_multiplier_is_configurable(sample_chain, expiry_date):
+    """LONG_STRANGLE strikes sit at ±(long_strangle_em_multiplier × EM).
 
-    Placing strikes at ±0.5×EM puts them near ATM which is expensive and
-    provides little incremental edge over a straddle. ±1.0×EM sits at the
-    1-sigma boundary — genuinely OTM, lower cost, clearer directional intent.
+    Default is 0.5×EM (tighter than the old 1.0×EM) to lift PoP toward the
+    strategy_min_pop floor while staying genuinely OTM. The multiplier is a
+    config knob, so this test pins both the default placement and that the
+    knob is honoured.
     """
+    from config import STRATEGY_CONFIG
+
+    # Default (0.5×EM): ≈ 23150 / 22850 — OTM but closer to ATM than 1×EM.
     legs = build_long_strangle(
         underlying="NIFTY", expiry=expiry_date, chain=sample_chain,
         spot=23000.0, expected_move=300.0, lots=1, lot_size=75,
     )
     long_call = next(l for l in legs if l.option_type == "CE")
     long_put  = next(l for l in legs if l.option_type == "PE")
-    # Strikes should be at ±1.0×EM (≈ 23300 / 22700)
-    assert long_call.strike >= 23250, f"Call strike {long_call.strike} not ≥ 23250"
-    assert long_put.strike  <= 22750, f"Put strike {long_put.strike} not ≤ 22750"
-    # And both legs must be OTM (call above spot, put below spot)
     assert long_call.strike > 23000
     assert long_put.strike  < 23000
+    assert 23050 < long_call.strike < 23250, f"Call strike {long_call.strike} not ~0.5×EM"
+    assert 22750 < long_put.strike  < 22950, f"Put strike {long_put.strike} not ~0.5×EM"
+
+    # Override to 1.0×EM widens the strikes to the ±1σ boundary (≈ 23300 / 22700).
+    with patch.dict(STRATEGY_CONFIG, {"long_strangle_em_multiplier": 1.0}):
+        wide = build_long_strangle(
+            underlying="NIFTY", expiry=expiry_date, chain=sample_chain,
+            spot=23000.0, expected_move=300.0, lots=1, lot_size=75,
+        )
+    wide_call = next(l for l in wide if l.option_type == "CE")
+    wide_put  = next(l for l in wide if l.option_type == "PE")
+    assert wide_call.strike >= 23250
+    assert wide_put.strike  <= 22750
 
 
 # ---------------------------------------------------------------------------

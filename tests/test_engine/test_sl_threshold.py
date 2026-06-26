@@ -11,9 +11,11 @@ def test_long_straddle_cap_binds_on_large_debit():
 
 
 def test_long_straddle_premium_fraction_on_small_debit():
+    # Long strangle SL is the profit-first 50% fraction (wider MTM room for the
+    # long-vol theta bleed); ₹10k cap doesn't bind on a ₹5k debit.
     threshold, label = effective_sl_rs(strategy="LONG_STRANGLE", max_loss_rs=5000.0)
-    assert threshold == 1500.0
-    assert "30%" in label
+    assert threshold == 2500.0
+    assert "50%" in label
 
 
 def test_iron_condor_fraction_only_when_max_loss_below_cap_floor():

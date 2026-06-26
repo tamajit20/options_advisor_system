@@ -276,33 +276,39 @@ class TestLongStrangleRouting:
     def test_long_strangle_routable_in_mid_iv_bullish(self):
         """LONG_STRANGLE is selected when iv_rank 20-30 (buying regime boundary),
         trend is BULLISH, and PCR is not strongly bullish. This test verifies the
-        routing path exists and produces correct ±1σ strikes (P1)."""
+        routing path exists and produces correct ±1σ strikes (P1).
+
+        The synthetic chain yields an unrealistically low PoP, so the production
+        `strategy_min_pop` floor is disabled here to keep the test focused on
+        routing/strike-placement rather than the PoP veto."""
         chain = _chain()
         ind   = _indicators(trend="BULLISH", iv_premium=0.7, adx=15.0)
-        sug = assemble_suggestion(
-            suggestion_id="SUG-20260520-004",
-            underlying="NIFTY",
-            expiry=date(2026, 5, 29),
-            expiry_type="Weekly",
-            dte=14,
-            spot=23000.0,
-            chain=chain,
-            indicators=ind,
-            confidence=_conf_result(True),
-            iv_rank=25.0,    # 20-30 range, moderately low
-            atm_iv=0.18,
-            lots=1,
-            lot_size=75,
-        )
+        with patch.dict("config.STRATEGY_CONFIG", {"strategy_min_pop": {}}):
+            sug = assemble_suggestion(
+                suggestion_id="SUG-20260520-004",
+                underlying="NIFTY",
+                expiry=date(2026, 5, 29),
+                expiry_type="Weekly",
+                dte=14,
+                spot=23000.0,
+                chain=chain,
+                indicators=ind,
+                confidence=_conf_result(True),
+                iv_rank=25.0,    # 20-30 range, moderately low
+                atm_iv=0.18,
+                lots=1,
+                lot_size=75,
+            )
         assert sug.strategy == "LONG_STRANGLE"
         call_leg = next(l for l in sug.legs if l.option_type == "CE")
         put_leg  = next(l for l in sug.legs if l.option_type == "PE")
-        # P1: strikes at ±1×EM not ±0.5×EM
+        # Strikes now sit at ±0.5×EM (long_strangle_em_multiplier default 0.5),
+        # tighter than the old ±1×EM to lift PoP. EM ≈ 300 → ≈ 23150 / 22850:
+        # still genuinely OTM but closer to ATM than the 1×EM (23300/22700) build.
         assert call_leg.strike > 23000
         assert put_leg.strike  < 23000
-        # EM ≈ 300 (from indicators), so strikes should be ≥ 23250 / ≤ 22750
-        assert call_leg.strike >= 23250
-        assert put_leg.strike  <= 22750
+        assert 23050 < call_leg.strike < 23250
+        assert 22750 < put_leg.strike  < 22950
 
 
 class TestCalendarSpreadAssembly:

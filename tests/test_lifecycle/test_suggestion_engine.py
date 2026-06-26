@@ -10,6 +10,33 @@ from lifecycle import suggestion_engine as se
 
 
 # ---------------------------------------------------------------------------
+class TestExceedsMaxLossCap:
+    """Tail-risk ceiling: veto when a single 1-lot position's max loss breaches
+    max_loss_pct_of_capital × capital. Backs the May-2026 straddle fix where
+    ₹60-70k debit positions (12-14% of ₹500k) lost multiples of their SL."""
+
+    def test_over_concentrated_position_exceeds(self):
+        # 70k max loss vs 10% of 500k (=50k) → blocked.
+        assert se.exceeds_max_loss_cap(70_000.0, 500_000.0, 0.10) is True
+
+    def test_properly_sized_position_passes(self):
+        # 44k max loss vs 50k ceiling → allowed (the winning straddles).
+        assert se.exceeds_max_loss_cap(44_000.0, 500_000.0, 0.10) is False
+
+    def test_exactly_at_ceiling_passes(self):
+        assert se.exceeds_max_loss_cap(50_000.0, 500_000.0, 0.10) is False
+
+    def test_disabled_when_pct_zero(self):
+        assert se.exceeds_max_loss_cap(70_000.0, 500_000.0, 0.0) is False
+
+    def test_disabled_when_capital_zero(self):
+        assert se.exceeds_max_loss_cap(70_000.0, 0.0, 0.10) is False
+
+    def test_disabled_when_max_loss_unknown(self):
+        assert se.exceeds_max_loss_cap(0.0, 500_000.0, 0.10) is False
+
+
+# ---------------------------------------------------------------------------
 class TestResolveDataDate:
     def test_returns_none_when_fo_missing(self, mock_db, mocker):
         mocker.patch("lifecycle.suggestion_engine.FoEodRepo.latest_trade_date",

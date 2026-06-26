@@ -465,6 +465,23 @@ def assemble_suggestion(
     # instead of the |Δ_long| approximation (which over-states PoP).
     pop = leg_builder.estimate_pop(legs, spot, dte, atm_iv, chain=chain, strategy=strategy)
 
+    # Minimum-PoP floor for structurally low-probability debit structures.
+    # Scoped per-strategy via `strategy_min_pop` (strategies NOT listed skip the
+    # check → no behaviour change). Targets long strangles, whose ±1σ strikes
+    # give ~23% PoP and a 0/6 production record: theta bleeds the debit unless
+    # the move exceeds the already-wide priced expected move. Fires after PoP is
+    # known and raises StrategyVeto → orchestrator records a NoSuggestion.
+    pop_floor_overrides = STRATEGY_CONFIG.get("strategy_min_pop", {}) or {}
+    pop_floor = pop_floor_overrides.get(strategy)
+    if pop_floor is not None and pop < float(pop_floor):
+        raise StrategyVeto(
+            f"{strategy} vetoed: probability of profit {pop:.0f}% below "
+            f"{float(pop_floor):.0f}% floor (strategy_min_pop) — strikes sit at "
+            f"the expected-move boundary, so this debit structure only pays off "
+            f"on a breakout beyond the priced move; theta bleed dominates at "
+            f"this PoP"
+        )
+
     # Charges (per-share priced — we want totals → multiply by qty)
     charges = estimate_charges([
         {

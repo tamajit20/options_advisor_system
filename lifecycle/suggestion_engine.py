@@ -67,6 +67,18 @@ _NSE_OPEN  = time(9, 15)
 _NSE_CLOSE = time(15, 30)
 
 
+def exceeds_max_loss_cap(max_loss_rs: float, capital_rs: float, cap_pct: float) -> bool:
+    """True when a single position's max loss breaches the capital ceiling.
+
+    Pure helper for the tail-risk veto in ``_evaluate_underlying`` so the
+    decision is unit-testable in isolation. Returns ``False`` (disabled) when
+    any input is non-positive.
+    """
+    if cap_pct <= 0 or capital_rs <= 0 or max_loss_rs <= 0:
+        return False
+    return max_loss_rs > cap_pct * capital_rs
+
+
 def _attach_em_calibration_warning(db: SQLServerConnection, sug: Suggestion) -> None:
     """Look up the (underlying, dte_band) calibration cohort for ``sug`` and
     attach a warning string when the median realised/expected deviates
@@ -626,6 +638,7 @@ def _evaluate_underlying(
             _risk_pct = float(STRATEGY_CONFIG.get("risk_per_trade_pct", 0.02))
             _max_lots = int(STRATEGY_CONFIG.get("max_lots_cap", 3))
             _computed_lots = 1
+            _one_lot_max_loss = 0.0
             _assemble_kw = dict(
                 underlying=symbol,
                 expiry=use_expiry,
@@ -657,15 +670,29 @@ def _evaluate_underlying(
                         lots=1,
                         **_assemble_kw,
                     )
-                    _ml = float(_test_sug.economics.max_loss or 0.0)
-                    if _ml > 0:
+                    _one_lot_max_loss = float(_test_sug.economics.max_loss or 0.0)
+                    if _one_lot_max_loss > 0:
                         _computed_lots = max(1, min(_max_lots, int(_math.floor(
-                            _capital * _risk_pct / _ml
+                            _capital * _risk_pct / _one_lot_max_loss
                         ))))
                 except Exception:
                     logger.debug(
                         "Position sizing dry-run failed for %s %s — using 1 lot",
                         symbol, use_expiry,
+                    )
+
+                # Tail-risk ceiling — veto when even a single lot's max loss
+                # exceeds max_loss_pct_of_capital × capital. Sizing can't go
+                # below 1 lot, so an over-large single contract would otherwise
+                # slip through. Guards against the over-concentrated debit
+                # straddles that lost multiples of their SL when unmonitored.
+                _ml_cap_pct = float(STRATEGY_CONFIG.get("max_loss_pct_of_capital", 0.0) or 0.0)
+                if exceeds_max_loss_cap(_one_lot_max_loss, _capital, _ml_cap_pct):
+                    raise StrategyVeto(
+                        f"max loss \u20b9{_one_lot_max_loss:,.0f} exceeds "
+                        f"{_ml_cap_pct * 100:.0f}% of capital "
+                        f"(\u20b9{_ml_cap_pct * _capital:,.0f}) at the 1-lot "
+                        f"minimum — position too large for the risk budget"
                     )
 
             primary_suggestion = assemble_suggestion(

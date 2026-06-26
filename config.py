@@ -405,6 +405,16 @@ STRATEGY_CONFIG = {
     "risk_per_trade_pct":    0.02,       # risk 2% of capital per trade
     "max_lots_cap":          3,          # never suggest more than this many lots
 
+    # Tail-risk ceiling: a single suggestion's max loss must not exceed this
+    # fraction of trading capital, even at the 1-lot minimum (sizing can't go
+    # below 1 lot). For debit structures max_loss = full premium paid, so when
+    # the live SL isn't enforced (monitor gap) the debit is the true exposure.
+    # Two May-2026 long straddles sized at ~12-14% of capital (₹60k-70k debit)
+    # lost ₹29k-38k — 3-4× their ₹10k SL — while two straddles at ~8-9% won.
+    # A 10% ceiling blocks the over-concentrated tail without touching the
+    # winning, properly-sized trades. Set to 0 to disable.
+    "max_loss_pct_of_capital": 0.10,
+
     # ---------------------------------------------------------------
     # Calendar Spread (P4) — mid-IV + sideways regime.
     # DTE band for the NEAR (short) leg of a calendar spread.
@@ -541,6 +551,30 @@ STRATEGY_CONFIG = {
         "strategies": ["LONG_STRADDLE", "LONG_STRANGLE"],
         "dte": 5,
         "min_loss_fraction": 0.20,
+    },
+
+    # Long-strangle strike placement as a multiple of the expected move (EM).
+    # Strikes sit at spot ± (long_strangle_em_multiplier × EM). Smaller = closer
+    # to ATM = higher PoP (but richer debit); larger = wider/cheaper but lower
+    # PoP. The 1.0×EM construction produced ~23% PoP and went 0/6 in June 2026,
+    # so we tighten to 0.5×EM to lift PoP toward the strategy_min_pop floor —
+    # strangles that still can't clear the floor are vetoed in strategy_selector.
+    "long_strangle_em_multiplier": 0.5,
+
+    # Minimum probability-of-profit floor (percent, 0–100) per strategy.
+    # Vetoes structurally low-probability debit structures in assemble_suggestion
+    # AFTER economics (PoP) are computed. Strategies NOT listed are unaffected.
+    #
+    # Why LONG_STRANGLE only (June 2026 evidence): long strangles place strikes
+    # at the ±1σ expected-move boundary, so breakevens sit near ±2σ and PoP is
+    # structurally ~23%. A run of 6 such strangles went 0/6 for ~-₹40k — theta
+    # bleeds the debit whenever the realised move doesn't exceed the (already
+    # wide) priced move. A 30% floor retires this construction unless future
+    # strikes are tighter (higher PoP). Long straddles (~42% PoP, ATM) and all
+    # credit strategies (naturally high PoP) are intentionally left ungated so
+    # this change cannot block historically-winning setups.
+    "strategy_min_pop": {
+        "LONG_STRANGLE": 30.0,
     },
 
     "strategy_sl_limits": {

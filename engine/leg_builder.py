@@ -190,21 +190,23 @@ def build_long_strangle(
     lots: int,
     lot_size: int,
 ) -> List[SuggestionLeg]:
-    """Long strangle — buy OTM call and put at ±1σ (expected_move boundary).
+    """Long strangle — buy OTM call and put at ±(mult × expected_move).
 
-    Strikes sit at the edge of the expected move (±1.0×EM) so the cost is
-    lower and the directional edge is genuine. Using 0.5×EM placed strikes
-    near ATM, making the trade expensive with little incremental edge over a
-    straddle.
+    ``mult`` is ``STRATEGY_CONFIG['long_strangle_em_multiplier']`` (default 0.5).
+    Wider placement (≈1.0×EM) is cheaper but gives ~23% PoP; tighter placement
+    (≈0.5×EM) lifts PoP toward the strategy_min_pop floor at the cost of a richer
+    debit. Strangles that still can't clear the PoP floor are vetoed downstream
+    in strategy_selector.assemble_suggestion.
     """
+    mult = float(STRATEGY_CONFIG.get("long_strangle_em_multiplier", 1.0))
     strikes = sorted({float(r["strike"]) for r in chain})
-    long_call = closest_strike(strikes, spot + expected_move * 1.0)
-    long_put  = closest_strike(strikes, spot - expected_move * 1.0)
+    long_call = closest_strike(strikes, spot + expected_move * mult)
+    long_put  = closest_strike(strikes, spot - expected_move * mult)
     return [
         _make_leg(1, None, underlying, expiry, long_call, "CE", "BUY", lots, lot_size, chain,
-                  "Long strangle — long OTM call at +1σ, profits on upside breakout"),
+                  f"Long strangle — long OTM call at +{mult:g}×EM, profits on upside breakout"),
         _make_leg(2, None, underlying, expiry, long_put,  "PE", "BUY", lots, lot_size, chain,
-                  "Long strangle — long OTM put at −1σ, profits on downside breakdown"),
+                  f"Long strangle — long OTM put at −{mult:g}×EM, profits on downside breakdown"),
     ]
 
 
