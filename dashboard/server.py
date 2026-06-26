@@ -52,6 +52,7 @@ from database.models import (
     VixRepo,
 )
 from engine.exit_pricing import sanitized_close_price
+from lifecycle.eod_gap_replay import replay_gap_for_trade
 from lifecycle.resuggestion_engine import generate_resuggestion
 from lifecycle.trade_executor import close_trade_with_fills, mark_executed, supplement_trade
 from utils import market_state_at, now_ist, today_ist
@@ -774,6 +775,18 @@ def create_app() -> Flask:
         )
         db.commit()
         return jsonify({"ok": True})
+
+    @app.route("/api/trades/<trade_id>/gap-replay")
+    @_with_db
+    def api_trade_gap_replay(db: SQLServerConnection, trade_id: str):
+        """EOD MTM replay for weekdays after the last live monitor snapshot."""
+        payload = replay_gap_for_trade(db, trade_id)
+        err = payload.get("error")
+        if err == "not_found":
+            return jsonify({"error": "Not found"}), 404
+        if err:
+            return jsonify({"error": err.replace("_", " ")}), 400
+        return jsonify(payload)
 
     @app.route("/api/trades/<trade_id>/close-suggestion")
     @_with_db

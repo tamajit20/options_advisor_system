@@ -1985,6 +1985,57 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .sl-monitor-footer  { margin-top: 5px; }
 .sl-action-note     { margin-top: 6px; padding: 4px 8px; }
 
+/* EOD gap replay (monitor downtime) */
+.gap-replay-section {
+  margin: 8px 0 4px;
+  padding: 7px 10px;
+  border: 1px solid #2a3744;
+  border-radius: 6px;
+  background: rgba(15, 23, 32, 0.45);
+}
+.gap-replay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.gap-replay-title { font-size: .82rem; font-weight: 600; color: #94a3b8; }
+.gap-replay-chevron { font-size: .7rem; opacity: .7; }
+.gap-replay-body { margin-top: 8px; }
+.gap-replay-alert {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: .82rem;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  color: #fecaca;
+}
+.gap-replay-alert.ok {
+  background: rgba(74, 222, 128, 0.08);
+  border-color: rgba(74, 222, 128, 0.3);
+  color: #bbf7d0;
+}
+.gap-replay-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .78rem;
+}
+.gap-replay-tbl th,
+.gap-replay-tbl td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #2a3744;
+  text-align: left;
+}
+.gap-replay-tbl th { color: #64748b; font-weight: 600; }
+.gap-replay-tbl tr.flag-sl_hit td { background: rgba(248, 113, 113, 0.08); }
+.gap-replay-tbl tr.flag-thesis td { background: rgba(248, 113, 113, 0.08); }
+.gap-replay-tbl tr.flag-target td { background: rgba(74, 222, 128, 0.08); }
+.gap-replay-tbl tr.flag-pre_breach td { background: rgba(251, 191, 36, 0.06); }
+.gap-replay-note { margin-top: 6px; font-size: .72rem; color: #64748b; }
+
 /* Action / execute button row */
 .btn-row { gap: 6px; }
 .btn     { padding: 7px 14px; min-height: 36px; }

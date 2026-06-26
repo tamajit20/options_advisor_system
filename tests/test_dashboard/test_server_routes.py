@@ -157,6 +157,26 @@ class TestMonitorPatch:
         upd.assert_called_once()
 
 
+class TestGapReplay:
+    def test_404_when_missing(self, client, mocker):
+        mocker.patch("dashboard.server.replay_gap_for_trade",
+                     return_value={"error": "not_found"})
+        resp = client.get("/api/trades/TRD-X/gap-replay")
+        assert resp.status_code == 404
+
+    def test_returns_replay_payload(self, client, mocker):
+        mocker.patch("dashboard.server.replay_gap_for_trade", return_value={
+            "trade_id": "TRD-1",
+            "has_gap": True,
+            "days": [{"date": "2026-06-22", "decision": "SL_HIT"}],
+        })
+        resp = client.get("/api/trades/TRD-1/gap-replay")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["trade_id"] == "TRD-1"
+        assert body["days"][0]["decision"] == "SL_HIT"
+
+
 class TestCloseSuggestion:
     def test_404_when_missing(self, client, mocker):
         mocker.patch("dashboard.server.TradeRepo.get", return_value=None)

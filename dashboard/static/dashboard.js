@@ -3117,6 +3117,7 @@ async function loadTrades() {
         loadTrades();
       } catch (err) { toast(err.message, 'err'); }
     }));
+    bindGapReplayPanels();
   } catch (e) {
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -3514,6 +3515,123 @@ function renderOriginalSuggestion(s) {
   return renderSuggestion(s, true, [], true);
 }
 
+function _gapReplayDecisionLabel(decision) {
+  return (decision || 'HOLD').replace(/_/g, ' ');
+}
+
+function _gapReplayFlagTags(flags) {
+  if (!flags || !flags.length) return '';
+  const labels = {
+    sl_hit: 'SL',
+    pre_breach: 'Pre-SL',
+    target: 'Target',
+    thesis: 'Thesis fail',
+  };
+  return flags.map(f => {
+    const cls = f === 'sl_hit' || f === 'thesis' ? 'tag tag-err tag-sm'
+      : f === 'target' ? 'tag tag-ok tag-sm'
+      : 'tag tag-warn tag-sm';
+    return `<span class="${cls}">${escapeHtml(labels[f] || f)}</span>`;
+  }).join(' ');
+}
+
+function renderGapReplayBody(data) {
+  if (!data || data.error) {
+    return `<div class="muted" style="font-size:.8rem">${escapeHtml(data?.error || 'Replay unavailable')}</div>`;
+  }
+  if (!data.has_gap || !data.days || !data.days.length) {
+    const last = data.monitor_last_seen
+      ? `Last monitor snapshot: ${escapeHtml(data.monitor_last_seen)}.`
+      : 'No live monitor snapshots yet.';
+    return `<div class="muted" style="font-size:.8rem">${last} No EOD gap days to replay through ${escapeHtml(data.replay_through || 'today')}.</div>`;
+  }
+
+  let alertHtml = '';
+  const fa = data.first_actionable;
+  if (fa && (fa.decision === 'SL_HIT' || fa.decision === 'THESIS_FAIL')) {
+    alertHtml = `<div class="gap-replay-alert">
+      Would have triggered <strong>${escapeHtml(_gapReplayDecisionLabel(fa.decision))}</strong>
+      at EOD on <strong>${escapeHtml(fa.date)}</strong>
+      (MTM \u20b9${fmt(fa.mtm)} vs SL \u2212\u20b9${fmt(data.sl_threshold_rs)}).
+    </div>`;
+  } else if (fa && fa.decision === 'TAKE_PROFIT') {
+    alertHtml = `<div class="gap-replay-alert ok">
+      Would have hit <strong>take profit</strong> at EOD on <strong>${escapeHtml(fa.date)}</strong>
+      (MTM \u20b9${fmt(fa.mtm)}).
+    </div>`;
+  } else {
+    alertHtml = `<div class="gap-replay-alert ok">
+      No SL / thesis / target breach at EOD across ${data.days.length} gap day(s).
+    </div>`;
+  }
+
+  const rows = data.days.map(d => {
+    const mtmCls = d.mtm >= 0 ? 'pnl-profit' : 'pnl-loss';
+    const flagCls = (d.flags && d.flags.length) ? `flag-${d.flags[0]}` : '';
+    return `<tr class="${flagCls}">
+      <td>${escapeHtml(d.date)}</td>
+      <td>${d.dte}</td>
+      <td class="${mtmCls}">\u20b9${fmt(d.mtm)}</td>
+      <td>\u2212\u20b9${fmt(d.sl_threshold_rs)}</td>
+      <td>${escapeHtml(_gapReplayDecisionLabel(d.decision))}</td>
+      <td>${_gapReplayFlagTags(d.flags)}</td>
+    </tr>`;
+  }).join('');
+
+  const meta = [
+    data.monitor_last_seen ? `Monitor last seen ${escapeHtml(data.monitor_last_seen)}` : null,
+    data.replay_from ? `Replay ${escapeHtml(data.replay_from)} \u2192 ${escapeHtml(data.replay_through)}` : null,
+    data.sl_label ? `SL: ${escapeHtml(data.sl_label)} (\u2212\u20b9${fmt(data.sl_threshold_rs)})` : null,
+  ].filter(Boolean).join(' \u00b7 ');
+
+  return `${alertHtml}
+    <div class="muted" style="font-size:.75rem;margin-bottom:6px">${meta}</div>
+    <table class="gap-replay-tbl">
+      <thead><tr>
+        <th>Date</th><th>DTE</th><th>EOD MTM</th><th>SL</th><th>Decision</th><th>Flags</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="gap-replay-note">${escapeHtml(data.disclaimer || '')}</div>`;
+}
+
+async function loadGapReplayPanel(section) {
+  const tradeId = section.dataset.tradeId;
+  const body = section.querySelector('.gap-replay-body');
+  if (!tradeId || !body || body.dataset.loaded === '1') return;
+  body.innerHTML = '<div class="muted" style="font-size:.8rem">Loading replay\u2026</div>';
+  try {
+    const data = await API(`/api/trades/${tradeId}/gap-replay`);
+    body.innerHTML = renderGapReplayBody(data);
+    body.dataset.loaded = '1';
+    if (!data.has_gap) {
+      section.querySelector('.gap-replay-chevron').textContent = '\u2014';
+    }
+  } catch (err) {
+    body.innerHTML = `<div class="muted" style="font-size:.8rem">Error: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function bindGapReplayPanels() {
+  $$('.gap-replay-section').forEach(section => {
+    const head = section.querySelector('.gap-replay-head');
+    const body = section.querySelector('.gap-replay-body');
+    if (!head || !body) return;
+    section.hidden = false;
+    const toggle = () => {
+      const open = body.hidden;
+      body.hidden = !open;
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+      section.querySelector('.gap-replay-chevron').textContent = open ? '\u25b2' : '\u25bc';
+      if (open) loadGapReplayPanel(section);
+    };
+    head.addEventListener('click', toggle);
+    head.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+    });
+  });
+}
+
 function renderTrade(t) {
   const broken = t.broken_state_json ? JSON.parse(t.broken_state_json) : null;
   const brokenHtml = broken && broken.options && broken.options.length ? `
@@ -3777,6 +3895,16 @@ function renderTrade(t) {
       return `<div class="risk-levels-pair">${liveProfitHtml}${slMonitorHtml}</div>`;
     })()}
     ${hasPendingClose ? `<div class="pending-close-alert">\u26a0 Exit fills not recorded \u2014 use Close Trade below to compute P&amp;L</div>` : ''}
+    ${hasExecutedLegs ? `
+    <section class="gap-replay-section" id="gap-replay-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}" hidden>
+      <div class="gap-replay-head" role="button" tabindex="0" aria-expanded="false">
+        <span class="gap-replay-title">EOD replay (while monitor was off)</span>
+        <span class="gap-replay-chevron">\u25bc</span>
+      </div>
+      <div class="gap-replay-body" hidden>
+        <div class="muted" style="font-size:.8rem">Loading replay\u2026</div>
+      </div>
+    </section>` : ''}
     ${legsHtml}
     ${t.exit_instruction ? `<p class="muted" style="margin:8px 0 0">Exit: ${escapeHtml(t.exit_instruction)}</p>` : ''}
     ${brokenHtml}
