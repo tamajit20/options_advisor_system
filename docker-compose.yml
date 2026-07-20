@@ -1,4 +1,43 @@
+# All-in-one stack: SQL Server + advisor + live WS runner.
+#
+# Quick start (Oracle Cloud / any Linux VM):
+#   cp .env.docker.example .env.docker   # edit passwords + Zerodha keys
+#   ./deploy/setup.sh                    # sets COMPOSE_PROFILES=bundled
+#
+# Windows laptop with local SQLEXPRESS (no bundled SQL):
+#   Set OPT_DB_SERVER=host.docker.internal\SQLEXPRESS in .env.docker
+#   docker compose up -d options_advisor ws_runner
+
 services:
+  # ---------------------------------------------------------------------------
+  # SQL Server Express — bundled DB (10 GB limit, free).
+  # On Oracle Cloud ARM VMs the image runs under amd64 emulation
+  # (platform: linux/amd64 below). Allow ~60s for first startup.
+  # ---------------------------------------------------------------------------
+  sqlserver:
+    profiles: [bundled]
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: options_sqlserver
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Express"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env.docker}
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    # Do NOT publish 1433 to the internet — app reaches DB on the internal network.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -Q "SELECT 1" -C -b || exit 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
   options_advisor:
     build:
       context: .
@@ -11,15 +50,16 @@ services:
     env_file:
       - .env.docker
     ports:
-      - "5001:5001"
+      - "${OPT_DASHBOARD_PORT:-5001}:5001"
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
       - ./archive:/app/archive
       - ./dashboard:/app/dashboard
-    extra_hosts:
-      # Allow container to reach Windows host (for SQL Server on TAMAJITLAPTOP\SQLEXPRESS)
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/health', timeout=5)"]
       interval: 30s
@@ -28,23 +68,11 @@ services:
       start_period: 30s
 
   # ---------------------------------------------------------------------------
-  # WebSocket runner (Phase 2b)
+  # WebSocket runner — Zerodha live ticks (optional but recommended).
   #
-  # Long-lived sidecar that streams Zerodha live ticks into the in-process
-  # cache + event_bus. Reuses the same image as `options_advisor` so a single
-  # `docker compose build` covers both. It does NOT expose any port: it talks
-  # only to upstream Kite and downstream SQL Server.
+  # Skip if you only want EOD:  docker compose up -d sqlserver options_advisor
   #
-  # Started by default. To run the stack without live data, use:
-  #     docker compose up -d options_advisor
-  #
-  # The runner refuses to start unless:
-  #     1. OPT_PROVIDERS=zerodha          (in .env.docker)
-  #     2. OPT_ZERODHA_ENABLED=true       (in .env.docker)
-  #     3. data/zerodha_session.json exists and the access_token is still
-  #        valid for the current trading day. If not, the container exits
-  #        with code 2 and the on-failure restart policy will retry up to
-  #        the configured limit.
+  # Requires a valid data/zerodha_session.json (run --zerodha-login each morning).
   # ---------------------------------------------------------------------------
   ws_runner:
     build:
@@ -60,17 +88,14 @@ services:
     env_file:
       - .env.docker
     volumes:
-      # Share the same data dir so the persisted Zerodha session written by
-      # `--zerodha-login` (run from the main container) is visible here.
       - ./logs:/app/logs
       - ./data:/app/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       options_advisor:
         condition: service_started
-    # No HTTP healthcheck: the runner has no listening socket. Liveness is
-    # implicit in the process not exiting; failures use exit codes (2 for
-    # config / token errors) and trigger the on-failure restart policy.
-    # Connection state is published on event_bus and visible via the main
-    # app's /providers endpoint.
+      sqlserver:
+        condition: service_healthy
+        required: false
+
+volumes:
+  sqlserver_data:

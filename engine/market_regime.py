@@ -85,7 +85,8 @@ def classify_market_regime(
                 f"IV rank {iv_rank:.1f}% is below {buy_max:.0f}%.{prem}"
             ),
             "profit_note": (
-                "Best expectancy: debit spreads / strangles when IV is not overpriced vs HV."
+                "Best expectancy: bull/bear debit spreads when trend is clear; "
+                "calendar when sideways; long vol only with a catalyst or cheap IV/HV."
             ),
         }
 

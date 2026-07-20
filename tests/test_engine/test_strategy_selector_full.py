@@ -47,13 +47,24 @@ class TestSelectStrategyWritingRegime:
 
 
 class TestSelectStrategyBuyingRegime:
-    def test_low_iv_sideways_returns_long_straddle(self):
-        ind = _make_indicators(trend="SIDEWAYS")
+    def test_low_iv_sideways_default_calendar(self):
+        ind = _make_indicators(trend="SIDEWAYS", iv_premium=1.10)
+        assert ss.select_strategy(iv_rank=15.0, trend="SIDEWAYS", indicators=ind) == "CALENDAR_SPREAD"
+
+    def test_low_iv_sideways_cheap_iv_returns_long_straddle(self):
+        ind = _make_indicators(trend="SIDEWAYS", iv_premium=0.85)
         assert ss.select_strategy(iv_rank=15.0, trend="SIDEWAYS", indicators=ind) == "LONG_STRADDLE"
 
-    def test_low_iv_bullish_returns_long_strangle(self):
+    def test_low_iv_bullish_returns_bull_call_spread(self):
         ind = _make_indicators(trend="BULLISH", pcr=0.8)
-        assert ss.select_strategy(iv_rank=25.0, trend="BULLISH", indicators=ind) == "LONG_STRANGLE"
+        assert ss.select_strategy(iv_rank=25.0, trend="BULLISH", indicators=ind) == "BULL_CALL_SPREAD"
+
+    def test_low_iv_bullish_catalyst_returns_long_strangle(self):
+        ind = _make_indicators(trend="BULLISH", pcr=0.8)
+        assert ss.select_strategy(
+            iv_rank=25.0, trend="BULLISH", indicators=ind,
+            has_long_vol_catalyst=True,
+        ) == "LONG_STRANGLE"
 
     def test_very_low_iv_strong_bullish_returns_long_call(self):
         ind = _make_indicators(trend="BULLISH", pcr=0.40)
@@ -63,9 +74,9 @@ class TestSelectStrategyBuyingRegime:
         ind = _make_indicators(trend="BEARISH", pcr=1.80)
         assert ss.select_strategy(iv_rank=15.0, trend="BEARISH", indicators=ind) == "LONG_PUT"
 
-    def test_low_iv_bearish_returns_long_strangle(self):
+    def test_low_iv_bearish_returns_bear_put_spread(self):
         ind = _make_indicators(trend="BEARISH", pcr=1.20)
-        assert ss.select_strategy(iv_rank=25.0, trend="BEARISH", indicators=ind) == "LONG_STRANGLE"
+        assert ss.select_strategy(iv_rank=25.0, trend="BEARISH", indicators=ind) == "BEAR_PUT_SPREAD"
 
 
 class TestSelectStrategyMidRegime:
@@ -675,6 +686,7 @@ class TestLongVolEntryGate:
         with pytest.raises(StrategyVeto, match="catalyst"):
             ss.assemble_suggestion(
                 **self._assemble_kw(sample_chain, ind, iv_rank=5.0),
+                strategy_override="LONG_STRADDLE",
                 has_long_vol_catalyst=False,
             )
 

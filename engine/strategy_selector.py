@@ -39,11 +39,42 @@ from engine.name_generator import make_trade_name
 from utils import now_ist
 
 
+def _long_vol_qualified(
+    *,
+    iv_rank: float,
+    trend: str,
+    indicators: MarketIndicators,
+    has_long_vol_catalyst: bool = False,
+) -> bool:
+    """True when a long straddle/strangle has a vol-expansion thesis.
+
+    Directional low-IV grinds route to debit spreads by default; long vol there
+    requires a HIGH-impact catalyst. Sideways low IV may use long straddle when
+    IV/HV is cheap enough (options not overpriced vs realised vol).
+    """
+    gate = STRATEGY_CONFIG.get("long_vol_entry_gate") or {}
+    if not gate.get("enabled", True):
+        return False
+    if has_long_vol_catalyst:
+        return True
+    if trend in ("BULLISH", "BEARISH"):
+        return False
+    iv_prem = getattr(indicators, "iv_premium", None)
+    iv_prem_max = gate.get("iv_premium_max")
+    if iv_prem is None or iv_prem_max is None:
+        return False
+    if iv_prem > float(iv_prem_max):
+        return False
+    iv_min = float(gate.get("iv_rank_min_without_catalyst", 15.0))
+    return iv_rank >= iv_min
+
+
 def select_strategy(
     *,
     iv_rank: float,
     trend: str,
     indicators: MarketIndicators,
+    has_long_vol_catalyst: bool = False,
 ) -> str:
     """Pick a strategy code from an 11-strategy matrix or raise StrategyVeto.
 
@@ -110,18 +141,33 @@ def select_strategy(
         raise StrategyVeto(f"Unrecognised trend in writing regime: {trend}")
 
     # ---------- BUYING regime (low IV) ----------
+    # Default to defined-risk DIRECTIONAL debit spreads — not long gamma. Long
+    # straddle/strangle only when `_long_vol_qualified` (catalyst on directional
+    # trends, or cheap IV/HV on sideways). Jul 2026: 7/7 long strangles lost in
+    # a low-IV grind because this block always returned long vol.
     if iv_rank < iv_buying_max:
+        long_vol = _long_vol_qualified(
+            iv_rank=iv_rank,
+            trend=trend,
+            indicators=indicators,
+            has_long_vol_catalyst=has_long_vol_catalyst,
+        )
         if trend == "SIDEWAYS":
-            return "LONG_STRADDLE"
+            if long_vol:
+                return "LONG_STRADDLE"
+            return "CALENDAR_SPREAD"
         if trend == "BULLISH":
-            # Very-low IV + strong conviction → naked long call (cheapest, highest leverage)
             if iv_rank < iv_naked_long_max and strong_bullish:
                 return "LONG_CALL"
-            return "LONG_STRANGLE"
+            if long_vol:
+                return "LONG_STRANGLE"
+            return "BULL_CALL_SPREAD"
         if trend == "BEARISH":
             if iv_rank < iv_naked_long_max and strong_bearish:
                 return "LONG_PUT"
-            return "LONG_STRANGLE"
+            if long_vol:
+                return "LONG_STRANGLE"
+            return "BEAR_PUT_SPREAD"
         raise StrategyVeto(f"Unrecognised trend in buying regime: {trend}")
 
     # ---------- MID-IV zone (30..50) ----------
@@ -252,6 +298,7 @@ def assemble_suggestion(
         iv_rank=iv_rank,
         trend=indicators.trend,
         indicators=indicators,
+        has_long_vol_catalyst=has_long_vol_catalyst,
     )
 
     _enforce_long_vol_entry_gate(

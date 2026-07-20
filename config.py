@@ -534,9 +534,11 @@ STRATEGY_CONFIG = {
         "BEAR_CALL_SPREAD", "JADE_LIZARD",
     ],
 
-    # Long-vol entry gate (profit-first): block straddle/strangle when IV rank is
-    # dead AND there is no HIGH-impact catalyst before expiry, or when IV/HV shows
-    # no real vol-buying edge (options overpriced vs realised vol).
+    # Long-vol entry gate (profit-first): block straddle/strangle at assembly when
+    # IV rank is dead AND there is no HIGH-impact catalyst, or when IV/HV shows
+    # no real vol-buying edge. Routing (select_strategy) now defaults low-IV
+    # directional trends to debit spreads; long vol is opt-in via catalyst or
+    # cheap IV/HV on sideways only.
     "long_vol_entry_gate": {
         "enabled": True,
         "strategies": ["LONG_STRADDLE", "LONG_STRANGLE"],

@@ -1,12 +1,8 @@
 """Unit tests for engine.strategy_selector — the 11-strategy decision tree.
 
 Critical regression net: any change to the dispatch matrix should be caught here.
-
-NOTE: One known issue surfaces here intentionally — see FUTURE_ENHANCEMENT_SCOPES.md
-"LONG_STRANGLE strategy is dead code". The current selector still routes to it for
-buying-regime + directional trends *unless* IV is very low (<20) AND PCR is strong.
-We assert the *current* behaviour; the FUTURE-marked test below documents the
-expected fix.
+Low-IV directional trends default to debit spreads; long vol requires catalyst
+(or cheap IV/HV on sideways).
 """
 from __future__ import annotations
 
@@ -62,14 +58,23 @@ class TestWritingRegime:
 
 
 class TestBuyingRegime:
-    """IV Rank < 30 → buying strategies."""
+    """IV Rank < 30 → directional debit spreads; long vol only with catalyst."""
 
-    def test_low_iv_sideways_returns_long_straddle(self):
+    def test_low_iv_sideways_default_calendar(self):
         assert select_strategy(iv_rank=20.0, trend="SIDEWAYS",
-                               indicators=_ind()) == "LONG_STRADDLE"
+                               indicators=_ind(iv_premium=1.10)) == "CALENDAR_SPREAD"
+
+    def test_low_iv_sideways_cheap_iv_returns_long_straddle(self):
+        assert select_strategy(iv_rank=20.0, trend="SIDEWAYS",
+                               indicators=_ind(iv_premium=0.85)) == "LONG_STRADDLE"
+
+    def test_low_iv_sideways_catalyst_returns_long_straddle(self):
+        assert select_strategy(
+            iv_rank=20.0, trend="SIDEWAYS", indicators=_ind(iv_premium=1.10),
+            has_long_vol_catalyst=True,
+        ) == "LONG_STRADDLE"
 
     def test_very_low_iv_strong_bullish_returns_long_call(self):
-        # IV < 20 + PCR < 0.55 → naked long
         assert select_strategy(iv_rank=15.0, trend="BULLISH",
                                indicators=_ind(pcr=0.50)) == "LONG_CALL"
 
@@ -77,10 +82,19 @@ class TestBuyingRegime:
         assert select_strategy(iv_rank=15.0, trend="BEARISH",
                                indicators=_ind(pcr=1.70)) == "LONG_PUT"
 
-    def test_low_iv_mild_bullish_returns_long_strangle(self):
-        # IV < 30 but ≥ 20, mild PCR → strangle (note: leg_builder uses ±0.5 EM)
+    def test_low_iv_mild_bullish_returns_bull_call_spread(self):
         assert select_strategy(iv_rank=25.0, trend="BULLISH",
-                               indicators=_ind(pcr=0.85)) == "LONG_STRANGLE"
+                               indicators=_ind(pcr=0.85)) == "BULL_CALL_SPREAD"
+
+    def test_low_iv_mild_bearish_returns_bear_put_spread(self):
+        assert select_strategy(iv_rank=25.0, trend="BEARISH",
+                               indicators=_ind(pcr=1.20)) == "BEAR_PUT_SPREAD"
+
+    def test_low_iv_bullish_catalyst_returns_long_strangle(self):
+        assert select_strategy(
+            iv_rank=25.0, trend="BULLISH", indicators=_ind(pcr=0.85),
+            has_long_vol_catalyst=True,
+        ) == "LONG_STRANGLE"
 
 
 class TestMidIvRegime:
@@ -124,12 +138,13 @@ def test_iron_condor_blocked_when_vix_rising_3day():
     assert result == "IRON_CONDOR"
 
 
-def test_long_strangle_routing_reachable_in_mid_iv_boundary():
-    """C3: LONG_STRANGLE is selected in the buying regime boundary (iv_rank ~25, BULLISH)."""
-    # iv_rank 25 is below iv_rank_buying_max (30) and at / above iv_naked_long_max (20),
-    # so LONG_CALL is NOT selected — LONG_STRANGLE is the fallback.
-    result = select_strategy(iv_rank=25.0, trend="BULLISH", indicators=_ind())
-    assert result == "LONG_STRANGLE"
+def test_long_strangle_only_with_catalyst_in_buying_regime():
+    """Low IV + bullish without catalyst → debit spread, not strangle."""
+    assert select_strategy(iv_rank=25.0, trend="BULLISH", indicators=_ind()) == "BULL_CALL_SPREAD"
+    assert select_strategy(
+        iv_rank=25.0, trend="BULLISH", indicators=_ind(),
+        has_long_vol_catalyst=True,
+    ) == "LONG_STRANGLE"
 
 
 def test_mid_iv_sideways_now_returns_calendar_spread():

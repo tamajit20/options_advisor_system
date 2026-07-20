@@ -273,14 +273,9 @@ class TestConfidenceGate:
 # C1e: LONG_STRANGLE routing (C3) — confirms the code path is reachable
 # ---------------------------------------------------------------------------
 class TestLongStrangleRouting:
-    def test_long_strangle_routable_in_mid_iv_bullish(self):
-        """LONG_STRANGLE is selected when iv_rank 20-30 (buying regime boundary),
-        trend is BULLISH, and PCR is not strongly bullish. This test verifies the
-        routing path exists and produces correct ±1σ strikes (P1).
-
-        The synthetic chain yields an unrealistically low PoP, so the production
-        `strategy_min_pop` floor is disabled here to keep the test focused on
-        routing/strike-placement rather than the PoP veto."""
+    def test_long_strangle_routable_with_catalyst(self):
+        """LONG_STRANGLE is selected in low IV + bullish when a HIGH-impact catalyst
+        is present. Without catalyst the router picks BULL_CALL_SPREAD instead."""
         chain = _chain()
         ind   = _indicators(trend="BULLISH", iv_premium=0.7, adx=15.0)
         with patch.dict("config.STRATEGY_CONFIG", {"strategy_min_pop": {}}):
@@ -298,6 +293,7 @@ class TestLongStrangleRouting:
                 atm_iv=0.18,
                 lots=1,
                 lot_size=75,
+                has_long_vol_catalyst=True,
             )
         assert sug.strategy == "LONG_STRANGLE"
         call_leg = next(l for l in sug.legs if l.option_type == "CE")
