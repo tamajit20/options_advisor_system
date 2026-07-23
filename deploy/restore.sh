@@ -37,10 +37,14 @@ docker compose exec -T sqlserver mkdir -p /var/opt/mssql/backup
 docker cp "${BAK}" "options_sqlserver:${CONTAINER_PATH}"
 
 echo "==> Restoring ${DB} from ${BASENAME}..."
+# Laptop SQLEXPRESS backups store Windows paths; MOVE files into Linux container data dir.
+DATA_DIR="/var/opt/mssql/data"
 docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd \
   -S localhost -U sa -P "${MSSQL_SA_PASSWORD}" -C -b -Q \
   "ALTER DATABASE [${DB}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-   RESTORE DATABASE [${DB}] FROM DISK = N'${CONTAINER_PATH}' WITH REPLACE, RECOVERY;
+   RESTORE DATABASE [${DB}] FROM DISK = N'${CONTAINER_PATH}' WITH REPLACE, RECOVERY,
+     MOVE N'${DB}' TO N'${DATA_DIR}/${DB}.mdf',
+     MOVE N'${DB}_log' TO N'${DATA_DIR}/${DB}_log.ldf';
    ALTER DATABASE [${DB}] SET MULTI_USER;"
 
 echo "==> Restarting app..."

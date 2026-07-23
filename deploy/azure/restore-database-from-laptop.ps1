@@ -65,7 +65,7 @@ if ($CreateLocalBackup) {
     Write-Host "==> [1/3] SQL BACKUP DATABASE locally (${DbName} only)..."
     Write-Host "    Output: $BackupPath"
 
-    $sql = "BACKUP DATABASE [$DbName] TO DISK = N'$($BackupPath -replace "'", "''")' WITH INIT, COMPRESSION, STATS = 10"
+    $sql = "BACKUP DATABASE [$DbName] TO DISK = N'$($BackupPath -replace "'", "''")' WITH INIT, STATS = 10"
     & sqlcmd -S $LocalSqlServer -E -Q $sql
     if ($LASTEXITCODE -ne 0) {
         throw "sqlcmd backup failed. Install sqlcmd (SSMS) or pass -BackupPath to an existing .bak"
@@ -97,27 +97,14 @@ $remoteScript = @"
 set -euo pipefail
 export COMPOSE_PROFILES=bundled
 cd '$VmProjectDir'
-# shellcheck disable=SC1091
+set -a
 source .env.docker
-DB='${DbName}'
-BAK='backups/$bakName'
-CONTAINER="/var/opt/mssql/backup/$bakName"
-if ! docker compose ps sqlserver 2>/dev/null | grep -q 'Up'; then
-  echo "ERROR: sqlserver container is not running." >&2
-  exit 1
-fi
-docker compose stop options_advisor ws_runner 2>/dev/null || true
-docker compose exec -T sqlserver mkdir -p /var/opt/mssql/backup
-docker cp "\${BAK}" "options_sqlserver:\${CONTAINER}"
-docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd \
-  -S localhost -U sa -P "\${MSSQL_SA_PASSWORD}" -C -b -Q \
-  "ALTER DATABASE [\${DB}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-   RESTORE DATABASE [\${DB}] FROM DISK = N'\${CONTAINER}' WITH REPLACE, RECOVERY;
-   ALTER DATABASE [\${DB}] SET MULTI_USER;"
-docker compose up -d options_advisor ws_runner
-echo "DONE_DB_RESTORE \${DB}"
+set +a
+chmod +x deploy/restore.sh 2>/dev/null || true
+sg docker -c "./deploy/restore.sh backups/$bakName"
+echo "DONE_DB_RESTORE ${DbName}"
 "@
-$remoteScript | & ssh @sshArgs $sshTarget "bash -s"
+$remoteScript | ForEach-Object { $_ -replace "`r", "" } | & ssh @sshArgs $sshTarget "bash -s"
 
 if ($LASTEXITCODE -ne 0) { throw "Database restore failed on VM" }
 

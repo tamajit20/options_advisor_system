@@ -24,7 +24,9 @@ if [[ ! -f .env.docker ]]; then
 fi
 
 # shellcheck disable=SC1091
+set -a
 source .env.docker
+set +a
 
 if [[ -z "${MSSQL_SA_PASSWORD:-}" || "${MSSQL_SA_PASSWORD}" == "ChangeMe!Str0ng#Pass" ]]; then
   echo "ERROR: Set a real MSSQL_SA_PASSWORD in .env.docker (and matching OPT_DB_PASSWORD)."

@@ -25,10 +25,29 @@ Do this once when the Azure VM is new.
 
 ### Step 2 — Install app + SQL Server on the VM
 
-SSH into the VM:
+**Recommended (from Windows laptop — includes opening port 5001):**
+
+```powershell
+copy deploy\azure\laptop.config.ps1.example deploy\azure\laptop.config.ps1
+notepad deploy\azure\laptop.config.ps1   # VmHost, SshKeyPath
+az login
+.\deploy\azure\remote-vm-install.ps1
+```
+
+This SSHs to the VM, runs `vm-install-deploy.sh`, then opens NSG port **5001** from your laptop.
+
+**Manual (SSH into VM only):**
+
+SSH into the VM (use the `.pem` key from Azure VM create):
 
 ```bash
-ssh azureuser@<VM_PUBLIC_IP>
+ssh -i D:/Share/StockAnalyzer/OptionsAdvisor_key.pem azureuser@52.230.104.81
+```
+
+Or with placeholder IP:
+
+```bash
+ssh -i /path/to/OptionsAdvisor_key.pem azureuser@<VM_PUBLIC_IP>
 ```
 
 Run:
@@ -62,9 +81,14 @@ chmod +x deploy/vm-install-deploy.sh
 
 ### Step 2b — Open port 5001 (dashboard)
 
-`vm-install-deploy.sh` tries this automatically at the end. On a fresh VM it usually **cannot** update Azure NSG (no `az login` yet).
+`vm-install-deploy.sh` **step 5/5** calls `deploy/azure/open-port-5001.sh` automatically.
 
-**From your Windows laptop** (recommended, one time):
+On Azure this usually **fails on the VM alone** (NSG needs `az login`). Use one of:
+
+| Method | Command |
+|--------|---------|
+| **All-in-one (recommended)** | `.\deploy\azure\remote-vm-install.ps1` |
+| **After manual VM install** | `az login` then `.\deploy\azure\open-port-5001.ps1` |
 
 ```powershell
 az login

@@ -31,8 +31,9 @@ if ! docker info &>/dev/null 2>&1; then
 fi
 
 echo "==> [1/4] Installing system packages (Docker, Git)..."
+export DEBIAN_FRONTEND=noninteractive
 if ! command -v docker &>/dev/null; then
-  sudo apt-get update
+  sudo apt-get update -y
   sudo apt-get install -y docker.io docker-compose-v2 git curl
   sudo usermod -aG docker "$USER" || true
   if ! docker info &>/dev/null 2>&1; then
@@ -41,8 +42,17 @@ if ! command -v docker &>/dev/null; then
   fi
 else
   echo "    Docker already installed."
-  sudo apt-get update
+  sudo apt-get update -y
   sudo apt-get install -y docker-compose-v2 git curl 2>/dev/null || true
+fi
+
+# Azure VM: install Azure CLI so step 5 can update the NSG (needs az login or managed identity).
+if curl -sf -H Metadata:true --max-time 2 \
+    "http://169.254.169.254/metadata/instance?api-version=2021-02-01" >/dev/null 2>&1; then
+  if ! command -v az &>/dev/null; then
+    echo "    Azure VM detected — installing Azure CLI for NSG port 5001..."
+    curl -sL https://aka.ms/InstallAzureCli | sudo bash
+  fi
 fi
 
 echo "==> [2/4] Fetching application code..."
@@ -83,7 +93,9 @@ if [[ ! -f .env.docker ]]; then
 fi
 
 # shellcheck disable=SC1091
+set -a
 source .env.docker
+set +a
 if [[ -z "${MSSQL_SA_PASSWORD:-}" || "${MSSQL_SA_PASSWORD}" == "ChangeMe!Str0ng#Pass" ]]; then
   echo "ERROR: Set a real MSSQL_SA_PASSWORD (and matching OPT_DB_PASSWORD) in .env.docker"
   exit 1
@@ -96,7 +108,15 @@ echo "    If a database already exists, you will be prompted: fresh vs keep exis
 
 echo "==> [5/5] Opening dashboard port ${OPT_DASHBOARD_PORT:-5001} (Azure NSG + local firewall)..."
 chmod +x deploy/azure/open-port-5001.sh 2>/dev/null || true
-./deploy/azure/open-port-5001.sh || true
+if ! ./deploy/azure/open-port-5001.sh; then
+  echo ""
+  echo "WARNING: Port ${OPT_DASHBOARD_PORT:-5001} was NOT opened in Azure NSG from the VM."
+  echo "         Run from your Windows laptop (after az login):"
+  echo "           .\\deploy\\azure\\open-port-5001.ps1"
+  echo "         Or use the all-in-one laptop installer:"
+  echo "           .\\deploy\\azure\\remote-vm-install.ps1"
+  echo ""
+fi
 
 echo ""
 echo "================================================================="

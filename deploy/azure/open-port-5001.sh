@@ -80,6 +80,10 @@ _open_azure_nsg() {
     return 1
   fi
   if ! az account show >/dev/null 2>&1; then
+    # Works when VM has system-assigned managed identity + Network Contributor on NSG.
+    az login --identity >/dev/null 2>&1 || true
+  fi
+  if ! az account show >/dev/null 2>&1; then
     return 1
   fi
 
@@ -131,11 +135,14 @@ if _is_azure; then
   echo "   az login"
   echo "   .\\deploy\\azure\\open-port-5001.ps1"
   echo ""
+  echo " Or use the all-in-one laptop installer:"
+  echo "   .\\deploy\\azure\\remote-vm-install.ps1"
+  echo ""
   echo " Or ON THIS VM (one-time Azure CLI login):"
-  echo "   curl -sL https://aka.ms/InstallAzureCli | sudo bash"
   echo "   az login --use-device-code"
   echo "   ./deploy/azure/open-port-5001.sh"
   echo "-----------------------------------------------------------------"
+  exit 1
 else
   echo "    Not running on Azure (or metadata unavailable)."
   echo "    Ensure your cloud firewall allows inbound TCP ${PORT}."
