@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
-# One-command deploy for Oracle Cloud (or any Linux VM with Docker).
-# Usage:  cp .env.docker.example .env.docker && nano .env.docker && ./deploy/setup.sh
+# Deploy the Docker stack on a Linux VM (SQL Server + app + WS runner).
+#
+# Usage:
+#   cp .env.docker.example .env.docker && nano .env.docker && ./deploy/setup.sh
+#
+# Database options (when OptionsAdvisorDB already exists):
+#   ./deploy/setup.sh                      # interactive: fresh vs keep existing
+#   ./deploy/setup.sh --fresh-db           # DROP + recreate empty database
+#   ./deploy/setup.sh --use-existing-db    # keep data; run --init-db for schema only
+#   DB_SETUP_MODE=fresh ./deploy/setup.sh  # non-interactive wipe
+#
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -41,8 +50,10 @@ for i in $(seq 1 24); do
   sleep 5
 done
 
-echo "==> Initialising database (safe to re-run)..."
-docker compose run --rm options_advisor python main.py --init-db
+# Database: create fresh, or keep existing data (see deploy/db-setup.sh).
+# shellcheck disable=SC1091
+source "$(dirname "$0")/db-setup.sh"
+run_db_setup "$@"
 
 echo "==> Starting full stack..."
 docker compose up -d
@@ -51,6 +62,6 @@ echo ""
 echo "Done. Dashboard: http://$(hostname -I 2>/dev/null | awk '{print $1}'):${OPT_DASHBOARD_PORT:-5001}"
 echo ""
 echo "Next steps:"
-echo "  1. Open port ${OPT_DASHBOARD_PORT:-5001} in Oracle Cloud security list (or use Tailscale)."
+echo "  1. Open port ${OPT_DASHBOARD_PORT:-5001} in your cloud firewall (Azure NSG / Oracle security list)."
 echo "  2. Each trading morning: docker compose exec options_advisor python main.py --zerodha-login"
 echo "  3. Check health: docker compose ps && docker compose logs -f options_advisor"

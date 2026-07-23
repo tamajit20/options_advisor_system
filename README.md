@@ -39,6 +39,10 @@ python main.py
 
 Dashboard: http://localhost:5001
 
+## Azure VM deploy
+
+See **[deploy/azure/OPERATIONS.md](deploy/azure/OPERATIONS.md)** — first install, database update, code-only deploy.
+
 ## Folder Structure
 
 See [ARCHITECTURE.txt](ARCHITECTURE.txt) for module dependency rules.

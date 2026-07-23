@@ -1,0 +1,26 @@
+# Copy to deploy/azure/laptop.config.ps1 and edit (file is gitignored).
+#
+#   copy deploy\azure\laptop.config.ps1.example deploy\azure\laptop.config.ps1
+#
+# Used by deploy/azure/backup-database-to-laptop.ps1
+#      and deploy/azure/restore-database-from-laptop.ps1
+
+# Azure VM (optional — open-port-5001.ps1 can auto-detect VM by public IP)
+$script:AzureResourceGroup = ""
+$script:AzureVmName        = ""
+$script:AzureNsgSource      = "*"    # set to "YOUR.IP.ADDR/32" to restrict dashboard access
+
+# VM public IP (required for SSH and open-port script)
+$script:VmHost       = "YOUR_VM_PUBLIC_IP"
+$script:VmUser       = "azureuser"
+$script:VmProjectDir = "/home/azureuser/options_advisor_system"
+
+# Optional: path to OpenSSH private key (leave empty for default ~/.ssh/id_ed25519)
+$script:SshKeyPath    = ""
+
+# Local folder for SQL Server .bak files ONLY (not app code/logs)
+$script:LocalBackupDir = "D:\Backups\OptionsAdvisorDB"
+
+# Local SQL Server (used when restore script creates a .bak for you)
+$script:LocalSqlServer = "TAMAJITLAPTOP\SQLEXPRESS"
+$script:LocalDbName    = "OptionsAdvisorDB"
