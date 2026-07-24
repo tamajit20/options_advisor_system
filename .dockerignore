@@ -16,6 +16,8 @@ logs/*
 data/*
 !data/.gitkeep
 archive/*
+backups/*
+!backups/.gitkeep
 .env
 .env.*
 !.env.docker.example
