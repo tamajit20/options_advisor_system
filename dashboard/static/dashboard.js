@@ -4724,6 +4724,20 @@ function _jobDuration(startIso, endIso) {
   return `${(sec/3600).toFixed(1)}h`;
 }
 
+function renderJobsGrid(jobs) {
+  let html = '';
+  let lastGroup = null;
+  for (const j of jobs) {
+    const group = j.display_group || 'Other';
+    if (group !== lastGroup) {
+      html += `<div class="jobs-section-head">${escapeHtml(group)}</div>`;
+      lastGroup = group;
+    }
+    html += renderJobCard(j);
+  }
+  return html;
+}
+
 async function loadJobs(silent = false) {
   const c = $('#jobs-container');
   if (!c) return;
@@ -4738,7 +4752,7 @@ async function loadJobs(silent = false) {
       return;
     }
     c.className = '';
-    c.innerHTML = `<div class="jobs-grid">${data.jobs.map(renderJobCard).join('')}</div>`;
+    c.innerHTML = `<div class="jobs-grid">${renderJobsGrid(data.jobs)}</div>`;
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -4766,17 +4780,25 @@ function renderJobCard(j) {
     ? `<div class="job-meta-row"><span>Rows</span><span>${escapeHtml(String(j.rows_processed))}</span></div>`
     : '';
 
+  const scheduleNote = j.via_pipeline
+    ? ' • via EOD pipeline'
+    : (j.cron_enabled === false || !j.enabled ? ' • manual only' : '');
+
   const triggerBtn = `<button class="btn job-trigger-btn" data-job="${escapeHtml(j.job_name)}"
-      ${isRunning || !j.enabled ? 'disabled' : ''}>
+      ${isRunning || j.manual_enabled === false ? 'disabled' : ''}>
       ${isRunning ? '⏳ Running…' : '▶ Run now'}
     </button>`;
+
+  const stepBadge = (j.via_pipeline && j.pipeline_step)
+    ? `<span class="job-pipeline-step">Step ${j.pipeline_step}</span>`
+    : '';
 
   return `<div class="${cardCls}">
     <div class="job-card-head">
       <span class="job-icon">${escapeHtml(j.icon)}</span>
       <div class="job-title-block">
-        <div class="job-name">${escapeHtml(j.display_name)}</div>
-        <div class="job-schedule">${escapeHtml(j.schedule)}${j.enabled ? '' : ' • disabled'}</div>
+        <div class="job-name">${escapeHtml(j.display_name)}${stepBadge}</div>
+        <div class="job-schedule">${escapeHtml(j.schedule)}${scheduleNote}</div>
       </div>
       <span class="job-status ${sm.cls}">${sm.label}</span>
     </div>

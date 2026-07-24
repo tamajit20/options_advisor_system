@@ -418,6 +418,58 @@ class TestJobsList:
         assert "jobs" in data
         assert data["scheduler_running"] is False
 
+    def test_pipeline_steps_inherit_next_run(self, client, mocker):
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        mocker.patch("dashboard.server.JobLogRepo.latest_status_per_job",
+                     return_value=[])
+        mocker.patch("scheduler.scheduler._eod_pipeline_enabled", return_value=True)
+
+        ist = ZoneInfo("Asia/Kolkata")
+        pipeline_when = datetime(2026, 7, 24, 20, 35, tzinfo=ist)
+
+        mock_pipeline_job = MagicMock()
+        mock_pipeline_job.id = "eod_nightly_pipeline"
+        mock_pipeline_job.next_run_time = pipeline_when
+
+        mock_sch = MagicMock()
+        mock_sch.running = True
+        mock_sch.get_jobs.return_value = [mock_pipeline_job]
+
+        import scheduler.scheduler as sched
+        mocker.patch.object(sched, "_SCHEDULER", mock_sch)
+
+        resp = client.get("/api/jobs/list")
+        data = resp.get_json()
+        fo = next(j for j in data["jobs"] if j["job_name"] == "fo_bhav_download")
+        assert fo["via_pipeline"] is True
+        assert fo["next_run"] is not None
+        assert "20:35" in fo["next_run"] or "20:35" in fo["schedule"]
+        assert fo["manual_enabled"] is True
+
+    def test_jobs_sorted_chronologically_with_groups(self, client, mocker):
+        mocker.patch("dashboard.server.JobLogRepo.latest_status_per_job",
+                     return_value=[])
+        mocker.patch("scheduler.scheduler._eod_pipeline_enabled", return_value=True)
+        import scheduler.scheduler as sched
+        mocker.patch.object(sched, "_SCHEDULER", None)
+
+        resp = client.get("/api/jobs/list")
+        jobs = resp.get_json()["jobs"]
+        names = [j["job_name"] for j in jobs]
+
+        assert names.index("events_seed") < names.index("intraday_validator")
+        assert names.index("intraday_validator") < names.index("live_suggestion_engine")
+        assert names.index("live_suggestion_engine") < names.index("event_eve_review")
+        assert names.index("event_eve_review") < names.index("intraday_close_snapshot")
+        assert names.index("eod_nightly_pipeline") < names.index("fo_bhav_download")
+        assert names.index("fo_bhav_download") < names.index("trade_greeks_update")
+        assert names.index("trade_greeks_update") < names.index("weekly_cleanup")
+
+        assert jobs[0]["display_group"] == "Monday & weekly"
+        assert all(j.get("display_group") for j in jobs)
+
 
 class TestJobsTrigger:
     def test_unknown_job_returns_400(self, client):

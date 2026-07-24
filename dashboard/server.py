@@ -413,6 +413,112 @@ _JOB_META: Dict[str, Dict[str, str]] = {
 _DOW_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu",
                "fri": "Fri", "sat": "Sat", "sun": "Sun"}
 
+# Jobs tab — chronological section headers (sort_group order).
+_JOB_DISPLAY_GROUPS: tuple[tuple[str, str], ...] = (
+    ("monday", "Monday & weekly"),
+    ("open", "Market open (09:00–10:00)"),
+    ("intraday", "Intraday (10:00–15:30)"),
+    ("close", "Market close"),
+    ("eod", "EOD pipeline (20:35+)"),
+    ("maintenance", "Maintenance"),
+    ("manual", "Manual only"),
+)
+_JOB_GROUP_ORDER = {gid: i for i, (gid, _) in enumerate(_JOB_DISPLAY_GROUPS)}
+
+
+def _cron_slots(cfg: Dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalized cron slots from a SCHEDULER_CONFIG job entry."""
+    if not cfg:
+        return []
+    schedules = cfg.get("schedules")
+    if schedules:
+        return [
+            s for s in schedules
+            if s.get("enabled", True)
+            and s.get("hour") is not None
+            and s.get("minute") is not None
+        ]
+    h, m = cfg.get("hour"), cfg.get("minute")
+    if h is not None and m is not None:
+        slot: dict[str, Any] = {"hour": int(h), "minute": int(m)}
+        if cfg.get("day_of_week"):
+            slot["day_of_week"] = cfg["day_of_week"]
+        return [slot]
+    return []
+
+
+def _slot_minutes(slot: dict[str, Any]) -> int:
+    return int(slot["hour"]) * 60 + int(slot["minute"])
+
+
+def _earliest_cron_minutes(cfg: Dict[str, Any]) -> int | None:
+    slots = _cron_slots(cfg)
+    if not slots:
+        return None
+    return min(_slot_minutes(s) for s in slots)
+
+
+def _job_display_sort_key(
+    name: str,
+    cfg: Dict[str, Any],
+    *,
+    via_pipeline: bool,
+    pipeline_cfg: Dict[str, Any],
+    cron_enabled: bool,
+) -> tuple[int, int, int, str]:
+    """Sort jobs for the dashboard: day section → time → pipeline step → name."""
+    from scheduler.scheduler import _EOD_PIPELINE_STEPS
+
+    pipeline_mins = _earliest_cron_minutes(pipeline_cfg) or (20 * 60 + 35)
+
+    if name == "eod_nightly_pipeline":
+        return (_JOB_GROUP_ORDER["eod"], pipeline_mins, 0, name)
+
+    if via_pipeline:
+        try:
+            step = _EOD_PIPELINE_STEPS.index(name) + 1
+        except ValueError:
+            step = 99
+        return (_JOB_GROUP_ORDER["eod"], pipeline_mins, step, name)
+
+    if name == "events_seed":
+        return (_JOB_GROUP_ORDER["monday"], _earliest_cron_minutes(cfg) or 9 * 60, 0, name)
+
+    if not cron_enabled:
+        return (_JOB_GROUP_ORDER["manual"], 99 * 60, 0, name)
+
+    mins = _earliest_cron_minutes(cfg)
+    if mins is None:
+        return (_JOB_GROUP_ORDER["manual"], 99 * 60, 0, name)
+
+    if name == "intraday_validator":
+        return (_JOB_GROUP_ORDER["open"], mins, 0, name)
+    if mins < 10 * 60:
+        return (_JOB_GROUP_ORDER["open"], mins, 0, name)
+    if name in ("event_eve_review", "intraday_close_snapshot"):
+        return (_JOB_GROUP_ORDER["close"], mins, 0, name)
+    if mins < 15 * 60 + 45:
+        return (_JOB_GROUP_ORDER["intraday"], mins, 0, name)
+    if name == "weekly_cleanup":
+        return (_JOB_GROUP_ORDER["maintenance"], mins, 0, name)
+    if mins >= 20 * 60:
+        return (_JOB_GROUP_ORDER["eod"], mins, 0, name)
+    return (_JOB_GROUP_ORDER["intraday"], mins, 0, name)
+
+
+def _job_display_group_label(sort_key: tuple[int, int, int, str]) -> str:
+    group_idx = sort_key[0]
+    for i, (_, label) in enumerate(_JOB_DISPLAY_GROUPS):
+        if i == group_idx:
+            return label
+    return "Other"
+
+
+def _sort_time_label(minutes: int | None) -> str:
+    if minutes is None:
+        return ""
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
 
 def _summarize_cron(cfg: Dict[str, Any]) -> str:
     """Render a SCHEDULER_CONFIG entry as a human-readable schedule string."""
@@ -1501,7 +1607,9 @@ def create_app() -> Flask:
     def api_jobs_list(db: SQLServerConnection):
         from scheduler.scheduler import (
             JOB_FUNCS as _JOB_FUNCS,
+            _EOD_PIPELINE_STEPS,
             _LAST_STATUS as _LAST,
+            _eod_pipeline_enabled,
             get_scheduler,
         )
 
@@ -1514,16 +1622,38 @@ def create_app() -> Flask:
 
         # Schedule config (cron triggers)
         cfg_jobs = SCHEDULER_CONFIG.get("jobs", {})
+        pipeline_on = _eod_pipeline_enabled()
+        pipeline_cfg = cfg_jobs.get("eod_nightly_pipeline", {}) or {}
+        pipeline_schedule = _summarize_cron(pipeline_cfg)
+        pipeline_next = (
+            _next_run_for_job(sch, "eod_nightly_pipeline")
+            if sch_running and pipeline_on
+            else None
+        )
 
         out = []
         for name in _JOB_FUNCS.keys():
             cfg = cfg_jobs.get(name, {}) or {}
             meta = _JOB_META.get(name, {})
+            cron_enabled = bool(cfg.get("enabled", True))
+            via_pipeline = pipeline_on and name in _EOD_PIPELINE_STEPS
 
             # Next scheduled run from APScheduler (earliest of multi-trigger jobs)
             next_run = None
             if sch_running:
-                next_run = _next_run_for_job(sch, name)
+                if via_pipeline:
+                    next_run = pipeline_next
+                else:
+                    next_run = _next_run_for_job(sch, name)
+
+            if via_pipeline:
+                schedule = (
+                    f"{pipeline_schedule} • step in EOD pipeline"
+                    if pipeline_schedule
+                    else "Step in EOD Nightly Pipeline"
+                )
+            else:
+                schedule = _summarize_cron(cfg)
 
             # Determine display status
             row = latest_rows.get(name) or {}
@@ -1545,15 +1675,32 @@ def create_app() -> Flask:
                 "display_name":  meta.get("name", name.replace("_", " ").title()),
                 "icon":          meta.get("icon", "⚙️"),
                 "description":   meta.get("description", ""),
-                "schedule":      _summarize_cron(cfg),
-                "enabled":       bool(cfg.get("enabled", True)),
+                "schedule":      schedule,
+                "enabled":       cron_enabled or via_pipeline,
+                "cron_enabled":  cron_enabled,
+                "via_pipeline":  via_pipeline,
+                "manual_enabled": True,
                 "status":        disp,
                 "started_at":    _ist_iso(row.get("started_at")),
                 "finished_at":   _ist_iso(row.get("finished_at")),
                 "error_message": row.get("error_message") or "",
                 "rows_processed": row.get("rows_processed"),
                 "next_run":      _ist_iso(next_run),
+                "_sort":         _job_display_sort_key(
+                    name, cfg,
+                    via_pipeline=via_pipeline,
+                    pipeline_cfg=pipeline_cfg,
+                    cron_enabled=cron_enabled,
+                ),
             })
+
+        out.sort(key=lambda j: j["_sort"])
+        for job in out:
+            sk = job.pop("_sort")
+            job["display_group"] = _job_display_group_label(sk)
+            job["sort_time"] = _sort_time_label(sk[1])
+            if job["via_pipeline"]:
+                job["pipeline_step"] = sk[2]
 
         return jsonify({
             "jobs": out,

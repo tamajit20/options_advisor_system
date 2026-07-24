@@ -1764,6 +1764,31 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .jobs-header-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .jobs-auto-label { font-size:.78rem; color:var(--text-dim); display:inline-flex; align-items:center; gap:4px; }
 .jobs-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }
+.jobs-section-head {
+  grid-column: 1 / -1;
+  font-size: .8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+  padding: 14px 0 4px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  margin-top: 4px;
+}
+.jobs-section-head:first-child { margin-top: 0; padding-top: 0; }
+.job-pipeline-step {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: .65rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  vertical-align: middle;
+  background: rgba(56,189,248,.15);
+  color: #7dd3fc;
+  letter-spacing: 0;
+  text-transform: none;
+}
 .job-card { background:var(--surface-alt); border:1px solid rgba(255,255,255,.06); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:8px; }
 .job-card--running  { border-color: rgba(56,189,248,.5);  box-shadow:0 0 0 1px rgba(56,189,248,.15); }
 .job-card--failed   { border-color: rgba(239,68,68,.5);   box-shadow:0 0 0 1px rgba(239,68,68,.12); }
