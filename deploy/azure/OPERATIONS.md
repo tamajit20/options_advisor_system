@@ -270,6 +270,27 @@ For code-only updates, prefer the **Part 3** commands above instead of re-runnin
 
 ---
 
+## VM power schedule (cost saving)
+
+Recommended **Mon–Fri only** (Sat/Sun off). All times **IST**.
+
+| Session | Start VM | Stop VM | What runs |
+|---------|----------|---------|-----------|
+| **Market** | **08:55** | **15:40** | Zerodha login, intraday jobs, live suggestions, 15:35 snapshot |
+| **EOD** | **20:30** | **21:00** | **EOD Nightly Pipeline** @ **20:35** (best-effort sequential bhav → IV → suggestion); **weekly_cleanup** @ **20:50** Fri |
+| **Weekend** | off | off | — |
+| **Mon only** | **08:55** | **15:40** | **events_seed** @ **09:00** (calendar sync) |
+
+The app uses **`eod_nightly_pipeline`**: one job at **20:35** runs all EOD steps back-to-back (~10–15 min).  
+Each step is attempted even if upstream steps fail or bhav is late — independent jobs (VIX, FII, simulation) always run; downstream orchestrators skip gracefully when data is missing.  
+Allow **5 min** after VM start for Docker/SQL before 20:35.
+
+**Azure Automation (UTC):** 08:55 IST = 03:25 UTC · 15:40 IST = 10:10 UTC · 20:30 IST = 15:00 UTC · 21:00 IST = 15:30 UTC.
+
+If **F&O bhav** is late (NSE not published by 20:35), the pipeline still runs VIX/FII/simulation and attempts IV/suggestion (they return 0 rows). Re-run **`fo_bhav_download`** from the Jobs tab when the file appears, then **`iv_calculation`** → **`suggestion_engine`** if needed.
+
+---
+
 ## Quick reference
 
 | Goal | Where | Command |

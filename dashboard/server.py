@@ -404,6 +404,8 @@ _JOB_META: Dict[str, Dict[str, str]] = {
                             "description": "Updates daily P/L simulation for past suggestions."},
     "exit_engine":        {"icon": "🚪", "name": "Exit Engine",
                             "description": "Evaluates open trades and emits exit instructions."},
+    "eod_nightly_pipeline": {"icon": "🌙", "name": "EOD Nightly Pipeline",
+                            "description": "Sequential EOD chain: bhav → IV → suggestion → exit (Mon–Fri 20:35 IST)."},
     "weekly_cleanup":     {"icon": "🧹", "name": "Weekly Cleanup",
                             "description": "Applies retention policy and trims historical data."},
 }

@@ -78,16 +78,30 @@ SCHEDULER_CONFIG = {
     # When EOD download / IV calc jobs run without an explicit trade_date,
     # fill any missing weekdays in this calendar-day window (plus refresh today).
     "data_backfill_lookback_days": 30,
+    # Azure VM EOD window: Mon–Fri 20:30–21:00 IST (5 min boot → pipeline @ 20:35).
+    # When eod_nightly_pipeline is enabled, individual EOD crons below are not scheduled
+    # (enabled: False) but still appear in Jobs for manual step re-runs.
     "jobs": {
-        # Data downloads (post-market) — NSE bhav copies often land after 18:30 IST.
-        "fo_bhav_download":   {"hour": 19, "minute": 30, "enabled": True},
-        "spot_bhav_download": {"hour": 19, "minute": 35, "enabled": True},
-        "vix_download":       {"hour": 19, "minute": 40, "enabled": True},
-        "fii_download":       {"hour": 19, "minute": 45, "enabled": True},
-        # Calculations
-        "iv_calculation":     {"hour": 20, "minute":  0, "enabled": True},
-        # Suggestions + lifecycle
-        "suggestion_engine":  {"hour": 20, "minute": 30, "enabled": True},
+        # --- EOD chain (scheduled via eod_nightly_pipeline @ 20:35 Mon–Fri) ---
+        "fo_bhav_download":   {"hour": 19, "minute": 30, "enabled": False},
+        "spot_bhav_download": {"hour": 19, "minute": 35, "enabled": False},
+        "vix_download":       {"hour": 19, "minute": 40, "enabled": False},
+        "fii_download":       {"hour": 19, "minute": 45, "enabled": False},
+        "iv_calculation":     {"hour": 20, "minute":  0, "enabled": False},
+        "suggestion_engine":  {"hour": 20, "minute": 30, "enabled": False},
+        "simulation_update":  {"hour": 20, "minute": 45, "enabled": False},
+        "exit_engine":        {"hour": 20, "minute": 50, "enabled": False},
+        "trade_greeks_update": {"hour": 21, "minute": 0, "enabled": False},
+        "drift_verifier": {
+            "day_of_week": "mon-fri", "hour": 20, "minute": 35, "enabled": False,
+        },
+        # Sequential EOD pipeline — VM up 20:30, jobs start 20:35 (~10–15 min total).
+        "eod_nightly_pipeline": {
+            "day_of_week": "mon-fri",
+            "hour": 20,
+            "minute": 35,
+            "enabled": True,
+        },
         # Live suggestion: re-evaluate with live Zerodha chain during market hours.
         # Requires OPT_PROVIDERS=zerodha. Multiple intraday windows (one dashboard
         # job tile; each window logs job_id suffix HHMM under job_name
@@ -108,20 +122,9 @@ SCHEDULER_CONFIG = {
         "event_eve_review": {
             "day_of_week": "mon-fri", "hour": 14, "minute": 30, "enabled": True,
         },
-        "simulation_update":  {"hour": 20, "minute": 45, "enabled": True},
-        "exit_engine":        {"hour": 20, "minute": 50, "enabled": True},
-        # C6 — Greek drift: recompute delta/vega/theta for open trades after EOD data
-        "trade_greeks_update": {"hour": 21, "minute": 0, "enabled": True},
-        # Phase 2b.1 — live-vs-settled drift detection
         # 15:35 IST: capture live LTP for every leg of every ACTIVE trade.
-        # 20:35 IST: compare to today's settled close (loaded by fo_bhav at
-        #            19:30) and fire a DRIFT_WARNING for legs that diverge
-        #            beyond STRATEGY_CONFIG["intraday_close_drift_pct"].
         "intraday_close_snapshot": {
             "day_of_week": "mon-fri", "hour": 15, "minute": 35, "enabled": True,
-        },
-        "drift_verifier": {
-            "day_of_week": "mon-fri", "hour": 20, "minute": 35, "enabled": True,
         },
         # 09:35 IST: re-validate today's PENDING suggestions against live
         # opening chain. Avoids 09:30 by 5 min so the worst of opening-tick
@@ -129,10 +132,10 @@ SCHEDULER_CONFIG = {
         "intraday_validator": {
             "day_of_week": "mon-fri", "hour": 9, "minute": 35, "enabled": True,
         },
-        # Maintenance (Sunday 02:00)
-        "weekly_cleanup":     {"day_of_week": "sun", "hour": 2,  "minute":  0, "enabled": True},
-        # Events calendar sync — Monday 07:00 before market open
-        "events_seed":        {"day_of_week": "mon", "hour": 7,  "minute":  0, "enabled": True},
+        # Maintenance — Fri EOD window (VM on 20:30–21:00 Mon–Fri)
+        "weekly_cleanup":     {"day_of_week": "fri", "hour": 20, "minute": 50, "enabled": True},
+        # Events calendar sync — Mon market window (VM on from 08:55)
+        "events_seed":        {"day_of_week": "mon", "hour": 9,  "minute":  0, "enabled": True},
     },
     # Each job also gets a max wallclock budget (seconds) — enforced by
     # `_run_job` via a watchdog thread that closes the DB connection on
@@ -156,6 +159,7 @@ SCHEDULER_CONFIG = {
         "intraday_close_snapshot": 300,
         "drift_verifier":          120,
         "intraday_validator":      180,
+        "eod_nightly_pipeline":    1200,
     },
     # Default for jobs not listed above.
     "default_job_timeout_seconds": 600,

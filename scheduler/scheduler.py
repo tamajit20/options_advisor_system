@@ -53,6 +53,27 @@ from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
 
+# EOD steps run sequentially by eod_nightly_pipeline (Azure VM 20:30–21:00 window).
+_EOD_PIPELINE_STEPS: tuple[str, ...] = (
+    "fo_bhav_download",
+    "spot_bhav_download",
+    "vix_download",
+    "fii_download",
+    "iv_calculation",
+    "suggestion_engine",
+    "drift_verifier",
+    "simulation_update",
+    "exit_engine",
+    "trade_greeks_update",
+)
+
+_EOD_JOBS_SUPERSEDED = frozenset(_EOD_PIPELINE_STEPS)
+
+
+def _eod_pipeline_enabled() -> bool:
+    conf = SCHEDULER_CONFIG.get("jobs", {}).get("eod_nightly_pipeline", {})
+    return bool(conf.get("enabled", False))
+
 
 # ---------------------------------------------------------------------------
 # Job-state tracker — used by chain-skip logic
@@ -358,10 +379,8 @@ def job_spot_bhav():  _run_job("spot_bhav_download", run_spot_bhav)
 def job_vix():        _run_job("vix_download",       run_vix)
 def job_fii():        _run_job("fii_download",       run_fii)
 
-def job_iv():         _run_job("iv_calculation",     run_iv_calculation,
-                               requires=["fo_bhav_download", "spot_bhav_download"])
-def job_suggestion(): _run_job("suggestion_engine",  run_suggestion_engine,
-                               requires=["iv_calculation"])
+def job_iv():         _run_job("iv_calculation",     run_iv_calculation)
+def job_suggestion(): _run_job("suggestion_engine",  run_suggestion_engine)
 def _live_suggestion_window_job(window_suffix: str):
     """One APScheduler trigger; logs under live_suggestion_engine with HHMM suffix."""
 
@@ -380,10 +399,8 @@ def job_live_suggestion() -> None:
     """Manual / default run (no window suffix)."""
     _run_job("live_suggestion_engine", run_live_suggestion_engine)
 def job_simulation(): _run_job("simulation_update",  run_simulation_update)
-def job_exit():       _run_job("exit_engine",        run_exit_engine,
-                               requires=["fo_bhav_download"])
-def job_trade_greeks(): _run_job("trade_greeks_update", run_trade_greeks_update,
-                                 requires=["fo_bhav_download", "spot_bhav_download"])
+def job_exit():       _run_job("exit_engine",        run_exit_engine)
+def job_trade_greeks(): _run_job("trade_greeks_update", run_trade_greeks_update)
 def job_events_seed(): _run_job("events_seed",       run_events_seed)
 def job_event_eve_review(): _run_job("event_eve_review", run_event_eve_review)
 
@@ -393,12 +410,46 @@ def job_intraday_close_snapshot():
 
 
 def job_drift_verifier():
-    _run_job("drift_verifier", run_drift_verifier,
-             requires=["fo_bhav_download"])
+    _run_job("drift_verifier", run_drift_verifier)
 
 
 def job_intraday_validator():
     _run_job("intraday_validator", run_intraday_validator)
+
+
+def job_eod_nightly_pipeline():
+    """Run the full EOD chain sequentially (Mon–Fri after VM boot).
+
+    Each step is attempted regardless of upstream status. Orchestrators
+    handle missing data internally (skip/return 0); independent jobs (VIX,
+    FII, simulation) always get a chance to run even when bhav is late.
+    """
+
+    def _pipeline(db: SQLServerConnection) -> int:
+        del db  # each step opens its own connection via _run_job
+        summary: dict[str, str] = {}
+        for step in _EOD_PIPELINE_STEPS:
+            step_fn = JOB_FUNCS.get(step)
+            if step_fn is None:
+                logger.warning("EOD pipeline: missing handler for %s", step)
+                summary[step] = "MISSING"
+                continue
+            logger.info("EOD pipeline — starting step %s", step)
+            try:
+                step_fn()
+            except Exception:
+                logger.exception("EOD pipeline — step %s raised unexpectedly", step)
+                summary[step] = "FAILED"
+                continue
+            summary[step] = _LAST_STATUS.get(step, "UNKNOWN")
+            logger.info(
+                "EOD pipeline — finished step %s status=%s",
+                step, summary[step],
+            )
+        logger.info("EOD pipeline complete: %s", summary)
+        return 0
+
+    _run_job("eod_nightly_pipeline", _pipeline)
 
 
 def job_weekly_cleanup():
@@ -454,6 +505,7 @@ JOB_FUNCS = {
     "intraday_close_snapshot": job_intraday_close_snapshot,
     "drift_verifier":          job_drift_verifier,
     "intraday_validator":      job_intraday_validator,
+    "eod_nightly_pipeline":    job_eod_nightly_pipeline,
 }
 
 
@@ -464,8 +516,15 @@ def _schedule_window_suffix(trigger_kwargs: dict) -> str:
 def build_scheduler() -> BackgroundScheduler:
     sch = BackgroundScheduler(timezone=SCHEDULER_CONFIG["timezone"])
     jobs = SCHEDULER_CONFIG["jobs"]
+    pipeline_on = _eod_pipeline_enabled()
     for name, conf in jobs.items():
         if not conf.get("enabled", True):
+            continue
+        if pipeline_on and name in _EOD_JOBS_SUPERSEDED:
+            logger.info(
+                "Skipping individual schedule for %s (eod_nightly_pipeline enabled)",
+                name,
+            )
             continue
 
         schedules = conf.get("schedules")

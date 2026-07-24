@@ -81,12 +81,45 @@ class TestRunJob:
         fn.assert_called_once()
 
 
+class TestEodPipeline:
+    def test_runs_all_steps_in_order(self, patched_db, mocker):
+        calls: list[str] = []
+
+        def _make_tracker(name):
+            def _fn():
+                calls.append(name)
+                sched._LAST_STATUS[name] = "SUCCESS"
+            return _fn
+
+        for step in sched._EOD_PIPELINE_STEPS:
+            sched.JOB_FUNCS[step] = _make_tracker(step)
+
+        sched.job_eod_nightly_pipeline()
+        assert calls == list(sched._EOD_PIPELINE_STEPS)
+
+    def test_continues_when_fo_bhav_has_no_data(self, patched_db, mocker):
+        """Best-effort: pipeline runs all steps even when bhav is NO_DATA."""
+
+        def _make(name, status="SUCCESS"):
+            def _fn():
+                sched._LAST_STATUS[name] = status
+            return _fn
+
+        sched.JOB_FUNCS["fo_bhav_download"] = _make("fo_bhav_download", "NO_DATA")
+        for step in sched._EOD_PIPELINE_STEPS[1:]:
+            sched.JOB_FUNCS[step] = _make(step)
+
+        sched.job_eod_nightly_pipeline()
+        for step in sched._EOD_PIPELINE_STEPS:
+            assert step in sched._LAST_STATUS
+
+
 class TestJobFuncsRegistry:
     def test_all_jobs_registered(self):
         expected = {
             "fo_bhav_download", "spot_bhav_download", "vix_download", "fii_download",
             "iv_calculation", "suggestion_engine", "simulation_update", "exit_engine",
-            "events_seed", "weekly_cleanup",
+            "events_seed", "weekly_cleanup", "eod_nightly_pipeline",
         }
         assert expected.issubset(set(sched.JOB_FUNCS.keys()))
 
@@ -96,7 +129,6 @@ class TestJobFuncsRegistry:
 
 
 def test_live_suggestion_single_job_multi_triggers():
-    """One logical job, four cron triggers — one dashboard tile."""
     assert "live_suggestion_engine" in sched.JOB_FUNCS
     assert "live_suggestion_engine_0945" not in sched.JOB_FUNCS
     sch = sched.build_scheduler()
@@ -108,6 +140,14 @@ def test_live_suggestion_single_job_multi_triggers():
         "live_suggestion_engine@1300",
         "live_suggestion_engine@1430",
     }
+
+
+def test_eod_pipeline_single_trigger_supersedes_individual_eod_crons():
+    sch = sched.build_scheduler()
+    pipeline = [j for j in sch.get_jobs() if j.id == "eod_nightly_pipeline"]
+    assert len(pipeline) == 1
+    for name in sched._EOD_PIPELINE_STEPS:
+        assert not [j for j in sch.get_jobs() if j.id == name or j.id.startswith(f"{name}@")]
 
 
 def test_event_eve_review_job_registered():
