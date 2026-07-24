@@ -281,11 +281,77 @@ Recommended **Mon–Fri only** (Sat/Sun off). All times **IST**.
 | **Weekend** | off | off | — |
 | **Mon only** | **08:55** | **15:40** | **events_seed** @ **09:00** (calendar sync) |
 
+Stopping must **deallocate** the VM (not guest OS shutdown only) to save compute cost. You still pay for the OS disk and a static public IP if reserved.
+
+**Azure Automation (UTC):** 08:55 IST = 03:25 UTC · 15:40 IST = 10:10 UTC · 20:30 IST = 15:00 UTC · 21:00 IST = 15:30 UTC.
+
+### Automated setup (recommended — from Windows laptop)
+
+Script: **`deploy/azure/VMUpTimeConfiguration.ps1`**
+
+Defaults (override in `deploy/azure/laptop.config.ps1` or `deploy/azure/vm-uptime/vm-uptime.config.ps1`):
+
+| Setting | Default |
+|---------|---------|
+| Resource group | `STOCKAPPS` |
+| VM name | `OptionsAdvisor` |
+| Automation account | `aa-stockapps-optionsadvisor` |
+
+```powershell
+az login
+
+# Preview commands only
+.\deploy\azure\VMUpTimeConfiguration.ps1 -WhatIf
+
+# Create Automation account, runbooks, and Mon–Fri schedules
+.\deploy\azure\VMUpTimeConfiguration.ps1
+
+# First run: import Az modules into Automation (~15–30 min)
+.\deploy\azure\VMUpTimeConfiguration.ps1 -ImportAzModules
+
+# Remove schedules/runbooks (keeps Automation account)
+.\deploy\azure\VMUpTimeConfiguration.ps1 -Remove
+```
+
+Runbooks live in `deploy/azure/vm-uptime/runbooks/`:
+
+- `Start-OptionsAdvisorVm.ps1` — start VM
+- `Stop-OptionsAdvisorVm.ps1` — stop + **deallocate**
+
+Schedules created:
+
+| Schedule name | UTC | IST | Action |
+|---------------|-----|-----|--------|
+| `sched-oa-start-market-mf` | 03:25 | 08:55 | Start |
+| `sched-oa-stop-market-mf` | 10:10 | 15:40 | Stop |
+| `sched-oa-start-eod-mf` | 15:00 | 20:30 | Start |
+| `sched-oa-stop-eod-mf` | 15:30 | 21:00 | Stop |
+
+**After setup — verify**
+
+1. Azure Portal → **Automation account** → `aa-stockapps-optionsadvisor` → **Runbooks** → test **Start** then **Stop**
+2. VM status must show **Stopped (deallocated)** when off
+3. **Jobs** tab in Automation → last run **Completed**
+4. Allow **~5 min** after start before cron jobs (SQL + Docker)
+
+**Market-day checklist:** Zerodha login after **08:55** start; EOD pipeline auto-runs at **20:35** if VM started at **20:30**.
+
+### Manual setup (Azure Portal)
+
+If you prefer the Portal instead of the script:
+
+1. **Create** → **Automation** → Automation account in **STOCKAPPS** (same region as VM)
+2. **Identity** → System assigned → **On** → save
+3. VM (or resource group) → **Access control (IAM)** → add **Virtual Machine Contributor** for the Automation account identity
+4. **Runbooks** → create **Start-OptionsAdvisorVm** / **Stop-OptionsAdvisorVm** (copy from `deploy/azure/vm-uptime/runbooks/`)
+5. **Schedules** → four weekly schedules (Mon–Fri, **UTC** times in table above)
+6. Link each schedule to the matching runbook with parameters: `ResourceGroupName=STOCKAPPS`, `VMName=OptionsAdvisor`
+
+---
+
 The app uses **`eod_nightly_pipeline`**: one job at **20:35** runs all EOD steps back-to-back (~10–15 min).  
 Each step is attempted even if upstream steps fail or bhav is late — independent jobs (VIX, FII, simulation) always run; downstream orchestrators skip gracefully when data is missing.  
 Allow **5 min** after VM start for Docker/SQL before 20:35.
-
-**Azure Automation (UTC):** 08:55 IST = 03:25 UTC · 15:40 IST = 10:10 UTC · 20:30 IST = 15:00 UTC · 21:00 IST = 15:30 UTC.
 
 If **F&O bhav** is late (NSE not published by 20:35), the pipeline still runs VIX/FII/simulation and attempts IV/suggestion (they return 0 rows). Re-run **`fo_bhav_download`** from the Jobs tab when the file appears, then **`iv_calculation`** → **`suggestion_engine`** if needed.
 
@@ -302,6 +368,7 @@ If **F&O bhav** is late (NSE not published by 20:35), the pipeline still runs VI
 | Restore on VM only | VM | `./deploy/restore.sh backups/file.bak` |
 | **Latest code, same DB** | VM | `git pull && docker compose build options_advisor && docker compose up -d` |
 | Open dashboard port 5001 | Laptop | `.\deploy\azure\open-port-5001.ps1` |
+| **VM start/stop schedules** | Laptop | `.\deploy\azure\VMUpTimeConfiguration.ps1` |
 | Zerodha login | VM | `docker compose exec options_advisor python main.py --zerodha-login` |
 
 ---

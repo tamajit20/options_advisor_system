@@ -1,0 +1,15 @@
+# Copy to deploy/azure/vm-uptime/vm-uptime.config.ps1 (optional overrides).
+#
+#   copy deploy\azure\vm-uptime\vm-uptime.config.ps1.example deploy\azure\vm-uptime\vm-uptime.config.ps1
+#
+# VMUpTimeConfiguration.ps1 also reads deploy/azure/laptop.config.ps1 when present.
+
+# Azure VM (Options Advisor production)
+$script:AzureResourceGroup       = "STOCKAPPS"
+$script:AzureVmName               = "OptionsAdvisor"
+
+# Automation account (name must be globally unique in Azure)
+$script:AutomationAccountName     = "aa-stockapps-optionsadvisor"
+
+# PowerShell runbook runtime in Automation (PowerShell72 or PowerShell)
+$script:AutomationRunbookType     = "PowerShell72"

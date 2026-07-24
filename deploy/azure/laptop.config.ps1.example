@@ -5,9 +5,9 @@
 # Used by deploy/azure/backup-database-to-laptop.ps1
 #      and deploy/azure/restore-database-from-laptop.ps1
 
-# Azure VM (optional — open-port-5001.ps1 can auto-detect VM by public IP)
-$script:AzureResourceGroup = ""
-$script:AzureVmName        = ""
+# Azure VM (optional — open-port-5001.ps1 and VMUpTimeConfiguration.ps1)
+$script:AzureResourceGroup = "STOCKAPPS"
+$script:AzureVmName        = "OptionsAdvisor"
 $script:AzureNsgSource      = "*"    # set to "YOUR.IP.ADDR/32" to restrict dashboard access
 
 # VM public IP (required for SSH and open-port script)
