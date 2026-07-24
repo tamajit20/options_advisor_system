@@ -354,6 +354,77 @@ class TestApiLogs:
 
 
 class TestZerodhaCallback:
+    def test_public_base_url_from_request_host(self, client):
+        with client.application.test_request_context(
+            "/",
+            base_url="http://52.230.104.81:5001/",
+        ):
+            assert server.public_base_url() == "http://52.230.104.81:5001"
+            assert server.zerodha_callback_url() == "http://52.230.104.81:5001/zerodha/callback"
+
+    def test_public_base_url_honors_forwarded_headers(self, client):
+        with client.application.test_request_context(
+            "/",
+            base_url="http://127.0.0.1:5001/",
+            headers={
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "options.example.com",
+            },
+        ):
+            assert server.public_base_url() == "https://options.example.com"
+            assert server.zerodha_callback_url() == "https://options.example.com/zerodha/callback"
+
+    def test_public_base_url_uses_config_override(self, client, mocker):
+        mocker.patch.dict(
+            server.DASHBOARD_CONFIG,
+            {"public_base_url": "http://azure-vm.example:5001"},
+            clear=False,
+        )
+        with client.application.test_request_context("/", base_url="http://localhost:5001/"):
+            assert server.public_base_url() == "http://azure-vm.example:5001"
+            assert server.zerodha_callback_url() == "http://azure-vm.example:5001/zerodha/callback"
+
+    def test_zerodha_status_includes_redirect_url(self, client, mocker):
+        mocker.patch("providers.zerodha.session.load_session", return_value=None)
+        resp = client.get(
+            "/api/zerodha/status",
+            base_url="http://52.230.104.81:5001/",
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["redirect_url"] == "http://52.230.104.81:5001/zerodha/callback"
+        assert body["public_base_url"] == "http://52.230.104.81:5001"
+
+    def test_zerodha_status_manual_paste_on_http_ip(self, client, mocker):
+        mocker.patch("providers.zerodha.session.load_session", return_value=None)
+        resp = client.get(
+            "/api/zerodha/status",
+            base_url="http://52.230.104.81:5001/",
+        )
+        body = resp.get_json()
+        assert body["kite_manual_paste_flow"] is True
+        assert body["kite_console_redirect_url"] == "http://127.0.0.1:5001/zerodha/callback"
+
+    def test_zerodha_status_flags_http_ip_as_https_required(self, client, mocker):
+        mocker.patch("providers.zerodha.session.load_session", return_value=None)
+        resp = client.get(
+            "/api/zerodha/status",
+            base_url="http://52.230.104.81:5001/",
+        )
+        assert resp.get_json()["kite_https_required"] is True
+
+    def test_zerodha_status_https_url_not_flagged(self, client, mocker):
+        mocker.patch.dict(
+            server.DASHBOARD_CONFIG,
+            {"public_base_url": "https://options.example.com"},
+            clear=False,
+        )
+        mocker.patch("providers.zerodha.session.load_session", return_value=None)
+        resp = client.get("/api/zerodha/status")
+        body = resp.get_json()
+        assert body["kite_https_required"] is False
+        assert body["redirect_url"] == "https://options.example.com/zerodha/callback"
+
     def test_callback_exchanges_token_and_redirects(self, client, mocker):
         mocker.patch(
             "providers.zerodha.session.exchange_request_token",

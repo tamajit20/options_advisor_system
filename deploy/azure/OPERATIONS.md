@@ -136,14 +136,32 @@ If you already ran Step 2 with an empty DB, that is fine — restore **overwrite
 
 ### Step 4 — Zerodha login (every trading morning)
 
-On the VM:
+Kite requires **HTTPS** for public redirect URLs. On Azure (HTTP + IP) use **manual paste**:
+
+**One-time in [Kite Developer Console](https://developers.kite.trade):**
+
+Redirect URL:
+
+```
+http://127.0.0.1:5001/zerodha/callback
+```
+
+**Each trading morning** (from your browser at `http://<VM_IP>:5001`):
+
+1. Open **WS Monitor** tab → **Open Kite Login** (opens new tab).
+2. Complete Kite login + 2FA.
+3. Browser lands on `127.0.0.1` — copy the **full URL** from the address bar.
+4. Back on the Azure dashboard → paste URL → **Submit Token**.
+
+**Alternative via SSH:**
 
 ```bash
 cd ~/options_advisor_system
-docker compose exec options_advisor python main.py --zerodha-login
+set -a && source .env.docker && set +a && export COMPOSE_PROFILES=bundled
+sg docker -c 'docker compose exec options_advisor python main.py --zerodha-login'
 ```
 
-Follow the URL, log in, paste the `request_token`.
+Paste the `request_token` when prompted.
 
 ---
 
@@ -275,4 +293,61 @@ For code-only updates, prefer the **Part 3** commands above instead of re-runnin
 | Dashboard unreachable | Run `.\deploy\azure\open-port-5001.ps1` from laptop after `az login` |
 | Restore fails | VM stack must be up: `docker compose ps` shows sqlserver **Up** |
 | WS runner restarting | Run Zerodha login (Part 1 Step 4) |
+| Kite rejects redirect URL (HTTPS required) | See **HTTPS for Zerodha OAuth** below |
 | sqlcmd not found on laptop | Install SSMS / SQL Server tools, or use `-BackupPath` with existing `.bak` |
+
+---
+
+## HTTPS for Zerodha OAuth (Azure)
+
+Kite Connect **requires HTTPS** for redirect URLs. The only HTTP exception is **`http://127.0.0.1`** (local dev).
+
+`http://52.230.104.81:5001` will **not** be accepted in the Kite Developer Console.
+
+### Option A — Domain + free SSL on the VM (recommended)
+
+1. Point a domain (e.g. `options.yourdomain.com`) to the VM public IP in DNS.
+2. Open Azure NSG ports **80** and **443** (same way you opened 5001).
+3. Install Caddy on the VM — it obtains a Let's Encrypt certificate automatically:
+
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update && sudo apt install -y caddy
+sudo tee /etc/caddy/Caddyfile <<'EOF'
+options.yourdomain.com {
+    reverse_proxy localhost:5001
+}
+EOF
+sudo systemctl reload caddy
+```
+
+4. In Kite Developer Console, set Redirect URL to:
+   `https://options.yourdomain.com/zerodha/callback`
+5. In VM `.env.docker`:
+   ```env
+   OPT_PUBLIC_BASE_URL=https://options.yourdomain.com
+   ```
+6. Restart app: `docker compose up -d options_advisor ws_runner`
+
+Browse the dashboard at **`https://options.yourdomain.com`** (not the raw IP).
+
+### Option B — Cloudflare Tunnel (HTTPS without opening 443 on Azure)
+
+If your domain uses Cloudflare DNS, run `cloudflared tunnel` to expose `localhost:5001` on a stable `https://…` URL. See [Cloudflare Tunnel docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).
+
+Set `OPT_PUBLIC_BASE_URL` to the tunnel HTTPS URL and register the same `/zerodha/callback` path in Kite.
+
+### Option C — Manual token paste (no HTTPS needed today)
+
+Keep Kite Redirect URL as **`http://127.0.0.1:5001/zerodha/callback`** (allowed by Kite).
+
+Each morning on the Azure dashboard:
+
+1. Click **Open Kite Login** → complete login + 2FA.
+2. Browser will land on `127.0.0.1` (may show an error page — that's OK).
+3. Copy the **full URL** from the address bar (contains `request_token=…`).
+4. Paste into the token box on the Azure dashboard → **Submit Token**.
+
+Or use SSH: `docker compose exec options_advisor python main.py --zerodha-login` and paste the token when prompted.

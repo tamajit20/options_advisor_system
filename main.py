@@ -160,6 +160,11 @@ def _cmd_zerodha_login() -> int:
     print("")
     print("Step 2 — after login you will be redirected to your registered URL")
     print("         with a 'request_token=XXXX' query parameter. Paste the value below.")
+    from config import DASHBOARD_CONFIG
+    base = (DASHBOARD_CONFIG.get("public_base_url") or "").strip().rstrip("/")
+    if not base:
+        base = f"http://127.0.0.1:{DASHBOARD_CONFIG['port']}"
+    print(f"         Kite redirect URL for this deploy: {base}/zerodha/callback")
     print("")
     try:
         request_token = input("request_token: ").strip()

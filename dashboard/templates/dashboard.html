@@ -240,10 +240,19 @@
       <div id="zerodha-session-card" class="card wsmon-config-card">
         <h3 class="wsmon-config-title">Zerodha Session</h3>
         <div id="zerodha-status" class="muted">Checking…</div>
-        <ol class="wsmon-config-steps">
-          <li>In <a href="https://developers.kite.trade/" target="_blank" rel="noopener">Kite Developer</a>, set Redirect URL to <code>http://localhost:5001/zerodha/callback</code>.</li>
+        <div id="zerodha-https-warning" class="wsmon-config-hint" style="display:none;color:#b45309;margin:.5rem 0;">
+          Azure / HTTP deploy — use <strong>manual paste</strong> below (Kite requires HTTPS for public URLs).
+        </div>
+        <ol id="zerodha-steps-auto" class="wsmon-config-steps">
+          <li>In <a href="https://developers.kite.trade/" target="_blank" rel="noopener">Kite Developer</a>, set Redirect URL to <code id="zerodha-callback-url">{{ zerodha_callback_url }}</code>.</li>
           <li>Click <a href="/zerodha/login"><strong>Open Kite Login</strong></a>, complete login + 2FA — you'll return here automatically.</li>
           <li>If Kite redirects to <code>/?request_token=…</code> instead, the token is auto-submitted; otherwise paste below.</li>
+        </ol>
+        <ol id="zerodha-steps-manual" class="wsmon-config-steps" style="display:none;">
+          <li>In <a href="https://developers.kite.trade/" target="_blank" rel="noopener">Kite Developer</a>, set Redirect URL to <code id="zerodha-kite-console-url">http://127.0.0.1:5001/zerodha/callback</code> (one-time setup).</li>
+          <li>Click <a id="zerodha-login-link-manual" href="/zerodha/login" target="_blank" rel="noopener"><strong>Open Kite Login</strong></a> → complete login + 2FA.</li>
+          <li>Browser lands on <code>127.0.0.1</code> (page may not load — OK). Copy the <strong>full URL</strong> from the address bar.</li>
+          <li>Paste the URL (or just <code>request_token</code>) below → <strong>Submit Token</strong>.</li>
         </ol>
         <div class="wsmon-config-actions">
           <input id="zerodha-token-input" type="text" placeholder="Paste redirect URL or request_token…"

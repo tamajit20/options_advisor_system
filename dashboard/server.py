@@ -18,9 +18,9 @@ import json
 import logging
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
-from flask import Flask, jsonify, redirect, render_template, request
+from flask import Flask, has_request_context, jsonify, redirect, render_template, request
 
 # Datetimes stored in the DB are naive IST (the runtime TZ is Asia/Kolkata).
 # Format them as plain readable strings — no UTC offset needed.
@@ -58,6 +58,75 @@ from lifecycle.trade_executor import close_trade_with_fills, mark_executed, supp
 from utils import market_state_at, now_ist, today_ist
 
 logger = logging.getLogger(__name__)
+
+
+def public_base_url() -> str:
+    """External base URL for Zerodha OAuth redirect registration and operator docs."""
+    configured = (DASHBOARD_CONFIG.get("public_base_url") or "").strip().rstrip("/")
+    if configured:
+        return configured
+    if has_request_context():
+        scheme = (request.headers.get("X-Forwarded-Proto") or request.scheme or "http").split(",")[0].strip()
+        host = (request.headers.get("X-Forwarded-Host") or request.host or "").split(",")[0].strip()
+        if host:
+            return f"{scheme}://{host}".rstrip("/")
+    port = DASHBOARD_CONFIG["port"]
+    return f"http://127.0.0.1:{port}"
+
+
+def zerodha_callback_url() -> str:
+    """Kite Developer Console redirect URL for this deployment."""
+    return f"{public_base_url()}/zerodha/callback"
+
+
+def kite_redirect_https_required(redirect_url: str | None = None) -> bool:
+    """True when Kite will reject this redirect URL (HTTP on non-localhost)."""
+    url = redirect_url or zerodha_callback_url()
+    parsed = urlparse(url)
+    if parsed.scheme == "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    return host not in ("127.0.0.1", "localhost")
+
+
+def kite_console_redirect_url() -> str:
+    """Redirect URL to register in Kite Developer Console for this deployment."""
+    if kite_redirect_https_required(zerodha_callback_url()):
+        port = DASHBOARD_CONFIG["port"]
+        return f"http://127.0.0.1:{port}/zerodha/callback"
+    return zerodha_callback_url()
+
+
+def _zerodha_status_payload() -> dict:
+    from providers.zerodha.session import is_token_valid, load_session
+
+    callback = zerodha_callback_url()
+    manual_paste = kite_redirect_https_required(callback)
+    console_redirect = kite_console_redirect_url()
+    base = {
+        "public_base_url": public_base_url(),
+        "redirect_url": callback,
+        "kite_console_redirect_url": console_redirect,
+        "login_path": "/zerodha/login",
+        "kite_https_required": manual_paste,
+        "kite_manual_paste_flow": manual_paste,
+    }
+    s = load_session()
+    if s is None:
+        return {
+            **base,
+            "has_session": False,
+            "valid": False,
+            "user_id": None,
+            "generated_at": None,
+        }
+    return {
+        **base,
+        "has_session": True,
+        "valid": bool(is_token_valid(s)),
+        "user_id": s.user_id,
+        "generated_at": s.generated_at.isoformat(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +492,7 @@ def create_app() -> Flask:
         return render_template("dashboard.html",
                                theme=DASHBOARD_CONFIG["theme"],
                                port=DASHBOARD_CONFIG["port"],
+                               zerodha_callback_url=zerodha_callback_url(),
                                cache_bust=int(time.time()))
 
     # ---------- Theme tokens ----------
@@ -439,8 +509,7 @@ def create_app() -> Flask:
     #   GET  /api/zerodha/status   — JSON snapshot of current session validity.
     #   POST /api/zerodha/logout   — clear persisted session (ws_runner exits).
     #
-    # Kite Developer Console redirect URL must be:
-    #   http://localhost:5001/zerodha/callback
+    # Kite Developer Console redirect URL must match zerodha_callback_url() for this host.
     @app.route("/zerodha/login")
     def zerodha_login_redirect():
         try:
@@ -491,21 +560,7 @@ def create_app() -> Flask:
 
     @app.route("/api/zerodha/status")
     def api_zerodha_status():
-        from providers.zerodha.session import is_token_valid, load_session
-        s = load_session()
-        if s is None:
-            return jsonify({
-                "has_session": False,
-                "valid": False,
-                "user_id": None,
-                "generated_at": None,
-            })
-        return jsonify({
-            "has_session": True,
-            "valid": bool(is_token_valid(s)),
-            "user_id": s.user_id,
-            "generated_at": s.generated_at.isoformat(),
-        })
+        return jsonify(_zerodha_status_payload())
 
     @app.route("/api/zerodha/logout", methods=["POST"])
     def api_zerodha_logout():

@@ -5062,6 +5062,33 @@ async function loadZerodhaStatus() {
     const d = await r.json();
     _zerodhaHasSession = !!d.has_session;
     _zerodhaValid = !!d.valid;
+    const callbackEl = document.getElementById('zerodha-callback-url');
+    if (callbackEl && d.redirect_url) {
+      callbackEl.textContent = d.redirect_url;
+    }
+    const manual = !!d.kite_manual_paste_flow;
+    const httpsWarn = document.getElementById('zerodha-https-warning');
+    const stepsAuto = document.getElementById('zerodha-steps-auto');
+    const stepsManual = document.getElementById('zerodha-steps-manual');
+    const kiteConsoleEl = document.getElementById('zerodha-kite-console-url');
+    if (httpsWarn) {
+      httpsWarn.style.display = manual ? 'block' : 'none';
+    }
+    if (stepsAuto) stepsAuto.style.display = manual ? 'none' : '';
+    if (stepsManual) stepsManual.style.display = manual ? '' : 'none';
+    if (kiteConsoleEl && d.kite_console_redirect_url) {
+      kiteConsoleEl.textContent = d.kite_console_redirect_url;
+    }
+    if (headerBtn) {
+      if (manual) {
+        headerBtn.setAttribute('target', '_blank');
+        headerBtn.setAttribute('rel', 'noopener');
+        headerBtn.title = 'Opens Kite login in a new tab — paste request_token back here when done.';
+      } else {
+        headerBtn.removeAttribute('target');
+        headerBtn.removeAttribute('rel');
+      }
+    }
     _refreshAllFeedTags();
     // Update header pill (always present)
     if (headerBtn && headerIcon && headerLabel) {
