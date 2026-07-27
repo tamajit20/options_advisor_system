@@ -26,14 +26,19 @@ param(
     [string]$AutomationAccountName,
     [string]$Location,
     [string]$SubscriptionId,
-    [ValidateSet("PowerShell72", "PowerShell")]
+    [ValidateSet("PowerShell", "Python3")]
     [string]$RunbookType,
     [switch]$ImportAzModules,
     [switch]$Remove,
     [switch]$WhatIf
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
+
+$azCliDir = "${env:ProgramFiles}\Microsoft SDKs\Azure\CLI2\wbin"
+if ((Test-Path $azCliDir) -and ($env:Path -notlike "*$azCliDir*")) {
+    $env:Path = "$azCliDir;$env:Path"
+}
 
 $DeployDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot    = Split-Path -Parent (Split-Path -Parent $DeployDir)
@@ -59,7 +64,7 @@ function Resolve-ConfigValue {
 $ResourceGroupName     = Resolve-ConfigValue $ResourceGroupName $script:AzureResourceGroup "STOCKAPPS"
 $VmName                = Resolve-ConfigValue $VmName $script:AzureVmName "OptionsAdvisor"
 $AutomationAccountName = Resolve-ConfigValue $AutomationAccountName $script:AutomationAccountName "aa-stockapps-optionsadvisor"
-$RunbookType           = Resolve-ConfigValue $RunbookType $script:AutomationRunbookType "PowerShell72"
+$RunbookType           = Resolve-ConfigValue $RunbookType $script:AutomationRunbookType "PowerShell"
 
 $RunbookStartName = "Start-OptionsAdvisorVm"
 $RunbookStopName  = "Stop-OptionsAdvisorVm"
@@ -75,36 +80,55 @@ $ScheduleDefinitions = @(
         Runbook     = $RunbookStartName
         HourUtc     = 3
         MinuteUtc   = 25
-        Description = "Mon-Fri 08:55 IST — start VM for market session"
+        Description = "Mon-Fri 08:55 IST - start VM for market session"
     },
     @{
         Name        = "sched-oa-stop-market-mf"
         Runbook     = $RunbookStopName
         HourUtc     = 10
         MinuteUtc   = 10
-        Description = "Mon-Fri 15:40 IST — stop VM after market session"
+        Description = "Mon-Fri 15:40 IST - stop VM after market session"
     },
     @{
         Name        = "sched-oa-start-eod-mf"
         Runbook     = $RunbookStartName
         HourUtc     = 15
         MinuteUtc   = 0
-        Description = "Mon-Fri 20:30 IST — start VM for EOD pipeline"
+        Description = "Mon-Fri 20:30 IST - start VM for EOD pipeline"
     },
     @{
         Name        = "sched-oa-stop-eod-mf"
         Runbook     = $RunbookStopName
         HourUtc     = 15
         MinuteUtc   = 30
-        Description = "Mon-Fri 21:00 IST — stop VM after EOD window"
+        Description = "Mon-Fri 21:00 IST - stop VM after EOD window"
     }
 )
 
-function Assert-AzCli {
-    if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
+function Get-AzCliPath {
+    $cmd = Get-Command az -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $default = "${env:ProgramFiles}\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
+    if (Test-Path $default) { return $default }
+    return $null
+}
+
+function Invoke-AzCliRaw {
+    param([string[]]$CliArgs)
+    $az = Get-AzCliPath
+    if (-not $az) {
         throw "Azure CLI not found. Install: winget install Microsoft.AzureCLI"
     }
-    $account = az account show 2>$null | ConvertFrom-Json
+    & $az @CliArgs
+    return $LASTEXITCODE
+}
+
+function Assert-AzCli {
+    $az = Get-AzCliPath
+    if (-not $az) {
+        throw "Azure CLI not found. Install: winget install Microsoft.AzureCLI"
+    }
+    $account = & $az account show 2>$null | ConvertFrom-Json
     if (-not $account) {
         throw "Not logged in to Azure. Run: az login"
     }
@@ -139,16 +163,16 @@ function Get-NextUtcStartTime {
 }
 
 function Invoke-AzCli {
-    param([string[]]$Args, [string]$Label)
+    param([string[]]$CliArgs, [string]$Label)
     if ($WhatIf) {
         Write-Host "[WhatIf] $Label"
-        Write-Host "         az $($Args -join ' ')"
+        Write-Host "         az $($CliArgs -join ' ')"
         return $null
     }
     Write-Host "==> $Label"
-    & az @Args
-    if ($LASTEXITCODE -ne 0) {
-        throw "Azure CLI failed: az $($Args -join ' ')"
+    $code = Invoke-AzCliRaw -CliArgs $CliArgs
+    if ($code -ne 0) {
+        throw "Azure CLI failed: az $($CliArgs -join ' ')"
     }
 }
 
@@ -189,9 +213,10 @@ function Ensure-SystemIdentity {
     }
 
     Invoke-AzCli @(
-        "automation", "account", "update",
-        "-g", $Rg,
-        "-n", $Name,
+        "resource", "update",
+        "--resource-group", $Rg,
+        "--name", $Name,
+        "--resource-type", "Microsoft.Automation/automationAccounts",
         "--set", "identity.type=SystemAssigned"
     ) -Label "Enabling system-assigned managed identity on '$Name'..."
 
@@ -221,7 +246,8 @@ function Ensure-VmContributorRole {
 
     Invoke-AzCli @(
         "role", "assignment", "create",
-        "--assignee", $PrincipalId,
+        "--assignee-object-id", $PrincipalId,
+        "--assignee-principal-type", "ServicePrincipal",
         "--role", "Virtual Machine Contributor",
         "--scope", $scope
     ) -Label "Assigning 'Virtual Machine Contributor' on resource group '$ScopeRg'..."
@@ -297,7 +323,7 @@ function Ensure-Schedule {
         -o json 2>$null | ConvertFrom-Json
 
     if ($existing) {
-        Write-Host "    Schedule '$($Definition.Name)' already exists — skipping create."
+        Write-Host "    Schedule '$($Definition.Name)' already exists - skipping create."
         return
     }
 
@@ -343,7 +369,7 @@ function Ensure-JobScheduleLink {
     }
 
     if ($alreadyLinked) {
-        Write-Host "    Job schedule link for '$ScheduleName' → '$RunbookName' already exists."
+        Write-Host "    Job schedule link for '$ScheduleName' -> '$RunbookName' already exists."
         return
     }
 
@@ -352,7 +378,7 @@ function Ensure-JobScheduleLink {
         return
     }
 
-    Write-Host "==> Linking schedule '$ScheduleName' → runbook '$RunbookName'..."
+    Write-Host "==> Linking schedule '$ScheduleName' -> runbook '$RunbookName'..."
     az automation job-schedule create `
         -g $Rg `
         --automation-account-name $AutomationAccount `
@@ -393,9 +419,9 @@ function Import-AutomationAzModule {
         "--automation-account-name", $AutomationAccount,
         "-n", $ModuleName,
         "--content-link", "uri=$uri"
-    ) -Label "Importing module '$ModuleName' $ModuleVersion (may take 15–30 min)..."
+    ) -Label "Importing module '$ModuleName' $ModuleVersion (may take 15-30 min)..."
 
-    Write-Host "    Module import started. Check Automation account → Modules until state = Succeeded."
+    Write-Host "    Module import started. Check Automation account -> Modules until state = Succeeded."
 }
 
 function Remove-UptimeConfiguration {
@@ -456,7 +482,7 @@ function Remove-UptimeConfiguration {
 # ---------------------------------------------------------------------------
 
 Write-Host ""
-Write-Host "Options Advisor — VM uptime configuration"
+Write-Host "Options Advisor - VM uptime configuration"
 Write-Host "  VM:              $VmName"
 Write-Host "  Resource group:  $ResourceGroupName"
 Write-Host "  Automation acct: $AutomationAccountName"
@@ -472,7 +498,7 @@ Write-Host ""
 if ($Remove) {
     $aa = Get-AutomationAccount -Rg $ResourceGroupName -Name $AutomationAccountName
     if (-not $aa) {
-        Write-Host "Automation account '$AutomationAccountName' not found — nothing to remove."
+        Write-Host "Automation account '$AutomationAccountName' not found - nothing to remove."
         exit 0
     }
     Remove-UptimeConfiguration -Rg $ResourceGroupName -AutomationAccount $AutomationAccountName
@@ -489,7 +515,7 @@ if ($ImportAzModules) {
 } else {
     Write-Host ""
     Write-Host "Tip: First-time setup may require Az modules in the Automation account."
-    Write-Host "     Re-run with -ImportAzModules (takes ~15–30 min) or import in Azure Portal."
+    Write-Host "     Re-run with -ImportAzModules (takes ~15-30 min) or import in Azure Portal."
     Write-Host ""
 }
 
@@ -513,14 +539,14 @@ Write-Host ""
 Write-Host "Done. VM uptime schedules configured."
 Write-Host ""
 Write-Host "Verify in Azure Portal:"
-Write-Host "  Automation account → $AutomationAccountName → Schedules / Runbooks / Jobs"
-Write-Host "  Virtual machines  → $VmName → Status should be 'Stopped (deallocated)' when off"
+Write-Host "  Automation account -> $AutomationAccountName -> Schedules / Runbooks / Jobs"
+Write-Host "  Virtual machines  -> $VmName -> Status should be 'Stopped (deallocated)' when off"
 Write-Host ""
-Write-Host "Manual test (Portal → Runbooks → Start test):"
-Write-Host "  1. Start-OptionsAdvisorVm  — VM should reach Running"
-Write-Host "  2. Stop-OptionsAdvisorVm   — VM should show Stopped (deallocated)"
+Write-Host "Manual test (Portal -> Runbooks -> Start test):"
+Write-Host "  1. Start-OptionsAdvisorVm  - VM should reach Running"
+Write-Host "  2. Stop-OptionsAdvisorVm   - VM should show Stopped (deallocated)"
 Write-Host ""
-Write-Host "Schedule summary (UTC → IST):"
+Write-Host "Schedule summary (UTC to IST):"
 Write-Host "  sched-oa-start-market-mf  03:25 UTC  =  08:55 IST  Mon-Fri"
 Write-Host "  sched-oa-stop-market-mf   10:10 UTC  =  15:40 IST  Mon-Fri"
 Write-Host "  sched-oa-start-eod-mf     15:00 UTC  =  20:30 IST  Mon-Fri"

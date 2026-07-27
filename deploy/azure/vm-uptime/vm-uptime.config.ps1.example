@@ -11,5 +11,5 @@ $script:AzureVmName               = "OptionsAdvisor"
 # Automation account (name must be globally unique in Azure)
 $script:AutomationAccountName     = "aa-stockapps-optionsadvisor"
 
-# PowerShell runbook runtime in Automation (PowerShell72 or PowerShell)
-$script:AutomationRunbookType     = "PowerShell72"
+# PowerShell runbook runtime in Automation (PowerShell or Python3)
+$script:AutomationRunbookType     = "PowerShell"
