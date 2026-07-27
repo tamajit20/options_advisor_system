@@ -360,3 +360,51 @@ def default_snapshot_path() -> Path:
     if not data_dir.is_absolute():
         data_dir = Path(__file__).resolve().parents[1] / data_dir
     return data_dir / "ws_status.json"
+
+
+def write_idle_snapshot(
+    path: Path,
+    *,
+    provider: str = _DEFAULT_PROVIDER,
+    detail: str = "waiting for Zerodha login",
+) -> None:
+    """Write a minimal ws_status.json while ws_runner waits for a session."""
+    now = _now_ist()
+    snap = {
+        "provider": provider,
+        "generated_at": now.isoformat(),
+        "started_at": now.isoformat(),
+        "uptime_seconds": 0.0,
+        "connection_state": "waiting_for_login",
+        "token_expired": False,
+        "last_tick_at": None,
+        "last_state_change_at": now.isoformat(),
+        "last_error": detail,
+        "tick_count_total": 0,
+        "tick_rate_per_sec": 0.0,
+        "rate_window_seconds": _DEFAULT_RATE_WINDOW_SECONDS,
+        "top_symbols": [],
+        "recent_events": [{
+            "ts": now.isoformat(),
+            "topic": "connection_state",
+            "provider": provider,
+            "state": "waiting_for_login",
+            "detail": detail,
+        }],
+        "max_recent_events": _DEFAULT_MAX_EVENTS,
+        "event_retention_seconds": _DEFAULT_EVENT_RETENTION_SECONDS,
+        "runner_state": "waiting_for_login",
+        "subscribed_tokens": 0,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=".ws_status_", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(snap, f, default=str)
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise

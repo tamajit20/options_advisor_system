@@ -660,10 +660,17 @@ def create_app() -> Flask:
         except Exception as exc:  # noqa: BLE001
             logger.exception("zerodha exchange failed")
             return jsonify({"ok": False, "error": str(exc)}), 500
+        ws_wake = {"ok": True, "action": "session_saved"}
+        try:
+            from providers.zerodha.ws_runner_control import ensure_ws_runner_running
+            ws_wake = ensure_ws_runner_running()
+        except Exception:
+            logger.exception("ws_runner wake after exchange failed (non-fatal)")
         return jsonify({
             "ok": True,
             "user_id": session.user_id,
             "generated_at": session.generated_at.isoformat(),
+            "ws_runner": ws_wake,
         })
 
     @app.route("/api/zerodha/status")
@@ -674,10 +681,9 @@ def create_app() -> Flask:
     def api_zerodha_logout():
         """Clear the persisted Zerodha session.
 
-            The ws_runner container watches the session file and will exit
-            cleanly within ~5 seconds of the file being removed. Restart
-            policy `on-failure:5` does not relaunch it (exit 0 = clean stop).
-            """
+        The ws_runner container polls the session file and returns to a
+        waiting state within ~5 seconds. No manual docker restart is needed.
+        """
         from providers.zerodha.session import clear_session
         removed = clear_session()
         return jsonify({

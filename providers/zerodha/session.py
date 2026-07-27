@@ -215,5 +215,10 @@ def exchange_request_token(request_token: str) -> ZerodhaSession:
         "zerodha session minted: user_id=%s generated_at=%s",
         session.user_id, session.generated_at.isoformat(),
     )
+    try:
+        from providers.zerodha.ws_runner_control import notify_session_updated
+        notify_session_updated()
+    except Exception:
+        logger.exception("ws_runner wake after login failed (non-fatal)")
     return session
 

@@ -351,6 +351,10 @@ class KiteWSRunner:
         self._stop_event.set()
         self._safe_close()
         self._set_state(ConnState.STOPPED, detail="stop() requested")
+        global _TICKER_INSTANCE
+        with _TICKER_LOCK:
+            if _TICKER_INSTANCE is self:
+                _TICKER_INSTANCE = None
 
     # ------------------------------------------------------------------
     # Connect loop
@@ -366,6 +370,9 @@ class KiteWSRunner:
             except _TokenExpired as exc:
                 self._handle_token_expiry(str(exc))
                 return  # terminal — restart needed via re-login
+            except _ProcessRestartRequired:
+                self._safe_close()
+                raise
             except Exception as exc:
                 self._record_failure(exc)
                 if self._failure_age_seconds() >= _DEGRADED_AFTER_SECONDS:
@@ -424,6 +431,10 @@ class KiteWSRunner:
         # threaded=False → blocking call; we manage our own thread (the
         # caller's thread is already dedicated to this runner).
         self._ticker.connect(threaded=False, disable_ssl_verification=False)
+        if not self._stop_event.is_set():
+            raise _ProcessRestartRequired(
+                "WS closed; Twisted reactor cannot reconnect in-process"
+            )
 
     # ------------------------------------------------------------------
     # KiteTicker callbacks
@@ -666,6 +677,10 @@ class KiteWSRunner:
 # ---------------------------------------------------------------------------
 class _TokenExpired(RuntimeError):
     """Raised inside `on_error` to break out of the connect loop."""
+
+
+class _ProcessRestartRequired(RuntimeError):
+    """Raised when the WS closed and a fresh KiteTicker is required."""
 
 
 def _looks_like_token_error(code: Any, reason: Any) -> bool:

@@ -197,60 +197,39 @@ def _cmd_zerodha_logout() -> int:
     return 0
 
 
-def _cmd_ws_runner() -> int:
-    """Long-lived WebSocket runner. Streams Zerodha live ticks into the
-    in-process cache + event bus. This is intended to be the entrypoint
-    of a dedicated docker service (`stock_ws_runner`) — only ONE instance
-    per Kite api_key is allowed.
+def _run_ws_runner_once(session, stop_event, bus, latest_spots: dict) -> str:
+    """Run one WS session until logout, token rotation, or WS disconnect.
 
-    Phase 2b-i: WS runner core (this function bootstraps it).
-    Phase 2b-ii: dynamic SubscriptionManager polls DB every 60s and
-    pushes the union of (active trade legs + today's pending suggestion
-    legs + index spots + VIX) into the runner.
+    Returns a reason string: ``logout``, ``token_rotated``, ``process_restart``,
+    ``token_expired``, or ``stopped``.
     """
-    from config import PROVIDERS_CONFIG, STRATEGY_CONFIG, ZERODHA_API_CONFIG
+    from config import PROVIDERS_CONFIG, STRATEGY_CONFIG
     from database.connection import SQLServerConnection
     from database.models import EventCalendarRepo, TradeLevelEventRepo, TradeMtmSnapshotRepo, TradeRepo
     from database.runtime_flags import FLAG_KILL_SWITCH, RuntimeFlagsRepo
-    from lifecycle.intraday_monitor import (
-        IntradayMonitor,
-        make_db_snapshot_loader,
+    from lifecycle.chain_aggregator import ChainTickAggregator
+    from lifecycle.intraday_monitor import IntradayMonitor, make_db_snapshot_loader
+    from lifecycle.live_risk_monitor import (
+        LiveRiskMonitor,
+        make_db_snapshot_loader as make_db_risk_snapshot_loader,
     )
     from lifecycle.opportunity_regen_watcher import OpportunityRegenWatcher
     from notifications import build_notifier
     from providers.cache import TTLCache
-    from providers.event_bus import get_event_bus
     from providers.zerodha.facade import KiteFacade
     from providers.zerodha.instruments import InstrumentMaster
-    from providers.zerodha.session import is_token_valid, load_session
+    from providers.zerodha.session import load_session as _load_sess
     from providers.zerodha.subscription_manager import (
         SubscriptionManager,
         make_db_leg_loader,
         make_watchlist_leg_loader,
         merge_leg_loaders,
     )
-    from providers.zerodha.ws_runner import KiteWSRunner
+    from providers.zerodha.ws_runner import KiteWSRunner, _ProcessRestartRequired
     from providers.ws_monitor import WSMonitor, default_snapshot_path
-    from lifecycle.chain_aggregator import ChainTickAggregator
-    from lifecycle.live_risk_monitor import (
-        LiveRiskMonitor,
-        make_db_snapshot_loader as make_db_risk_snapshot_loader,
-    )
-
-    if (PROVIDERS_CONFIG.get("active") or "").strip().lower() != "zerodha":
-        print("ERROR: --ws-runner requires OPT_PROVIDERS=zerodha")
-        return 2
-    if not ZERODHA_API_CONFIG.get("enabled", True):
-        print("ERROR: OPT_ZERODHA_ENABLED=false — refusing to start WS runner")
-        return 2
-
-    session = load_session()
-    if session is None or not is_token_valid(session):
-        print("ERROR: no valid Zerodha session — run `python main.py --zerodha-login` first")
-        return 2
+    from providers.ws_watchdog import WSWatchdog
 
     cache = TTLCache(default_ttl_seconds=PROVIDERS_CONFIG.get("live_cache_ttl_seconds", 5))
-    bus = get_event_bus()
 
     runner = KiteWSRunner(
         api_key=session.api_key,
@@ -259,8 +238,6 @@ def _cmd_ws_runner() -> int:
         event_bus=bus,
     )
 
-    # Build the instrument master from a shared facade so the daily
-    # 30k-row download happens exactly once per process.
     facade = KiteFacade(api_key=session.api_key, access_token=session.access_token)
     master = InstrumentMaster(loader=lambda: facade.instruments())
 
@@ -268,21 +245,6 @@ def _cmd_ws_runner() -> int:
     db.connect()
 
     flags_repo = RuntimeFlagsRepo(db)
-
-    # Shared latest-spot lookup for the watchlist loader. Populated by tick
-    # callbacks via the chain aggregator (see _on_tick → _spots) — but to
-    # avoid coupling, we do a lightweight independent capture here too.
-    _latest_spots: dict = {}
-
-    def _capture_spot(quote) -> None:
-        if quote is None or quote.option_type is not None:
-            return
-        try:
-            _latest_spots[quote.symbol] = float(quote.last_price)
-        except (TypeError, ValueError):
-            pass
-
-    bus.subscribe("tick", _capture_spot)
 
     sub_manager = SubscriptionManager(
         runner=runner,
@@ -292,7 +254,7 @@ def _cmd_ws_runner() -> int:
             make_watchlist_leg_loader(
                 master,
                 underlyings=STRATEGY_CONFIG.get("underlyings", []),
-                spot_lookup=lambda s: _latest_spots.get(s),
+                spot_lookup=lambda s: latest_spots.get(s),
                 band_pct=PROVIDERS_CONFIG.get("watchlist_band_pct", 0.05),
                 expiries_per_underlying=int(
                     PROVIDERS_CONFIG.get("watchlist_expiries_per_underlying", 2)
@@ -305,9 +267,6 @@ def _cmd_ws_runner() -> int:
         kill_switch_fn=lambda: flags_repo.get_bool(FLAG_KILL_SWITCH, default=False),
     )
 
-    # 5-min chain trajectory aggregator — subscribes to TOPIC_TICK, persists
-    # rolling aggregates to options_chain_5min + options_atm_iv_5min for the
-    # live suggestion engine to load as ChainTrajectory.
     def _expiries_for(sym: str):
         from datetime import date as _d
         today = _d.today()
@@ -319,16 +278,7 @@ def _cmd_ws_runner() -> int:
         event_bus=bus,
     )
 
-    # Phase 2c-i — live trade-level SL / target alerter.
-    # Recomputes whole-trade MTM (via engine.exit_engine.evaluate_exit) on
-    # every leg tick and fires SL_TRIGGER / TARGET_HIT through the Notifier.
-    # Never closes the trade automatically; the user closes manually. Once
-    # the trade leaves ACTIVE status the next reload drops it from the
-    # watchlist and alerts stop.
     def _prime_legs(keys):
-        """Cold-start primer: convert LegKeys → Zerodha symbols → LTP via the
-        facade so the monitor doesn't have to wait for the slowest leg's first
-        tick before evaluating MTM."""
         out = {}
         sym_to_key = {}
         for (underlying, expiry, strike, otype) in keys:
@@ -365,35 +315,24 @@ def _cmd_ws_runner() -> int:
         snapshot_loader=make_db_risk_snapshot_loader(db),
         prime_loader=_prime_legs,
         event_bus=bus,
-        # Phase 3 #4 — persist trailing SL ratchets through DB UPDATEs so
-        # the floor survives process restart.
         trailing_persister=lambda tid, floor, idx: TradeRepo(db).update_trailing(
             tid, trailing_pnl_floor=floor, trailing_step_idx=idx),
         mtm_snapshot_persister=_persist_mtm_snapshot,
         level_event_persister=_persist_level_event,
-        # Phase 3 #5 — events_repo for event-eve tightening.
         events_repo=EventCalendarRepo(db),
     )
 
-    # Phase 2b-iii — PERFECT_ENTRY on pending suggestions (open-trade alerts
-    # are handled by LiveRiskMonitor).
     monitor = IntradayMonitor(
         notifier=build_notifier(db, provider="zerodha"),
         snapshot_loader=make_db_snapshot_loader(db),
         event_bus=bus,
     )
 
-    # Opportunity-regen-on-tick — fires OPPORTUNITY_REGEN_HINT (gated by
-    # `opportunity_alerts` flag) when intraday VIX or spot moves enough
-    # to invalidate the morning's suggestion regime.
     regen_watcher = OpportunityRegenWatcher(
         notifier=build_notifier(db, provider="zerodha"),
         event_bus=bus,
     )
 
-    # WS telemetry — observes events the runner already publishes and
-    # writes a periodic JSON snapshot to data/ws_status.json that the
-    # dashboard reads. Adds zero Zerodha API load.
     ws_monitor = WSMonitor(
         snapshot_path=default_snapshot_path(),
         event_bus=bus,
@@ -401,14 +340,33 @@ def _cmd_ws_runner() -> int:
         status_fn=runner.status,
     )
 
-    # Phase 3 — #7: dead-man watchdog. Polls ws_monitor.snapshot() and
-    # fires a CRITICAL WS_DEAD_MAN notification once per stale-incident.
-    from providers.ws_watchdog import WSWatchdog
     ws_watchdog = WSWatchdog(
         snapshot_fn=ws_monitor.snapshot,
         notifier=build_notifier(db, provider="zerodha"),
         event_bus=bus,
     )
+
+    exit_reason = {"reason": "stopped"}
+
+    def _watch_session():
+        my_token = session.access_token
+        while not runner._stop_event.is_set():  # type: ignore[attr-defined]
+            try:
+                cur = _load_sess()
+                if cur is None:
+                    print("Session file removed — stopping WS runner (logout).")
+                    exit_reason["reason"] = "logout"
+                    runner.stop()
+                    return
+                if cur.access_token != my_token:
+                    print("Session token rotated — reconnecting with new token.")
+                    exit_reason["reason"] = "token_rotated"
+                    runner.stop()
+                    return
+            except Exception:
+                pass
+            if runner._stop_event.wait(5.0):  # type: ignore[attr-defined]
+                return
 
     print(f"Starting WS runner (user_id={session.user_id})")
     sub_manager.start()
@@ -419,47 +377,17 @@ def _cmd_ws_runner() -> int:
     chain_aggregator.start()
     live_risk_monitor.start()
 
-    # Session-revocation watcher — polls data/zerodha_session.json every 5s
-    # and gracefully stops the runner if the file is deleted (dashboard logout)
-    # or rewritten with a token whose access_token differs from ours
-    # (user re-logged in via the dashboard). For a logout, we exit 0 so the
-    # `on-failure` restart policy keeps the runner down. For a token
-    # rotation we exit non-zero so docker restarts the container — the
-    # fresh process then reads the new token from disk and reconnects
-    # automatically (no manual `docker compose up -d` needed).
     import threading as _threading
-    from providers.zerodha.session import load_session as _load_sess
-
-    # Sentinel set by the watcher so the outer return path can pick the
-    # right exit code without restructuring the existing flow.
-    _exit_reason = {"reason": None}  # "logout" | "token_rotated" | None
-
-    def _watch_session():
-        my_token = session.access_token
-        while not runner._stop_event.is_set():  # type: ignore[attr-defined]
-            try:
-                cur = _load_sess()
-                if cur is None:
-                    print("Session file removed — stopping WS runner (logout).")
-                    _exit_reason["reason"] = "logout"
-                    runner.stop()
-                    return
-                if cur.access_token != my_token:
-                    print("Session token rotated — stopping WS runner so it picks up new token.")
-                    _exit_reason["reason"] = "token_rotated"
-                    runner.stop()
-                    return
-            except Exception:
-                pass
-            if runner._stop_event.wait(5.0):  # type: ignore[attr-defined]
-                return
-
     _threading.Thread(target=_watch_session, name="zerodha-session-watch", daemon=True).start()
 
     try:
         runner.start()
     except KeyboardInterrupt:
         runner.stop()
+        exit_reason["reason"] = "stopped"
+    except _ProcessRestartRequired:
+        runner.stop()
+        exit_reason["reason"] = "process_restart"
     finally:
         live_risk_monitor.stop()
         chain_aggregator.stop()
@@ -474,15 +402,87 @@ def _cmd_ws_runner() -> int:
             pass
 
     status = runner.status()
-    print(f"WS runner exited — final state={status.state.value}, last_error={status.last_error}")
+    print(
+        f"WS runner exited — final state={status.state.value}, "
+        f"last_error={status.last_error}, reason={exit_reason['reason']}"
+    )
     if status.state.value == "token_expired":
+        return "token_expired"
+    if stop_event.is_set() and exit_reason["reason"] == "stopped":
+        return "stopped"
+    return exit_reason["reason"]
+
+
+def _cmd_ws_runner() -> int:
+    """Long-lived WebSocket runner. Streams Zerodha live ticks into the
+    in-process cache + event bus. This is intended to be the entrypoint
+    of a dedicated docker service (`stock_ws_runner`) — only ONE instance
+    per Kite api_key is allowed.
+
+    Waits for a valid Zerodha session when none is present (dashboard login),
+    reconnects automatically after token rotation, and survives WS disconnects
+    without manual ``docker compose restart``.
+    """
+    import signal
+    import threading
+
+    from config import PROVIDERS_CONFIG, ZERODHA_API_CONFIG
+    from providers.event_bus import get_event_bus
+    from providers.zerodha.session import is_token_valid, load_session
+    from providers.ws_monitor import default_snapshot_path, write_idle_snapshot
+
+    if (PROVIDERS_CONFIG.get("active") or "").strip().lower() != "zerodha":
+        print("ERROR: --ws-runner requires OPT_PROVIDERS=zerodha")
         return 2
-    # Token rotation requires the on-failure restart policy to bring the
-    # runner back up so it loads the fresh token. Exit non-zero (75 = a
-    # distinct sentinel for ops triage) to trigger that.
-    if _exit_reason["reason"] == "token_rotated":
-        print("Exiting with code 75 to trigger docker restart (token rotated).")
-        return 75
+    if not ZERODHA_API_CONFIG.get("enabled", True):
+        print("ERROR: OPT_ZERODHA_ENABLED=false — refusing to start WS runner")
+        return 2
+
+    stop_event = threading.Event()
+
+    def _on_sig(signum, _frame):
+        print(f"Signal {signum} received — shutting down WS runner service.")
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, _on_sig)
+    signal.signal(signal.SIGTERM, _on_sig)
+
+    bus = get_event_bus()
+    latest_spots: dict = {}
+
+    def _capture_spot(quote) -> None:
+        if quote is None or quote.option_type is not None:
+            return
+        try:
+            latest_spots[quote.symbol] = float(quote.last_price)
+        except (TypeError, ValueError):
+            pass
+
+    bus.subscribe("tick", _capture_spot)
+    snapshot_path = default_snapshot_path()
+
+    while not stop_event.is_set():
+        session = load_session()
+        if session is None or not is_token_valid(session):
+            write_idle_snapshot(
+                snapshot_path,
+                detail="waiting for Zerodha login via dashboard",
+            )
+            print(
+                "Waiting for valid Zerodha session — paste token in dashboard "
+                "WS Monitor tab."
+            )
+            if stop_event.wait(5.0):
+                return 0
+            continue
+
+        reason = _run_ws_runner_once(session, stop_event, bus, latest_spots)
+        if stop_event.is_set() or reason == "stopped":
+            return 0
+        if reason in ("logout", "token_rotated", "process_restart", "token_expired"):
+            continue
+        return 0
+
     return 0
 
 
