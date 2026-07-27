@@ -284,6 +284,9 @@ function Ensure-Runbook {
     }
 
     $content = Get-Content -Path $ContentPath -Raw -Encoding UTF8
+    if (-not $content.Trim()) {
+        throw "Runbook file is empty: $ContentPath"
+    }
     if ($WhatIf) {
         Write-Host "[WhatIf] Upload runbook content: $RunbookName"
     } else {
@@ -292,7 +295,7 @@ function Ensure-Runbook {
             -g $Rg `
             --automation-account-name $AutomationAccount `
             -n $RunbookName `
-            --content $content | Out-Null
+            --content "@$ContentPath" | Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to upload runbook content for $RunbookName"
         }
