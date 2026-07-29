@@ -278,6 +278,11 @@ class Suggestion:
     pricing_provenance:     Optional[PricingProvenance] = None  # spot+chain timestamps → DB data_as_of
     # Composite 0–100 quality rating (edge + confidence + PoP); persisted for analysis.
     entry_quality_score:    Optional[int] = None
+    # Sideways regime pair (range vs breakout) — persisted via trigger_reason JSON.
+    regime_pair_group:              Optional[str] = None
+    regime_pair_type:               Optional[str] = None   # "range" | "breakout"
+    regime_pair_preferred:          bool = False
+    regime_pair_preference_reason:  Optional[str] = None
 
 
 @dataclass

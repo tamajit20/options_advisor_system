@@ -13,8 +13,8 @@ For each underlying:
     5. Persist (Suggestion + legs OR NoSuggestion)
     6. Emit notification
 
-Generates AT MOST one suggestion per underlying per day. We pick the
-highest-confidence underlying as "the" suggestion of the day.
+Generates one or two suggestions per underlying per day when the market is
+sideways (range + breakout pair). Directional trends still get a single pick.
 """
 
 from __future__ import annotations
@@ -55,6 +55,11 @@ from engine.market_data_provenance import (
 from engine.iv_calculator import implied_vol
 from engine.iv_rank import iv_rank as compute_iv_rank, pick_atm_iv
 from engine.strategy_selector import assemble_suggestion, select_strategy
+from engine.regime_pair import (
+    apply_regime_pair_metadata,
+    regime_pair_group_id,
+    resolve_regime_pair_strategies,
+)
 from exceptions import StrategyVeto
 from lifecycle.chain_aggregator import load_trajectory
 from lifecycle.session_spot import build_session_bar
@@ -77,6 +82,52 @@ def exceeds_max_loss_cap(max_loss_rs: float, capital_rs: float, cap_pct: float) 
     if cap_pct <= 0 or capital_rs <= 0 or max_loss_rs <= 0:
         return False
     return max_loss_rs > cap_pct * capital_rs
+
+
+def _assemble_sized_suggestion(
+    *,
+    suggestion_id: str,
+    assemble_kw: dict,
+    strategy_override: str | None = None,
+) -> Suggestion:
+    """Build one suggestion with capital-based lot sizing and tail-risk veto."""
+    import math as _math
+
+    kw = dict(assemble_kw)
+    kw["suggestion_id"] = suggestion_id
+    if strategy_override is not None:
+        kw["strategy_override"] = strategy_override
+
+    _capital = float(STRATEGY_CONFIG.get("trading_capital_rs", 0.0))
+    _risk_pct = float(STRATEGY_CONFIG.get("risk_per_trade_pct", 0.02))
+    _max_lots = int(STRATEGY_CONFIG.get("max_lots_cap", 3))
+    _computed_lots = 1
+    _one_lot_max_loss = 0.0
+
+    if _capital > 0:
+        try:
+            _test_sug = assemble_suggestion(lots=1, **kw)
+            _one_lot_max_loss = float(_test_sug.economics.max_loss or 0.0)
+            if _one_lot_max_loss > 0:
+                _computed_lots = max(1, min(_max_lots, int(_math.floor(
+                    _capital * _risk_pct / _one_lot_max_loss
+                ))))
+        except Exception:
+            logger.debug(
+                "Position sizing dry-run failed for %s — using 1 lot",
+                strategy_override or "auto",
+            )
+
+        _ml_cap_pct = float(STRATEGY_CONFIG.get("max_loss_pct_of_capital", 0.0) or 0.0)
+        if exceeds_max_loss_cap(_one_lot_max_loss, _capital, _ml_cap_pct):
+            raise StrategyVeto(
+                f"max loss \u20b9{_one_lot_max_loss:,.0f} exceeds "
+                f"{_ml_cap_pct * 100:.0f}% of capital "
+                f"(\u20b9{_ml_cap_pct * _capital:,.0f}) at the 1-lot "
+                f"minimum — position too large for the risk budget"
+            )
+
+    return assemble_suggestion(lots=_computed_lots, **kw)
 
 
 def _attach_em_calibration_warning(db: SQLServerConnection, sug: Suggestion) -> None:
@@ -633,74 +684,151 @@ def _evaluate_underlying(
 
         suggestion_id = sug_repo.next_suggestion_id(_id_date)
         primary_suggestion: Optional[Suggestion] = None
-        try:
-            # P2: Dynamic lot sizing — dry-run at 1 lot to discover max_loss, then scale.
-            import math as _math
-            _capital = float(STRATEGY_CONFIG.get("trading_capital_rs", 0.0))
-            _risk_pct = float(STRATEGY_CONFIG.get("risk_per_trade_pct", 0.02))
-            _max_lots = int(STRATEGY_CONFIG.get("max_lots_cap", 3))
-            _computed_lots = 1
-            _one_lot_max_loss = 0.0
-            _assemble_kw = dict(
-                underlying=symbol,
-                expiry=use_expiry,
-                expiry_type=expiry_type,
-                dte=use_dte,
-                spot=spot,
-                chain=use_chain,
-                indicators=use_indicators,
-                confidence=use_confidence,
-                iv_rank=iv_rank,
-                atm_iv=atm_iv,
-                lot_size=lot_size,
-                existing_trade_names=existing_names,
-                generated_on=now_ist(),
-                execution_window=execution_window,
-                data_date=trade_date,
-                entry_date=entry_day,
-                spot_data_date=actual_spot_date,
-                fii_data_date=actual_fii_date,
-                vix_data_date=actual_vix_date,
-                oi_pcr_change=use_indicators.oi_pcr_change,
-                calendar_legs=calendar_legs,
+        _assemble_kw = dict(
+            underlying=symbol,
+            expiry=use_expiry,
+            expiry_type=expiry_type,
+            dte=use_dte,
+            spot=spot,
+            chain=use_chain,
+            indicators=use_indicators,
+            confidence=use_confidence,
+            iv_rank=iv_rank,
+            atm_iv=atm_iv,
+            lot_size=lot_size,
+            existing_trade_names=existing_names,
+            generated_on=now_ist(),
+            execution_window=execution_window,
+            data_date=trade_date,
+            entry_date=entry_day,
+            spot_data_date=actual_spot_date,
+            fii_data_date=actual_fii_date,
+            vix_data_date=actual_vix_date,
+            oi_pcr_change=use_indicators.oi_pcr_change,
+            calendar_legs=calendar_legs,
+            has_long_vol_catalyst=_has_lv_catalyst,
+        )
+
+        if use_indicators.trend == "SIDEWAYS":
+            range_strat, breakout_strat = resolve_regime_pair_strategies(
+                iv_rank=float(iv_rank or 0.0),
                 has_long_vol_catalyst=_has_lv_catalyst,
             )
-            if _capital > 0:
+            pair_specs: list[tuple[str, str]] = [("range", range_strat)]
+            if breakout_strat:
+                pair_specs.append(("breakout", breakout_strat))
+
+            built_pair: list[tuple[Suggestion, str]] = []
+            for ptype, strat in pair_specs:
+                strat_kw = dict(_assemble_kw)
+                strat_kw["calendar_legs"] = None
+                strat_expiry = use_expiry
+                strat_chain = use_chain
+                strat_dte = use_dte
+                strat_indicators = use_indicators
+                strat_confidence = use_confidence
+                strat_calendar = calendar_legs
+
+                if strat == "CALENDAR_SPREAD":
+                    strat_calendar = _resolve_calendar_legs(
+                        fo, symbol, trade_date, entry_day,
+                        chain_provider=chain_provider,
+                        live_today=live_today,
+                    )
+                    if strat_calendar is None:
+                        logger.debug(
+                            "Regime pair: calendar legs unavailable for %s %s",
+                            symbol, expiry_type,
+                        )
+                        continue
+                    strat_expiry = strat_calendar["near_expiry"]
+                    strat_chain = strat_calendar["near_chain"]
+                    strat_dte = max(days_between(entry_day, strat_expiry), 0)
+                    if strat_expiry != use_expiry or strat_dte != use_dte:
+                        strat_indicators = build_indicators(
+                            symbol=symbol,
+                            as_of=_trend_as_of,
+                            spot=spot,
+                            chain_rows=strat_chain,
+                            spot_history=spot_history,
+                            vix_history=vix_history,
+                            atm_iv=atm_iv,
+                            dte=strat_dte,
+                            fii_net_futures=fii_net_futures,
+                            oi_chain_rows=oi_abs_rows,
+                            oi_change_rows=oi_change_rows,
+                            trajectory=load_trajectory(
+                                db, symbol=symbol, expiry=strat_expiry,
+                            ) if _live_mode else None,
+                            session_bar=_session_bar,
+                            live_mode=_live_mode,
+                        )
+                        strat_confidence = evaluate_confidence(
+                            iv_rank=iv_rank,
+                            indicators=strat_indicators,
+                            dte=strat_dte,
+                            has_high_impact_event_this_week=has_event,
+                            high_impact_event_description=event_desc,
+                            events_calendar_row_count=events_total,
+                        )
+                        if not strat_confidence.all_passed:
+                            continue
+                    strat_kw.update(
+                        expiry=strat_expiry,
+                        chain=strat_chain,
+                        dte=strat_dte,
+                        indicators=strat_indicators,
+                        confidence=strat_confidence,
+                        calendar_legs=strat_calendar,
+                    )
+
                 try:
-                    _test_sug = assemble_suggestion(
-                        suggestion_id=suggestion_id,
-                        lots=1,
-                        **_assemble_kw,
+                    sid = sug_repo.next_suggestion_id(_id_date)
+                    sug = _assemble_sized_suggestion(
+                        suggestion_id=sid,
+                        assemble_kw=strat_kw,
+                        strategy_override=strat,
                     )
-                    _one_lot_max_loss = float(_test_sug.economics.max_loss or 0.0)
-                    if _one_lot_max_loss > 0:
-                        _computed_lots = max(1, min(_max_lots, int(_math.floor(
-                            _capital * _risk_pct / _one_lot_max_loss
-                        ))))
-                except Exception:
+                    sug.pricing_provenance = provenance
+                    _attach_em_calibration_warning(db, sug)
+                    built_pair.append((sug, ptype))
+                    existing_names.append(sug.trade_name)
+                except StrategyVeto as veto:
                     logger.debug(
-                        "Position sizing dry-run failed for %s %s — using 1 lot",
-                        symbol, use_expiry,
+                        "Regime pair %s (%s) veto for %s %s: %s",
+                        ptype, strat, symbol, expiry_type, veto,
                     )
 
-                # Tail-risk ceiling — veto when even a single lot's max loss
-                # exceeds max_loss_pct_of_capital × capital. Sizing can't go
-                # below 1 lot, so an over-large single contract would otherwise
-                # slip through. Guards against the over-concentrated debit
-                # straddles that lost multiples of their SL when unmonitored.
-                _ml_cap_pct = float(STRATEGY_CONFIG.get("max_loss_pct_of_capital", 0.0) or 0.0)
-                if exceeds_max_loss_cap(_one_lot_max_loss, _capital, _ml_cap_pct):
-                    raise StrategyVeto(
-                        f"max loss \u20b9{_one_lot_max_loss:,.0f} exceeds "
-                        f"{_ml_cap_pct * 100:.0f}% of capital "
-                        f"(\u20b9{_ml_cap_pct * _capital:,.0f}) at the 1-lot "
-                        f"minimum — position too large for the risk budget"
-                    )
+            if built_pair:
+                group = regime_pair_group_id(
+                    underlying=symbol,
+                    expiry_type=expiry_type,
+                    entry_date=entry_day,
+                )
+                apply_regime_pair_metadata(
+                    built_pair,
+                    group_id=group,
+                    iv_rank=float(iv_rank or 0.0),
+                )
+                for sug, _ptype in built_pair:
+                    suggestions.append(sug)
+                continue
 
-            primary_suggestion = assemble_suggestion(
+            no_suggestions.append(NoSuggestion(
+                generated_on=now_ist(),
+                underlying=symbol,
+                confidence=use_confidence,
+                reason=(
+                    f"[{expiry_type} {use_expiry}] Sideways regime pair: "
+                    f"neither range nor breakout leg passed strategy gates"
+                ),
+            ))
+            continue
+
+        try:
+            primary_suggestion = _assemble_sized_suggestion(
                 suggestion_id=suggestion_id,
-                lots=_computed_lots,
-                **_assemble_kw,
+                assemble_kw=_assemble_kw,
             )
             primary_suggestion.pricing_provenance = provenance
             suggestions.append(primary_suggestion)
@@ -716,10 +844,6 @@ def _evaluate_underlying(
 
         # When the primary is IC or IB, also generate BPS and BCS as cheaper
         # companion suggestions (half the margin — same put/call sides individually).
-        #
-        # INVARIANT: IC and IB are only ever selected when trend == "SIDEWAYS"
-        # (enforced by select_strategy). If that ever changes this assertion will
-        # catch it before a wrong suggestion is persisted.
         if primary_suggestion is not None and primary_suggestion.strategy in (
             "IRON_CONDOR", "IRON_BUTTERFLY"
         ):
@@ -727,7 +851,6 @@ def _evaluate_underlying(
                 f"BUG: IC/IB generated for non-SIDEWAYS trend '{indicators.trend}' "
                 f"on {symbol} — check strategy_selector.select_strategy()"
             )
-            # Both BPS (put side) and BCS (call side) are valid for a SIDEWAYS market.
             for companion_strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
                 try:
                     comp_id = sug_repo.next_suggestion_id(_id_date)

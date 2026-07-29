@@ -680,6 +680,83 @@ function renderSitOutCard(s) {
   </div>`;
 }
 
+function regimePairTitle(s) {
+  if (s.regime_pair_type === 'range') {
+    return 'If market stays in range';
+  }
+  if (s.regime_pair_type === 'breakout') {
+    return 'If market moves sharply up or down';
+  }
+  return '';
+}
+
+function groupRegimePairSuggestions(list) {
+  const groups = new Map();
+  const singles = [];
+  for (const s of list || []) {
+    const gid = s.regime_pair_group;
+    if (!gid) {
+      singles.push({ type: 'single', item: s });
+      continue;
+    }
+    if (!groups.has(gid)) {
+      groups.set(gid, { type: 'pair', group: gid, items: [] });
+    }
+    groups.get(gid).items.push(s);
+  }
+  const out = [...groups.values(), ...singles];
+  out.sort((a, b) => {
+    const au = (a.items && a.items[0]?.underlying) || a.item?.underlying || '';
+    const bu = (b.items && b.items[0]?.underlying) || b.item?.underlying || '';
+    return au.localeCompare(bu);
+  });
+  return out;
+}
+
+function renderRegimePairGroup(group) {
+  const items = (group.items || []).slice().sort((a, b) => {
+    if (a.regime_pair_type === 'range') return -1;
+    if (b.regime_pair_type === 'range') return 1;
+    return 0;
+  });
+  const preferred = items.find(x => x.regime_pair_preferred);
+  const reason = preferred?.regime_pair_preference_reason
+    || items[0]?.regime_pair_preference_reason
+    || '';
+  const underlying = items[0]?.underlying || '';
+  const header = `<div class="regime-pair-header">
+    <div class="regime-pair-headline">
+      <span class="tag tag-info">TWO SCENARIOS</span>
+      <strong>${escapeHtml(underlying)} — pick the scenario you believe in</strong>
+    </div>
+    ${reason ? `<p class="regime-pair-pref muted">${escapeHtml(reason)}</p>` : ''}
+    <p class="regime-pair-hint muted">Take only one of these — they bet on opposite outcomes.</p>
+  </div>`;
+  const cards = items.map(s => {
+    const prefBadge = s.regime_pair_preferred
+      ? '<span class="tag tag-ok regime-pair-pref-badge">System preferred</span>'
+      : '';
+    const scenario = regimePairTitle(s);
+    return `<div class="regime-pair-card${s.regime_pair_preferred ? ' regime-pair-preferred' : ''}">
+      <div class="regime-pair-scenario">
+        <strong>${escapeHtml(scenario)}</strong>
+        ${prefBadge}
+      </div>
+      ${renderSuggestion(s, false, items)}
+    </div>`;
+  }).join('');
+  return `<div class="regime-pair-group">${header}<div class="regime-pair-cards">${cards}</div></div>`;
+}
+
+function renderSuggestionList(list) {
+  return groupRegimePairSuggestions(list).map(entry => {
+    if (entry.type === 'pair') {
+      return renderRegimePairGroup(entry);
+    }
+    return renderSuggestion(entry.item, false, list);
+  }).join('');
+}
+
 async function loadSuggestion() {
   const c = $('#suggestion-container');
   c.className = 'loading'; c.textContent = 'Loading…';
@@ -695,7 +772,7 @@ async function loadSuggestion() {
       parts.push(renderMarketSitOutSummary(data.market_summary));
     }
     if (list.length) {
-      parts.push(list.map(s => renderSuggestion(s, false, list)).join(''));
+      parts.push(renderSuggestionList(list));
     }
     if (sitOut.length) {
       parts.push(sitOut.map(s => renderSitOutCard(s)).join(''));
@@ -2419,6 +2496,10 @@ function renderStrategyRationale(s) {
       why:    `IV Rank is ${ivDesc} — ${ivPremDesc}${pcrDesc ? `. ${pcrDesc.charAt(0).toUpperCase() + pcrDesc.slice(1)}` : ''}. A Jade Lizard (short OTM call spread + short OTM put) generates premium with zero upside risk — the call spread credit exactly offsets the short put's upside exposure.`,
       better: `Nifty rises or stays sideways. No loss on the upside${pop ? ` (${pop}% PoP)` : ''}. Downside risk only appears below ₹${fmt(spLeg?.strike)} minus net credit. ${vixDesc}.`,
     },
+    CALENDAR_SPREAD: {
+      why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Nifty is ${trendDesc}. A calendar spread sells the near expiry and buys a farther one — you profit when the index stays calm and time decay works in your favour.`,
+      better: `Nifty stays near ₹${fmt(spot)} and does not make a large move before the near expiry. ${vixDesc}. Quiet days help the near leg lose value faster than the far leg.`,
+    },
     LONG_STRADDLE: {
       why:    `IV Rank is ${ivDesc} — ${ivPremDesc}. Buying both ATM CE and PE ${dteDesc} at low cost lets you profit from any large directional move, regardless of which way Nifty goes.`,
       better: `A sharp breakout above ₹${fmt(ub)} or breakdown below ₹${fmt(lb)}. ${vixDesc}. Every day Nifty stays flat, the ₹${fmt(debit)}/unit debit decays — the move should come soon.`,
@@ -2448,6 +2529,10 @@ function renderStrategyRationale(s) {
   const info = lookup[s.strategy];
   if (!info) return '';
 
+  const betterLabel = s.regime_pair_type === 'range'
+    ? 'When this trade wins (range)'
+    : (s.regime_pair_type === 'breakout' ? 'When this trade wins (big move)' : 'What makes it better');
+
   const profit = buildProfitScenario({
     strategy: s.strategy,
     legs,
@@ -2470,7 +2555,7 @@ function renderStrategyRationale(s) {
       <span class="sr-text">${info.why}</span>
     </div>
     <div class="sr-row">
-      <span class="sr-label">What makes it better</span>
+      <span class="sr-label">${betterLabel}</span>
       <span class="sr-text">${info.better}</span>
     </div>
     ${idealHtml}

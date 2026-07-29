@@ -758,6 +758,8 @@ def create_app() -> Flask:
                 "reason": gate.reason(),
                 "label": _execution_gate_label(gate, r),
             }
+            from engine.regime_pair import decode_regime_pair_trigger_reason
+            r_out.update(decode_regime_pair_trigger_reason(r.get("trigger_reason")))
             out.append(r_out)
         from engine.market_regime import regime_from_sit_out_row, summarize_market_sit_out
 
