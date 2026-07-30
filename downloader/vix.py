@@ -4,11 +4,11 @@ downloader/vix.py
 
 Download India VIX history.
 
-The configured `vix_archive_url` (niftyindices.com) was decommissioned in
-2024 and now returns an HTML page instead of CSV. We therefore use NSE's
-live `allIndices` API as the primary source — it returns the current day's
-INDIA VIX OHLC. For a richer history, point `vix_archive_url` at a working
-CSV endpoint (the legacy parser is preserved for that case).
+Per-date backfill uses NSE's daily ``ind_close_all_{ddmmyyyy}.csv`` archive
+(same file as index spot EOD) — it includes an ``India VIX`` row with OHLC.
+During the live session, today's row falls back to the ``allIndices`` API
+until the archive is published. The legacy ``vix_archive_url`` (niftyindices)
+is kept as a last resort when present.
 """
 
 from __future__ import annotations
@@ -81,6 +81,79 @@ def _parse_rows(csv_text: str) -> List[VixRow]:
         except Exception as exc:
             logger.debug("Skipping bad VIX row: %s", exc)
     return out
+
+
+def _normalise_index_header(h: str) -> str:
+    return (h or "").strip().upper().replace(" ", "_")
+
+
+def _parse_vix_from_index_close_csv(csv_text: str, trade_date: date) -> Optional[VixRow]:
+    """Extract India VIX OHLC from NSE ``ind_close_all`` daily CSV."""
+    reader = csv.DictReader(io.StringIO(csv_text))
+    if reader.fieldnames is None:
+        return None
+
+    col_map = {_normalise_index_header(h): h for h in reader.fieldnames}
+
+    def _col(*candidates: str) -> Optional[str]:
+        for c in candidates:
+            k = col_map.get(c)
+            if k:
+                return k
+        return None
+
+    name_col = _col("INDEX_NAME", "INDEX", "INDEXNAME")
+    open_col = _col("OPEN_INDEX_VALUE", "OPEN", "OPEN_INDEX", "OPEN_INDEX_VAL")
+    high_col = _col("HIGH_INDEX_VALUE", "HIGH", "HIGH_INDEX", "HIGH_INDEX_VAL")
+    low_col = _col("LOW_INDEX_VALUE", "LOW", "LOW_INDEX", "LOW_INDEX_VAL")
+    close_col = _col(
+        "CLOSING_INDEX_VALUE", "CLOSE", "CLOSING", "CLOSE_INDEX", "CLOSE_INDEX_VAL",
+    )
+    if not name_col or not close_col:
+        return None
+
+    for raw in reader:
+        sym = (raw.get(name_col) or "").strip().upper()
+        if sym != "INDIA VIX":
+            continue
+        close = safe_float(raw.get(close_col), 0.0) or 0.0
+        if close <= 0:
+            return None
+        opn = safe_float(raw.get(open_col), close) if open_col else close
+        high = safe_float(raw.get(high_col), close) if high_col else close
+        low = safe_float(raw.get(low_col), close) if low_col else close
+        opn = opn or close
+        high = high or close
+        low = low or close
+        if high < low:
+            high, low = low, high
+        return VixRow(
+            trade_date=trade_date,
+            open_price=opn,
+            high_price=high,
+            low_price=low,
+            close_price=close,
+        )
+    return None
+
+
+def _fetch_vix_from_nse_index_close(trade_date: date, session=None) -> Optional[VixRow]:
+    """Fetch settled India VIX OHLC from NSE daily index-close archive."""
+    from downloader.index_spot_nse import _build_url
+
+    session = session or make_session()
+    url = _build_url(trade_date)
+    logger.info("VIX index close %s: %s", trade_date, url)
+    resp = fetch_with_retry(session, url, accept_404=True)
+    if resp is None:
+        return None
+    row = _parse_vix_from_index_close_csv(resp.text, trade_date)
+    if row is not None:
+        logger.info(
+            "VIX index close: 1 row for %s (close=%.2f)",
+            trade_date, row.close_price,
+        )
+    return row
 
 
 def _fetch_live_vix(session) -> Optional[VixRow]:
@@ -160,6 +233,11 @@ def download_vix_for_date(trade_date: date) -> List[VixRow]:
             return [row]
 
     session = make_session()
+
+    archive_row = _fetch_vix_from_nse_index_close(trade_date, session=session)
+    if archive_row is not None:
+        return [archive_row]
+
     if trade_date == today_ist():
         live = _fetch_live_vix(session)
         if live is not None and live.trade_date == trade_date:
@@ -194,14 +272,20 @@ def download_vix_history() -> List[VixRow]:
                 if rows:
                     logger.info("VIX archive parsed: %d rows", len(rows))
                     return rows
-                logger.warning("VIX archive parsed 0 rows, falling back to live API")
+                logger.warning("VIX archive parsed 0 rows, falling back to NSE index close")
             else:
                 logger.warning("VIX archive endpoint returned non-CSV (likely HTML); "
-                               "falling back to live API")
+                               "falling back to NSE index close")
         except Exception as exc:
-            logger.warning("VIX archive fetch failed (%s); falling back to live API", exc)
+            logger.warning("VIX archive fetch failed (%s); falling back to NSE index close", exc)
 
-    # 2) Fall back to live API (today's value only).
+    # 2) Settled EOD row from daily index-close archive (today after publish).
+    today = today_ist()
+    archive_row = _fetch_vix_from_nse_index_close(today, session=session)
+    if archive_row is not None:
+        return [archive_row]
+
+    # 3) Fall back to live API (today's intraday value).
     live = _fetch_live_vix(session)
     if live is None:
         logger.warning("VIX: no rows available from any source")
