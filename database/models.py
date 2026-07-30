@@ -209,6 +209,12 @@ class SpotEodRepo:
             [symbol],
         )
 
+    def latest_trade_date(self, symbol: str = "NIFTY") -> Optional[date]:
+        row = self.latest(symbol)
+        if not row:
+            return None
+        return row.get("trade_date")
+
     def has_trade_date(self, trade_date: date, symbol: str = "NIFTY") -> bool:
         n = self.db.scalar(
             "SELECT COUNT(1) FROM options_spot_eod WHERE trade_date = ? AND symbol = ?",
@@ -270,6 +276,10 @@ class VixRepo:
 
     def latest(self) -> Optional[dict]:
         return self.db.fetch_one("SELECT TOP 1 * FROM options_vix_history ORDER BY trade_date DESC")
+
+    def latest_trade_date(self) -> Optional[date]:
+        v = self.db.scalar("SELECT MAX(trade_date) FROM options_vix_history")
+        return v
 
     def has_trade_date(self, trade_date: date) -> bool:
         n = self.db.scalar(
@@ -338,6 +348,9 @@ class FiiRepo:
         return self.db.fetch_all(
             "SELECT * FROM options_fii_data WHERE trade_date = ?", [last_dt]
         )
+
+    def latest_trade_date(self) -> Optional[date]:
+        return self.db.scalar("SELECT MAX(trade_date) FROM options_fii_data")
 
     def has_trade_date(self, trade_date: date) -> bool:
         n = self.db.scalar(

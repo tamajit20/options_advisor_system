@@ -49,6 +49,7 @@ from lifecycle.suggestion_engine import run_live_suggestion_engine, run_suggesti
 from lifecycle.trade_greeks_job import run_trade_greeks_update
 from simulation.simulator import run_simulation_update
 from exceptions import NoDataError
+from lifecycle.no_data_messages import enrich_with_latest_in_db
 from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
@@ -200,8 +201,10 @@ def _run_job(
                 _record_skipped(job_id, job_name, f"{upstream} failed")
                 return
             if up_status == "NO_DATA":
-                _record_skipped(job_id, job_name,
-                                f"{upstream} has no data — market holiday or file not yet published")
+                base = (
+                    f"{upstream} has no data — market holiday or file not yet published"
+                )
+                _record_skipped(job_id, job_name, base, latest_for_job=upstream)
                 return
 
     db = SQLServerConnection()
@@ -215,10 +218,13 @@ def _run_job(
         if requires and not skip_freshness:
             stale = _check_data_freshness(db, requires)
             if stale is not None:
+                base = (
+                    f"Upstream '{stale}' has no data for today — "
+                    "market holiday or source file not yet published"
+                )
                 _record_skipped_with_db(
                     db, job_id, job_name,
-                    f"Upstream '{stale}' has no data for today — "
-                    "market holiday or source file not yet published",
+                    enrich_with_latest_in_db(db, stale, base),
                 )
                 return
         job_log = JobLogRepo(db)
@@ -236,7 +242,7 @@ def _run_job(
             # Source had no data (holiday, file not yet published, etc.).
             # This is NOT a system failure — record NO_DATA with a clear
             # message so operators understand why downstream jobs are skipped.
-            msg = str(exc)
+            msg = enrich_with_latest_in_db(db, job_name, str(exc))
             logger.warning("Job %s NO_DATA — %s", job_id, msg)
             try:
                 db.rollback()
@@ -286,13 +292,22 @@ def _run_job(
         db.close()
 
 
-def _record_skipped(job_id: str, job_name: str, reason: str) -> None:
+def _record_skipped(
+    job_id: str,
+    job_name: str,
+    reason: str,
+    *,
+    latest_for_job: str | None = None,
+) -> None:
     """Open a fresh DB connection to record SKIPPED. Use when no
     connection is available (e.g. early in `_run_job` before connect)."""
     db = SQLServerConnection()
     try:
         db.connect()
-        _record_skipped_with_db(db, job_id, job_name, reason)
+        msg = reason
+        if latest_for_job:
+            msg = enrich_with_latest_in_db(db, latest_for_job, reason)
+        _record_skipped_with_db(db, job_id, job_name, msg)
     except Exception:
         logger.exception("Failed to record skipped job %s", job_id)
     finally:

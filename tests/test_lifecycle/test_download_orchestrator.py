@@ -19,10 +19,11 @@ _FO_ROWS = [
 
 
 class TestRunFoBhav:
-    def test_empty_download_raises_no_data_error(self, mock_db, mocker):
+    def test_empty_download_includes_latest_available(self, mock_db, mocker):
+        mock_db.scalar.return_value = date(2026, 7, 29)
         mocker.patch("lifecycle.download_orchestrator.download_fo_bhav", return_value=[])
-        with pytest.raises(NoDataError, match="FO bhavcopy not available"):
-            orch.run_fo_bhav(mock_db, date(2026, 4, 30))
+        with pytest.raises(NoDataError, match="Latest available in DB: 2026-07-29"):
+            orch.run_fo_bhav(mock_db, date(2026, 7, 30))
         mock_db.commit.assert_not_called()
 
     def test_happy_path_upserts_and_commits(self, mock_db, mocker):
@@ -88,7 +89,7 @@ class TestRunVix:
         mocker.patch("lifecycle.download_orchestrator.load_bundled_vix_rows", return_value=[])
         mocker.patch("lifecycle.data_backfill.dates_to_process", return_value=[])
         mocker.patch("lifecycle.download_orchestrator.download_vix_history", return_value=[])
-        with pytest.raises(NoDataError, match="VIX history download returned no rows"):
+        with pytest.raises(NoDataError, match="VIX data not available"):
             orch.run_vix(mock_db)
 
     def test_normal_path_when_history_already_seeded(self, mock_db, mocker):
