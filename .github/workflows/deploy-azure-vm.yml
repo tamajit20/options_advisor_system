@@ -1,0 +1,29 @@
+name: Deploy to Azure VM
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Git branch to deploy
+        required: false
+        default: master_zerodha
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.AZURE_VM_HOST }}
+          username: ${{ secrets.AZURE_VM_USER }}
+          key: ${{ secrets.AZURE_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /home/azureuser/options_advisor_system
+            git fetch origin
+            git checkout "${{ github.event.inputs.branch }}"
+            git pull origin "${{ github.event.inputs.branch }}"
+            docker compose --env-file .env.docker build options_advisor
+            docker compose --env-file .env.docker up -d options_advisor
+            docker compose --env-file .env.docker ps options_advisor
