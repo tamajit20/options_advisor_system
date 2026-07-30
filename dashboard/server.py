@@ -520,6 +520,20 @@ def _sort_time_label(minutes: int | None) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
+def _enrich_job_error_message(
+    db: SQLServerConnection,
+    job_name: str,
+    message: str,
+) -> str:
+    """Append latest-in-DB suffix for EOD download jobs (incl. old log rows)."""
+    if not message:
+        return ""
+    from lifecycle.no_data_messages import LATEST_DATE_BY_JOB, enrich_with_latest_in_db
+    if job_name not in LATEST_DATE_BY_JOB:
+        return message
+    return enrich_with_latest_in_db(db, job_name, message)
+
+
 def _summarize_cron(cfg: Dict[str, Any]) -> str:
     """Render a SCHEDULER_CONFIG entry as a human-readable schedule string."""
     if not cfg:
@@ -1503,7 +1517,14 @@ def create_app() -> Flask:
     @_with_db
     def api_jobs_latest(db: SQLServerConnection):
         repo = JobLogRepo(db)
-        return jsonify({"jobs": [_row(r) for r in repo.latest_status_per_job()]})
+        rows = []
+        for r in repo.latest_status_per_job():
+            row = _row(r)
+            row["error_message"] = _enrich_job_error_message(
+                db, r["job_name"], r.get("error_message") or "",
+            )
+            rows.append(row)
+        return jsonify({"jobs": rows})
 
     # ---------- Tab 5: Config ----------
     @app.route("/api/config")
@@ -1671,12 +1692,15 @@ def create_app() -> Flask:
             # "RUNNING" if the worker died. Trust DB for finished states.
             if db_status == "RUNNING":
                 disp = "RUNNING"
-            elif db_status in ("SUCCESS", "FAILED", "SKIPPED"):
+            elif db_status in ("SUCCESS", "FAILED", "SKIPPED", "NO_DATA"):
                 disp = db_status
             elif mem_status:
                 disp = mem_status
             else:
                 disp = "NEVER"
+
+            raw_err = row.get("error_message") or ""
+            err_msg = _enrich_job_error_message(db, name, raw_err)
 
             out.append({
                 "job_name":      name,
@@ -1691,7 +1715,7 @@ def create_app() -> Flask:
                 "status":        disp,
                 "started_at":    _ist_iso(row.get("started_at")),
                 "finished_at":   _ist_iso(row.get("finished_at")),
-                "error_message": row.get("error_message") or "",
+                "error_message": err_msg,
                 "rows_processed": row.get("rows_processed"),
                 "next_run":      _ist_iso(next_run),
                 "_sort":         _job_display_sort_key(

@@ -470,6 +470,37 @@ class TestJobsList:
         assert jobs[0]["display_group"] == "Monday & weekly"
         assert all(j.get("display_group") for j in jobs)
 
+    def test_no_data_status_and_enriched_error(self, client, mocker):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        finished = datetime(2026, 7, 30, 11, 11, tzinfo=ZoneInfo("Asia/Kolkata"))
+        mocker.patch(
+            "dashboard.server.JobLogRepo.latest_status_per_job",
+            return_value=[{
+                "job_name": "fo_bhav_download",
+                "status": "NO_DATA",
+                "started_at": finished,
+                "finished_at": finished,
+                "error_message": (
+                    "FO bhavcopy not available for 2026-07-30 — "
+                    "market holiday or NSE has not published the file yet"
+                ),
+                "rows_processed": 0,
+            }],
+        )
+        mocker.patch(
+            "lifecycle.no_data_messages.latest_trade_date_for_job",
+            return_value=__import__("datetime").date(2026, 7, 29),
+        )
+        import scheduler.scheduler as sched
+        mocker.patch.object(sched, "_SCHEDULER", None)
+
+        resp = client.get("/api/jobs/list")
+        fo = next(j for j in resp.get_json()["jobs"] if j["job_name"] == "fo_bhav_download")
+        assert fo["status"] == "NO_DATA"
+        assert "Latest available in DB: 2026-07-29" in fo["error_message"]
+
 
 class TestJobsTrigger:
     def test_unknown_job_returns_400(self, client):
