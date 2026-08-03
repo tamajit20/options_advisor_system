@@ -276,12 +276,12 @@ Recommended **Mon–Fri only** (Sat/Sun off). All times **IST**.
 
 | Session | Start VM | Stop VM | What runs |
 |---------|----------|---------|-----------|
-| **Market** | **08:55** | **16:10** | **Morning EOD Catchup** @ **09:00**; Zerodha login; intraday jobs; live suggestions; **15:35** snapshot; **Fri 15:40** `weekly_cleanup` |
+| **Market** | **08:55** | **15:45** | **Morning EOD Catchup** @ **09:00**; **Fri 09:30** `weekly_cleanup`; Zerodha login; intraday jobs; live suggestions; **15:35** snapshot |
 | **Weekend** | off | off | — |
 
 Stopping must **deallocate** the VM (not guest OS shutdown only) to save compute cost. You still pay for the OS disk and a static public IP if reserved.
 
-**Azure Automation (UTC):** 08:55 IST = 03:25 UTC · 16:10 IST = 10:40 UTC.
+**Azure Automation (UTC):** 08:55 IST = 03:25 UTC · 15:45 IST = 10:15 UTC.
 
 ### Automated setup (recommended — from Windows laptop)
 
@@ -321,7 +321,7 @@ Schedules created:
 | Schedule name | UTC | IST | Action |
 |---------------|-----|-----|--------|
 | `sched-oa-start-market-mf` | 03:25 | 08:55 | Start |
-| `sched-oa-stop-market-mf` | 10:40 | **16:10** | Stop (Fri: after `weekly_cleanup` @ 15:40) |
+| `sched-oa-stop-market-mf` | 10:15 | **15:45** | Stop (10 min after 15:35 snapshot) |
 
 Re-running `VMUpTimeConfiguration.ps1` **deletes** retired evening schedules (`sched-oa-start-eod-mf`, `sched-oa-stop-eod-mf`) if they still exist in Azure.
 

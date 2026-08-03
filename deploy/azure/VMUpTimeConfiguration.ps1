@@ -5,7 +5,7 @@
 #
 # Schedule (IST → UTC):
 #   Start market  08:55 Mon–Fri  →  03:25 UTC
-#   Stop market   16:10 Mon–Fri  →  10:40 UTC  (Fri weekly_cleanup @ 15:40)
+#   Stop market   15:45 Mon–Fri  →  10:15 UTC  (weekly_cleanup Fri @ 09:30)
 # Evening EOD window removed — morning_eod_catchup @ 09:00 in the app.
 #
 # Prerequisites (Windows laptop):
@@ -85,8 +85,8 @@ $ScheduleDefinitions = @(
         Name        = "sched-oa-stop-market-mf"
         Runbook     = $RunbookStopName
         HourUtc     = 10
-        MinuteUtc   = 40
-        Description = "Mon-Fri 16:10 IST - stop VM after market session (Fri weekly_cleanup @ 15:40)"
+        MinuteUtc   = 15
+        Description = "Mon-Fri 15:45 IST - stop VM after market session (15:35 snapshot + buffer)"
     }
 )
 
@@ -586,6 +586,6 @@ Write-Host "  2. Stop-OptionsAdvisorVm   - VM should show Stopped (deallocated)"
 Write-Host ""
 Write-Host "Schedule summary (UTC to IST):"
 Write-Host "  sched-oa-start-market-mf  03:25 UTC  =  08:55 IST  Mon-Fri"
-Write-Host "  sched-oa-stop-market-mf   10:40 UTC  =  16:10 IST  Mon-Fri"
+Write-Host "  sched-oa-stop-market-mf   10:15 UTC  =  15:45 IST  Mon-Fri"
 Write-Host "  (evening EOD schedules removed - morning catchup @ 09:00 in app)"
 Write-Host ""

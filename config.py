@@ -141,9 +141,9 @@ SCHEDULER_CONFIG = {
         "intraday_validator": {
             "day_of_week": "mon-fri", "hour": 9, "minute": 35, "enabled": True,
         },
-        # Fri 15:40 IST: retention trim after market close (15:30) and
-        # intraday_close_snapshot (15:35). VM stops at 16:10 to allow ~30 min.
-        "weekly_cleanup":     {"day_of_week": "fri", "hour": 15, "minute": 40, "enabled": True},
+        # Fri 09:30 IST: retention trim in the morning (after morning_eod_catchup)
+        # so the VM can stop at 15:45 with Mon-Thu — no extra Fri evening window.
+        "weekly_cleanup":     {"day_of_week": "fri", "hour": 9, "minute": 30, "enabled": True},
         # Events calendar sync — Mon market window (VM on from 08:55)
         "events_seed":        {"day_of_week": "mon", "hour": 9,  "minute":  0, "enabled": True},
     },

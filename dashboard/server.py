@@ -409,7 +409,7 @@ _JOB_META: Dict[str, Dict[str, str]] = {
     "morning_eod_catchup": {"icon": "🌅", "name": "Morning EOD Catchup",
                             "description": "Same EOD chain at 09:00 IST when the VM boots (08:55) — backfills missed overnight runs before market open."},
     "weekly_cleanup":     {"icon": "🧹", "name": "Weekly Cleanup",
-                            "description": "Applies retention policy and trims historical data (Fri 15:40 IST, after market close)."},
+                            "description": "Applies retention policy and trims historical data (Fri 09:30 IST, after morning EOD catchup)."},
 }
 
 _DOW_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu",
