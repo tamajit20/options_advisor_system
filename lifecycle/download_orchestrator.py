@@ -29,6 +29,11 @@ from downloader.index_spot_nse import download_nse_index_spot
 from downloader.spot_bhav import download_spot_bhav
 from exceptions import NoDataError
 from lifecycle.data_backfill import run_or_backfill
+from lifecycle.eod_session import (
+    bhav_unavailable_reason,
+    effective_bhav_end_date,
+    vix_unavailable_reason,
+)
 from lifecycle.no_data_messages import (
     _fii_latest,
     _fo_latest,
@@ -51,7 +56,7 @@ def _run_fo_bhav_for_date(db: SQLServerConnection, trade_date: date) -> int:
             db,
             dataset="FO bhavcopy",
             trade_date=trade_date,
-            reason="market holiday or NSE has not published the file yet",
+            reason=bhav_unavailable_reason(dataset="FO bhavcopy"),
             latest_fn=_fo_latest,
         )
     n = FoEodRepo(db).upsert_many(rows)
@@ -127,7 +132,7 @@ def _run_spot_bhav_for_date(db: SQLServerConnection, trade_date: date) -> int:
             db,
             dataset="Spot bhavcopy",
             trade_date=trade_date,
-            reason="market holiday or NSE has not published the file yet",
+            reason=bhav_unavailable_reason(dataset="Spot bhavcopy"),
             latest_fn=_spot_latest,
         )
     n = SpotEodRepo(db).upsert_many(rows)
@@ -166,7 +171,7 @@ def _run_vix_for_date(db: SQLServerConnection, trade_date: date) -> int:
             db,
             dataset="VIX data",
             trade_date=trade_date,
-            reason="NSE index-close archive and live sources had no match",
+            reason=vix_unavailable_reason(),
             latest_fn=_vix_latest,
         )
     n = VixRepo(db).upsert_many(rows)
@@ -194,14 +199,15 @@ def run_vix(db: SQLServerConnection, trade_date: date | None = None) -> int:
     if total > 0:
         return total
 
-    # Last resort for today when per-date sources are empty (live API / archive).
+    # Last resort when per-date sources are empty (live API / archive).
+    session_end = effective_bhav_end_date()
     rows = download_vix_history()
     if not rows:
         latest = _vix_latest(db)
         raise NoDataError(format_no_data_message(
             dataset="VIX data",
-            trade_date=today_ist(),
-            reason="NSE may not have published today's VIX data yet",
+            trade_date=session_end,
+            reason=vix_unavailable_reason(),
             latest_available=latest,
         ))
     n = vix_repo.upsert_many(rows)
@@ -217,7 +223,7 @@ def _run_fii_for_date(db: SQLServerConnection, trade_date: date) -> int:
             db,
             dataset="FII OI data",
             trade_date=trade_date,
-            reason="market holiday or SEBI/NSE has not published the file yet",
+            reason=bhav_unavailable_reason(dataset="FII OI data"),
             latest_fn=_fii_latest,
         )
     n = FiiRepo(db).upsert_many(rows)

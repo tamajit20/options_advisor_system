@@ -28,6 +28,7 @@ from database.models import (
 )
 from engine.trade_greeks import compute_trade_greeks
 from utils import today_ist
+from lifecycle.eod_session import effective_bhav_end_date
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ def run_trade_greeks_update(
 
     Returns the number of trades processed.
     """
-    trade_date = trade_date or today_ist()
+    trade_date = trade_date or effective_bhav_end_date()
     trd  = TradeRepo(db)
     sp   = SpotEodRepo(db)
     iv   = IvHistoryRepo(db)

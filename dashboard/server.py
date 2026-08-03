@@ -405,9 +405,11 @@ _JOB_META: Dict[str, Dict[str, str]] = {
     "exit_engine":        {"icon": "🚪", "name": "Exit Engine",
                             "description": "Evaluates open trades and emits exit instructions."},
     "eod_nightly_pipeline": {"icon": "🌙", "name": "EOD Nightly Pipeline",
-                            "description": "Sequential EOD chain: bhav → IV → suggestion → exit (Mon–Fri 20:35 IST)."},
+                            "description": "Sequential EOD chain (disabled — use Morning EOD Catchup @ 09:00; manual re-run only)."},
+    "morning_eod_catchup": {"icon": "🌅", "name": "Morning EOD Catchup",
+                            "description": "Same EOD chain at 09:00 IST when the VM boots (08:55) — backfills missed overnight runs before market open."},
     "weekly_cleanup":     {"icon": "🧹", "name": "Weekly Cleanup",
-                            "description": "Applies retention policy and trims historical data."},
+                            "description": "Applies retention policy and trims historical data (Fri 15:40 IST, after market close)."},
 }
 
 _DOW_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu",
@@ -474,6 +476,10 @@ def _job_display_sort_key(
     if name == "eod_nightly_pipeline":
         return (_JOB_GROUP_ORDER["eod"], pipeline_mins, 0, name)
 
+    if name == "morning_eod_catchup":
+        mins = _earliest_cron_minutes(cfg) or (9 * 60)
+        return (_JOB_GROUP_ORDER["open"], mins, 0, name)
+
     if via_pipeline:
         try:
             step = _EOD_PIPELINE_STEPS.index(name) + 1
@@ -495,12 +501,10 @@ def _job_display_sort_key(
         return (_JOB_GROUP_ORDER["open"], mins, 0, name)
     if mins < 10 * 60:
         return (_JOB_GROUP_ORDER["open"], mins, 0, name)
-    if name in ("event_eve_review", "intraday_close_snapshot"):
+    if name in ("event_eve_review", "intraday_close_snapshot", "weekly_cleanup"):
         return (_JOB_GROUP_ORDER["close"], mins, 0, name)
     if mins < 15 * 60 + 45:
         return (_JOB_GROUP_ORDER["intraday"], mins, 0, name)
-    if name == "weekly_cleanup":
-        return (_JOB_GROUP_ORDER["maintenance"], mins, 0, name)
     if mins >= 20 * 60:
         return (_JOB_GROUP_ORDER["eod"], mins, 0, name)
     return (_JOB_GROUP_ORDER["intraday"], mins, 0, name)

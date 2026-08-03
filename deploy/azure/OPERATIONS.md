@@ -276,14 +276,12 @@ Recommended **Mon–Fri only** (Sat/Sun off). All times **IST**.
 
 | Session | Start VM | Stop VM | What runs |
 |---------|----------|---------|-----------|
-| **Market** | **08:55** | **15:40** | Zerodha login, intraday jobs, live suggestions, 15:35 snapshot |
-| **EOD** | **20:30** | **21:00** | **EOD Nightly Pipeline** @ **20:35** (best-effort sequential bhav → IV → suggestion); **weekly_cleanup** @ **20:50** Fri |
+| **Market** | **08:55** | **16:10** | **Morning EOD Catchup** @ **09:00**; Zerodha login; intraday jobs; live suggestions; **15:35** snapshot; **Fri 15:40** `weekly_cleanup` |
 | **Weekend** | off | off | — |
-| **Mon only** | **08:55** | **15:40** | **events_seed** @ **09:00** (calendar sync) |
 
 Stopping must **deallocate** the VM (not guest OS shutdown only) to save compute cost. You still pay for the OS disk and a static public IP if reserved.
 
-**Azure Automation (UTC):** 08:55 IST = 03:25 UTC · 15:40 IST = 10:10 UTC · 20:30 IST = 15:00 UTC · 21:00 IST = 15:30 UTC.
+**Azure Automation (UTC):** 08:55 IST = 03:25 UTC · 16:10 IST = 10:40 UTC.
 
 ### Automated setup (recommended — from Windows laptop)
 
@@ -323,9 +321,9 @@ Schedules created:
 | Schedule name | UTC | IST | Action |
 |---------------|-----|-----|--------|
 | `sched-oa-start-market-mf` | 03:25 | 08:55 | Start |
-| `sched-oa-stop-market-mf` | 10:10 | 15:40 | Stop |
-| `sched-oa-start-eod-mf` | 15:00 | 20:30 | Start |
-| `sched-oa-stop-eod-mf` | 15:30 | 21:00 | Stop |
+| `sched-oa-stop-market-mf` | 10:40 | **16:10** | Stop (Fri: after `weekly_cleanup` @ 15:40) |
+
+Re-running `VMUpTimeConfiguration.ps1` **deletes** retired evening schedules (`sched-oa-start-eod-mf`, `sched-oa-stop-eod-mf`) if they still exist in Azure.
 
 **After setup — verify**
 
@@ -333,8 +331,32 @@ Schedules created:
 2. VM status must show **Stopped (deallocated)** when off
 3. **Jobs** tab in Automation → last run **Completed**
 4. Allow **~5 min** after start before cron jobs (SQL + Docker)
+5. Confirm **no** evening start/stop schedules remain under **Schedules**
 
-**Market-day checklist:** Zerodha login after **08:55** start; EOD pipeline auto-runs at **20:35** if VM started at **20:30**.
+**Market-day checklist:** Zerodha login after **08:55** start; **Morning EOD Catchup** auto-runs at **09:00**.
+
+### Morning EOD catchup (09:00 IST) — primary EOD run
+
+When the VM starts at **08:55**, **`morning_eod_catchup`** runs the full EOD chain at **09:00 IST** (Mon–Fri):
+
+1. `fo_bhav_download` → … → `trade_greeks_update`
+
+**Date targeting:** prior trading session bhav — never today's file pre-market:
+
+| Run day | Bhav date fetched |
+|---------|-------------------|
+| Tue–Fri 09:00 | Previous calendar weekday |
+| **Mon 09:00** | **Friday** |
+
+Steps are **idempotent**. **`eod_nightly_pipeline`** (evening) is **disabled** — manual re-run only from the Jobs tab if needed.
+
+**NO_DATA messages** during morning catchup reference the **prior session** date, not today.
+
+**Timing:** pipeline should finish before `intraday_validator` (09:35) and `live_suggestion_engine` (09:45).
+
+If **F&O bhav** is late, re-run **`fo_bhav_download`** from the Jobs tab when the file appears, then **`iv_calculation`** → **`suggestion_engine`**.
+
+---
 
 ### Manual setup (Azure Portal)
 
@@ -346,14 +368,6 @@ If you prefer the Portal instead of the script:
 4. **Runbooks** → create **Start-OptionsAdvisorVm** / **Stop-OptionsAdvisorVm** (copy from `deploy/azure/vm-uptime/runbooks/`)
 5. **Schedules** → four weekly schedules (Mon–Fri, **UTC** times in table above)
 6. Link each schedule to the matching runbook with parameters: `ResourceGroupName=STOCKAPPS`, `VMName=OptionsAdvisor`
-
----
-
-The app uses **`eod_nightly_pipeline`**: one job at **20:35** runs all EOD steps back-to-back (~10–15 min).  
-Each step is attempted even if upstream steps fail or bhav is late — independent jobs (VIX, FII, simulation) always run; downstream orchestrators skip gracefully when data is missing.  
-Allow **5 min** after VM start for Docker/SQL before 20:35.
-
-If **F&O bhav** is late (NSE not published by 20:35), the pipeline still runs VIX/FII/simulation and attempts IV/suggestion (they return 0 rows). Re-run **`fo_bhav_download`** from the Jobs tab when the file appears, then **`iv_calculation`** → **`suggestion_engine`** if needed.
 
 ---
 

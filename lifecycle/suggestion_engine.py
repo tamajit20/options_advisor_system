@@ -1154,11 +1154,15 @@ def run_suggestion_engine(
         logger.info("Suggestion engine: using explicit trade_date=%s", trade_date)
 
     # Execution window: when/how to enter this trade.
-    # Use max(trade_date, today) so that a weekend/late run with stale data
-    # still produces an entry_day in the future (e.g. Sun run with Thu data
-    # → entry_day = Monday, not the already-passed Friday).
+    # Evening EOD: entry is the next session after bhav date (Fri bhav → Mon entry).
+    # Morning catchup: entry is today — we are generating before the open using
+    # prior-session bhav (Mon 09:00 + Fri bhav → Mon entry, not Tue).
     _today = now_ist().date()
-    entry_day = _next_trading_day(max(trade_date, _today))
+    from lifecycle.eod_session import is_morning_catchup
+    if is_morning_catchup():
+        entry_day = _today
+    else:
+        entry_day = _next_trading_day(max(trade_date, _today))
     exec_window = _execution_window(entry_day, now_ist())
 
     # Collect all candidates across all underlyings first, then apply

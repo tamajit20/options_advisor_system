@@ -35,6 +35,7 @@ from database.models import (
 )
 from engine.charges import estimate_charges
 from utils import days_between, today_ist
+from lifecycle.eod_session import effective_bhav_end_date
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ def update_simulation(
 ) -> bool:
     """Run simulation update for one suggestion as-of `sim_date`. Returns True
     if any work was done (i.e. trade not already void/closed)."""
-    sim_date = sim_date or today_ist()
+    sim_date = sim_date or effective_bhav_end_date()
     sug = SuggestionRepo(db)
     sim = SimulationRepo(db)
     fo = FoEodRepo(db)
@@ -271,7 +272,7 @@ def update_simulation(
 
 def run_simulation_update(db: SQLServerConnection, sim_date: date | None = None) -> int:
     """Run simulation update for every active suggestion (today and recent)."""
-    sim_date = sim_date or today_ist()
+    sim_date = sim_date or effective_bhav_end_date()
     sug = SuggestionRepo(db)
     # Pick everything generated in the last ~30 days that's not closed
     rows = db.fetch_all(

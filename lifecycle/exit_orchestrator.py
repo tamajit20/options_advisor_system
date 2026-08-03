@@ -26,6 +26,7 @@ from engine.circuit_breaker import check_daily_pnl_breach
 from engine.exit_engine import evaluate_exit
 from engine.exit_pricing import sanitized_close_price as _sanitized_close_price
 from utils import days_between, now_ist, today_ist
+from lifecycle.eod_session import effective_bhav_end_date
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ def _close_trade_with_charges(db: SQLServerConnection, trade_id: str,
 
 
 def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> int:
-    trade_date = trade_date or today_ist()
+    trade_date = trade_date or effective_bhav_end_date()
     trd = TradeRepo(db)
     fo = FoEodRepo(db)
     notif = NotificationRepo(db)

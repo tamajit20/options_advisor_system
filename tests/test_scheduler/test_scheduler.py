@@ -97,6 +97,21 @@ class TestEodPipeline:
         sched.job_eod_nightly_pipeline()
         assert calls == list(sched._EOD_PIPELINE_STEPS)
 
+    def test_morning_catchup_runs_all_steps(self, patched_db, mocker):
+        calls: list[str] = []
+
+        def _make_tracker(name):
+            def _fn():
+                calls.append(name)
+                sched._LAST_STATUS[name] = "SUCCESS"
+            return _fn
+
+        for step in sched._EOD_PIPELINE_STEPS:
+            sched.JOB_FUNCS[step] = _make_tracker(step)
+
+        sched.job_morning_eod_catchup()
+        assert calls == list(sched._EOD_PIPELINE_STEPS)
+
     def test_continues_when_fo_bhav_has_no_data(self, patched_db, mocker):
         """Best-effort: pipeline runs all steps even when bhav is NO_DATA."""
 
@@ -120,6 +135,7 @@ class TestJobFuncsRegistry:
             "fo_bhav_download", "spot_bhav_download", "vix_download", "fii_download",
             "iv_calculation", "suggestion_engine", "simulation_update", "exit_engine",
             "events_seed", "weekly_cleanup", "eod_nightly_pipeline",
+            "morning_eod_catchup",
         }
         assert expected.issubset(set(sched.JOB_FUNCS.keys()))
 
@@ -145,7 +161,9 @@ def test_live_suggestion_single_job_multi_triggers():
 def test_eod_pipeline_single_trigger_supersedes_individual_eod_crons():
     sch = sched.build_scheduler()
     pipeline = [j for j in sch.get_jobs() if j.id == "eod_nightly_pipeline"]
-    assert len(pipeline) == 1
+    assert len(pipeline) == 0  # evening pipeline disabled (morning-only)
+    morning = [j for j in sch.get_jobs() if j.id == "morning_eod_catchup"]
+    assert len(morning) == 1
     for name in sched._EOD_PIPELINE_STEPS:
         assert not [j for j in sch.get_jobs() if j.id == name or j.id.startswith(f"{name}@")]
 
@@ -182,23 +200,38 @@ class TestDataFreshnessGate:
 class TestDataProbes:
     def test_probe_fo_bhav_returns_true_when_today(self, mock_db, mocker):
         from datetime import date
-        mocker.patch("scheduler.scheduler.today_ist", return_value=date(2026, 5, 4))
-        mocker.patch("database.models.FoEodRepo.latest_trade_date",
-                     return_value=date(2026, 5, 4))
+        mocker.patch(
+            "scheduler.scheduler.effective_bhav_end_date",
+            return_value=date(2026, 5, 4),
+        )
+        mocker.patch(
+            "database.models.FoEodRepo.has_trade_date",
+            return_value=True,
+        )
         assert sched._probe_fo_bhav(mock_db) is True
 
     def test_probe_fo_bhav_returns_false_when_stale(self, mock_db, mocker):
         from datetime import date
-        mocker.patch("scheduler.scheduler.today_ist", return_value=date(2026, 5, 4))
-        mocker.patch("database.models.FoEodRepo.latest_trade_date",
-                     return_value=date(2026, 5, 3))
+        mocker.patch(
+            "scheduler.scheduler.effective_bhav_end_date",
+            return_value=date(2026, 5, 4),
+        )
+        mocker.patch(
+            "database.models.FoEodRepo.has_trade_date",
+            return_value=False,
+        )
         assert sched._probe_fo_bhav(mock_db) is False
 
     def test_probe_iv_calculation_returns_true_when_today(self, mock_db, mocker):
         from datetime import date
-        mocker.patch("scheduler.scheduler.today_ist", return_value=date(2026, 5, 4))
-        mocker.patch("database.models.IvHistoryRepo.latest_trade_date",
-                     return_value=date(2026, 5, 4))
+        mocker.patch(
+            "scheduler.scheduler.effective_bhav_end_date",
+            return_value=date(2026, 5, 4),
+        )
+        mocker.patch(
+            "database.models.IvHistoryRepo.has_trade_date",
+            return_value=True,
+        )
         assert sched._probe_iv_calculation(mock_db) is True
 
     def test_check_data_freshness_skips_unknown_upstreams(self, mock_db):

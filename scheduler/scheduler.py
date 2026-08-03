@@ -50,6 +50,11 @@ from lifecycle.trade_greeks_job import run_trade_greeks_update
 from simulation.simulator import run_simulation_update
 from exceptions import NoDataError
 from lifecycle.no_data_messages import enrich_with_latest_in_db
+from lifecycle.eod_session import (
+    eod_pipeline_session,
+    effective_bhav_end_date,
+    upstream_missing_reason,
+)
 from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
@@ -218,10 +223,7 @@ def _run_job(
         if requires and not skip_freshness:
             stale = _check_data_freshness(db, requires)
             if stale is not None:
-                base = (
-                    f"Upstream '{stale}' has no data for today — "
-                    "market holiday or source file not yet published"
-                )
+                base = upstream_missing_reason(stale)
                 _record_skipped_with_db(
                     db, job_id, job_name,
                     enrich_with_latest_in_db(db, stale, base),
@@ -342,18 +344,18 @@ def _record_skipped_with_db(
 # treated as "data unavailable" and downstream is skipped with that reason.
 def _probe_fo_bhav(db: SQLServerConnection) -> bool:
     from database.models import FoEodRepo
-    return FoEodRepo(db).latest_trade_date() == today_ist()
+    return FoEodRepo(db).has_trade_date(effective_bhav_end_date())
 
 
 def _probe_spot_bhav(db: SQLServerConnection) -> bool:
     from database.models import SpotEodRepo
-    row = SpotEodRepo(db).latest("NIFTY") or {}
-    return row.get("trade_date") == today_ist()
+    row = SpotEodRepo(db).for_date("NIFTY", effective_bhav_end_date())
+    return bool(row)
 
 
 def _probe_iv_calculation(db: SQLServerConnection) -> bool:
     from database.models import IvHistoryRepo
-    return IvHistoryRepo(db).latest_trade_date() == today_ist()
+    return IvHistoryRepo(db).has_trade_date(effective_bhav_end_date())
 
 
 _DATA_PROBES: dict[str, Callable[[SQLServerConnection], bool]] = {
@@ -432,39 +434,60 @@ def job_intraday_validator():
     _run_job("intraday_validator", run_intraday_validator)
 
 
-def job_eod_nightly_pipeline():
-    """Run the full EOD chain sequentially (Mon–Fri after VM boot).
+def _run_eod_pipeline_steps(label: str) -> int:
+    """Run the full EOD chain sequentially (shared by nightly + morning catchup).
 
     Each step is attempted regardless of upstream status. Orchestrators
     handle missing data internally (skip/return 0); independent jobs (VIX,
     FII, simulation) always get a chance to run even when bhav is late.
     """
+    summary: dict[str, str] = {}
+    for step in _EOD_PIPELINE_STEPS:
+        step_fn = JOB_FUNCS.get(step)
+        if step_fn is None:
+            logger.warning("%s: missing handler for %s", label, step)
+            summary[step] = "MISSING"
+            continue
+        logger.info("%s — starting step %s", label, step)
+        try:
+            step_fn()
+        except Exception:
+            logger.exception("%s — step %s raised unexpectedly", label, step)
+            summary[step] = "FAILED"
+            continue
+        summary[step] = _LAST_STATUS.get(step, "UNKNOWN")
+        logger.info(
+            "%s — finished step %s status=%s",
+            label, step, summary[step],
+        )
+    logger.info("%s complete: %s", label, summary)
+    return 0
+
+
+def job_eod_nightly_pipeline():
+    """Run the full EOD chain sequentially (Mon–Fri after evening VM boot)."""
 
     def _pipeline(db: SQLServerConnection) -> int:
         del db  # each step opens its own connection via _run_job
-        summary: dict[str, str] = {}
-        for step in _EOD_PIPELINE_STEPS:
-            step_fn = JOB_FUNCS.get(step)
-            if step_fn is None:
-                logger.warning("EOD pipeline: missing handler for %s", step)
-                summary[step] = "MISSING"
-                continue
-            logger.info("EOD pipeline — starting step %s", step)
-            try:
-                step_fn()
-            except Exception:
-                logger.exception("EOD pipeline — step %s raised unexpectedly", step)
-                summary[step] = "FAILED"
-                continue
-            summary[step] = _LAST_STATUS.get(step, "UNKNOWN")
-            logger.info(
-                "EOD pipeline — finished step %s status=%s",
-                step, summary[step],
-            )
-        logger.info("EOD pipeline complete: %s", summary)
-        return 0
+        with eod_pipeline_session(morning_catchup=False):
+            return _run_eod_pipeline_steps("EOD pipeline")
 
     _run_job("eod_nightly_pipeline", _pipeline)
+
+
+def job_morning_eod_catchup():
+    """Run the EOD chain on morning VM boot if last night's run was missed.
+
+    Scheduled at 09:00 IST (VM starts 08:55). Backfills the **prior trading
+    session** bhav (Mon → Fri) before the 09:15 open. Steps are idempotent.
+    """
+
+    def _pipeline(db: SQLServerConnection) -> int:
+        del db
+        with eod_pipeline_session(morning_catchup=True):
+            return _run_eod_pipeline_steps("Morning EOD catchup")
+
+    _run_job("morning_eod_catchup", _pipeline)
 
 
 def job_weekly_cleanup():
@@ -521,6 +544,7 @@ JOB_FUNCS = {
     "drift_verifier":          job_drift_verifier,
     "intraday_validator":      job_intraday_validator,
     "eod_nightly_pipeline":    job_eod_nightly_pipeline,
+    "morning_eod_catchup":     job_morning_eod_catchup,
 }
 
 

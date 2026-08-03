@@ -15,6 +15,7 @@ from typing import Callable, Iterable, List, Optional, TypeVar
 from config import SCHEDULER_CONFIG
 from database.connection import SQLServerConnection
 from exceptions import NoDataError
+from lifecycle.eod_session import effective_bhav_end_date
 from utils import today_ist
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ def dates_to_process(
     *always_refresh_end* re-fetches the latest session even when a row already
     exists (scheduled post-market refresh).
     """
-    end = end or today_ist()
+    end = end or effective_bhav_end_date()
     lookback = lookback_days if lookback_days is not None else backfill_lookback_days()
     start = end - timedelta(days=lookback)
     pending = {d for d in weekdays_in_range(start, end) if not has_date(d)}
@@ -104,12 +105,15 @@ def run_or_backfill(
     if trade_date is not None:
         return single_date_fn(db, trade_date)
 
+    end = effective_bhav_end_date()
     dates = dates_to_process(
         has_date=has_date,
+        end=end,
         always_refresh_end=always_refresh_end,
     )
     return run_dates_backfill(
         dates,
         lambda d: single_date_fn(db, d),
         label=label,
+        today=end,
     )

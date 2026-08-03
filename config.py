@@ -78,7 +78,8 @@ SCHEDULER_CONFIG = {
     # When EOD download / IV calc jobs run without an explicit trade_date,
     # fill any missing weekdays in this calendar-day window (plus refresh today).
     "data_backfill_lookback_days": 30,
-    # Azure VM EOD window: Mon–Fri 20:30–21:00 IST (5 min boot → pipeline @ 20:35).
+    # Morning-only EOD: prior-session bhav @ 09:00 (VM boot 08:55). Evening pipeline
+    # disabled — no 20:30 VM window. Individual EOD crons stay off (manual re-run only).
     # When eod_nightly_pipeline is enabled, individual EOD crons below are not scheduled
     # (enabled: False) but still appear in Jobs for manual step re-runs.
     "jobs": {
@@ -95,11 +96,19 @@ SCHEDULER_CONFIG = {
         "drift_verifier": {
             "day_of_week": "mon-fri", "hour": 20, "minute": 35, "enabled": False,
         },
-        # Sequential EOD pipeline — VM up 20:30, jobs start 20:35 (~10–15 min total).
+        # Legacy evening pipeline — disabled (morning_eod_catchup @ 09:00 replaces this).
         "eod_nightly_pipeline": {
             "day_of_week": "mon-fri",
             "hour": 20,
             "minute": 35,
+            "enabled": False,
+        },
+        # Morning catchup — VM up 08:55, pipeline @ 09:00 before market open.
+        # Targets prior trading session bhav (Mon → Fri), never today's file.
+        "morning_eod_catchup": {
+            "day_of_week": "mon-fri",
+            "hour": 9,
+            "minute": 0,
             "enabled": True,
         },
         # Live suggestion: re-evaluate with live Zerodha chain during market hours.
@@ -132,8 +141,9 @@ SCHEDULER_CONFIG = {
         "intraday_validator": {
             "day_of_week": "mon-fri", "hour": 9, "minute": 35, "enabled": True,
         },
-        # Maintenance — Fri EOD window (VM on 20:30–21:00 Mon–Fri)
-        "weekly_cleanup":     {"day_of_week": "fri", "hour": 20, "minute": 50, "enabled": True},
+        # Fri 15:40 IST: retention trim after market close (15:30) and
+        # intraday_close_snapshot (15:35). VM stops at 16:10 to allow ~30 min.
+        "weekly_cleanup":     {"day_of_week": "fri", "hour": 15, "minute": 40, "enabled": True},
         # Events calendar sync — Mon market window (VM on from 08:55)
         "events_seed":        {"day_of_week": "mon", "hour": 9,  "minute":  0, "enabled": True},
     },
@@ -160,6 +170,7 @@ SCHEDULER_CONFIG = {
         "drift_verifier":          120,
         "intraday_validator":      180,
         "eod_nightly_pipeline":    1200,
+        "morning_eod_catchup":     1200,
     },
     # Default for jobs not listed above.
     "default_job_timeout_seconds": 600,

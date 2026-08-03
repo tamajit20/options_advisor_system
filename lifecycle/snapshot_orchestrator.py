@@ -52,6 +52,7 @@ from database.models import (
 from providers.base import DataSource, MarketDataProvider
 from providers.registry import get_market_data
 from utils import now_ist, today_ist
+from lifecycle.eod_session import effective_bhav_end_date
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ def run_intraday_close_snapshot(
     Returns the number of leg-rows written. Tests inject `provider`; in
     production we read from the registry (which is process-cached).
     """
-    snapshot_date = trade_date or today_ist()
+    snapshot_date = trade_date or effective_bhav_end_date()
     p = provider if provider is not None else get_market_data()
     captured_at = now_ist()
 
@@ -186,7 +187,7 @@ def run_drift_verifier(
     Returns the number of legs flagged. Snapshot rows whose source is
     `EOD` are skipped (the comparison is trivially zero).
     """
-    snapshot_date = trade_date or today_ist()
+    snapshot_date = trade_date or effective_bhav_end_date()
     threshold_pct = float(STRATEGY_CONFIG.get("intraday_close_drift_pct", 5.0))
 
     snaps = IntradayCloseSnapshotRepo(db).get_by_date(snapshot_date)

@@ -31,6 +31,7 @@ from lifecycle.data_backfill import (
     run_dates_backfill,
     weekdays_in_range,
 )
+from lifecycle.eod_session import effective_bhav_end_date
 from utils import days_between, today_ist
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 def _iv_dates_to_process(db: SQLServerConnection, end: Optional[date] = None) -> List[date]:
     """Weekdays with FO data but missing/stale IV, plus today when FO is ready."""
-    end = end or today_ist()
+    end = end or effective_bhav_end_date()
     fo = FoEodRepo(db)
     iv = IvHistoryRepo(db)
     start = end - timedelta(days=backfill_lookback_days())
@@ -152,9 +153,11 @@ def run_iv_calculation(
         return _run_iv_for_date(db, trade_date)
 
     dates = _iv_dates_to_process(db)
+    end = effective_bhav_end_date()
     return run_dates_backfill(
         dates,
         lambda d: _run_iv_for_date(db, d),
         label="IV calc",
         fail_if_today_missing=False,
+        today=end,
     )

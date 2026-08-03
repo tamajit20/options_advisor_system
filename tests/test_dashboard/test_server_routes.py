@@ -463,9 +463,8 @@ class TestJobsList:
         assert names.index("intraday_validator") < names.index("live_suggestion_engine")
         assert names.index("live_suggestion_engine") < names.index("event_eve_review")
         assert names.index("event_eve_review") < names.index("intraday_close_snapshot")
-        assert names.index("eod_nightly_pipeline") < names.index("fo_bhav_download")
-        assert names.index("fo_bhav_download") < names.index("trade_greeks_update")
-        assert names.index("trade_greeks_update") < names.index("weekly_cleanup")
+        assert names.index("morning_eod_catchup") < names.index("intraday_validator")
+        assert names.index("intraday_close_snapshot") < names.index("weekly_cleanup")
 
         assert jobs[0]["display_group"] == "Monday & weekly"
         assert all(j.get("display_group") for j in jobs)

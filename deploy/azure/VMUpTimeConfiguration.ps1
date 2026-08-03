@@ -5,9 +5,8 @@
 #
 # Schedule (IST → UTC):
 #   Start market  08:55 Mon–Fri  →  03:25 UTC
-#   Stop market   15:40 Mon–Fri  →  10:10 UTC
-#   Start EOD     20:30 Mon–Fri  →  15:00 UTC
-#   Stop EOD      21:00 Mon–Fri  →  15:30 UTC
+#   Stop market   16:10 Mon–Fri  →  10:40 UTC  (Fri weekly_cleanup @ 15:40)
+# Evening EOD window removed — morning_eod_catchup @ 09:00 in the app.
 #
 # Prerequisites (Windows laptop):
 #   winget install Microsoft.AzureCLI
@@ -86,23 +85,15 @@ $ScheduleDefinitions = @(
         Name        = "sched-oa-stop-market-mf"
         Runbook     = $RunbookStopName
         HourUtc     = 10
-        MinuteUtc   = 10
-        Description = "Mon-Fri 15:40 IST - stop VM after market session"
-    },
-    @{
-        Name        = "sched-oa-start-eod-mf"
-        Runbook     = $RunbookStartName
-        HourUtc     = 15
-        MinuteUtc   = 0
-        Description = "Mon-Fri 20:30 IST - start VM for EOD pipeline"
-    },
-    @{
-        Name        = "sched-oa-stop-eod-mf"
-        Runbook     = $RunbookStopName
-        HourUtc     = 15
-        MinuteUtc   = 30
-        Description = "Mon-Fri 21:00 IST - stop VM after EOD window"
+        MinuteUtc   = 40
+        Description = "Mon-Fri 16:10 IST - stop VM after market session (Fri weekly_cleanup @ 15:40)"
     }
+)
+
+# Retired schedules (removed from config — deleted on each apply).
+$RetiredScheduleNames = @(
+    "sched-oa-start-eod-mf",
+    "sched-oa-stop-eod-mf"
 )
 
 function Get-AzCliPath {
@@ -427,6 +418,43 @@ function Import-AutomationAzModule {
     Write-Host "    Module import started. Check Automation account -> Modules until state = Succeeded."
 }
 
+function Remove-ScheduleAndJobLinks {
+    param(
+        [string]$Rg,
+        [string]$AutomationAccount,
+        [string]$ScheduleName
+    )
+
+    if ($WhatIf) {
+        Write-Host "[WhatIf] Remove retired schedule + links: $ScheduleName"
+        return
+    }
+
+    $links = az automation job-schedule list `
+        -g $Rg `
+        --automation-account-name $AutomationAccount `
+        -o json 2>$null | ConvertFrom-Json
+
+    if ($links) {
+        foreach ($link in $links) {
+            if ($link.schedule.name -eq $ScheduleName) {
+                az automation job-schedule delete `
+                    -g $Rg `
+                    --automation-account-name $AutomationAccount `
+                    --job-schedule-id $link.jobScheduleId | Out-Null
+            }
+        }
+    }
+
+    az automation schedule delete `
+        -g $Rg `
+        --automation-account-name $AutomationAccount `
+        -n $ScheduleName `
+        --yes 2>$null | Out-Null
+
+    Write-Host "    Removed retired schedule: $ScheduleName"
+}
+
 function Remove-UptimeConfiguration {
     param(
         [string]$Rg,
@@ -538,6 +566,13 @@ foreach ($def in $ScheduleDefinitions) {
         -VmName $VmName
 }
 
+foreach ($retired in $RetiredScheduleNames) {
+    Remove-ScheduleAndJobLinks `
+        -Rg $ResourceGroupName `
+        -AutomationAccount $AutomationAccountName `
+        -ScheduleName $retired
+}
+
 Write-Host ""
 Write-Host "Done. VM uptime schedules configured."
 Write-Host ""
@@ -551,7 +586,6 @@ Write-Host "  2. Stop-OptionsAdvisorVm   - VM should show Stopped (deallocated)"
 Write-Host ""
 Write-Host "Schedule summary (UTC to IST):"
 Write-Host "  sched-oa-start-market-mf  03:25 UTC  =  08:55 IST  Mon-Fri"
-Write-Host "  sched-oa-stop-market-mf   10:10 UTC  =  15:40 IST  Mon-Fri"
-Write-Host "  sched-oa-start-eod-mf     15:00 UTC  =  20:30 IST  Mon-Fri"
-Write-Host "  sched-oa-stop-eod-mf      15:30 UTC  =  21:00 IST  Mon-Fri"
+Write-Host "  sched-oa-stop-market-mf   10:40 UTC  =  16:10 IST  Mon-Fri"
+Write-Host "  (evening EOD schedules removed - morning catchup @ 09:00 in app)"
 Write-Host ""

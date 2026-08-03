@@ -30,6 +30,18 @@ def today_ist() -> date:
     return datetime.now(tz=_IST).date()
 
 
+def previous_trading_day(d: date | None = None) -> date:
+    """Return the most recent weekday strictly before *d* (or before today).
+
+    Mon → Fri, Tue → Mon, … — NSE holidays are not considered.
+    """
+    ref = d or today_ist()
+    prev = ref - timedelta(days=1)
+    while prev.weekday() >= 5:
+        prev -= timedelta(days=1)
+    return prev
+
+
 def parse_ddmmyyyy(s: str) -> date:
     """Parse '30042026' → date(2026, 4, 30)."""
     return datetime.strptime(s, "%d%m%Y").date()
