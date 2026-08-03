@@ -466,12 +466,16 @@ def _job_display_sort_key(
     *,
     via_pipeline: bool,
     pipeline_cfg: Dict[str, Any],
+    pipeline_parent: str | None,
     cron_enabled: bool,
 ) -> tuple[int, int, int, str]:
     """Sort jobs for the dashboard: day section → time → pipeline step → name."""
     from scheduler.scheduler import _EOD_PIPELINE_STEPS
 
     pipeline_mins = _earliest_cron_minutes(pipeline_cfg) or (20 * 60 + 35)
+    pipeline_group = (
+        "open" if pipeline_parent == "morning_eod_catchup" else "eod"
+    )
 
     if name == "eod_nightly_pipeline":
         return (_JOB_GROUP_ORDER["eod"], pipeline_mins, 0, name)
@@ -485,7 +489,7 @@ def _job_display_sort_key(
             step = _EOD_PIPELINE_STEPS.index(name) + 1
         except ValueError:
             step = 99
-        return (_JOB_GROUP_ORDER["eod"], pipeline_mins, step, name)
+        return (_JOB_GROUP_ORDER[pipeline_group], pipeline_mins, step, name)
 
     if name == "events_seed":
         return (_JOB_GROUP_ORDER["monday"], _earliest_cron_minutes(cfg) or 9 * 60, 0, name)
@@ -1643,6 +1647,7 @@ def create_app() -> Flask:
             _EOD_PIPELINE_STEPS,
             _LAST_STATUS as _LAST,
             _eod_pipeline_enabled,
+            _morning_eod_catchup_enabled,
             get_scheduler,
         )
 
@@ -1655,12 +1660,26 @@ def create_app() -> Flask:
 
         # Schedule config (cron triggers)
         cfg_jobs = SCHEDULER_CONFIG.get("jobs", {})
-        pipeline_on = _eod_pipeline_enabled()
-        pipeline_cfg = cfg_jobs.get("eod_nightly_pipeline", {}) or {}
+        evening_on = _eod_pipeline_enabled()
+        morning_on = _morning_eod_catchup_enabled()
+        evening_cfg = cfg_jobs.get("eod_nightly_pipeline", {}) or {}
+        morning_cfg = cfg_jobs.get("morning_eod_catchup", {}) or {}
+        if evening_on:
+            pipeline_parent = "eod_nightly_pipeline"
+            pipeline_cfg = evening_cfg
+            pipeline_label = "EOD Nightly Pipeline"
+        elif morning_on:
+            pipeline_parent = "morning_eod_catchup"
+            pipeline_cfg = morning_cfg
+            pipeline_label = "Morning EOD Catchup"
+        else:
+            pipeline_parent = None
+            pipeline_cfg = {}
+            pipeline_label = ""
         pipeline_schedule = _summarize_cron(pipeline_cfg)
         pipeline_next = (
-            _next_run_for_job(sch, "eod_nightly_pipeline")
-            if sch_running and pipeline_on
+            _next_run_for_job(sch, pipeline_parent)
+            if sch_running and pipeline_parent
             else None
         )
 
@@ -1669,7 +1688,9 @@ def create_app() -> Flask:
             cfg = cfg_jobs.get(name, {}) or {}
             meta = _JOB_META.get(name, {})
             cron_enabled = bool(cfg.get("enabled", True))
-            via_pipeline = pipeline_on and name in _EOD_PIPELINE_STEPS
+            via_pipeline = bool(
+                pipeline_parent and name in _EOD_PIPELINE_STEPS
+            )
 
             # Next scheduled run from APScheduler (earliest of multi-trigger jobs)
             next_run = None
@@ -1681,9 +1702,9 @@ def create_app() -> Flask:
 
             if via_pipeline:
                 schedule = (
-                    f"{pipeline_schedule} • step in EOD pipeline"
+                    f"{pipeline_schedule} • step in {pipeline_label}"
                     if pipeline_schedule
-                    else "Step in EOD Nightly Pipeline"
+                    else f"Step in {pipeline_label}"
                 )
             else:
                 schedule = _summarize_cron(cfg)
@@ -1715,6 +1736,7 @@ def create_app() -> Flask:
                 "enabled":       cron_enabled or via_pipeline,
                 "cron_enabled":  cron_enabled,
                 "via_pipeline":  via_pipeline,
+                "pipeline_parent": pipeline_parent if via_pipeline else None,
                 "manual_enabled": True,
                 "status":        disp,
                 "started_at":    _ist_iso(row.get("started_at")),
@@ -1726,6 +1748,7 @@ def create_app() -> Flask:
                     name, cfg,
                     via_pipeline=via_pipeline,
                     pipeline_cfg=pipeline_cfg,
+                    pipeline_parent=pipeline_parent if via_pipeline else None,
                     cron_enabled=cron_enabled,
                 ),
             })

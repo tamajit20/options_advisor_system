@@ -448,6 +448,40 @@ class TestJobsList:
         assert "20:35" in fo["next_run"] or "20:35" in fo["schedule"]
         assert fo["manual_enabled"] is True
 
+    def test_morning_pipeline_steps_not_manual_only(self, client, mocker):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        mocker.patch("dashboard.server.JobLogRepo.latest_status_per_job",
+                     return_value=[])
+        mocker.patch("scheduler.scheduler._eod_pipeline_enabled", return_value=False)
+        mocker.patch("scheduler.scheduler._morning_eod_catchup_enabled", return_value=True)
+
+        ist = ZoneInfo("Asia/Kolkata")
+        pipeline_when = datetime(2026, 8, 4, 9, 0, tzinfo=ist)
+
+        mock_pipeline_job = MagicMock()
+        mock_pipeline_job.id = "morning_eod_catchup"
+        mock_pipeline_job.next_run_time = pipeline_when
+
+        mock_sch = MagicMock()
+        mock_sch.running = True
+        mock_sch.get_jobs.return_value = [mock_pipeline_job]
+
+        import scheduler.scheduler as sched
+        mocker.patch.object(sched, "_SCHEDULER", mock_sch)
+
+        resp = client.get("/api/jobs/list")
+        data = resp.get_json()
+        fo = next(j for j in data["jobs"] if j["job_name"] == "fo_bhav_download")
+        assert fo["via_pipeline"] is True
+        assert fo["pipeline_parent"] == "morning_eod_catchup"
+        assert fo["enabled"] is True
+        assert "09:00" in fo["schedule"] or "Morning EOD" in fo["schedule"]
+        nightly = next(j for j in data["jobs"] if j["job_name"] == "eod_nightly_pipeline")
+        assert nightly["via_pipeline"] is False
+        assert nightly["enabled"] is False
+
     def test_jobs_sorted_chronologically_with_groups(self, client, mocker):
         mocker.patch("dashboard.server.JobLogRepo.latest_status_per_job",
                      return_value=[])

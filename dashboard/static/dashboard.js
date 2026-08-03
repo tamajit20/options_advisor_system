@@ -4866,7 +4866,9 @@ function renderJobCard(j) {
     : '';
 
   const scheduleNote = j.via_pipeline
-    ? ' • via EOD pipeline'
+    ? (j.pipeline_parent === 'morning_eod_catchup'
+        ? ' • via Morning EOD @ 09:00'
+        : ' • via EOD pipeline')
     : (j.cron_enabled === false || !j.enabled ? ' • manual only' : '');
 
   const triggerBtn = `<button class="btn job-trigger-btn" data-job="${escapeHtml(j.job_name)}"

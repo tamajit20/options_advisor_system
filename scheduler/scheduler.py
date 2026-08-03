@@ -81,6 +81,11 @@ def _eod_pipeline_enabled() -> bool:
     return bool(conf.get("enabled", False))
 
 
+def _morning_eod_catchup_enabled() -> bool:
+    conf = SCHEDULER_CONFIG.get("jobs", {}).get("morning_eod_catchup", {})
+    return bool(conf.get("enabled", False))
+
+
 # ---------------------------------------------------------------------------
 # Job-state tracker — used by chain-skip logic
 # ---------------------------------------------------------------------------
