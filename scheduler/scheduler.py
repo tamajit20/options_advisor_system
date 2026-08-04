@@ -18,6 +18,7 @@ to keep transaction scope tight.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import traceback
@@ -135,10 +136,13 @@ def _run_with_timeout(job_name, fn, db):
 
     result: dict = {"value": None, "error": None}
     done = threading.Event()
+    # ContextVar (EOD morning session) does not inherit into new threads —
+    # copy the parent context so download jobs target prior-session bhav.
+    ctx = contextvars.copy_context()
 
     def _worker():
         try:
-            result["value"] = fn(db)
+            result["value"] = ctx.run(fn, db)
         except BaseException as exc:  # noqa: BLE001
             result["error"] = exc
         finally:

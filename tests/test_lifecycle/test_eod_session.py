@@ -49,7 +49,7 @@ class TestEodPipelineSession:
         )
         with eod_pipeline_session(morning_catchup=True):
             pass
-        assert effective_bhav_end_date() == date.today()
+        assert effective_bhav_end_date() == date(2026, 8, 3)
 
 
 class TestMorningMessages:
@@ -104,6 +104,17 @@ class TestMorningCatchupEntryDay:
         monkeypatch.setattr(
             "lifecycle.eod_session.today_ist",
             lambda: date(2026, 8, 3),  # Monday
+        )
+        monkeypatch.setattr(
+            "utils.today_ist",
+            lambda: date(2026, 8, 3),
+        )
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        ist = ZoneInfo("Asia/Kolkata")
+        monkeypatch.setattr(
+            "lifecycle.suggestion_engine.now_ist",
+            lambda: datetime(2026, 8, 3, 9, 0, tzinfo=ist),
         )
         monkeypatch.setattr(
             se_mod, "_resolve_data_date",

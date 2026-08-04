@@ -321,6 +321,32 @@ def test_run_with_timeout_propagates_business_exception():
 
     with pytest.raises(ValueError, match="bad input"):
         sched._run_with_timeout("any_job", boom, mock_db)
+
+
+def test_run_with_timeout_preserves_contextvars():
+    """EOD morning session must survive the watchdog worker thread."""
+    from datetime import date
+
+    from lifecycle.eod_session import eod_pipeline_session, effective_bhav_end_date
+
+    mock_db = MagicMock()
+
+    def probe(db):
+        return effective_bhav_end_date()
+
+    probe._run_job_timeout = 5.0  # type: ignore[attr-defined]
+
+    with eod_pipeline_session(morning_catchup=True):
+        # Monkeypatch today inside session — Aug 4 Tue → prior Mon Aug 3
+        import lifecycle.eod_session as es
+        orig = es.today_ist
+        es.today_ist = lambda: date(2026, 8, 4)
+        try:
+            result = sched._run_with_timeout("fo_bhav_download", probe, mock_db)
+        finally:
+            es.today_ist = orig
+
+    assert result == date(2026, 8, 3)
     # Connection must NOT be closed by the watchdog when the worker
     # raises a normal exception (the caller's `finally` will close it).
     mock_db.close.assert_not_called()

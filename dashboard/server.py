@@ -532,6 +532,8 @@ def _enrich_job_error_message(
     db: SQLServerConnection,
     job_name: str,
     message: str,
+    *,
+    started_at=None,
 ) -> str:
     """Append latest-in-DB suffix for EOD download jobs (incl. old log rows)."""
     if not message:
@@ -539,7 +541,9 @@ def _enrich_job_error_message(
     from lifecycle.no_data_messages import LATEST_DATE_BY_JOB, enrich_with_latest_in_db
     if job_name not in LATEST_DATE_BY_JOB:
         return message
-    return enrich_with_latest_in_db(db, job_name, message)
+    return enrich_with_latest_in_db(
+        db, job_name, message, started_at=started_at,
+    )
 
 
 def _summarize_cron(cfg: Dict[str, Any]) -> str:
@@ -1530,6 +1534,7 @@ def create_app() -> Flask:
             row = _row(r)
             row["error_message"] = _enrich_job_error_message(
                 db, r["job_name"], r.get("error_message") or "",
+                started_at=r.get("started_at"),
             )
             rows.append(row)
         return jsonify({"jobs": rows})
@@ -1725,7 +1730,9 @@ def create_app() -> Flask:
                 disp = "NEVER"
 
             raw_err = row.get("error_message") or ""
-            err_msg = _enrich_job_error_message(db, name, raw_err)
+            err_msg = _enrich_job_error_message(
+                db, name, raw_err, started_at=row.get("started_at"),
+            )
 
             out.append({
                 "job_name":      name,

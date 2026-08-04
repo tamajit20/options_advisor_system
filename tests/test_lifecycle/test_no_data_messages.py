@@ -61,3 +61,38 @@ class TestEnrichWithLatestInDb:
         )
         original = "Already has Latest available in DB: 2026-07-28."
         assert enrich_with_latest_in_db(None, "fo_bhav_download", original) == original
+
+
+class TestClarifyMorningNoData:
+    def test_rewrites_wrong_date_morning_window(self):
+        from datetime import datetime
+
+        msg = (
+            "FO bhavcopy not available for 2026-08-04 — "
+            "market holiday or NSE has not published the file yet"
+        )
+        started = datetime(2026, 8, 4, 9, 0, 54)
+        out = __import__(
+            "lifecycle.no_data_messages", fromlist=["clarify_morning_no_data_message"]
+        ).clarify_morning_no_data_message(
+            msg, job_name="fo_bhav_download", started_at=started,
+        )
+        assert "2026-08-03" in out
+        assert "prior trading session" in out
+        assert "morning pre-market run" in out
+        assert "2026-08-04" not in out
+
+    def test_leaves_evening_message_unchanged(self):
+        from datetime import datetime
+
+        msg = (
+            "FO bhavcopy not available for 2026-08-04 — "
+            "market holiday or NSE has not published the file yet"
+        )
+        started = datetime(2026, 8, 4, 20, 35, 0)
+        out = __import__(
+            "lifecycle.no_data_messages", fromlist=["clarify_morning_no_data_message"]
+        ).clarify_morning_no_data_message(
+            msg, job_name="fo_bhav_download", started_at=started,
+        )
+        assert out == msg

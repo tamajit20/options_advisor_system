@@ -15,7 +15,7 @@ from typing import Callable, Iterable, List, Optional, TypeVar
 from config import SCHEDULER_CONFIG
 from database.connection import SQLServerConnection
 from exceptions import NoDataError
-from lifecycle.eod_session import effective_bhav_end_date
+from lifecycle.eod_session import effective_bhav_end_date, is_morning_catchup
 from utils import today_ist
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,12 @@ def dates_to_process(
     pending = {d for d in weekdays_in_range(start, end) if not has_date(d)}
     if always_refresh_end and end.weekday() < 5:
         pending.add(end)
-    return sorted(pending)
+    dates = sorted(pending)
+    if is_morning_catchup():
+        # Never attempt today's bhav during pre-market catchup.
+        today = today_ist()
+        dates = [d for d in dates if d < today]
+    return dates
 
 
 def run_dates_backfill(

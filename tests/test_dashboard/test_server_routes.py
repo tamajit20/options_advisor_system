@@ -535,6 +535,37 @@ class TestJobsList:
         assert fo["status"] == "NO_DATA"
         assert "Latest available in DB: 2026-07-29" in fo["error_message"]
 
+    def test_morning_no_data_rewritten_on_jobs_list(self, client, mocker):
+        from datetime import datetime
+
+        started = datetime(2026, 8, 4, 9, 0, 54)
+        mocker.patch(
+            "dashboard.server.JobLogRepo.latest_status_per_job",
+            return_value=[{
+                "job_name": "fo_bhav_download",
+                "status": "NO_DATA",
+                "started_at": started,
+                "finished_at": started,
+                "error_message": (
+                    "FO bhavcopy not available for 2026-08-04 — "
+                    "market holiday or NSE has not published the file yet"
+                ),
+                "rows_processed": 0,
+            }],
+        )
+        mocker.patch(
+            "lifecycle.no_data_messages.latest_trade_date_for_job",
+            return_value=__import__("datetime").date(2026, 8, 3),
+        )
+        import scheduler.scheduler as sched
+        mocker.patch.object(sched, "_SCHEDULER", None)
+
+        resp = client.get("/api/jobs/list")
+        fo = next(j for j in resp.get_json()["jobs"] if j["job_name"] == "fo_bhav_download")
+        assert "2026-08-03" in fo["error_message"]
+        assert "prior trading session" in fo["error_message"]
+        assert "Latest available in DB: 2026-08-03" in fo["error_message"]
+
 
 class TestJobsTrigger:
     def test_unknown_job_returns_400(self, client):

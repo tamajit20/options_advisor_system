@@ -8,8 +8,11 @@ stored in the database.
 
 from __future__ import annotations
 
-from datetime import date
+import re
+from datetime import date, datetime, time
 from typing import TYPE_CHECKING, Callable, Optional
+
+from utils import previous_trading_day
 
 if TYPE_CHECKING:
     from database.connection import SQLServerConnection
@@ -85,12 +88,85 @@ def latest_trade_date_for_job(
         return None
 
 
+_NO_DATA_RE = re.compile(
+    r"^(?P<dataset>.+?) not available for (?P<trade_date>\d{4}-\d{2}-\d{2})"
+    r" — (?P<reason>.+?)\.?$"
+)
+
+
+def _morning_catchup_window(started_at: datetime | None) -> bool:
+    """True when *started_at* falls in the Mon–Fri pre-market job window."""
+    if started_at is None:
+        return False
+    if started_at.tzinfo is not None:
+        from zoneinfo import ZoneInfo
+        started_at = started_at.astimezone(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+    if started_at.weekday() >= 5:
+        return False
+    return time(8, 0) <= started_at.time() <= time(10, 30)
+
+
+def _morning_prior_session_reason(*, dataset: str, prior: date) -> str:
+    ds = dataset.lower()
+    if "vix" in ds:
+        return (
+            f"prior session ({prior.isoformat()}) VIX not in NSE archive yet "
+            f"(morning pre-market run)"
+        )
+    if "fii" in ds:
+        return (
+            f"prior session ({prior.isoformat()}) FII OI not published on NSE yet "
+            f"(morning pre-market run)"
+        )
+    return (
+        f"prior trading session ({prior.isoformat()}) not published on NSE yet "
+        f"(morning pre-market run — today's bhav is not expected)"
+    )
+
+
+def clarify_morning_no_data_message(
+    message: str,
+    *,
+    job_name: str,
+    started_at: datetime | None,
+) -> str:
+    """Rewrite legacy/wrong-date NO_DATA rows from the morning catchup window."""
+    if not message or job_name not in LATEST_DATE_BY_JOB:
+        return message
+    if "morning pre-market run" in message or "prior trading session" in message:
+        return message
+    if not _morning_catchup_window(started_at):
+        return message
+
+    m = _NO_DATA_RE.match(message.strip())
+    if not m:
+        return message
+
+    run_day = started_at.date()
+    trade_date = date.fromisoformat(m.group("trade_date"))
+    reason = m.group("reason")
+    if trade_date != run_day:
+        return message
+    if "market holiday or NSE has not published" not in reason:
+        return message
+
+    prior = previous_trading_day(run_day)
+    dataset = m.group("dataset")
+    new_reason = _morning_prior_session_reason(dataset=dataset, prior=prior)
+    return f"{dataset} not available for {prior} — {new_reason}."
+
+
 def enrich_with_latest_in_db(
     db: "SQLServerConnection",
     job_name: str,
     message: str,
+    *,
+    started_at: datetime | None = None,
 ) -> str:
     """Append latest-available suffix when *message* does not already include it."""
+    message = clarify_morning_no_data_message(
+        message, job_name=job_name, started_at=started_at,
+    )
     if "Latest available in DB:" in message or "No data in DB yet" in message:
         return message
     latest = latest_trade_date_for_job(db, job_name)
