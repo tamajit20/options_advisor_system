@@ -115,6 +115,50 @@ a { color: var(--accent); text-decoration: none; }
 .card h3 { margin: 0 0 4px; font-size: 1rem; }
 .card-id-row { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 
+/* ---------- Collapsible suggestion / trade cards ---------- */
+details.collapsible-card > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+details.collapsible-card > summary::-webkit-details-marker { display: none; }
+.collapsible-card-head {
+  position: relative;
+  padding-right: 22px;
+  margin-bottom: 0;
+}
+.collapsible-card-head h3 { margin-bottom: 0; }
+.collapsible-chevron {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-dim);
+  font-size: .72rem;
+  line-height: 1;
+  pointer-events: none;
+}
+details.collapsible-card:not([open]) .collapsible-chevron::before { content: '▶'; }
+details.collapsible-card[open] .collapsible-chevron::before { content: '▼'; }
+.collapsible-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: .78rem;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,.06);
+  color: var(--text-dim);
+}
+.collapsible-preview strong { color: var(--text); font-weight: 600; }
+.collapsible-body {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #2a3744;
+}
+details.collapsible-card:not([open]) { padding-bottom: 12px; }
+details.collapsible-card[open] .collapsible-preview { display: none; }
+
 .sit-out-summary {
   margin-bottom: 14px;
   padding: 12px 14px;
@@ -484,6 +528,88 @@ input:focus, select:focus, textarea:focus {
   .header-center { order: 3; flex-basis: 100%; margin: 4px 0 0 0; flex-wrap: wrap; }
   .index-spot-strip { max-width: 100%; flex: 1 1 100%; }
   .global-banners { flex: 1 1 100%; margin: 0; }
+}
+
+/* Compact header on phones — single row, minimal vertical space */
+@media (max-width: 640px) {
+  .app-header {
+    flex-wrap: nowrap;
+    align-items: center;
+    padding: 6px 10px;
+    gap: 6px;
+    row-gap: 0;
+  }
+  .brand { gap: 6px; min-width: 0; flex-shrink: 0; }
+  .brand-dot { width: 9px; height: 9px; }
+  .brand-name { display: none; }
+  .header-center {
+    order: 0;
+    flex: 1 1 auto;
+    flex-basis: auto;
+    margin: 0 4px;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .index-spot-strip {
+    flex: 1 1 auto;
+    max-width: none;
+    font-size: .68rem;
+    padding: 0;
+    gap: 4px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .idx-chip {
+    padding: 3px 7px;
+    font-size: .68rem;
+    gap: 3px;
+  }
+  .idx-chip-src { font-size: .58rem; }
+  .global-banners {
+    flex: 0 0 auto;
+    max-width: 42%;
+    margin: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-height: 28px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .sys-banner {
+    font-size: .68rem;
+    padding: 3px 7px;
+    white-space: nowrap;
+  }
+  .sys-banner .btn {
+    font-size: .62rem;
+    padding: 2px 6px;
+    min-height: 0;
+  }
+  .header-actions { gap: 4px; flex-shrink: 0; }
+  .icon-btn {
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+  }
+  #zerodha-login-label { display: none; }
+  #zerodha-login-btn {
+    width: auto;
+    min-width: 36px;
+    padding: 0 6px;
+  }
+  .app-main { min-height: calc(100vh - 48px); }
+  .tab-panels { padding: 10px 12px; }
+  .collapsible-card-head { padding-right: 18px; }
+  .collapsible-card-head h3 { font-size: .92rem; }
+  .card-head-tags { gap: 4px; }
+  .card-head-tags .tag { font-size: .68rem; padding: 2px 6px; }
+  .card-head-btn {
+    font-size: .65rem;
+    padding: 3px 8px;
+  }
+  .collapsible-preview { font-size: .72rem; gap: 4px 8px; margin-top: 6px; padding-top: 6px; }
+  details.collapsible-card { padding: 12px; }
 }
 
 /* ---------- Suggestion card legs ---------- */

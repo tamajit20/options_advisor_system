@@ -713,7 +713,30 @@ function groupRegimePairSuggestions(list) {
   return out;
 }
 
-function renderRegimePairGroup(group) {
+function wrapCollapsibleCard(summaryHtml, bodyHtml, { open = false, className = '', attrs = '' } = {}) {
+  const openAttr = open ? ' open' : '';
+  const cls = className ? ` ${className}` : '';
+  return `<details class="card collapsible-card${cls}"${openAttr}${attrs ? ` ${attrs}` : ''}>
+    <summary class="collapsible-summary">${summaryHtml}</summary>
+    <div class="collapsible-body">${bodyHtml}</div>
+  </details>`;
+}
+
+function bindCollapsibleCardInteractions(root) {
+  const scope = root || document;
+  scope.querySelectorAll('.collapsible-card summary button, .collapsible-card summary a, .collapsible-card summary input, .collapsible-card summary select, .collapsible-card summary textarea, .collapsible-card summary label').forEach(el => {
+    if (el.dataset.collapseBound === '1') return;
+    el.dataset.collapseBound = '1';
+    el.addEventListener('click', e => e.stopPropagation());
+  });
+  scope.querySelectorAll('.collapsible-card summary .btn, .collapsible-card summary .card-head-btn').forEach(el => {
+    if (el.dataset.collapseBound === '2') return;
+    el.dataset.collapseBound = '2';
+    el.addEventListener('mousedown', e => e.stopPropagation());
+  });
+}
+
+function renderRegimePairGroup(group, startCardIdx = 0) {
   const items = (group.items || []).slice().sort((a, b) => {
     if (a.regime_pair_type === 'range') return -1;
     if (b.regime_pair_type === 'range') return 1;
@@ -732,7 +755,7 @@ function renderRegimePairGroup(group) {
     ${reason ? `<p class="regime-pair-pref muted">${escapeHtml(reason)}</p>` : ''}
     <p class="regime-pair-hint muted">Take only one of these — they bet on opposite outcomes.</p>
   </div>`;
-  const cards = items.map(s => {
+  const cards = items.map((s, i) => {
     const prefBadge = s.regime_pair_preferred
       ? '<span class="tag tag-ok regime-pair-pref-badge">System preferred</span>'
       : '';
@@ -742,18 +765,23 @@ function renderRegimePairGroup(group) {
         <strong>${escapeHtml(scenario)}</strong>
         ${prefBadge}
       </div>
-      ${renderSuggestion(s, false, items)}
+      ${renderSuggestion(s, false, items, false, startCardIdx + i === 0)}
     </div>`;
   }).join('');
   return `<div class="regime-pair-group">${header}<div class="regime-pair-cards">${cards}</div></div>`;
 }
 
 function renderSuggestionList(list) {
+  let cardIdx = 0;
   return groupRegimePairSuggestions(list).map(entry => {
     if (entry.type === 'pair') {
-      return renderRegimePairGroup(entry);
+      const html = renderRegimePairGroup(entry, cardIdx);
+      cardIdx += (entry.items || []).length;
+      return html;
     }
-    return renderSuggestion(entry.item, false, list);
+    const html = renderSuggestion(entry.item, false, list, false, cardIdx === 0);
+    cardIdx += 1;
+    return html;
   }).join('');
 }
 
@@ -785,6 +813,7 @@ async function loadSuggestion() {
     c.className = '';
     c.innerHTML = parts.join('');
     bindSuggestionActions();
+    bindCollapsibleCardInteractions(c);
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -2651,7 +2680,7 @@ function renderExecutionGateBanner(s) {
   </div>`;
 }
 
-function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader = false) {
+function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader = false, expanded = true) {
   const isNoSug = s.strategy === 'NONE' || s.status === 'NO_SUGGESTION';
   if (isNoSug) {
     return renderSitOutCard(s);
@@ -2744,10 +2773,8 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     || (s.is_stale ? 'Stale' : null)
     || (sugStatus === 'IGNORED' ? 'Retired' : null);
   const gateBanner = readOnly ? '' : renderExecutionGateBanner(s);
-  // attach live lot-count recalc after DOM insert — see bindSuggestionActions
-  const innerHtml = `
-    ${gateBanner}
-    <div class="card-head">
+  const summaryHtml = `
+    <div class="card-head collapsible-card-head">
       <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
@@ -2758,7 +2785,17 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           edge: s.edge_score, conf: s.confidence_score, pop: s.probability_of_profit,
         })}
       </div>
+      <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
+    <div class="collapsible-preview">
+      <span>PoP <strong>${fmtPct(econ.pop)}</strong></span>
+      <span>Credit <strong>₹${fmt(econ.np)}</strong>/u</span>
+      <span>Max loss <strong>₹${fmt(econ.ml)}</strong></span>
+      ${s.dte != null ? `<span>DTE <strong>${s.dte}</strong></span>` : ''}
+    </div>`;
+  // attach live lot-count recalc after DOM insert — see bindSuggestionActions
+  const bodyHtml = `
+    ${gateBanner}
     <div class="card-id-row">
       <span class="id-chip" title="Suggestion ID">${escapeHtml(s.suggestion_id || '—')}</span>
     </div>
@@ -2854,10 +2891,10 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     const detailsStyle = inlineHeader ? '' : ' style="margin-top:10px"';
     return `<details class="${detailsCls}"${detailsStyle}>
       <summary class="orig-sug-summary">\ud83d\udccb Original suggestion</summary>
-      <div class="orig-sug-body">${innerHtml}</div>
+      <div class="orig-sug-body">${summaryHtml}${bodyHtml}</div>
     </details>`;
   }
-  return `<div class="card${canExecute ? '' : (readOnly ? '' : ' suggestion-not-executable')}"
+  const cardAttrs = `
     data-sug-id="${escapeHtml(s.suggestion_id)}"
     data-strategy="${escapeHtml(s.strategy || '')}"
     data-dte="${s.dte != null ? parseInt(s.dte, 10) : ''}"
@@ -2874,8 +2911,12 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     data-sug-range-lo="${sugRangeLo}"
     data-sug-range-hi="${sugRangeHi}"
     data-short-call-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='CE')||{}).strike||''}"
-    data-short-put-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='PE')||{}).strike||''}"
-  >${innerHtml}</div>`;
+    data-short-put-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='PE')||{}).strike||''}"`;
+  return wrapCollapsibleCard(summaryHtml, bodyHtml, {
+    open: expanded,
+    className: canExecute ? '' : 'suggestion-not-executable',
+    attrs: cardAttrs.trim(),
+  });
 }
 
 function bindFlagResetButtons() {
@@ -3170,7 +3211,7 @@ async function loadTrades() {
       c.className=''; c.innerHTML = '<div class="empty">No open trades.</div>';
       return;
     }
-    c.className=''; c.innerHTML = data.trades.map(renderTrade).join('');
+    c.className=''; c.innerHTML = data.trades.map((t, i) => renderTrade(t, i === 0)).join('');
     try {
       const snap = await API('/api/live/mtm/snapshot');
       _bootstrapLiveLevelsForTrades(data.trades, snap);
@@ -3203,6 +3244,7 @@ async function loadTrades() {
       } catch (err) { toast(err.message, 'err'); }
     }));
     bindGapReplayPanels();
+    bindCollapsibleCardInteractions(c);
   } catch (e) {
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -3717,7 +3759,7 @@ function bindGapReplayPanels() {
   });
 }
 
-function renderTrade(t) {
+function renderTrade(t, expanded = true) {
   const broken = t.broken_state_json ? JSON.parse(t.broken_state_json) : null;
   const brokenHtml = broken && broken.options && broken.options.length ? `
     <div style="margin-top:10px">
@@ -3867,14 +3909,11 @@ function renderTrade(t) {
   }
 
   const _entryQualBadge = _qualityBadge(t.entry_quality_score, 'Entry quality: ');
-  return `<div class="card">
-    <div class="card-head">
+  const summaryHtml = `
+    <div class="card-head collapsible-card-head">
       <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
       <div class="card-head-tags">
         ${(() => {
-          // Live risk-monitor verdict (refreshed on every leg tick during
-          // market hours). Shown ahead of the daily-status tag so the
-          // operator can't miss a TARGET / SL event.
           const ra = t.risk_alert;
           if (!ra || !ra.notif_type) return '';
           const cls =
@@ -3913,7 +3952,14 @@ function renderTrade(t) {
         <button type="button" class="btn btn-danger btn-void-trade card-head-btn" data-trade-id="${escapeHtml(t.trade_id)}">
           Void Trade</button>
       </div>
+      <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
+    <div class="collapsible-preview">
+      ${t.suggestion?.strategy ? `<span>${escapeHtml(t.suggestion.strategy)}</span>` : ''}
+      ${t.net_credit_actual != null ? `<span>Entry <strong>₹${fmt(t.net_credit_actual)}</strong>/u</span>` : ''}
+      ${t.spot_at_execution != null ? `<span>Spot @ entry <strong>₹${fmt(t.spot_at_execution)}</strong></span>` : ''}
+    </div>`;
+  const bodyHtml = `
     ${renderTradeActionPanel(t)}
     ${(() => {
       const liveProfitHtml = renderLiveProfitLevels(t);
@@ -4002,8 +4048,8 @@ function renderTrade(t) {
       <div class="close-trade-header sl-monitor-label">Close Trade</div>
       <div class="close-trade-content"><div class="muted">Loading…</div></div>
     </section>` : ''}
-    ${isPartial ? `<div class="supplement-panel" id="supp-${escapeHtml(t.trade_id)}" hidden></div>` : ''}
-  </div>`;
+    ${isPartial ? `<div class="supplement-panel" id="supp-${escapeHtml(t.trade_id)}" hidden></div>` : ''}`;
+  return wrapCollapsibleCard(summaryHtml, bodyHtml, { open: expanded });
 }
 
 // ---------------- Tab 3: History ----------------
