@@ -511,6 +511,24 @@ def _run_scheduler(stop_event: threading.Event) -> None:
         logger.info("Scheduler stopped.")
 
 
+def _ensure_schema_on_startup() -> None:
+    """Create any missing tables (idempotent). Safe on every container start."""
+    try:
+        from database.connection import SQLServerConnection
+        from database.schema import create_all_tables
+
+        db = SQLServerConnection()
+        db.connect()
+        try:
+            create_all_tables(db)
+            db.commit()
+            logger.info("Startup schema ensure completed (options + scout tables).")
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Startup schema ensure failed (non-fatal)")
+
+
 def _seed_events_on_startup() -> None:
     """Seed EVENTS_CONFIG into options_events_calendar on every startup.
     Non-fatal: a failure here does not prevent the app from running."""
@@ -539,6 +557,7 @@ def _run_full() -> int:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
+    _ensure_schema_on_startup()
     _seed_events_on_startup()
 
     sched_thread = threading.Thread(

@@ -443,6 +443,11 @@ def job_intraday_validator():
     _run_job("intraday_validator", run_intraday_validator)
 
 
+def job_scout_scanner():
+    from scout.orchestrator import run_scout_scan
+    _run_job("scout_scanner", run_scout_scan)
+
+
 def _run_eod_pipeline_steps(label: str) -> int:
     """Run the full EOD chain sequentially (shared by nightly + morning catchup).
 
@@ -554,6 +559,7 @@ JOB_FUNCS = {
     "intraday_validator":      job_intraday_validator,
     "eod_nightly_pipeline":    job_eod_nightly_pipeline,
     "morning_eod_catchup":     job_morning_eod_catchup,
+    "scout_scanner":           job_scout_scanner,
 }
 
 

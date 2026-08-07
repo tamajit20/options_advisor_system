@@ -1,0 +1,72 @@
+/* Intraday Scout — separate styles (not mixed into options advisor rules) */
+
+.nav-section-label {
+  font-size: .65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-dim);
+  padding: 14px 12px 4px;
+  margin-top: 4px;
+}
+.nav-section-label--scout {
+  border-top: 1px solid rgba(255,255,255,.08);
+  margin-top: 10px;
+  padding-top: 16px;
+  color: var(--accent);
+}
+
+.scout-intro { margin-top: 0; max-width: 52rem; }
+.scout-status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-bottom: 12px;
+  font-size: .85rem;
+}
+.scout-stat { white-space: nowrap; }
+.scout-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.scout-signal-list {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+.scout-card {
+  background: var(--surface);
+  border-radius: 10px;
+  border: 1px solid #2a3744;
+  padding: 12px 14px;
+  border-left: 4px solid var(--text-dim);
+}
+.scout-card.scout-buy { border-left-color: var(--ok); }
+.scout-card.scout-sell { border-left-color: var(--err); }
+.scout-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.scout-symbol { font-size: 1.05rem; }
+.scout-action { font-weight: 700; }
+.scout-strength {
+  font-size: .72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.06);
+  color: var(--text-dim);
+}
+.scout-strength--medium { color: var(--accent); background: rgba(245,158,11,.12); }
+.scout-price { font-size: 1.1rem; font-weight: 700; margin-bottom: 4px; }
+.scout-age { font-size: .78rem; font-weight: 500; }
+.scout-reason { font-size: .9rem; line-height: 1.35; margin-bottom: 6px; }
+.scout-inval, .scout-type { font-size: .78rem; }
+
+@media (max-width: 640px) {
+  .scout-signal-list { grid-template-columns: 1fr; }
+}

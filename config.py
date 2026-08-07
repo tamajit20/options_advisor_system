@@ -146,6 +146,19 @@ SCHEDULER_CONFIG = {
         "weekly_cleanup":     {"day_of_week": "fri", "hour": 9, "minute": 30, "enabled": True},
         # Events calendar sync — Mon market window (VM on from 08:55)
         "events_seed":        {"day_of_week": "mon", "hour": 9,  "minute":  0, "enabled": True},
+        # Intraday Scout — equity watchlist scan (separate module)
+        "scout_scanner": {
+            "enabled": True,
+            "schedules": [
+                {"day_of_week": "mon-fri", "hour": 9,  "minute": 20},
+                {"day_of_week": "mon-fri", "hour": 10, "minute": 0},
+                {"day_of_week": "mon-fri", "hour": 11, "minute": 0},
+                {"day_of_week": "mon-fri", "hour": 12, "minute": 0},
+                {"day_of_week": "mon-fri", "hour": 13, "minute": 0},
+                {"day_of_week": "mon-fri", "hour": 14, "minute": 0},
+                {"day_of_week": "mon-fri", "hour": 15, "minute": 0},
+            ],
+        },
     },
     # Each job also gets a max wallclock budget (seconds) — enforced by
     # `_run_job` via a watchdog thread that closes the DB connection on
@@ -171,9 +184,35 @@ SCHEDULER_CONFIG = {
         "intraday_validator":      180,
         "eod_nightly_pipeline":    1200,
         "morning_eod_catchup":     1200,
+        "scout_scanner":           900,
     },
     # Default for jobs not listed above.
     "default_job_timeout_seconds": 600,
+}
+
+
+# ---------------------------------------------------------------------------
+# Intraday Scout (separate module — scout_* tables, /api/scout/*)
+# ---------------------------------------------------------------------------
+SCOUT_CONFIG: dict = {
+    "enabled": True,
+    # Liquid Nifty 50 names — edit without touching options code
+    "watchlist": [
+        "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "SBIN",
+        "BHARTIARTL", "LT", "AXISBANK", "KOTAKBANK", "TATASTEEL", "SUNPHARMA",
+        "MARUTI", "BAJFINANCE", "HINDUNILVR", "WIPRO", "NTPC", "POWERGRID",
+        "ONGC",
+    ],
+    "market_open": (9, 15),
+    "market_close": (15, 30),
+    "max_move_from_open_pct": 1.2,
+    "late_spike_from_extreme_pct": 0.8,
+    "compression_bars": 10,
+    "compression_range_pct": 0.35,
+    "or_minutes": 15,
+    "min_candles": 12,
+    "rs_margin_pct": 0.15,
+    "signal_display_minutes": 120,
 }
 
 

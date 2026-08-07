@@ -622,10 +622,27 @@ const toast = (msg, kind='info') => {
   $('#toast-container').appendChild(el);
   setTimeout(() => el.remove(), 4000);
 };
+window.toast = toast;
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
+const TABS = ['suggestion', 'trades', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config', 'scout'];
+const TAB_LOADERS = {};
+const TAB_LEAVE = {};
+
+/** Extension point for separate modules (e.g. Intraday Scout). */
+function registerDashboardTab(name, onEnter, onLeave) {
+  if (!TABS.includes(name)) TABS.push(name);
+  if (onEnter) TAB_LOADERS[name] = onEnter;
+  if (onLeave) TAB_LEAVE[name] = onLeave;
+}
+window.registerDashboardTab = registerDashboardTab;
+
 function switchTab(name) {
+  const prev = TABS.find(t => {
+    const panel = document.getElementById(`panel-${t}`);
+    return panel && panel.classList.contains('active');
+  });
+  if (prev && TAB_LEAVE[prev]) TAB_LEAVE[prev]();
   TABS.forEach(t => {
     const panel = document.getElementById(`panel-${t}`);
     if (!panel) return;
@@ -641,6 +658,7 @@ function switchTab(name) {
   if (name === 'wsmon')         loadWsMonitor();
   if (name === 'notifications') loadNotifications();
   if (name === 'config')        loadConfig();
+  if (TAB_LOADERS[name])        TAB_LOADERS[name]();
   // Stop jobs auto-refresh when leaving the tab
   if (name !== 'jobs')  stopJobsAutoRefresh();
   if (name !== 'wsmon') stopWsMonitorAutoRefresh();

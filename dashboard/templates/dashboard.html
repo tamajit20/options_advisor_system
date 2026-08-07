@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="{{ theme.primary }}">
-<title>Options Advisor</title>
+<title>Trading Dashboard</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ cache_bust }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='scout.css') }}?v={{ cache_bust }}">
 <link rel="icon" href="data:,">
 <style>
   /* Inject theme tokens from server */
@@ -29,7 +30,7 @@
 <header class="app-header">
   <div class="brand">
     <span class="brand-dot"></span>
-    <span class="brand-name">Options Advisor</span>
+    <span class="brand-name">Trading Dashboard</span>
   </div>
   <!-- Global banners (system flags + unread CRITICAL/WARNING alerts).
        Lives inside the green header strip so it is visible on every tab
@@ -52,6 +53,7 @@
 <main class="app-main">
   <!-- Side nav (desktop) -->
   <nav class="side-nav" aria-label="Primary">
+    <div class="nav-section-label">Options Advisor</div>
     <button class="nav-item active" data-tab="suggestion">
       <span class="nav-icon">💡</span><span class="nav-label">Suggestion</span>
     </button>
@@ -77,6 +79,10 @@
     </button>
     <button class="nav-item" data-tab="config">
       <span class="nav-icon">⚙️</span><span class="nav-label">Config</span>
+    </button>
+    <div class="nav-section-label nav-section-label--scout">Intraday Scout</div>
+    <button class="nav-item" data-tab="scout">
+      <span class="nav-icon">🔍</span><span class="nav-label">Scout Signals</span>
     </button>
   </nav>
 
@@ -357,6 +363,17 @@
       </div>
     </article>
 
+    <article class="panel" id="panel-scout" aria-hidden="true">
+      <h2 class="panel-title">Intraday Scout</h2>
+      <p class="muted scout-intro">Live equity setups from 1-minute candles — <strong>BUY</strong> / <strong>SELL</strong> / wait. Separate from Options Advisor. Same Zerodha login.</p>
+      <div id="scout-status-bar" class="scout-status-bar muted">Loading status…</div>
+      <div class="scout-toolbar">
+        <button type="button" class="btn btn-accent" id="scout-scan-now">Scan now</button>
+        <button type="button" class="btn btn-ghost" id="scout-refresh">Refresh</button>
+      </div>
+      <div id="scout-container" class="loading">Loading…</div>
+    </article>
+
     <article class="panel" id="panel-config" aria-hidden="true">
       <h2 class="panel-title">Configuration</h2>
       <p class="muted">Runtime overrides — these take precedence over <code>config.py</code> defaults. Zerodha / WS connection is on the <strong>WS Monitor</strong> tab.</p>
@@ -377,6 +394,7 @@
   <button class="bnav-item" data-tab="notifications">
     <span>🔔</span><span>Alerts</span>
   </button>
+  <button class="bnav-item" data-tab="scout"><span>🔍</span><span>Scout</span></button>
   <button class="bnav-item" data-tab="config"><span>⚙️</span><span>Cfg</span></button>
 </nav>
 
@@ -384,5 +402,6 @@
 <div id="toast-container" aria-live="polite"></div>
 
 <script src="{{ url_for('static', filename='dashboard.js') }}?v={{ cache_bust }}"></script>
+<script src="{{ url_for('static', filename='scout.js') }}?v={{ cache_bust }}"></script>
 </body>
 </html>

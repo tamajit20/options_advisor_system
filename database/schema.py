@@ -911,7 +911,9 @@ def create_all_tables(db: SQLServerConnection) -> None:
         sql = _normalize_ddl(raw)
         cur = db.execute(sql)
         cur.close()
-    logger.info("All tables ensured (%d DDL statements executed).", len(_TABLE_DDL))
+    from database.scout_schema import create_scout_tables
+    create_scout_tables(db)
+    logger.info("All tables ensured (%d options DDL + scout).", len(_TABLE_DDL))
 
 
 def list_tables() -> List[str]:

@@ -432,6 +432,8 @@ _JOB_META: Dict[str, Dict[str, str]] = {
                             "description": "Applies retention policy and trims historical data (Fri 09:30 IST, after morning EOD catchup)."},
 }
 
+# Scout module jobs (merged at register time — see scout.routes.SCOUT_JOB_META)
+
 _DOW_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu",
                "fri": "Fri", "sat": "Sat", "sun": "Sun"}
 
@@ -440,6 +442,7 @@ _JOB_DISPLAY_GROUPS: tuple[tuple[str, str], ...] = (
     ("monday", "Monday & weekly"),
     ("open", "Market open (09:00–10:00)"),
     ("intraday", "Intraday (10:00–15:30)"),
+    ("scout", "Intraday Scout"),
     ("close", "Market close"),
     ("eod", "EOD pipeline (20:35+)"),
     ("maintenance", "Maintenance"),
@@ -523,6 +526,8 @@ def _job_display_sort_key(
 
     if name == "intraday_validator":
         return (_JOB_GROUP_ORDER["open"], mins, 0, name)
+    if name == "scout_scanner":
+        return (_JOB_GROUP_ORDER["scout"], mins or (9 * 60 + 20), 0, name)
     if mins < 10 * 60:
         return (_JOB_GROUP_ORDER["open"], mins, 0, name)
     if name in ("event_eve_review", "intraday_close_snapshot", "weekly_cleanup"):
@@ -2369,6 +2374,10 @@ def create_app() -> Flask:
         return Response(_gen(), mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",
                                  "X-Accel-Buffering": "no"})
+
+    from scout.routes import SCOUT_JOB_META, register_scout
+    _JOB_META.update(SCOUT_JOB_META)
+    register_scout(app)
 
     return app
 

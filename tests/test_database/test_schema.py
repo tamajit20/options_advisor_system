@@ -32,13 +32,14 @@ class TestListTables:
 
 
 class TestCreateAllTables:
-    def test_runs_every_ddl(self):
+    def test_runs_every_ddl(self, mocker):
         db = MagicMock()
         cur = MagicMock()
         db.execute = MagicMock(return_value=cur)
+        scout_create = mocker.patch("database.scout_schema.create_scout_tables")
         sc.create_all_tables(db)
-        # Should be called once per DDL statement
         assert db.execute.call_count == len(sc._TABLE_DDL)
+        scout_create.assert_called_once_with(db)
 
 
 class TestCreateDatabaseIfMissing:
