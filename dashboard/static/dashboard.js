@@ -353,16 +353,27 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
     };
   }
   document.querySelectorAll(`.live-mtm[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
-    const valEl = el.querySelector('.cpnl-val');
+    const valEl = el.querySelector('.cpnl-val') || el.querySelector('.lpl-current-val');
+    const pctEl = el.querySelector('.cpnl-pct-bracket') || el.querySelector('.lpl-current-pct');
+    const premRs = parseFloat(el.dataset.premiumRs);
+    const premInfo = premRs > 0
+      ? { rs: premRs, kind: el.dataset.premiumKind || 'paid' }
+      : null;
     const txt = mtm != null
-      ? '\u20b9' + Number(mtm).toLocaleString('en-IN', { maximumFractionDigits: 0 })
+      ? (mtm >= 0 ? '+' : '\u2212') + '\u20b9' + fmt(Math.abs(mtm))
       : '\u2014';
     if (valEl) valEl.textContent = txt;
-    else el.textContent = 'Current P&L ' + txt;
+    if (pctEl) pctEl.innerHTML = (mtm != null && premInfo) ? pnlPctBracket(mtm, premInfo) : '';
+    else if (valEl && mtm != null && premInfo) {
+      valEl.insertAdjacentHTML('afterend', pnlPctBracket(mtm, premInfo));
+    }
     el.classList.toggle('mtm-pos', mtm > 0);
     el.classList.toggle('mtm-neg', mtm < 0);
     const feed = _liveFeedInfo(tradeId);
-    el.title = 'Current profit/loss' + (asOf ? ' as of ' + asOf + ' IST' : '') + '. ' + feed.tip;
+    const premTip = premInfo
+      ? ` · ${premInfo.kind === 'received' ? 'Premium received' : 'Premium paid'} \u20b9${fmt(premInfo.rs)}`
+      : '';
+    el.title = 'Current profit/loss' + premTip + (asOf ? ' as of ' + asOf + ' IST' : '') + '. ' + feed.tip;
   });
   _updateFeedTag(tradeId);
 }
@@ -431,12 +442,11 @@ function _applyLegLtpsToClosePanel(tradeId, legLtps) {
   if (preview && allFilled) {
     const charges = estChargesOneSide([...entryTxns, ...exitTxns]);
     const net = gross - charges;
-    const g = preview.querySelector('.live-pnl-gross');
+    const prem = _premiumFromDataset(preview);
+    _setPnlLine(preview.querySelector('.live-pnl-gross'), preview.querySelector('.live-pnl-gross-pct'), gross, prem);
     const c = preview.querySelector('.live-pnl-charges');
-    const n = preview.querySelector('.live-pnl-value');
-    if (g) { g.textContent = `\u20b9${fmt(gross)}`; g.className = 'live-pnl-gross ' + (gross >= 0 ? 'pnl-pos' : 'pnl-neg'); }
     if (c) c.textContent = `\u20b9${fmt(charges)}`;
-    if (n) { n.textContent = `\u20b9${fmt(net)}`; n.className = 'live-pnl-value ' + (net >= 0 ? 'pnl-pos' : 'pnl-neg'); }
+    _setPnlLine(preview.querySelector('.live-pnl-value'), preview.querySelector('.live-pnl-pct'), net, prem);
   }
   return anyUpdated;
 }
@@ -467,6 +477,135 @@ const pctHint = (val, base, label = '') => {
   const lbl = label ? `${label} ` : '';
   return `<span class="pct-hint"> (${p}% of ${lbl}₹${fmt(base)})</span>`;
 };
+
+/** Total premium received (credit) or paid (debit) in ₹ from executed leg fills. */
+function tradePremiumFromLegs(legs) {
+  const exec = (legs || []).filter(l => l.executed && l.fill_price != null);
+  if (!exec.length) return null;
+  let total = 0;
+  exec.forEach(l => {
+    const lots = l.lots_actual || l.lots || 0;
+    const qty = lots * (l.lot_size || 1);
+    const sign = l.action === 'SELL' ? 1 : -1;
+    total += sign * parseFloat(l.fill_price) * qty;
+  });
+  if (!total) return null;
+  return {
+    rs: Math.abs(total),
+    kind: total > 0 ? 'received' : 'paid',
+  };
+}
+
+/** Per-leg premium basis for leg-level P&L %. */
+function legPremiumFromLeg(l) {
+  if (l.fill_price == null) return null;
+  const lots = l.lots_actual || l.lots || 0;
+  const qty = lots * (l.lot_size || 1);
+  if (!qty) return null;
+  const sign = l.action === 'SELL' ? 1 : -1;
+  const total = sign * parseFloat(l.fill_price) * qty;
+  if (!total) return null;
+  return { rs: Math.abs(total), kind: total > 0 ? 'received' : 'paid' };
+}
+
+function premiumInfoFromTrade(t) {
+  if (!t) return null;
+  if (t.premium_rs > 0) {
+    return { rs: parseFloat(t.premium_rs), kind: t.premium_kind || 'paid' };
+  }
+  return tradePremiumFromLegs(t.legs || []);
+}
+
+/** Premium basis from signed total credit/debit (positive = received, negative = paid). */
+function premiumFromCreditTotal(totalCredit) {
+  const n = parseFloat(totalCredit);
+  if (!n || isNaN(n)) return null;
+  return { rs: Math.abs(n), kind: n > 0 ? 'received' : 'paid' };
+}
+
+function premiumFromSuggestion(s) {
+  if (!s) return null;
+  const legs = s.legs || [];
+  if (legs.length) {
+    let total = 0;
+    legs.forEach(l => {
+      const qty = (l.lots || 1) * (l.lot_size || 1);
+      const price = parseFloat(l.suggested_price || l.suggested_price_low || 0);
+      total += (l.action === 'SELL' ? 1 : -1) * price * qty;
+    });
+    if (total) return premiumFromCreditTotal(total);
+  }
+  if (s.net_credit != null) {
+    const qty = legs[0] ? (legs[0].lots || 1) * (legs[0].lot_size || 1) : 1;
+    return premiumFromCreditTotal(parseFloat(s.net_credit) * qty);
+  }
+  return null;
+}
+
+function _premiumLabel(kind, aggregate = false) {
+  if (aggregate) return 'premium deployed';
+  return kind === 'received' ? 'premium received' : 'premium paid';
+}
+
+/** Bracket beside P&L: "(+26.3% · premium paid ₹18,450)" */
+function pnlPctBracket(pnl, premiumInfo, { aggregate = false } = {}) {
+  if (pnl == null || isNaN(pnl) || !premiumInfo || !premiumInfo.rs) return '';
+  const pct = (pnl / premiumInfo.rs) * 100;
+  const sign = pct >= 0 ? '+' : '';
+  const kindLabel = _premiumLabel(premiumInfo.kind, aggregate);
+  return `<span class="pnl-pct-bracket"> (${sign}${pct.toFixed(1)}% · ${kindLabel} \u20b9${fmt(premiumInfo.rs)})</span>`;
+}
+
+function formatPnlPctText(pnl, premiumInfo, { aggregate = false } = {}) {
+  if (pnl == null || isNaN(pnl) || !premiumInfo || !premiumInfo.rs) return '';
+  const pct = (pnl / premiumInfo.rs) * 100;
+  const sign = pct >= 0 ? '+' : '';
+  return ` (${sign}${pct.toFixed(1)}% · ${_premiumLabel(premiumInfo.kind, aggregate)} \u20b9${fmt(premiumInfo.rs)})`;
+}
+
+function formatPnlWithPct(pnl, premiumInfo, { useGrossSign = true, aggregate = false } = {}) {
+  if (pnl == null || isNaN(pnl)) return '—';
+  const prefix = useGrossSign && pnl > 0 ? '+' : (useGrossSign && pnl < 0 ? '\u2212' : '');
+  const absTxt = '\u20b9' + fmt(Math.abs(pnl));
+  return `${prefix}${absTxt}${pnlPctBracket(pnl, premiumInfo, { aggregate })}`;
+}
+
+function _setPnlLine(valueEl, pctEl, amount, premiumInfo) {
+  if (!valueEl) return;
+  if (amount == null || isNaN(amount)) {
+    valueEl.textContent = '\u2014';
+    if (pctEl) pctEl.innerHTML = '';
+    return;
+  }
+  const prefix = amount >= 0 ? '' : '\u2212';
+  valueEl.textContent = prefix + '\u20b9' + fmt(Math.abs(amount));
+  const posNeg = amount >= 0 ? ' pnl-pos' : ' pnl-neg';
+  valueEl.className = valueEl.className.replace(/pnl-pos|pnl-neg/g, '').trim() + posNeg;
+  if (pctEl) {
+    pctEl.innerHTML = premiumInfo ? pnlPctBracket(amount, premiumInfo) : '';
+    pctEl.className = 'pnl-pct-bracket muted' + posNeg;
+  }
+}
+
+function _premiumFromDataset(el) {
+  if (!el) return null;
+  const rs = parseFloat(el.dataset.premiumRs);
+  if (!rs || isNaN(rs)) return null;
+  return { rs, kind: el.dataset.premiumKind || 'paid' };
+}
+
+function formatLegPnlHtml(l) {
+  if (l.leg_pnl == null) return '';
+  const prem = legPremiumFromLeg(l);
+  const cls = l.leg_pnl >= 0 ? 'pnl-profit' : 'pnl-loss';
+  return `<span class="${cls}">P&amp;L: ${formatPnlWithPct(l.leg_pnl, prem)}</span>`;
+}
+
+function _perfPnlHtml(pnl, premiumRs, premiumKind, { aggregate = false } = {}) {
+  if (pnl == null) return '—';
+  const prem = premiumRs > 0 ? { rs: premiumRs, kind: premiumKind || 'paid' } : null;
+  return formatPnlWithPct(pnl, prem, { aggregate });
+}
 // "+400 pts, +1.6%" from spot — shows price level relative to spot
 const spotDist = (level, spot) => {
   if (level == null || spot == null || spot === 0) return '';
@@ -904,10 +1043,28 @@ function liveTargetFraction(dte) {
 
 function renderLiveProfitLevels(t) {
   const sug = t.suggestion || {};
+  const premium = tradePremiumFromLegs(t.legs || []);
+  const premAttrs = premium
+    ? ` data-premium-rs="${premium.rs}" data-premium-kind="${premium.kind}"`
+    : '';
+  const currentRow = `
+        <div class="lpl-row lpl-current-row live-mtm" data-trade-id="${escapeHtml(t.trade_id)}"${premAttrs}>
+          <span class="lpl-label">Current P&amp;L</span>
+          <span class="lpl-val-line">
+            <strong class="cpnl-val lpl-current-val">\u2014</strong><span class="cpnl-pct-bracket lpl-current-pct muted"></span>
+          </span>
+          <span class="muted lpl-note">Live MTM vs entry fills</span>
+        </div>`;
   const mpRaw = t.actual_max_profit != null ? t.actual_max_profit
               : (sug.max_profit != null ? sug.max_profit : null);
   const mp = mpRaw != null ? parseFloat(mpRaw) : null;
-  if (mp == null || mp <= 0 || isNaN(mp)) return '';
+  if (mp == null || mp <= 0 || isNaN(mp)) {
+    return `
+    <div class="live-profit-levels live-profit-levels--mtm-only" data-trade-id="${escapeHtml(t.trade_id)}"${premAttrs}>
+      <div class="sl-monitor-label">Live P&amp;L</div>
+      <div class="lpl-grid">${currentRow}</div>
+    </div>`;
+  }
   const expiry = sug.expiry_date;
   const dte = dteFromExpiry(expiry);
   const tgtFrac = liveTargetFraction(dte);
@@ -948,6 +1105,7 @@ function renderLiveProfitLevels(t) {
          data-trailing-floor="${floorAttr}">
       <div class="sl-monitor-label">Live profit levels</div>
       <div class="lpl-grid">
+        ${currentRow}
         <div class="lpl-row lpl-target-row">
           <span class="lpl-label">Target profit</span>
           <span class="lpl-val-line">
@@ -977,10 +1135,11 @@ function renderLiveProfitLevels(t) {
     </div>`;
 }
 
-function _fmtMtmSigned(v) {
+function _fmtMtmSigned(v, premiumInfo) {
   if (v == null || isNaN(v)) return '—';
   const n = Math.round(v);
-  return (n >= 0 ? '+₹' : '−₹') + fmt(Math.abs(n));
+  const base = (n >= 0 ? '+₹' : '−₹') + fmt(Math.abs(n));
+  return base + formatPnlPctText(v, premiumInfo);
 }
 
 function _computeTradeActionInstruction(opts) {
@@ -988,6 +1147,7 @@ function _computeTradeActionInstruction(opts) {
     liveMtm, lossHit, floorBreach, targetHit, preBreachNear,
     lossRs, targetRs, floor, strategy,
     dailyStatus, exitInstruction, riskNotif,
+    premiumInfo,
   } = opts;
   const ds = (dailyStatus || '').toUpperCase();
   const rn = (riskNotif || '').toUpperCase();
@@ -1013,7 +1173,7 @@ function _computeTradeActionInstruction(opts) {
         : 'Buy back every short leg and sell every long leg — exit the full position. '
         + 'This is your MTM stop loss.',
       why: liveMtm != null && lossRs != null
-        ? `Live MTM ${_fmtMtmSigned(liveMtm)} · loss limit −₹${fmt(lossRs)}`
+        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · loss limit −₹${fmt(lossRs)}`
         : 'Loss limit alert is active.',
       cta: 'Tap Close Trade below → enter live exit prices → confirm.',
     };
@@ -1040,7 +1200,7 @@ function _computeTradeActionInstruction(opts) {
       instruction: 'A short leg premium has risen to 2× entry or more. Check whole-trade MTM — '
         + 'this is an early risk warning, not a take-profit signal.',
       why: liveMtm != null
-        ? `Live MTM ${_fmtMtmSigned(liveMtm)} · one short leg is blowing up`
+        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · one short leg is blowing up`
         : 'Short-leg stress alert is active.',
       cta: 'Review MTM and decide whether to reduce or exit.',
     };
@@ -1053,7 +1213,7 @@ function _computeTradeActionInstruction(opts) {
       instruction: 'MTM dropped below your trailing profit floor. Exit now if you accept the '
         + '"lock gains" rule — don\'t wait for target again.',
       why: liveMtm != null && floor != null
-        ? `Live MTM ${_fmtMtmSigned(liveMtm)} · floor ₹${fmt(floor)} · target ₹${fmt(targetRs || 0)}`
+        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · floor ₹${fmt(floor)} · target ₹${fmt(targetRs || 0)}`
         : 'Profit floor breach is active.',
       cta: 'Use Close Trade below.',
     };
@@ -1066,7 +1226,7 @@ function _computeTradeActionInstruction(opts) {
       instruction: 'You may close now to lock profit, or hold for more if you still like the setup. '
         + 'No forced exit on target alone.',
       why: liveMtm != null && targetRs != null
-        ? `Live MTM ${_fmtMtmSigned(liveMtm)} · target ₹${fmt(targetRs)}`
+        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · target ₹${fmt(targetRs)}`
         : 'Target alert is active.',
       cta: 'Optional: Close Trade below to book profit.',
     };
@@ -1079,7 +1239,7 @@ function _computeTradeActionInstruction(opts) {
       instruction: 'Informational early warning. Do NOT exit on this alone — wait for '
         + 'LOSS LIMIT HIT, THESIS FAIL, or an explicit sell signal from the system.',
       why: liveMtm != null && lossRs != null
-        ? `Live MTM ${_fmtMtmSigned(liveMtm)} · loss limit −₹${fmt(lossRs)}`
+        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · loss limit −₹${fmt(lossRs)}`
         : 'Pre-breach warning fired today.',
       cta: 'No mandatory action.',
     };
@@ -1111,7 +1271,7 @@ function _computeTradeActionInstruction(opts) {
     title: 'No action required',
     instruction: '',
     why: liveMtm != null
-      ? `Live MTM ${_fmtMtmSigned(liveMtm)}`
+      ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)}`
         + (lossRs != null ? ` · loss limit −₹${fmt(lossRs)}` : '')
         + (targetRs != null ? ` · target ₹${fmt(targetRs)}` : '')
       : 'Waiting for live MTM during market hours.',
@@ -1179,6 +1339,7 @@ function renderTradeProfitZone(t, legs) {
 }
 
 function renderTradeKvGrid(t, legs) {
+  const premium = tradePremiumFromLegs(legs);
   const scLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE' && l.fill_price != null);
   const spLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'PE' && l.fill_price != null);
   let fillNetCredit = 0;
@@ -1209,15 +1370,16 @@ function renderTradeKvGrid(t, legs) {
       <div><span class="k">Entry date</span><br><span class="v">${fmtDt(t.executed_on)}</span></div>
       ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : '<div></div>'}
       <div><span class="k">Net credit (actual)</span><br><span class="v">\u20b9${fmt(t.net_credit_actual)}</span></div>
+      ${premium ? `<div><span class="k">${premium.kind === 'received' ? 'Premium received' : 'Premium paid'}</span><br><span class="v">\u20b9${fmt(premium.rs)}</span></div>` : '<div></div>'}
       <div><span class="k">Type</span><br><span class="v">${escapeHtml(t.position_type)}</span></div>
       ${estMp != null ? `<div><span class="k">Est. max profit</span><br><span class="v pnl-profit">\u20b9${fmt(estMp)}</span></div>` : '<div></div>'}
       ${estMl != null ? `<div><span class="k">Est. max loss</span><br><span class="v pnl-loss">\u20b9${fmt(estMl)}<span class="econ-ml-hint">${pctHint(estMl, t.net_credit_actual, 'credit')}</span></span></div>` : '<div></div>'}
       ${estPop != null ? `<div><span class="k">Est. PoP</span><br><span class="v">${fmtPct(estPop)}</span></div>` : '<div></div>'}
       ${realUBE != null ? `<div><span class="k">Upper BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realUBE)}</span></div>` : '<div></div>'}
       ${realLBE != null ? `<div><span class="k">Lower BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realLBE)}</span></div>` : '<div></div>'}
-      <div><span class="k">P&amp;L</span><br><span class="v">\u20b9${fmt(t.net_pnl)}${pctHint(t.net_pnl, t.net_credit_actual, 'credit')}</span></div>
+      ${t.net_pnl != null ? `<div><span class="k">P&amp;L</span><br><span class="v">${formatPnlWithPct(t.net_pnl, premium)}</span></div>` : '<div></div>'}
       ${estChg != null ? `<div><span class="k">Est. charges <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(estChg)}</span></div>` : '<div></div>'}
-      ${estNetPnl != null ? `<div><span class="k">Est. net P&amp;L</span><br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">\u20b9${fmt(estNetPnl)}</span></div>` : '<div></div>'}
+      ${estNetPnl != null ? `<div><span class="k">Est. net P&amp;L</span><br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${formatPnlWithPct(estNetPnl, premium, { useGrossSign: false })}</span></div>` : '<div></div>'}
       ${dteDisplay != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${escapeHtml(String(dteDisplay))}</span></div>` : '<div></div>'}
       <div><span class="k">Status</span><br><span class="v">${escapeHtml(t.status)}</span></div>
       ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}`;
@@ -1225,12 +1387,17 @@ function renderTradeKvGrid(t, legs) {
 
 function renderTradeActionPanel(t) {
   const legs = t.legs || [];
+  const premium = tradePremiumFromLegs(legs);
+  const premAttrs = premium
+    ? ` data-premium-rs="${premium.rs}" data-premium-kind="${premium.kind}"`
+    : '';
   const ra = t.risk_alert || {};
   const sug = t.suggestion || {};
   const initial = _computeTradeActionInstruction({
     dailyStatus: t.daily_status,
     exitInstruction: t.exit_instruction,
     riskNotif: ra.notif_type,
+    premiumInfo: premium,
   });
   const origSugHtml = renderOriginalSuggestion(t.suggestion);
   const isHold = initial.tone === 'hold';
@@ -1248,7 +1415,7 @@ function renderTradeActionPanel(t) {
         <p class="tap-why muted">${escapeHtml(initial.why)}</p>
       </details>`;
   return `
-    <div class="trade-action-panel" data-trade-id="${escapeHtml(t.trade_id)}"
+    <div class="trade-action-panel" data-trade-id="${escapeHtml(t.trade_id)}"${premAttrs}
          data-strategy="${escapeHtml(sug.strategy || '')}"
          data-daily-status="${escapeHtml(t.daily_status || '')}"
          data-exit-instruction="${escapeHtml(t.exit_instruction || '')}"
@@ -1308,6 +1475,7 @@ function _updateTradeActionPanel(tradeId, payload, stripState) {
       dailyStatus: panel.dataset.dailyStatus,
       exitInstruction: panel.dataset.exitInstruction,
       riskNotif: panel.dataset.riskNotif,
+      premiumInfo: _premiumFromDataset(panel),
     });
     const inner = panel.querySelector('.tap-inner');
     if (inner) {
@@ -2724,6 +2892,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     s.net_credit = econ.np;  // keep renderExitPlan in sync
   }
   const baseTotalCredit = (econ.np || 0) * baseQty;
+  const sugPremium = premiumFromCreditTotal(baseTotalCredit);
   const sugStrategy = s.strategy || '';
   const sugDte = s.dte != null ? parseInt(s.dte, 10) : null;
   const legsHtml = (s.legs || []).map(l => {
@@ -2847,7 +3016,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       })()}
       <div><span class="k">Premium SL <span class="muted" style="font-size:.72rem">(1.5× credit)</span></span><br><span class="v econ-psl">₹${fmt((econ.np||0) * baseQty * 1.5)}</span></div>
       <div><span class="k">Est. charges</span><br><span class="v econ-chg">₹${fmt(econ.chg)}</span></div>
-      <div><span class="k">Est. net P&amp;L</span><br><span class="v econ-npnl">₹${fmt(econ.npnl)}</span></div>
+      <div><span class="k">Est. net P&amp;L</span><br><span class="v econ-npnl">${formatPnlWithPct(econ.npnl, sugPremium, { useGrossSign: false })}</span></div>
       <div><span class="k">DTE</span><br><span class="v">${s.dte ?? '—'}</span></div>
     </div>
     ${execOrderBanner(s.legs, s.strategy, 'entry')}
@@ -3019,7 +3188,10 @@ function bindSuggestionActions() {
       setText('.econ-mp',         `₹${fmt(liveMp)}`);
       if (isCreditStrat) setText('.econ-ml', `₹${fmt(liveMl)}`);
       setText('.econ-chg',        `₹${fmt(liveChg)}`);
-      setText('.econ-npnl',       `₹${fmt(liveNpnl)}`);
+      const npnlEl = card.querySelector('.econ-npnl');
+      if (npnlEl) {
+        npnlEl.innerHTML = formatPnlWithPct(liveNpnl, premiumFromCreditTotal(liveTotalCredit), { useGrossSign: false });
+      }
       setText('.econ-psl',        `\u20b9${fmt(liveTotalCredit * 1.5)}`);
       const qtyHint = card.querySelector('.econ-qty-hint');
       if (qtyHint) qtyHint.textContent = `(\u00d7${curQty})`;
@@ -3445,6 +3617,8 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
         </div>`;
     }).join('');
 
+    const closePremium = tradePremiumFromLegs(data.legs);
+
     content.innerHTML = `
         <div class="close-two-col">
 
@@ -3453,11 +3627,11 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
             <div id="live-feed-banner-${escapeHtml(tradeId)}" class="live-feed-banner" hidden></div>
             <div class="close-col-title">📡 Current market prices</div>
             <div class="cf-live-legs">${liveLegsHtml}</div>
-            <div class="live-pnl-preview" id="live-pnl-${escapeHtml(tradeId)}">
+            <div class="live-pnl-preview" id="live-pnl-${escapeHtml(tradeId)}"${closePremium ? ` data-premium-rs="${closePremium.rs}" data-premium-kind="${closePremium.kind}"` : ''}>
               <div class="live-pnl-label">If you close now</div>
-              <div>Gross P&amp;L: <strong class="live-pnl-gross">—</strong></div>
-              <div class="muted" style="font-size:.82rem">Est. charges: <strong class="live-pnl-charges">—</strong></div>
-              <div>Net P&amp;L: <strong class="live-pnl-value">—</strong><span class="live-pnl-pct muted"></span></div>
+              <div>Gross P&amp;L: <strong class="live-pnl-gross">\u2014</strong><span class="live-pnl-gross-pct pnl-pct-bracket muted"></span></div>
+              <div class="muted" style="font-size:.82rem">Est. charges: <strong class="live-pnl-charges">\u2014</strong></div>
+              <div>Net P&amp;L: <strong class="live-pnl-value">\u2014</strong><span class="live-pnl-pct pnl-pct-bracket muted"></span></div>
             </div>
           </div>
 
@@ -3465,11 +3639,11 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
           <div class="close-col close-col-fills">
             ${execOrderFillsSection(data.legs, closeStrategy, '\u270f\ufe0f Enter your actual fills')}
             <div class="leg-exit-grid">${fillLegsHtml}</div>
-            <div class="fill-pnl-preview" id="fill-pnl-${escapeHtml(tradeId)}">
+            <div class="fill-pnl-preview" id="fill-pnl-${escapeHtml(tradeId)}"${closePremium ? ` data-premium-rs="${closePremium.rs}" data-premium-kind="${closePremium.kind}"` : ''}>
               <div class="live-pnl-label">P&amp;L based on your fills</div>
-              <div>Gross P&amp;L: <strong class="fill-pnl-gross">—</strong></div>
-              <div class="muted" style="font-size:.82rem">Est. charges: <strong class="fill-pnl-charges">—</strong></div>
-              <div>Net P&amp;L: <strong class="fill-pnl-value">—</strong><span class="fill-pnl-pct muted"></span></div>
+              <div>Gross P&amp;L: <strong class="fill-pnl-gross">\u2014</strong><span class="fill-pnl-gross-pct pnl-pct-bracket muted"></span></div>
+              <div class="muted" style="font-size:.82rem">Est. charges: <strong class="fill-pnl-charges">\u2014</strong></div>
+              <div>Net P&amp;L: <strong class="fill-pnl-value">\u2014</strong><span class="fill-pnl-pct pnl-pct-bracket muted"></span></div>
             </div>
             <div class="btn-row" style="margin-top:8px">
               <button class="btn btn-danger btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm &amp; record fills</button>
@@ -3500,31 +3674,31 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       return { gross, charges, net: gross - charges };
     }
 
-    function _renderPnl(container, result, lossWarnSelector) {
-      const grossEl   = container.querySelector('[class*="pnl-gross"]');
-      const chargesEl = container.querySelector('[class*="pnl-charges"]');
-      const netEl     = container.querySelector('[class*="pnl-value"]');
-      const pctEl     = container.querySelector('[class*="pnl-pct"]');
+    function _renderPnl(container, result) {
+      if (!container) return;
+      const prem = _premiumFromDataset(container) || closePremium;
+      const isFill = container.classList.contains('fill-pnl-preview');
+      const grossEl = container.querySelector(isFill ? '.fill-pnl-gross' : '.live-pnl-gross');
+      const grossPctEl = container.querySelector(isFill ? '.fill-pnl-gross-pct' : '.live-pnl-gross-pct');
+      const chargesEl = container.querySelector(isFill ? '.fill-pnl-charges' : '.live-pnl-charges');
+      const netEl = container.querySelector(isFill ? '.fill-pnl-value' : '.live-pnl-value');
+      const netPctEl = container.querySelector(isFill ? '.fill-pnl-pct' : '.live-pnl-pct');
       if (!netEl) return;
       if (!result) {
-        if (grossEl)   grossEl.textContent = '—';
-        if (chargesEl) chargesEl.textContent = '—';
-        netEl.textContent = '—'; netEl.className = netEl.className.replace(/pnl-pos|pnl-neg/g, '').trim();
-        if (pctEl) pctEl.textContent = '';
+        _setPnlLine(grossEl, grossPctEl, null, prem);
+        if (chargesEl) chargesEl.textContent = '\u2014';
+        _setPnlLine(netEl, netPctEl, null, prem);
+        container.querySelectorAll('.close-loss-warn').forEach(el => el.remove());
         return;
       }
       const { gross, charges, net } = result;
-      if (grossEl)   { grossEl.textContent = `\u20b9${fmt(gross)}`; grossEl.className = grossEl.className.replace(/pnl-pos|pnl-neg/g, '').trim() + (gross >= 0 ? ' pnl-pos' : ' pnl-neg'); }
+      _setPnlLine(grossEl, grossPctEl, gross, prem);
       if (chargesEl) chargesEl.textContent = `\u20b9${fmt(charges)}`;
-      netEl.textContent = `\u20b9${fmt(net)}`;
-      netEl.className = netEl.className.replace(/pnl-pos|pnl-neg/g, '').trim() + (net >= 0 ? ' pnl-pos' : ' pnl-neg');
-      const pctStr = netCreditActual > 0 ? ` (${net >= 0 ? '+' : ''}${(net / netCreditActual * 100).toFixed(0)}% of credit)` : '';
-      if (pctEl) { pctEl.textContent = pctStr; pctEl.className = pctEl.className.replace(/pnl-pos|pnl-neg/g, '').trim() + (net >= 0 ? ' pnl-pos' : ' pnl-neg'); }
-      // loss warning
+      _setPnlLine(netEl, netPctEl, net, prem);
       let warnEl = container.querySelector('.close-loss-warn');
       if (net < 0) {
         if (!warnEl) { warnEl = document.createElement('div'); warnEl.className = 'close-loss-warn'; container.appendChild(warnEl); }
-        warnEl.innerHTML = `⚠ Loss of <strong>\u20b9${fmt(Math.abs(net))}</strong> — verify before confirming.`;
+        warnEl.innerHTML = `\u26a0 Loss of <strong>\u20b9${fmt(Math.abs(net))}</strong>${formatPnlPctText(net, prem)} — verify before confirming.`;
       } else if (warnEl) warnEl.remove();
     }
 
@@ -3575,8 +3749,12 @@ async function submitClose(tradeId, panel) {
   // ── 2-step confirm ────────────────────────────────────────────────────────
   const btn = panel.querySelector('.btn-close-submit');
   if (!btn.dataset.confirmed) {
-    const pnlEl = panel.querySelector('.live-pnl-value');
-    const pnlText = pnlEl && pnlEl.textContent !== '—' ? ` · Net P&L ${pnlEl.textContent}` : '';
+    const fillPreview = panel.querySelector('.fill-pnl-preview');
+    const pnlEl = fillPreview?.querySelector('.fill-pnl-value');
+    const pctEl = fillPreview?.querySelector('.fill-pnl-pct');
+    const pnlText = pnlEl && pnlEl.textContent !== '\u2014'
+      ? ` \u00b7 Net P&L ${pnlEl.textContent}${pctEl ? pctEl.textContent : ''}`
+      : '';
     btn.dataset.confirmed = '1';
     btn.textContent = `Really close${pnlText}?`;
     btn.classList.add('btn-confirm-pending');
@@ -3662,7 +3840,7 @@ function _gapReplayFlagTags(flags) {
   }).join(' ');
 }
 
-function renderGapReplayBody(data) {
+function renderGapReplayBody(data, premiumInfo) {
   if (!data || data.error) {
     return `<div class="muted" style="font-size:.8rem">${escapeHtml(data?.error || 'Replay unavailable')}</div>`;
   }
@@ -3679,12 +3857,12 @@ function renderGapReplayBody(data) {
     alertHtml = `<div class="gap-replay-alert">
       Would have triggered <strong>${escapeHtml(_gapReplayDecisionLabel(fa.decision))}</strong>
       at EOD on <strong>${escapeHtml(fa.date)}</strong>
-      (MTM \u20b9${fmt(fa.mtm)} vs SL \u2212\u20b9${fmt(data.sl_threshold_rs)}).
+      (MTM ${formatPnlWithPct(fa.mtm, premiumInfo)} vs SL \u2212\u20b9${fmt(data.sl_threshold_rs)}).
     </div>`;
   } else if (fa && fa.decision === 'TAKE_PROFIT') {
     alertHtml = `<div class="gap-replay-alert ok">
       Would have hit <strong>take profit</strong> at EOD on <strong>${escapeHtml(fa.date)}</strong>
-      (MTM \u20b9${fmt(fa.mtm)}).
+      (MTM ${formatPnlWithPct(fa.mtm, premiumInfo)}).
     </div>`;
   } else {
     alertHtml = `<div class="gap-replay-alert ok">
@@ -3698,7 +3876,7 @@ function renderGapReplayBody(data) {
     return `<tr class="${flagCls}">
       <td>${escapeHtml(d.date)}</td>
       <td>${d.dte}</td>
-      <td class="${mtmCls}">\u20b9${fmt(d.mtm)}</td>
+      <td class="${mtmCls}">${formatPnlWithPct(d.mtm, premiumInfo)}</td>
       <td>\u2212\u20b9${fmt(d.sl_threshold_rs)}</td>
       <td>${escapeHtml(_gapReplayDecisionLabel(d.decision))}</td>
       <td>${_gapReplayFlagTags(d.flags)}</td>
@@ -3729,7 +3907,7 @@ async function loadGapReplayPanel(section) {
   body.innerHTML = '<div class="muted" style="font-size:.8rem">Loading replay\u2026</div>';
   try {
     const data = await API(`/api/trades/${tradeId}/gap-replay`);
-    body.innerHTML = renderGapReplayBody(data);
+    body.innerHTML = renderGapReplayBody(data, _premiumFromDataset(section));
     body.dataset.loaded = '1';
     if (!data.has_gap) {
       section.querySelector('.gap-replay-chevron').textContent = '\u2014';
@@ -3870,7 +4048,7 @@ function renderTrade(t, expanded = true) {
               <span class="tl-instrument">${instrument}</span>
               <div class="muted" style="font-size:.8rem">${escapeHtml(legRoleNote(l.strategy, l))}</div>
               <span class="leg-status-done">\u2713 Filled @ \u20b9${fmt(l.fill_price)} \u00b7 ${lotsUsed} lot${lotsUsed !== 1 ? 's' : ''}</span>
-              <span class="leg-exit-info">\u21b3 Closed @ \u20b9${fmt(l.exit_price)}${l.leg_pnl != null ? (() => { const legBase = (l.fill_price||0)*(l.lots_actual||l.lots||1)*(l.lot_size||1); const legPct = legBase > 0 ? ` (${l.leg_pnl >= 0 ? '+' : ''}${(l.leg_pnl/legBase*100).toFixed(0)}%)` : ''; return ` &nbsp;<span class="${pnlClass}">P&L: \u20b9${fmt(l.leg_pnl)}${legPct}</span>`; })() : ''}</span>
+              <span class="leg-exit-info">\u21b3 Closed @ \u20b9${fmt(l.exit_price)}${l.leg_pnl != null ? ` &nbsp;${formatLegPnlHtml(l)}` : ''}</span>
             </div>
           </div>`;
         } else if (done) {
@@ -3909,6 +4087,10 @@ function renderTrade(t, expanded = true) {
   }
 
   const _entryQualBadge = _qualityBadge(t.entry_quality_score, 'Entry quality: ');
+  const _tradePremium = tradePremiumFromLegs(legs);
+  const _premAttrs = _tradePremium
+    ? ` data-premium-rs="${_tradePremium.rs}" data-premium-kind="${_tradePremium.kind}"`
+    : '';
   const summaryHtml = `
     <div class="card-head collapsible-card-head">
       <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
@@ -3944,8 +4126,8 @@ function renderTrade(t, expanded = true) {
         ${hasPendingClose ? `<span class="tag tag-warn" title="Record exit prices to compute P&L">CLOSE PENDING</span>` : ''}
         <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
-        <span class="tag tag-current-pnl live-mtm" data-trade-id="${escapeHtml(t.trade_id)}" title="Current profit/loss">
-          <span class="cpnl-label">Current P&L</span> <strong class="cpnl-val">\u2014</strong>
+        <span class="tag tag-current-pnl live-mtm" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs} title="Current profit/loss">
+          <span class="cpnl-label">Current P&amp;L</span> <strong class="cpnl-val">\u2014</strong><span class="cpnl-pct-bracket muted"></span>
         </span>
         <span class="tag tag-warn live-feed-tag" data-trade-id="${escapeHtml(t.trade_id)}" title="Checking feed\u2026">\u2026</span>
         ${_entryQualBadge}
@@ -3956,8 +4138,8 @@ function renderTrade(t, expanded = true) {
     </div>
     <div class="collapsible-preview">
       ${t.suggestion?.strategy ? `<span>${escapeHtml(t.suggestion.strategy)}</span>` : ''}
-      ${t.net_credit_actual != null ? `<span>Entry <strong>₹${fmt(t.net_credit_actual)}</strong>/u</span>` : ''}
-      ${t.spot_at_execution != null ? `<span>Spot @ entry <strong>₹${fmt(t.spot_at_execution)}</strong></span>` : ''}
+      ${_tradePremium ? `<span>${_tradePremium.kind === 'received' ? 'Premium received' : 'Premium paid'} <strong>\u20b9${fmt(_tradePremium.rs)}</strong></span>` : (t.net_credit_actual != null ? `<span>Entry <strong>\u20b9${fmt(t.net_credit_actual)}</strong>/u</span>` : '')}
+      ${t.spot_at_execution != null ? `<span>Spot @ entry <strong>\u20b9${fmt(t.spot_at_execution)}</strong></span>` : ''}
     </div>`;
   const bodyHtml = `
     ${renderTradeActionPanel(t)}
@@ -4027,7 +4209,7 @@ function renderTrade(t, expanded = true) {
     })()}
     ${hasPendingClose ? `<div class="pending-close-alert">\u26a0 Exit fills not recorded \u2014 use Close Trade below to compute P&amp;L</div>` : ''}
     ${hasExecutedLegs ? `
-    <section class="gap-replay-section" id="gap-replay-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}" hidden>
+    <section class="gap-replay-section" id="gap-replay-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs} hidden>
       <div class="gap-replay-head" role="button" tabindex="0" aria-expanded="false">
         <span class="gap-replay-title">EOD replay (while monitor was off)</span>
         <span class="gap-replay-chevron">\u25bc</span>
@@ -4286,7 +4468,9 @@ function _buildLineChart(trades, strategies, W = 700, H = 320) {
     const x = toX(new Date(t.closed_on));
     const y = toY(t.cum_pnl_overall);
     const fill = t.net_pnl >= 0 ? '#86efac' : '#fca5a5';
-    const tip = `${t.trade_name || t.trade_id} | ${t.strategy} | ${t.net_pnl >= 0 ? '+' : ''}₹${t.net_pnl.toLocaleString('en-IN')}`;
+    const prem = premiumInfoFromTrade(t);
+    const pnlTxt = (t.net_pnl >= 0 ? '+' : '') + '₹' + Number(t.net_pnl).toLocaleString('en-IN') + formatPnlPctText(t.net_pnl, prem);
+    const tip = `${t.trade_name || t.trade_id} | ${t.strategy} | ${pnlTxt}`;
     dots += _svgCircle(x, y, 4, fill, 'chart-dot', `data-tip="${escapeHtml(tip)}"`);
   });
 
@@ -4316,10 +4500,15 @@ function _buildBarChart(trades, strategies, W = 700, H = 220) {
   const cW = W - PAD.left - PAD.right;
   const cH = H - PAD.top - PAD.bottom;
 
-  // Per-strategy total P&L
+  // Per-strategy total P&L and premium deployed
   const totals = {};
-  strategies.forEach(s => { totals[s] = 0; });
-  trades.forEach(t => { totals[t.strategy] = (totals[t.strategy] || 0) + t.net_pnl; });
+  const premTotals = {};
+  strategies.forEach(s => { totals[s] = 0; premTotals[s] = 0; });
+  trades.forEach(t => {
+    totals[t.strategy] = (totals[t.strategy] || 0) + t.net_pnl;
+    const premRs = t.premium_rs > 0 ? t.premium_rs : Math.abs(t.net_credit_actual || 0);
+    premTotals[t.strategy] = (premTotals[t.strategy] || 0) + premRs;
+  });
   const sorted = [...strategies].sort((a, b) => (totals[b] || 0) - (totals[a] || 0));
 
   if (!sorted.length) return '';
@@ -4345,7 +4534,10 @@ function _buildBarChart(trades, strategies, W = 700, H = 220) {
     const barH = Math.abs(v / maxAbs) * (cH / 2);
     const y = v >= 0 ? zero - barH : zero;
     const fill = v >= 0 ? 'rgba(134,239,172,.75)' : 'rgba(252,165,165,.75)';
-    const tip = `${s}: ${v >= 0 ? '+' : ''}₹${v.toLocaleString('en-IN', {maximumFractionDigits:0})}`;
+    const stratPrem = premTotals[s] > 0 ? { rs: premTotals[s], kind: 'paid' } : null;
+    const tip = stratPrem
+      ? `${s}: ${formatPnlWithPct(v, stratPrem, { aggregate: true })}`
+      : `${s}: ${v >= 0 ? '+' : ''}₹${v.toLocaleString('en-IN', {maximumFractionDigits:0})}`;
     bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${barH.toFixed(1)}" rx="3" fill="${fill}" class="chart-bar" data-tip="${escapeHtml(tip)}"/>`;
     xLabels += _svgText(PAD.left + gap * i + gap / 2, PAD.top + cH + 20, s.replace('_', ' '), 'middle');
   });
@@ -4383,8 +4575,9 @@ async function loadPnlCharts() {
 
     // Summary strip
     const pnlCls = data.total_pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    const totalPrem = data.total_invested > 0 ? { rs: data.total_invested, kind: 'paid' } : null;
     sumEl.innerHTML = `
-      <div class="chart-kv"><span>Total net P&L</span><strong class="${pnlCls}">₹${fmt(data.total_pnl)}</strong></div>
+      <div class="chart-kv"><span>Total net P&amp;L</span><strong class="${pnlCls}">${formatPnlWithPct(data.total_pnl, totalPrem, { aggregate: true })}</strong></div>
       <div class="chart-kv"><span>Total premium deployed</span><strong>₹${fmt(data.total_invested)}</strong></div>
       <div class="chart-kv"><span>Return on premium</span><strong class="${pnlCls}">${data.total_invested > 0 ? (data.total_pnl / data.total_invested * 100).toFixed(1) + '%' : '—'}</strong></div>
       <div class="chart-kv"><span>Total charges paid</span><strong>₹${fmt(data.total_charges)}</strong></div>
@@ -4462,10 +4655,10 @@ function _renderPerfPage(data) {
       <div class="perf-overall-grid">
         <div class="perf-kv"><span>Total trades</span><strong>${ov.total}</strong></div>
         <div class="perf-kv"><span>Win rate</span><strong class="${ov.win_rate >= 50 ? 'pnl-pos' : 'pnl-neg'}">${ov.win_rate}%</strong></div>
-        <div class="perf-kv"><span>Total net P&L</span><strong class="${_perfColor(ov.total_pnl)}">₹${fmt(ov.total_pnl)}</strong></div>
-        <div class="perf-kv"><span>Avg net P&L / trade</span><strong class="${_perfColor(ov.avg_pnl)}">₹${fmt(ov.avg_pnl)}</strong></div>
-        <div class="perf-kv"><span>Best trade</span><strong class="pnl-pos">₹${fmt(ov.best_trade)}</strong></div>
-        <div class="perf-kv"><span>Worst trade</span><strong class="pnl-neg">₹${fmt(ov.worst_trade)}</strong></div>
+        <div class="perf-kv"><span>Total net P&amp;L</span><strong class="${_perfColor(ov.total_pnl)}">${_perfPnlHtml(ov.total_pnl, ov.total_premium, 'paid', { aggregate: true })}</strong></div>
+        <div class="perf-kv"><span>Avg net P&amp;L / trade</span><strong class="${_perfColor(ov.avg_pnl)}">${_perfPnlHtml(ov.avg_pnl, ov.total_premium && ov.total ? ov.total_premium / ov.total : 0, 'paid')}</strong></div>
+        <div class="perf-kv"><span>Best trade</span><strong class="pnl-pos">${_perfPnlHtml(ov.best_trade, ov.best_trade_premium_rs, ov.best_trade_premium_kind)}</strong></div>
+        <div class="perf-kv"><span>Worst trade</span><strong class="pnl-neg">${_perfPnlHtml(ov.worst_trade, ov.worst_trade_premium_rs, ov.worst_trade_premium_kind)}</strong></div>
         <div class="perf-kv"><span>Profit factor</span><strong class="${ov.losses === 0 ? 'pnl-pos' : ov.profit_factor != null ? (ov.profit_factor >= 1 ? 'pnl-pos' : 'pnl-neg') : ''}">${ov.losses === 0 ? '∞' : ov.profit_factor != null ? ov.profit_factor + 'x' : '—'}</strong></div>
       </div>
     </div>`;
@@ -4476,7 +4669,7 @@ function _renderPerfPage(data) {
     <div class="perf-card ${s.total_pnl >= 0 ? 'perf-card--pos' : 'perf-card--neg'}">
       <div class="perf-card-head">
         <span class="perf-strategy-name">${escapeHtml(s.strategy)}</span>
-        <span class="perf-total-pnl ${_perfColor(s.total_pnl)}">₹${fmt(s.total_pnl)}</span>
+        <span class="perf-total-pnl ${_perfColor(s.total_pnl)}">${_perfPnlHtml(s.total_pnl, s.total_premium, 'paid', { aggregate: true })}</span>
       </div>
       ${_winBar(s.wins, s.total)}
       <div class="perf-stats-grid">
@@ -4489,7 +4682,7 @@ function _renderPerfPage(data) {
           <div class="perf-stat-lbl">${s.total} trades</div>
         </div>
         <div class="perf-stat">
-          <div class="perf-stat-val ${_perfColor(s.avg_pnl)}">₹${fmt(s.avg_pnl)}</div>
+          <div class="perf-stat-val ${_perfColor(s.avg_pnl)}">${_perfPnlHtml(s.avg_pnl, s.total_premium && s.total ? s.total_premium / s.total : 0, 'paid')}</div>
           <div class="perf-stat-lbl">Avg P&L</div>
         </div>
         <div class="perf-stat">
@@ -4497,19 +4690,19 @@ function _renderPerfPage(data) {
           <div class="perf-stat-lbl">Profit factor</div>
         </div>
         <div class="perf-stat">
-          <div class="perf-stat-val pnl-pos">₹${fmt(s.avg_win)}</div>
+          <div class="perf-stat-val pnl-pos">${_perfPnlHtml(s.avg_win, s.total_premium && s.wins ? s.total_premium / s.total : 0, 'paid')}</div>
           <div class="perf-stat-lbl">Avg win</div>
         </div>
         <div class="perf-stat">
-          <div class="perf-stat-val pnl-neg">₹${fmt(s.avg_loss)}</div>
+          <div class="perf-stat-val pnl-neg">${_perfPnlHtml(s.avg_loss, s.total_premium && s.losses ? s.total_premium / s.total : 0, 'paid')}</div>
           <div class="perf-stat-lbl">Avg loss</div>
         </div>
         <div class="perf-stat">
-          <div class="perf-stat-val pnl-pos">₹${fmt(s.best_trade)}</div>
+          <div class="perf-stat-val pnl-pos">${_perfPnlHtml(s.best_trade, s.best_trade_premium_rs, s.best_trade_premium_kind)}</div>
           <div class="perf-stat-lbl">Best trade</div>
         </div>
         <div class="perf-stat">
-          <div class="perf-stat-val pnl-neg">₹${fmt(s.worst_trade)}</div>
+          <div class="perf-stat-val pnl-neg">${_perfPnlHtml(s.worst_trade, s.worst_trade_premium_rs, s.worst_trade_premium_kind)}</div>
           <div class="perf-stat-lbl">Worst trade</div>
         </div>
         ${s.avg_hold_days != null ? `<div class="perf-stat"><div class="perf-stat-val">${s.avg_hold_days}d</div><div class="perf-stat-lbl">Avg hold</div></div>` : ''}
@@ -4568,8 +4761,9 @@ function renderHistorySuggestion(s) {
 function renderHistoryTrade(t) {
   const s = t.suggestion || {};
   const pnl = t.net_pnl;
+  const premium = premiumInfoFromTrade(t);
+  const sugPremium = premiumFromSuggestion(s);
   const pnlClass = pnl != null ? (pnl >= 0 ? 'pnl-profit' : 'pnl-loss') : '';
-  const pnlSign  = pnl != null && pnl > 0 ? '+' : '';
   const statusCls = t.status === 'CLOSED' ? 'tag-ok' : t.status === 'EXPIRED' ? 'tag-warn' : 'tag-acc';
 
   // Comparison row helper: key | suggested value | actual value
@@ -4597,7 +4791,7 @@ function renderHistoryTrade(t) {
       <td class="num muted">${sugRange}</td>
       <td class="num">${l.fill_price != null ? '₹'+fmt(l.fill_price) : '—'}</td>
       <td class="num">${l.exit_price != null ? '₹'+fmt(l.exit_price) : '—'}</td>
-      <td class="num ${lpc}">${l.leg_pnl != null ? '₹'+fmt(l.leg_pnl) : '—'}</td>
+      <td class="num ${lpc}">${l.leg_pnl != null ? formatPnlWithPct(l.leg_pnl, legPremiumFromLeg(l)) : '—'}</td>
     </tr>`;
   }).join('');
 
@@ -4611,7 +4805,7 @@ function renderHistoryTrade(t) {
         ${_qualityBadge(t.entry_quality_score, 'Entry quality: ')}
         ${t.position_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(t.position_type)}</span>` : ''}
       </div>
-      <div class="hist-card-pnl ${pnlClass}">${pnl != null ? pnlSign+'₹'+fmt(pnl) : '—'}${pnl != null && t.net_credit_actual ? `<span class="hist-pnl-pct"> (${pnl >= 0 ? '+' : ''}${(pnl / Math.abs(t.net_credit_actual) * 100).toFixed(0)}% of credit)</span>` : ''}</div>
+      <div class="hist-card-pnl ${pnlClass}">${pnl != null ? formatPnlWithPct(pnl, premium) : '—'}</div>
     </div>
     <div class="hist-card-meta muted">
       ${escapeHtml(t.trade_name || t.trade_id)}
@@ -4629,9 +4823,10 @@ function renderHistoryTrade(t) {
       ${cmp('Credit received',   r(s.net_credit),      r(t.net_credit_actual))}
       ${cmp('Max profit',        r(s.max_profit),      r(t.actual_max_profit))}
       ${cmp('Max loss',          r(s.max_loss),        r(t.actual_max_loss))}
-      ${cmp('Gross P&amp;L',     '—',                  r(t.gross_pnl))}
+      ${cmp('Gross P&amp;L',     '—',                  t.gross_pnl != null ? formatPnlWithPct(t.gross_pnl, premium, { useGrossSign: true }) : '—')}
+      ${premium ? cmp(premium.kind === 'received' ? 'Premium received' : 'Premium paid', '—', r(premium.rs)) : ''}
       ${cmp('Charges / tax',     r(s.est_charges),     r(t.total_charges))}
-      ${cmp('Net P&amp;L',       r(s.est_net_pnl),     `<span class="${pnlClass} hcmp-bold">${pnl != null ? pnlSign+'₹'+fmt(pnl) : '—'}</span>`)}
+      ${cmp('Net P&amp;L',       s.est_net_pnl != null ? formatPnlWithPct(s.est_net_pnl, sugPremium, { useGrossSign: false }) : '—',     `<span class="${pnlClass} hcmp-bold">${pnl != null ? formatPnlWithPct(pnl, premium, { useGrossSign: true }) : '—'}</span>`)}
       ${cmp('Spot at entry',     s.spot != null ? fmt(s.spot) : '—',  t.spot_at_execution != null ? fmt(t.spot_at_execution) : '—')}
       ${cmp('Upper breakeven',   s.upper_be != null ? fmt(s.upper_be) : '—',  t.actual_upper_be != null ? fmt(t.actual_upper_be) : '—')}
       ${cmp('Lower breakeven',   s.lower_be != null ? fmt(s.lower_be) : '—',  t.actual_lower_be != null ? fmt(t.actual_lower_be) : '—')}

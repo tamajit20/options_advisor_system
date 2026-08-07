@@ -173,6 +173,26 @@ def _row(d: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _trade_premium_from_legs(db: SQLServerConnection, trade_id: str) -> tuple[float, str]:
+    """Return (absolute premium ₹, 'received'|'paid') from executed leg fills."""
+    legs = db.fetch_all(
+        "SELECT tl.lots_actual, sl.lots, sl.lot_size, sl.action, tl.fill_price "
+        "FROM options_trade_legs tl "
+        "JOIN options_suggestion_legs sl ON sl.id = tl.suggestion_leg_id "
+        "WHERE tl.trade_id = ? AND tl.executed = 1",
+        [trade_id],
+    )
+    total = 0.0
+    for lg in legs:
+        lots = lg.get("lots_actual") or lg.get("lots") or 0
+        qty = lots * (lg.get("lot_size") or 1)
+        sign = 1 if lg.get("action") == "SELL" else -1
+        total += sign * float(lg.get("fill_price") or 0) * qty
+    if not total:
+        return 0.0, "paid"
+    return abs(total), ("received" if total > 0 else "paid")
+
+
 _CONFIDENCE_LEGACY_TOTAL = 7
 _CONFIDENCE_EXPANDED_TOTAL = 14
 
@@ -1200,10 +1220,12 @@ def create_app() -> Flask:
             pnl    = float(r["net_pnl"])
             credit = float(r["net_credit_actual"] or 0)
             strat  = r["strategy"]
+            prem_rs, prem_kind = _trade_premium_from_legs(db, r["trade_id"])
+            if prem_rs <= 0:
+                prem_rs = abs(credit)
             cum_overall += pnl
             cum_by_strategy[strat] = cum_by_strategy.get(strat, 0.0) + pnl
-            # "Invested" = absolute premium collected/paid (capital at risk per trade)
-            total_invested += abs(credit)
+            total_invested += prem_rs
             trades.append({
                 "trade_id":        r["trade_id"],
                 "trade_name":      r["trade_name"],
@@ -1215,6 +1237,8 @@ def create_app() -> Flask:
                 "gross_pnl":       round(float(r["gross_pnl"] or 0), 2),
                 "total_charges":   round(float(r["total_charges"] or 0), 2),
                 "net_credit_actual": round(credit, 2),
+                "premium_rs":      round(prem_rs, 2),
+                "premium_kind":    prem_kind,
                 "cum_pnl_overall": round(cum_overall, 2),
                 "cum_pnl_strategy": round(cum_by_strategy[strat], 2),
             })
@@ -1270,18 +1294,28 @@ def create_app() -> Flask:
 
         strategy_stats = []
         all_pnls = []
+        overall_premium = 0.0
         for strategy, trades in sorted(buckets.items()):
             pnls = [float(t["net_pnl"]) for t in trades]
             all_pnls.extend(pnls)
             wins   = [p for p in pnls if p > 0]
             losses = [p for p in pnls if p <= 0]
             hold_days = [d for d in (_hold_days(t) for t in trades) if d is not None]
-            best  = max(pnls)
-            worst = min(pnls)
+            best_row  = max(trades, key=lambda t: float(t["net_pnl"]))
+            worst_row = min(trades, key=lambda t: float(t["net_pnl"]))
+            best  = float(best_row["net_pnl"])
+            worst = float(worst_row["net_pnl"])
+            strat_premium = 0.0
+            for t in trades:
+                prem_rs, _ = _trade_premium_from_legs(db, t["trade_id"])
+                strat_premium += prem_rs
+            overall_premium += strat_premium
             avg_max_profit = None
             mps = [float(t["actual_max_profit"]) for t in trades if t.get("actual_max_profit")]
             if mps:
                 avg_max_profit = round(sum(mps) / len(mps), 2)
+            best_prem, best_kind = _trade_premium_from_legs(db, best_row["trade_id"])
+            worst_prem, worst_kind = _trade_premium_from_legs(db, worst_row["trade_id"])
             strategy_stats.append({
                 "strategy":       strategy,
                 "total":          len(trades),
@@ -1289,11 +1323,16 @@ def create_app() -> Flask:
                 "losses":         len(losses),
                 "win_rate":       round(len(wins) / len(trades) * 100, 1) if trades else 0,
                 "total_pnl":      round(sum(pnls), 2),
+                "total_premium":  round(strat_premium, 2),
                 "avg_pnl":        round(sum(pnls) / len(pnls), 2),
                 "avg_win":        round(sum(wins)   / len(wins),   2) if wins   else 0,
                 "avg_loss":       round(sum(losses) / len(losses), 2) if losses else 0,
                 "best_trade":     round(best,  2),
+                "best_trade_premium_rs": round(best_prem, 2),
+                "best_trade_premium_kind": best_kind,
                 "worst_trade":    round(worst, 2),
+                "worst_trade_premium_rs": round(worst_prem, 2),
+                "worst_trade_premium_kind": worst_kind,
                 "avg_hold_days":  round(sum(hold_days) / len(hold_days), 1) if hold_days else None,
                 "avg_max_profit": avg_max_profit,
                 "profit_factor":  round(sum(wins) / abs(sum(losses)), 2) if losses and sum(losses) != 0 else None,
@@ -1302,15 +1341,27 @@ def create_app() -> Flask:
         # Overall summary across all strategies
         overall_wins   = [p for p in all_pnls if p > 0]
         overall_losses = [p for p in all_pnls if p <= 0]
+        best_prem_ov, best_kind_ov = 0.0, "paid"
+        worst_prem_ov, worst_kind_ov = 0.0, "paid"
+        if rows:
+            best_row_ov = max(rows, key=lambda t: float(t["net_pnl"]))
+            worst_row_ov = min(rows, key=lambda t: float(t["net_pnl"]))
+            best_prem_ov, best_kind_ov = _trade_premium_from_legs(db, best_row_ov["trade_id"])
+            worst_prem_ov, worst_kind_ov = _trade_premium_from_legs(db, worst_row_ov["trade_id"])
         overall = {
             "total":      len(all_pnls),
             "wins":       len(overall_wins),
             "losses":     len(overall_losses),
             "win_rate":   round(len(overall_wins) / len(all_pnls) * 100, 1) if all_pnls else 0,
             "total_pnl":  round(sum(all_pnls), 2),
+            "total_premium": round(overall_premium, 2),
             "avg_pnl":    round(sum(all_pnls) / len(all_pnls), 2) if all_pnls else 0,
             "best_trade": round(max(all_pnls), 2) if all_pnls else 0,
+            "best_trade_premium_rs": round(best_prem_ov, 2),
+            "best_trade_premium_kind": best_kind_ov,
             "worst_trade":round(min(all_pnls), 2) if all_pnls else 0,
+            "worst_trade_premium_rs": round(worst_prem_ov, 2),
+            "worst_trade_premium_kind": worst_kind_ov,
             "profit_factor": round(sum(overall_wins) / abs(sum(overall_losses)), 2)
                              if overall_losses and sum(overall_losses) != 0 else None,
         }
