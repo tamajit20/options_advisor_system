@@ -194,6 +194,13 @@ NIFTY_50_SYMBOLS: tuple[str, ...] = (
     "TECHM", "TITAN", "TRENT", "ULTRACEMCO", "WIPRO",
 )
 
+# Nifty Bank index constituents (for watchlist grouping / badges).
+NIFTY_BANK_SYMBOLS: tuple[str, ...] = (
+    "AXISBANK", "AUBANK", "BANKBARODA", "BANDHANBNK", "FEDERALBNK",
+    "HDFCBANK", "ICICIBANK", "IDFCFIRSTB", "INDUSINDBK", "KOTAKBANK",
+    "PNB", "SBIN",
+)
+
 SCOUT_CONFIG: dict = {
     "enabled": True,
     # Default watchlist until user saves via UI (subset of NIFTY_50_SYMBOLS)

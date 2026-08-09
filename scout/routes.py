@@ -21,9 +21,9 @@ from scout.config_loader import (
     default_watchlist,
     get_watchlist,
     invalidate_watchlist_cache,
-    is_nifty50,
     watchlist_set,
 )
+from scout.index_groups import INDEX_GROUPS, index_tags
 from scout.instruments import (
     ScoutInstrumentError,
     nse_equity_universe,
@@ -124,34 +124,25 @@ def api_scout_watchlist_get(db: SQLServerConnection):
             page, total = [], 0
         else:
             fallback = [
-                {"symbol": sym, "name": "", "is_nifty50": True}
+                {
+                    "symbol": sym,
+                    "name": "",
+                    "is_nifty50": True,
+                    "index_tags": index_tags(sym),
+                }
                 for sym in nifty50
             ]
             total = len(fallback)
             page = fallback[offset: offset + limit]
 
     stocks = []
-    page_syms = set()
     for row in page:
         sym = row["symbol"]
-        page_syms.add(sym)
         stocks.append({
             **row,
+            "index_tags": row.get("index_tags") or index_tags(sym),
             "selected": sym in selected,
             "is_default": sym in default,
-        })
-
-    # Always surface selected symbols that are not on the current page.
-    for sym in sorted(selected):
-        if sym in page_syms:
-            continue
-        stocks.insert(0, {
-            "symbol": sym,
-            "name": "",
-            "is_nifty50": is_nifty50(sym),
-            "selected": True,
-            "is_default": sym in default,
-            "pinned_selected": True,
         })
 
     return jsonify({
@@ -161,6 +152,7 @@ def api_scout_watchlist_get(db: SQLServerConnection):
         "total_equity_count": total,
         "nifty50": nifty50,
         "nifty50_count": len(nifty50),
+        "index_groups": INDEX_GROUPS,
         "search": search,
         "offset": offset,
         "limit": limit,

@@ -199,7 +199,72 @@
   let _wlRefreshedAt = '';
   let _wlZerodhaOk = true;
   let _wlNotice = '';
+  let _wlIndexGroups = {
+    nifty50: { label: 'Nifty 50', badge: '50' },
+    nifty_bank: { label: 'Nifty Bank', badge: 'BN' },
+  };
 
+  const WL_SECTIONS = [
+    { tag: 'nifty50', fallbackTitle: 'Nifty 50' },
+    { tag: 'nifty_bank', fallbackTitle: 'Nifty Bank' },
+    { tag: '_other', fallbackTitle: 'Other NSE' },
+  ];
+
+  function watchlistSectionTitle(tag) {
+    const g = _wlIndexGroups[tag];
+    return (g && g.label) || WL_SECTIONS.find(s => s.tag === tag)?.fallbackTitle || tag;
+  }
+
+  function renderWatchlistBadges(tags) {
+    if (!tags || !tags.length) return '';
+    return tags.map(t => {
+      const g = _wlIndexGroups[t] || {};
+      const badge = g.badge || t.slice(0, 2).toUpperCase();
+      const title = g.label || t;
+      return `<span class="scout-wl-badge scout-wl-badge--${escapeHtml(t)}" title="${escapeHtml(title)}">${escapeHtml(badge)}</span>`;
+    }).join('');
+  }
+
+  function renderWatchlistItem(s) {
+    const tags = s.index_tags || [];
+    const checked = _wlSelected.has(s.symbol);
+    return `
+      <label class="scout-wl-item${checked ? ' scout-wl-item--checked' : ''}">
+        <input type="checkbox" class="scout-wl-cb" data-symbol="${escapeHtml(s.symbol)}"${checked ? ' checked' : ''}>
+        <span class="scout-wl-item-body">
+          <span class="scout-wl-symbol">${escapeHtml(s.symbol)}</span>
+          ${s.name ? `<span class="scout-wl-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span>` : ''}
+          ${tags.length ? `<span class="scout-wl-badges">${renderWatchlistBadges(tags)}</span>` : ''}
+        </span>
+      </label>`;
+  }
+
+  function bucketWatchlistStocks(stocks) {
+    const buckets = { nifty50: [], nifty_bank: [], _other: [] };
+    stocks.forEach(s => {
+      const tags = s.index_tags || [];
+      if (tags.includes('nifty50')) buckets.nifty50.push(s);
+      else if (tags.includes('nifty_bank')) buckets.nifty_bank.push(s);
+      else buckets._other.push(s);
+    });
+    return buckets;
+  }
+
+  function bindWatchlistCheckboxes(root) {
+    root.querySelectorAll('.scout-wl-cb').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const sym = cb.getAttribute('data-symbol');
+        if (cb.checked) _wlSelected.add(sym);
+        else _wlSelected.delete(sym);
+        cb.closest('.scout-wl-item')?.classList.toggle('scout-wl-item--checked', cb.checked);
+        renderWatchlistMeta({
+          total_equity_count: _wlTotal,
+          search: _wlSearch,
+          instrument_refreshed_at: _wlRefreshedAt,
+        });
+      });
+    });
+  }
   function renderWatchlistNotice() {
     const el = $('#scout-wl-notice');
     if (!el) return;
@@ -221,7 +286,7 @@
         symbol: sym,
         name: '',
         is_nifty50: opts.isNifty50 || _wlNifty50.includes(sym),
-        pinned_selected: !!opts.pinned,
+        index_tags: opts.indexTags || (opts.isNifty50 || _wlNifty50.includes(sym) ? ['nifty50'] : []),
       });
     });
   }
@@ -246,7 +311,7 @@
     if (cnt) cnt.textContent = _wlSelected.size + ' selected';
     const more = $('#scout-wl-more');
     if (more) {
-      const hasMore = _wlOffset + _wlStocks.filter(s => !s.pinned_selected).length < _wlTotal;
+      const hasMore = _wlOffset + _wlStocks.length < _wlTotal;
       more.hidden = !hasMore;
     }
   }
@@ -263,34 +328,30 @@
       renderWatchlistMeta(null);
       return;
     }
-    c.className = 'scout-wl-grid';
-    c.innerHTML = _wlStocks.map(s => `
-      <label class="scout-wl-item${s.is_nifty50 ? ' scout-wl-item--n50' : ''}${s.pinned_selected ? ' scout-wl-item--pinned' : ''}">
-        <input type="checkbox" class="scout-wl-cb" data-symbol="${escapeHtml(s.symbol)}"
-          ${_wlSelected.has(s.symbol) ? 'checked' : ''}>
-        <span>
-          <span>${escapeHtml(s.symbol)}</span>
-          ${s.name ? `<span class="scout-wl-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span>` : ''}
-        </span>
-      </label>
-    `).join('');
+
+    let html = '';
+    if (_wlSearch) {
+      c.className = 'scout-wl-grid';
+      html = _wlStocks.map(renderWatchlistItem).join('');
+    } else {
+      c.className = 'scout-watchlist-wrap';
+      const buckets = bucketWatchlistStocks(_wlStocks);
+      html = WL_SECTIONS.map(sec => {
+        const list = sec.tag === '_other' ? buckets._other : buckets[sec.tag];
+        if (!list.length) return '';
+        return `
+          <h3 class="scout-wl-group-title">${escapeHtml(watchlistSectionTitle(sec.tag))}
+            <span class="muted">(${list.length})</span></h3>
+          <div class="scout-wl-grid">${list.map(renderWatchlistItem).join('')}</div>`;
+      }).join('');
+    }
+    c.innerHTML = html;
     renderWatchlistMeta({
       total_equity_count: _wlTotal,
       search: _wlSearch,
       instrument_refreshed_at: _wlRefreshedAt,
     });
-    c.querySelectorAll('.scout-wl-cb').forEach(cb => {
-      cb.addEventListener('change', () => {
-        const sym = cb.getAttribute('data-symbol');
-        if (cb.checked) _wlSelected.add(sym);
-        else _wlSelected.delete(sym);
-        renderWatchlistMeta({
-          total_equity_count: _wlTotal,
-          search: _wlSearch,
-          instrument_refreshed_at: _wlRefreshedAt,
-        });
-      });
-    });
+    bindWatchlistCheckboxes(c);
   }
 
   async function loadScoutWatchlist(opts = {}) {
@@ -314,6 +375,7 @@
       });
       if (refresh) q.set('refresh', '1');
       const data = await scoutApi('/watchlist?' + q.toString());
+      if (data.index_groups) _wlIndexGroups = data.index_groups;
       _wlNifty50 = data.nifty50 || [];
       _wlTotal = data.total_equity_count || 0;
       _wlRefreshedAt = data.instrument_refreshed_at || '';
@@ -361,7 +423,7 @@
         return;
       }
       syms.forEach(sym => _wlSelected.add(sym));
-      ensureWatchlistRows(syms, { isNifty50: true, pinned: true });
+      ensureWatchlistRows(syms, { isNifty50: true, indexTags: ['nifty50'] });
       renderWatchlist();
       toast('Nifty 50 selected (' + syms.length + ')', 'info');
     });

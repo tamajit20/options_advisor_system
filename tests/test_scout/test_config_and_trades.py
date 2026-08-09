@@ -45,9 +45,9 @@ def test_scout_watchlist_api(client, mocker):
         "scout.routes.nse_equity_universe",
         return_value=(
             [
-                {"symbol": "RELIANCE", "name": "Reliance", "is_nifty50": True},
-                {"symbol": "TCS", "name": "TCS", "is_nifty50": True},
-                {"symbol": "INFY", "name": "Infosys", "is_nifty50": True},
+                {"symbol": "RELIANCE", "name": "Reliance", "is_nifty50": True, "index_tags": ["nifty50"]},
+                {"symbol": "TCS", "name": "TCS", "is_nifty50": True, "index_tags": ["nifty50"]},
+                {"symbol": "INFY", "name": "Infosys", "is_nifty50": True, "index_tags": ["nifty50"]},
             ],
             3,
             "2026-08-09 10:00:00",
@@ -79,7 +79,9 @@ def test_scout_watchlist_api_without_zerodha(client, mocker):
     assert data["notice"]
     assert len(data["stocks"]) == 2
     assert data["stocks"][0]["symbol"] == "RELIANCE"
+    assert data["stocks"][0]["index_tags"] == ["nifty50"]
     assert data["total_equity_count"] == 2
+    assert "nifty50" in data["index_groups"]
 
 
 def test_scout_trades_open(client, mocker):

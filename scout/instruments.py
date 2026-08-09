@@ -8,10 +8,11 @@ import time
 from datetime import timedelta
 from typing import List, Optional, Tuple
 
-from config import NIFTY_50_SYMBOLS, ZERODHA_API_CONFIG
+from config import NIFTY_50_SYMBOLS, NIFTY_BANK_SYMBOLS, ZERODHA_API_CONFIG
 from providers.zerodha.facade import KiteFacade
 from providers.zerodha.instruments import InstrumentMaster
 from providers.zerodha.session import is_token_valid, load_session
+from scout.index_groups import index_tags, sort_watchlist_rows
 from utils import now_ist
 
 logger = logging.getLogger(__name__)
@@ -76,15 +77,19 @@ def nse_equity_universe(
     else:
         filtered = rows
     total = len(filtered)
-    page = filtered[offset: offset + limit]
-    stocks = [
+    stock_rows = [
         {
             "symbol": inst.tradingsymbol.upper(),
             "name": inst.name or "",
             "is_nifty50": inst.tradingsymbol.upper() in _NIFTY50_SET,
+            "index_tags": index_tags(inst.tradingsymbol),
         }
-        for inst in page
+        for inst in filtered
     ]
+    if not search:
+        stock_rows = sort_watchlist_rows(stock_rows)
+    page = stock_rows[offset: offset + limit]
+    stocks = page
     loaded = master.loaded_at_monotonic
     if loaded is not None:
         refreshed = (
