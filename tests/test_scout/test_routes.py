@@ -10,6 +10,8 @@ def test_scout_status_route(client):
     assert "zerodha_ok" in data
     assert "market_open" in data
     assert "watchlist_count" in data
+    assert "push_enabled" in data
+    assert data.get("mode") == "websocket"
 
 
 def test_scout_signals_route(client):

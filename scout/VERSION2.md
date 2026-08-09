@@ -23,7 +23,7 @@ This document tracks what v2 should add (not implemented in v1).
 
 ## Nice to have
 
-13. WebSocket-built candles (shared tick cache, no REST minute history per scan).
+13. ~~WebSocket-built candles (shared tick cache, no REST minute history per scan).~~ **Done in v1** — `scout/push_engine.py` in `ws_runner`; REST scan is a 3‑min backup only.
 14. Order-book / depth imbalance.
 15. Push notifications (Telegram / SMS) in addition to dashboard.
 16. Stock futures symbols alongside cash.

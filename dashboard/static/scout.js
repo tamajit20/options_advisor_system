@@ -45,8 +45,12 @@
     const parts = [];
     parts.push(st.market_open ? '🟢 Market open' : '⚫ Market closed');
     parts.push(st.zerodha_ok ? '🔑 Zerodha OK' : '🔑 ' + (st.zerodha_message || 'Not logged in'));
-    if (st.last_scan && st.last_scan.finished_at) {
-      parts.push('Last scan: ' + st.last_scan.signals_found + ' signal(s)');
+    parts.push('📡 WebSocket push');
+    if (st.last_signal && st.last_signal.triggered_at) {
+      parts.push(
+        'Last signal: ' + st.last_signal.symbol + ' ' + st.last_signal.action
+        + ' (' + ageLabel(st.last_signal.triggered_at) + ')'
+      );
     }
     parts.push(st.watchlist_count + ' symbols watched');
     bar.innerHTML = parts.map(p => `<span class="scout-stat">${escapeHtml(p)}</span>`).join('');
@@ -57,7 +61,7 @@
     if (!c) return;
     if (!signals || !signals.length) {
       c.className = '';
-      c.innerHTML = '<div class="empty">No scout signals in the last 2 hours. Try <strong>Scan now</strong> during market hours.</div>';
+      c.innerHTML = '<div class="empty">No scout signals in the last 2 hours. Ensure <strong>WS Monitor</strong> shows connected during market hours.</div>';
       return;
     }
     c.className = 'scout-signal-list';
@@ -115,27 +119,6 @@
 
   function bindScoutUi() {
     $('#scout-refresh')?.addEventListener('click', () => loadScout());
-    $('#scout-scan-now')?.addEventListener('click', async () => {
-      const btn = $('#scout-scan-now');
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Scanning…';
-      }
-      try {
-        const r = await scoutApi('/scan', { method: 'POST' });
-        if (typeof window.toast === 'function') {
-          window.toast('Scout scan done — ' + (r.signals_found || 0) + ' signal(s)', 'info');
-        }
-        await loadScout();
-      } catch (e) {
-        if (typeof window.toast === 'function') window.toast(e.message, 'err');
-      } finally {
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = 'Scan now';
-        }
-      }
-    });
   }
 
   function onScoutTabActive() {

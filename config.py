@@ -146,19 +146,6 @@ SCHEDULER_CONFIG = {
         "weekly_cleanup":     {"day_of_week": "fri", "hour": 9, "minute": 30, "enabled": True},
         # Events calendar sync — Mon market window (VM on from 08:55)
         "events_seed":        {"day_of_week": "mon", "hour": 9,  "minute":  0, "enabled": True},
-        # Intraday Scout — equity watchlist scan (separate module)
-        "scout_scanner": {
-            "enabled": True,
-            "schedules": [
-                {"day_of_week": "mon-fri", "hour": 9,  "minute": 20},
-                {"day_of_week": "mon-fri", "hour": 10, "minute": 0},
-                {"day_of_week": "mon-fri", "hour": 11, "minute": 0},
-                {"day_of_week": "mon-fri", "hour": 12, "minute": 0},
-                {"day_of_week": "mon-fri", "hour": 13, "minute": 0},
-                {"day_of_week": "mon-fri", "hour": 14, "minute": 0},
-                {"day_of_week": "mon-fri", "hour": 15, "minute": 0},
-            ],
-        },
     },
     # Each job also gets a max wallclock budget (seconds) — enforced by
     # `_run_job` via a watchdog thread that closes the DB connection on
@@ -184,7 +171,6 @@ SCHEDULER_CONFIG = {
         "intraday_validator":      180,
         "eod_nightly_pipeline":    1200,
         "morning_eod_catchup":     1200,
-        "scout_scanner":           900,
     },
     # Default for jobs not listed above.
     "default_job_timeout_seconds": 600,
@@ -213,6 +199,9 @@ SCOUT_CONFIG: dict = {
     "min_candles": 12,
     "rs_margin_pct": 0.15,
     "signal_display_minutes": 120,
+    # Live WS push (ws_runner): evaluate patterns on each 1m bar close from ticks.
+    "push_enabled": True,
+    "push_dedupe_minutes": 30,
 }
 
 

@@ -228,6 +228,8 @@ def _run_ws_runner_once(session, stop_event, bus, latest_spots: dict) -> str:
     from providers.zerodha.ws_runner import KiteWSRunner, _ProcessRestartRequired
     from providers.ws_monitor import WSMonitor, default_snapshot_path
     from providers.ws_watchdog import WSWatchdog
+    from scout.push_engine import ScoutPushEngine
+    from scout.subscription import make_scout_equity_loader
 
     cache = TTLCache(default_ttl_seconds=PROVIDERS_CONFIG.get("live_cache_ttl_seconds", 5))
 
@@ -265,6 +267,7 @@ def _run_ws_runner_once(session, stop_event, bus, latest_spots: dict) -> str:
             PROVIDERS_CONFIG.get("ws_subscription_interval_seconds", 60)
         ),
         kill_switch_fn=lambda: flags_repo.get_bool(FLAG_KILL_SWITCH, default=False),
+        equity_loader=make_scout_equity_loader(),
     )
 
     def _expiries_for(sym: str):
@@ -275,6 +278,12 @@ def _run_ws_runner_once(session, stop_event, bus, latest_spots: dict) -> str:
     chain_aggregator = ChainTickAggregator(
         db=db,
         expiry_provider=_expiries_for,
+        event_bus=bus,
+    )
+
+    scout_push = ScoutPushEngine(
+        db=db,
+        spot_lookup=lambda s: latest_spots.get(s),
         event_bus=bus,
     )
 
@@ -376,6 +385,7 @@ def _run_ws_runner_once(session, stop_event, bus, latest_spots: dict) -> str:
     ws_watchdog.start()
     chain_aggregator.start()
     live_risk_monitor.start()
+    scout_push.start()
 
     import threading as _threading
     _threading.Thread(target=_watch_session, name="zerodha-session-watch", daemon=True).start()
@@ -390,6 +400,7 @@ def _run_ws_runner_once(session, stop_event, bus, latest_spots: dict) -> str:
         exit_reason["reason"] = "process_restart"
     finally:
         live_risk_monitor.stop()
+        scout_push.stop()
         chain_aggregator.stop()
         ws_watchdog.stop()
         ws_monitor.stop()

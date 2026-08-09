@@ -76,6 +76,13 @@ class ScoutSignalRepo:
             out.append(row)
         return out
 
+    def last_signal(self) -> Optional[dict]:
+        row = self.db.fetch_one(
+            "SELECT TOP 1 symbol, action, signal_type, triggered_at "
+            "FROM scout_signals ORDER BY triggered_at DESC",
+        )
+        return _row(row) if row else None
+
 
 class ScoutScanLogRepo:
     def __init__(self, db: SQLServerConnection):

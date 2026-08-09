@@ -83,6 +83,7 @@ class IndexSpec:
 
 
 IndexLoader = Callable[[], Iterable[IndexSpec]]
+EquityLoader = Callable[[], Iterable[str]]
 
 
 # Default indexes streamed for opportunity regeneration. Tied to
@@ -126,6 +127,9 @@ class SubscriptionManager:
     index_loader:
         Zero-arg callable returning `IndexSpec` rows. Defaults to a
         constant supplier of `DEFAULT_INDEX_SPECS`.
+    equity_loader:
+        Zero-arg callable returning NSE equity tradingsymbols (e.g. scout
+        watchlist). Resolved to EQ tokens and merged into the WS set.
     interval_seconds:
         Poll cadence (default 60s).
     """
@@ -136,6 +140,7 @@ class SubscriptionManager:
         instrument_master: InstrumentMaster,
         leg_loader: LegLoader,
         index_loader: Optional[IndexLoader] = None,
+        equity_loader: Optional[EquityLoader] = None,
         *,
         interval_seconds: float = 60.0,
         kill_switch_fn: Optional[Callable[[], bool]] = None,
@@ -148,6 +153,7 @@ class SubscriptionManager:
         self._index_loader: IndexLoader = (
             index_loader if index_loader is not None else (lambda: DEFAULT_INDEX_SPECS)
         )
+        self._equity_loader: EquityLoader = equity_loader or (lambda: [])
         self._interval = float(interval_seconds)
         # `kill_switch_fn()` returns True when live data is globally disabled.
         # When True, we apply an empty token set every cycle. The runner stays
@@ -214,6 +220,7 @@ class SubscriptionManager:
 
         legs = list(self._leg_loader())
         indexes = list(self._index_loader())
+        equities = list(self._equity_loader())
 
         tokens = set()
         unresolved = 0
@@ -259,6 +266,21 @@ class SubscriptionManager:
                     option_type=opt_type,
                     is_index=False,
                 ),
+            )
+
+        for tradingsymbol in equities:
+            sym = str(tradingsymbol).upper()
+            inst = self._master.get_by_tradingsymbol("NSE", sym)
+            if inst is None:
+                logger.warning(
+                    "subscription_manager: equity %s not in instrument master", sym,
+                )
+                unresolved += 1
+                continue
+            tokens.add(inst.instrument_token)
+            self._runner.set_token_meta(
+                inst.instrument_token,
+                TokenMeta(symbol=sym, is_index=False),
             )
 
         current = self._runner.desired_tokens()

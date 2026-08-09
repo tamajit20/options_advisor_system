@@ -12,23 +12,13 @@ from flask import Blueprint, jsonify, request
 
 from config import SCOUT_CONFIG
 from database.connection import SQLServerConnection
-from database.scout_models import ScoutScanLogRepo, ScoutSignalRepo
+from database.scout_models import ScoutSignalRepo
 from scout.market_data import zerodha_ready
-from scout.orchestrator import run_scout_scan
 from scout.utils import is_market_open
 
 logger = logging.getLogger(__name__)
 
 scout_bp = Blueprint("scout", __name__, url_prefix="/api/scout")
-
-SCOUT_JOB_META = {
-    "scout_scanner": {
-        "icon": "🔍",
-        "name": "Intraday Scout Scan",
-        "description": "Scans the equity watchlist on live Zerodha 1m candles for BUY/SELL intraday setups.",
-        "module": "scout",
-    },
-}
 
 
 def _with_db(fn: Callable):
@@ -48,14 +38,16 @@ def _with_db(fn: Callable):
 @_with_db
 def api_scout_status(db: SQLServerConnection):
     ok, msg = zerodha_ready()
-    last = ScoutScanLogRepo(db).last_success()
+    last_sig = ScoutSignalRepo(db).last_signal()
     return jsonify({
         "enabled": bool(SCOUT_CONFIG.get("enabled", True)),
+        "mode": "websocket",
         "market_open": is_market_open(),
         "zerodha_ok": ok,
         "zerodha_message": msg,
         "watchlist_count": len(SCOUT_CONFIG.get("watchlist") or []),
-        "last_scan": last,
+        "push_enabled": bool(SCOUT_CONFIG.get("push_enabled", True)),
+        "last_signal": last_sig,
     })
 
 
@@ -66,16 +58,6 @@ def api_scout_signals(db: SQLServerConnection):
     since = min(int(request.args.get("since_minutes", 120)), 24 * 60)
     rows = ScoutSignalRepo(db).recent(limit=limit, since_minutes=since)
     return jsonify({"signals": rows, "count": len(rows)})
-
-
-@scout_bp.route("/scan", methods=["POST"])
-@_with_db
-def api_scout_scan_now(db: SQLServerConnection):
-    ok, msg = zerodha_ready()
-    if not ok:
-        return jsonify({"error": msg}), 503
-    n = run_scout_scan(db)
-    return jsonify({"status": "ok", "signals_found": n})
 
 
 def register_scout(app) -> None:

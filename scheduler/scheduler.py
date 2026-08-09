@@ -28,6 +28,7 @@ from typing import Callable, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from config import SCHEDULER_CONFIG
 from contracts import Notification
@@ -443,11 +444,6 @@ def job_intraday_validator():
     _run_job("intraday_validator", run_intraday_validator)
 
 
-def job_scout_scanner():
-    from scout.orchestrator import run_scout_scan
-    _run_job("scout_scanner", run_scout_scan)
-
-
 def _run_eod_pipeline_steps(label: str) -> int:
     """Run the full EOD chain sequentially (shared by nightly + morning catchup).
 
@@ -559,7 +555,6 @@ JOB_FUNCS = {
     "intraday_validator":      job_intraday_validator,
     "eod_nightly_pipeline":    job_eod_nightly_pipeline,
     "morning_eod_catchup":     job_morning_eod_catchup,
-    "scout_scanner":           job_scout_scanner,
 }
 
 
@@ -582,6 +577,23 @@ def build_scheduler() -> BackgroundScheduler:
             continue
 
         schedules = conf.get("schedules")
+        interval_minutes = conf.get("interval_minutes")
+        if interval_minutes:
+            fn = JOB_FUNCS.get(name)
+            if fn is None:
+                logger.warning("No handler for scheduled job %s", name)
+                continue
+            sch.add_job(
+                fn,
+                IntervalTrigger(minutes=int(interval_minutes)),
+                id=name,
+                name=name,
+                misfire_grace_time=600,
+                max_instances=1,
+                replace_existing=True,
+            )
+            logger.info("Scheduled %s every %s minutes", name, interval_minutes)
+            continue
         if schedules:
             fn = JOB_FUNCS.get(name)
             if fn is None:
