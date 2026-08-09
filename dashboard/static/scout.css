@@ -197,6 +197,53 @@
 .scout-watchlist-wrap .scout-wl-group-title:first-child {
   margin-top: 0;
 }
+.scout-wl-section {
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  background: rgba(0, 0, 0, .12);
+}
+.scout-wl-section-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.scout-wl-section-summary::-webkit-details-marker { display: none; }
+.scout-wl-section-summary::before {
+  content: '▸';
+  margin-right: 8px;
+  color: var(--accent);
+  transition: transform .15s ease;
+}
+.scout-wl-section[open] > .scout-wl-section-summary::before {
+  transform: rotate(90deg);
+}
+.scout-wl-section-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 160px;
+}
+.scout-wl-section-title {
+  font-size: .9rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.scout-wl-section-count { font-size: .75rem; }
+.scout-wl-section-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.scout-wl-section > .scout-wl-grid {
+  padding: 0 12px 12px;
+}
 .scout-wl-name {
   display: block;
   font-size: .72rem;

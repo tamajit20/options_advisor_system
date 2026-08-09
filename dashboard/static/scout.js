@@ -190,6 +190,7 @@
   let _wlStocks = [];
   let _wlSelected = new Set();
   let _wlNifty50 = [];
+  let _wlNiftyBank = [];
   let _wlOffset = 0;
   let _wlLimit = 80;
   let _wlTotal = 0;
@@ -209,6 +210,52 @@
     { tag: 'nifty_bank', fallbackTitle: 'Nifty Bank' },
     { tag: '_other', fallbackTitle: 'Other NSE' },
   ];
+  let _wlSectionOpen = { nifty50: true, nifty_bank: true, _other: false };
+
+  function indexTagsForSymbol(sym) {
+    const tags = [];
+    if (_wlNifty50.includes(sym)) tags.push('nifty50');
+    if (_wlNiftyBank.includes(sym)) tags.push('nifty_bank');
+    return tags;
+  }
+
+  function fullSectionSymbolList(tag, visibleList) {
+    if (tag === 'nifty50') return _wlNifty50.slice();
+    if (tag === 'nifty_bank') return _wlNiftyBank.slice();
+    return visibleList.map(s => s.symbol);
+  }
+
+  function sectionAllSelected(symbols) {
+    return symbols.length > 0 && symbols.every(sym => _wlSelected.has(sym));
+  }
+
+  function sectionToggleLabel(symbols) {
+    return sectionAllSelected(symbols) ? 'Clear section' : 'Select all';
+  }
+
+  function toggleSectionSelection(tag, symbols) {
+    if (!symbols.length) return;
+    if (sectionAllSelected(symbols)) {
+      symbols.forEach(sym => _wlSelected.delete(sym));
+      toast(watchlistSectionTitle(tag) + ' cleared', 'info');
+    } else {
+      symbols.forEach(sym => _wlSelected.add(sym));
+      ensureWatchlistRows(symbols);
+      toast(watchlistSectionTitle(tag) + ' selected (' + symbols.length + ')', 'info');
+    }
+    renderWatchlist();
+  }
+
+  function selectIndexList(symbols, label) {
+    if (!symbols.length) {
+      toast(label + ' list not loaded yet', 'err');
+      return;
+    }
+    symbols.forEach(sym => _wlSelected.add(sym));
+    ensureWatchlistRows(symbols);
+    renderWatchlist();
+    toast(label + ' selected (' + symbols.length + ')', 'info');
+  }
 
   function watchlistSectionTitle(tag) {
     const g = _wlIndexGroups[tag];
@@ -250,6 +297,27 @@
     return buckets;
   }
 
+  function bindWatchlistSections(root) {
+    root.querySelectorAll('.scout-wl-sec-toggle').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const tag = btn.dataset.section;
+        let syms = [];
+        const raw = btn.getAttribute('data-symbols') || '';
+        if (raw) syms = raw.split(',').filter(Boolean);
+        toggleSectionSelection(tag, syms);
+      });
+    });
+    root.querySelectorAll('.scout-wl-section').forEach(det => {
+      const tag = det.dataset.section;
+      if (tag && tag in _wlSectionOpen) det.open = _wlSectionOpen[tag];
+      det.addEventListener('toggle', () => {
+        if (tag) _wlSectionOpen[tag] = det.open;
+      });
+    });
+  }
+
   function bindWatchlistCheckboxes(root) {
     root.querySelectorAll('.scout-wl-cb').forEach(cb => {
       cb.addEventListener('change', () => {
@@ -277,16 +345,17 @@
     el.textContent = _wlNotice + ' You can still select Nifty 50 below; use 🔑 Login for the full NSE list and search.';
   }
 
-  function ensureWatchlistRows(symbols, opts = {}) {
+  function ensureWatchlistRows(symbols) {
     const seen = new Set(_wlStocks.map(s => s.symbol));
     symbols.forEach(sym => {
       if (!sym || seen.has(sym)) return;
       seen.add(sym);
+      const tags = indexTagsForSymbol(sym);
       _wlStocks.push({
         symbol: sym,
         name: '',
-        is_nifty50: opts.isNifty50 || _wlNifty50.includes(sym),
-        index_tags: opts.indexTags || (opts.isNifty50 || _wlNifty50.includes(sym) ? ['nifty50'] : []),
+        is_nifty50: tags.includes('nifty50'),
+        index_tags: tags,
       });
     });
   }
@@ -339,10 +408,25 @@
       html = WL_SECTIONS.map(sec => {
         const list = sec.tag === '_other' ? buckets._other : buckets[sec.tag];
         if (!list.length) return '';
+        const allSyms = fullSectionSymbolList(sec.tag, list);
+        const open = _wlSectionOpen[sec.tag] !== false;
+        const toggleLabel = sectionToggleLabel(allSyms);
+        const selectedInSection = allSyms.filter(s => _wlSelected.has(s)).length;
         return `
-          <h3 class="scout-wl-group-title">${escapeHtml(watchlistSectionTitle(sec.tag))}
-            <span class="muted">(${list.length})</span></h3>
-          <div class="scout-wl-grid">${list.map(renderWatchlistItem).join('')}</div>`;
+          <details class="scout-wl-section" data-section="${escapeHtml(sec.tag)}"${open ? ' open' : ''}>
+            <summary class="scout-wl-section-summary">
+              <span class="scout-wl-section-heading">
+                <span class="scout-wl-section-title">${escapeHtml(watchlistSectionTitle(sec.tag))}</span>
+                <span class="muted scout-wl-section-count">${list.length} shown · ${selectedInSection}/${allSyms.length} selected</span>
+              </span>
+              <span class="scout-wl-section-actions">
+                <button type="button" class="btn btn-sm btn-ghost scout-wl-sec-toggle"
+                  data-section="${escapeHtml(sec.tag)}"
+                  data-symbols="${escapeHtml(allSyms.join(','))}">${escapeHtml(toggleLabel)}</button>
+              </span>
+            </summary>
+            <div class="scout-wl-grid">${list.map(renderWatchlistItem).join('')}</div>
+          </details>`;
       }).join('');
     }
     c.innerHTML = html;
@@ -352,6 +436,7 @@
       instrument_refreshed_at: _wlRefreshedAt,
     });
     bindWatchlistCheckboxes(c);
+    bindWatchlistSections(c);
   }
 
   async function loadScoutWatchlist(opts = {}) {
@@ -377,6 +462,7 @@
       const data = await scoutApi('/watchlist?' + q.toString());
       if (data.index_groups) _wlIndexGroups = data.index_groups;
       _wlNifty50 = data.nifty50 || [];
+      _wlNiftyBank = data.nifty_bank || [];
       _wlTotal = data.total_equity_count || 0;
       _wlRefreshedAt = data.instrument_refreshed_at || '';
       _wlZerodhaOk = data.zerodha_ok !== false;
@@ -417,15 +503,10 @@
       renderWatchlist();
     });
     $('#scout-wl-select-n50')?.addEventListener('click', () => {
-      const syms = _wlNifty50.length ? _wlNifty50 : [];
-      if (!syms.length) {
-        toast('Nifty 50 list not loaded yet — open Watchlist again or log in to Zerodha', 'err');
-        return;
-      }
-      syms.forEach(sym => _wlSelected.add(sym));
-      ensureWatchlistRows(syms, { isNifty50: true, indexTags: ['nifty50'] });
-      renderWatchlist();
-      toast('Nifty 50 selected (' + syms.length + ')', 'info');
+      selectIndexList(_wlNifty50, 'Nifty 50');
+    });
+    $('#scout-wl-select-nbank')?.addEventListener('click', () => {
+      selectIndexList(_wlNiftyBank, 'Nifty Bank');
     });
     $('#scout-wl-clear')?.addEventListener('click', () => {
       _wlSelected.clear();

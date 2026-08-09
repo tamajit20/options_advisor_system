@@ -41,6 +41,7 @@ def test_scout_watchlist_api(client, mocker):
     )
     mocker.patch("scout.routes.default_watchlist", return_value=["RELIANCE"])
     mocker.patch("scout.routes.nifty50_symbols", return_value=["RELIANCE", "TCS", "INFY"])
+    mocker.patch("scout.routes.nifty_bank_symbols", return_value=["HDFCBANK", "ICICIBANK"])
     mocker.patch(
         "scout.routes.nse_equity_universe",
         return_value=(
@@ -59,6 +60,7 @@ def test_scout_watchlist_api(client, mocker):
     assert data["selected_count"] == 2
     assert data["total_equity_count"] == 3
     assert len(data["nifty50"]) == 3
+    assert len(data["nifty_bank"]) == 2
     assert data["zerodha_ok"] is True
 
 
@@ -68,6 +70,7 @@ def test_scout_watchlist_api_without_zerodha(client, mocker):
     mocker.patch("scout.routes.get_watchlist", return_value=[])
     mocker.patch("scout.routes.default_watchlist", return_value=["RELIANCE"])
     mocker.patch("scout.routes.nifty50_symbols", return_value=["RELIANCE", "TCS"])
+    mocker.patch("scout.routes.nifty_bank_symbols", return_value=["HDFCBANK", "ICICIBANK"])
     mocker.patch(
         "scout.routes.nse_equity_universe",
         side_effect=ScoutInstrumentError("Zerodha login required"),

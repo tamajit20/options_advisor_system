@@ -47,3 +47,7 @@ def watchlist_sort_key(row: dict) -> tuple:
 
 def sort_watchlist_rows(rows: List[dict]) -> List[dict]:
     return sorted(rows, key=watchlist_sort_key)
+
+
+def nifty_bank_symbols() -> List[str]:
+    return list(NIFTY_BANK_SYMBOLS)
