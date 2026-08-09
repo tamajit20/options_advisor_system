@@ -18,7 +18,7 @@ def app(mocker):
     fake_conn.fetch_all.return_value = []
     mocker.patch("dashboard.server.SQLServerConnection", return_value=fake_conn)
     mocker.patch("scout.routes.SQLServerConnection", return_value=fake_conn)
-    mocker.patch("database.scout_models.ScoutScanLogRepo.last_success", return_value=None)
+    mocker.patch("database.scout_models.ScoutSignalRepo.last_signal", return_value=None)
     app = server.create_app()
     app.config["TESTING"] = True
     return app

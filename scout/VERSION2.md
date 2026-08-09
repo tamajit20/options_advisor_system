@@ -18,13 +18,13 @@ This document tracks what v2 should add (not implemented in v1).
 8. **News / event disable** — no scouts on result day for a symbol.
 9. **Failed breakout** — break then back inside range → SELL / avoid.
 10. **Exit hints** — target zone and trail-stop suggestions, not entry only.
-11. **Signal track record** — log outcomes vs entry for calibration.
-12. **User watchlist editor** — UI to add/remove symbols (v1 uses config list).
+11. ~~Signal track record~~ — **Partial in v1** (closed trade history + stats by signal type).
+12. ~~User watchlist editor~~ — **Done in v1** (`/api/scout/watchlist`, Scout → Watchlist tab).
 
 ## Nice to have
 
-13. ~~WebSocket-built candles (shared tick cache, no REST minute history per scan).~~ **Done in v1** — `scout/push_engine.py` in `ws_runner`; REST scan is a 3‑min backup only.
+13. ~~WebSocket-built candles (shared tick cache, no REST minute history per scan).~~ **Done in v1** — `scout/push_engine.py` in `ws_runner`.
 14. Order-book / depth imbalance.
 15. Push notifications (Telegram / SMS) in addition to dashboard.
 16. Stock futures symbols alongside cash.
-17. Paper-trading mode for scout signals.
+17. ~~Trade tracking for scout signals.~~ **Done in v1** — `scout_trades` + Mark taken / My Trades (same flow as Options mark executed).

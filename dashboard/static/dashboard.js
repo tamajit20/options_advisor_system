@@ -625,7 +625,7 @@ const toast = (msg, kind='info') => {
 window.toast = toast;
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config', 'scout'];
+const TABS = ['suggestion', 'trades', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
 const TAB_LOADERS = {};
 const TAB_LEAVE = {};
 
@@ -649,7 +649,11 @@ function switchTab(name) {
     panel.classList.toggle('active', t === name);
     panel.setAttribute('aria-hidden', t !== name);
   });
-  $$('.nav-item, .bnav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  $$('.nav-item, .bnav-item').forEach(b => {
+    const tab = b.dataset.tab;
+    const active = tab === name || (tab === 'scout-signals' && name.startsWith('scout-'));
+    b.classList.toggle('active', active);
+  });
   if (name === 'suggestion')    loadSuggestion();
   if (name === 'trades')        loadTrades();
   if (name === 'history')       loadHistory();
@@ -659,6 +663,13 @@ function switchTab(name) {
   if (name === 'notifications') loadNotifications();
   if (name === 'config')        loadConfig();
   if (TAB_LOADERS[name])        TAB_LOADERS[name]();
+  if (name.startsWith('scout-')) {
+    const sec = document.getElementById('nav-section-scout');
+    if (sec) sec.open = true;
+  } else if (TABS.includes(name)) {
+    const sec = document.getElementById('nav-section-options');
+    if (sec) sec.open = true;
+  }
   // Stop jobs auto-refresh when leaving the tab
   if (name !== 'jobs')  stopJobsAutoRefresh();
   if (name !== 'wsmon') stopWsMonitorAutoRefresh();
@@ -669,6 +680,8 @@ function switchTab(name) {
     }
   } catch (_) {}
 }
+window.switchTab = switchTab;
+
 $$('.nav-item, .bnav-item').forEach(b =>
   b.addEventListener('click', () => switchTab(b.dataset.tab))
 );
@@ -679,11 +692,13 @@ $$('.nav-item, .bnav-item').forEach(b =>
 function _restoreActiveTab() {
   let initial = null;
   const hash = (window.location.hash || '').replace(/^#/, '');
-  if (hash && TABS.includes(hash)) initial = hash;
+  if (hash === 'scout') initial = 'scout-signals';
+  else if (hash && TABS.includes(hash)) initial = hash;
   if (!initial) {
     try {
       const saved = localStorage.getItem('activeTab');
-      if (saved && TABS.includes(saved)) initial = saved;
+      if (saved === 'scout') initial = 'scout-signals';
+      else if (saved && TABS.includes(saved)) initial = saved;
     } catch (_) {}
   }
   if (initial) switchTab(initial);

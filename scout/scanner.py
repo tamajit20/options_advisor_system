@@ -13,11 +13,11 @@ from scout.utils import pct_change
 logger = logging.getLogger(__name__)
 
 
-def scan_watchlist(mkt: ScoutMarketData) -> Tuple[List[dict], int]:
+def scan_watchlist(mkt: ScoutMarketData, db=None) -> Tuple[List[dict], int]:
     """Return (signal dicts with symbol, symbols_scanned count)."""
     bench_pct = mkt.benchmark_pct_from_open()
     out: List[dict] = []
-    symbols = mkt.watchlist()
+    symbols = mkt.watchlist(db)
     for symbol in symbols:
         try:
             candles, stats = mkt.minute_bars(symbol)

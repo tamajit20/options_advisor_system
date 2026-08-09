@@ -116,5 +116,5 @@ class ScoutMarketData:
         return candles, stats
 
     @staticmethod
-    def watchlist() -> List[str]:
-        return list(SCOUT_CONFIG.get("watchlist") or [])
+    def watchlist(db=None) -> List[str]:
+        return get_watchlist(db)

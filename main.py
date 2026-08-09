@@ -267,7 +267,7 @@ def _run_ws_runner_once(session, stop_event, bus, latest_spots: dict) -> str:
             PROVIDERS_CONFIG.get("ws_subscription_interval_seconds", 60)
         ),
         kill_switch_fn=lambda: flags_repo.get_bool(FLAG_KILL_SWITCH, default=False),
-        equity_loader=make_scout_equity_loader(),
+        equity_loader=make_scout_equity_loader(db),
     )
 
     def _expiries_for(sym: str):

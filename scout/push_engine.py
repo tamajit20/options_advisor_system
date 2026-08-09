@@ -93,9 +93,8 @@ class ScoutPushEngine:
         self._spot_lookup = spot_lookup
         self._bus = event_bus or get_event_bus()
         self._clock = clock
-        self._watchlist: Set[str] = {
-            str(s).upper() for s in (SCOUT_CONFIG.get("watchlist") or [])
-        }
+        self._watchlist: Set[str] = set()
+        self._reload_watchlist()
         self._dedupe_minutes = int(SCOUT_CONFIG.get("push_dedupe_minutes", 30))
 
         self._lock = threading.RLock()
@@ -109,6 +108,11 @@ class ScoutPushEngine:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._seeded = False
+
+    def _reload_watchlist(self) -> None:
+        from scout.config_loader import get_watchlist
+
+        self._watchlist = {str(s).upper() for s in get_watchlist(self._db)}
 
     def start(self) -> None:
         if not SCOUT_CONFIG.get("enabled", True):
@@ -237,6 +241,7 @@ class ScoutPushEngine:
                 return
             if not is_market_open():
                 continue
+            self._reload_watchlist()
             try:
                 self.flush_at(target)
             except Exception:

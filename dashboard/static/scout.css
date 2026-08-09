@@ -1,19 +1,63 @@
 /* Intraday Scout — separate styles (not mixed into options advisor rules) */
 
-.nav-section-label {
+/* Collapsible side-nav sections */
+.nav-section {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+.nav-section-summary {
   font-size: .65rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .06em;
   color: var(--text-dim);
-  padding: 14px 12px 4px;
-  margin-top: 4px;
+  padding: 12px 12px 6px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
 }
-.nav-section-label--scout {
+.nav-section-summary::-webkit-details-marker { display: none; }
+.nav-section-summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform .15s ease;
+}
+.nav-section[open] > .nav-section-summary::before {
+  transform: rotate(90deg);
+}
+.nav-section--scout {
   border-top: 1px solid rgba(255,255,255,.08);
-  margin-top: 10px;
-  padding-top: 16px;
+  margin-top: 6px;
+}
+.nav-section--scout > .nav-section-summary {
   color: var(--accent);
+}
+.nav-section-items {
+  display: flex;
+  flex-direction: column;
+}
+
+.scout-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.scout-subtab {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #2a3744;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: .82rem;
+  cursor: pointer;
+}
+.scout-subtab.active {
+  background: var(--primary-dim);
+  color: var(--text);
+  border-color: var(--primary);
 }
 
 .scout-intro { margin-top: 0; max-width: 52rem; }
@@ -66,7 +110,110 @@
 .scout-age { font-size: .78rem; font-weight: 500; }
 .scout-reason { font-size: .9rem; line-height: 1.35; margin-bottom: 6px; }
 .scout-inval, .scout-type { font-size: .78rem; }
+.scout-card-actions { margin-top: 10px; }
+.scout-trade-badge { font-size: .78rem; }
+.scout-mark-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+.scout-entry-input,
+.scout-qty-input {
+  width: 100px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #2a3744;
+  background: var(--surface-alt);
+  color: var(--text);
+}
+.scout-qty-input { width: 64px; }
+
+/* My trades */
+.scout-trade-list {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+}
+.scout-close-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  align-items: center;
+}
+.scout-exit-input {
+  width: 120px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #2a3744;
+  background: var(--surface-alt);
+  color: var(--text);
+}
+
+/* Watchlist config */
+.scout-watchlist-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.scout-wl-count { margin-left: auto; font-size: .85rem; }
+.scout-wl-group-title {
+  font-size: .9rem;
+  margin: 16px 0 8px;
+}
+.scout-wl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 6px 10px;
+}
+.scout-wl-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .85rem;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.scout-wl-item:hover { background: rgba(255,255,255,.04); }
+.scout-wl-item--n50 span { font-weight: 500; }
+
+.scout-hist-filters { margin-bottom: 12px; }
+.scout-history-stats { margin-bottom: 20px; }
+.scout-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.scout-stat-box {
+  background: var(--surface);
+  border: 1px solid #2a3744;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.scout-stat-box strong { font-size: 1.1rem; }
+.scout-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .85rem;
+}
+.scout-stats-table th,
+.scout-stats-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #2a3744;
+  text-align: left;
+}
 
 @media (max-width: 640px) {
-  .scout-signal-list { grid-template-columns: 1fr; }
+  .scout-signal-list,
+  .scout-trade-list { grid-template-columns: 1fr; }
+  .scout-wl-count { width: 100%; margin-left: 0; }
 }

@@ -1,0 +1,57 @@
+"""Tests for scout config, trades, and API routes."""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+from database.scout_models import ScoutConfigRepo
+
+
+def test_scout_config_watchlist_roundtrip():
+    db = MagicMock()
+    db.fetch_one.return_value = None
+    repo = ScoutConfigRepo(db)
+    assert repo.get_watchlist() is None
+    repo.set_watchlist(["RELIANCE", "TCS"])
+    assert db.execute.called
+
+
+def test_trade_pnl_buy_and_sell():
+    from database.scout_models import _trade_pnl
+
+    pnl, pct = _trade_pnl("BUY", 100.0, 105.0, 1)
+    assert pnl == 5.0
+    assert pct == 5.0
+    pnl2, _ = _trade_pnl("SELL", 100.0, 95.0, 1)
+    assert pnl2 == 5.0
+
+
+def test_config_loader_default_without_db():
+    from scout.config_loader import default_watchlist, get_watchlist, invalidate_watchlist_cache
+
+    invalidate_watchlist_cache()
+    wl = get_watchlist(None, use_cache=False)
+    assert wl == default_watchlist()
+
+
+def test_scout_watchlist_api(client, mocker):
+    mocker.patch(
+        "scout.routes.get_watchlist",
+        return_value=["RELIANCE", "TCS"],
+    )
+    mocker.patch("scout.routes.nifty50_universe", return_value=["RELIANCE", "TCS", "INFY"])
+    mocker.patch("scout.routes.default_watchlist", return_value=["RELIANCE"])
+    rv = client.get("/api/scout/watchlist")
+    assert rv.status_code == 200
+    data = rv.get_json()
+    assert data["selected_count"] == 2
+    assert len(data["stocks"]) == 3
+
+
+def test_scout_trades_open(client, mocker):
+    mock_repo = MagicMock()
+    mock_repo.open_trades.return_value = []
+    mocker.patch("scout.routes.ScoutTradeRepo", return_value=mock_repo)
+    rv = client.get("/api/scout/trades/open")
+    assert rv.status_code == 200
+    assert rv.get_json()["count"] == 0

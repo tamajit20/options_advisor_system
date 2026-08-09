@@ -180,9 +180,23 @@ SCHEDULER_CONFIG = {
 # ---------------------------------------------------------------------------
 # Intraday Scout (separate module — scout_* tables, /api/scout/*)
 # ---------------------------------------------------------------------------
+# NSE tradingsymbols for Nifty 50 index (static universe for watchlist UI).
+NIFTY_50_SYMBOLS: tuple[str, ...] = (
+    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
+    "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL", "BHARTIARTL",
+    "BPCL", "BRITANNIA", "CIPLA", "COALINDIA", "DRREDDY",
+    "EICHERMOT", "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE",
+    "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK", "INDUSINDBK",
+    "INFY", "ITC", "JSWSTEEL", "KOTAKBANK", "LT",
+    "M&M", "MARUTI", "NESTLEIND", "NTPC", "ONGC",
+    "POWERGRID", "RELIANCE", "SBILIFE", "SBIN", "SHRIRAMFIN",
+    "SUNPHARMA", "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TCS",
+    "TECHM", "TITAN", "TRENT", "ULTRACEMCO", "WIPRO",
+)
+
 SCOUT_CONFIG: dict = {
     "enabled": True,
-    # Liquid Nifty 50 names — edit without touching options code
+    # Default watchlist until user saves via UI (subset of NIFTY_50_SYMBOLS)
     "watchlist": [
         "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "SBIN",
         "BHARTIARTL", "LT", "AXISBANK", "KOTAKBANK", "TATASTEEL", "SUNPHARMA",

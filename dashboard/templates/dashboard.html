@@ -53,37 +53,54 @@
 <main class="app-main">
   <!-- Side nav (desktop) -->
   <nav class="side-nav" aria-label="Primary">
-    <div class="nav-section-label">Options Advisor</div>
-    <button class="nav-item active" data-tab="suggestion">
-      <span class="nav-icon">💡</span><span class="nav-label">Suggestion</span>
-    </button>
-    <button class="nav-item" data-tab="trades">
-      <span class="nav-icon">📊</span><span class="nav-label">My Trades</span>
-    </button>
-    <button class="nav-item" data-tab="history">
-      <span class="nav-icon">📜</span><span class="nav-label">History</span>
-    </button>
-    <button class="nav-item" data-tab="logs">
-      <span class="nav-icon">🪵</span><span class="nav-label">Logs</span>
-    </button>
-    <button class="nav-item" data-tab="jobs">
-      <span class="nav-icon">🔧</span><span class="nav-label">Jobs</span>
-    </button>
-    <button class="nav-item" data-tab="wsmon">
-      <span class="nav-icon">📡</span><span class="nav-label">WS Monitor</span>
-    </button>
-    <button class="nav-item" data-tab="notifications">
-      <span class="nav-icon">🔔</span>
-      <span class="nav-label">Alerts</span>
-      <span id="notif-tab-badge" class="notif-tab-badge" hidden>0</span>
-    </button>
-    <button class="nav-item" data-tab="config">
-      <span class="nav-icon">⚙️</span><span class="nav-label">Config</span>
-    </button>
-    <div class="nav-section-label nav-section-label--scout">Intraday Scout</div>
-    <button class="nav-item" data-tab="scout">
-      <span class="nav-icon">🔍</span><span class="nav-label">Scout Signals</span>
-    </button>
+    <details class="nav-section" id="nav-section-options" open>
+      <summary class="nav-section-summary">Options Advisor</summary>
+      <div class="nav-section-items">
+        <button class="nav-item active" data-tab="suggestion">
+          <span class="nav-icon">💡</span><span class="nav-label">Suggestion</span>
+        </button>
+        <button class="nav-item" data-tab="trades">
+          <span class="nav-icon">📊</span><span class="nav-label">My Trades</span>
+        </button>
+        <button class="nav-item" data-tab="history">
+          <span class="nav-icon">📜</span><span class="nav-label">History</span>
+        </button>
+        <button class="nav-item" data-tab="logs">
+          <span class="nav-icon">🪵</span><span class="nav-label">Logs</span>
+        </button>
+        <button class="nav-item" data-tab="jobs">
+          <span class="nav-icon">🔧</span><span class="nav-label">Jobs</span>
+        </button>
+        <button class="nav-item" data-tab="wsmon">
+          <span class="nav-icon">📡</span><span class="nav-label">WS Monitor</span>
+        </button>
+        <button class="nav-item" data-tab="notifications">
+          <span class="nav-icon">🔔</span>
+          <span class="nav-label">Alerts</span>
+          <span id="notif-tab-badge" class="notif-tab-badge" hidden>0</span>
+        </button>
+        <button class="nav-item" data-tab="config">
+          <span class="nav-icon">⚙️</span><span class="nav-label">Config</span>
+        </button>
+      </div>
+    </details>
+    <details class="nav-section nav-section--scout" id="nav-section-scout" open>
+      <summary class="nav-section-summary">Intraday Scout</summary>
+      <div class="nav-section-items">
+        <button class="nav-item" data-tab="scout-signals">
+          <span class="nav-icon">🔍</span><span class="nav-label">Signals</span>
+        </button>
+        <button class="nav-item" data-tab="scout-watchlist">
+          <span class="nav-icon">📋</span><span class="nav-label">Watchlist</span>
+        </button>
+        <button class="nav-item" data-tab="scout-trades">
+          <span class="nav-icon">📊</span><span class="nav-label">My Trades</span>
+        </button>
+        <button class="nav-item" data-tab="scout-history">
+          <span class="nav-icon">📈</span><span class="nav-label">History</span>
+        </button>
+      </div>
+    </details>
   </nav>
 
   <section class="tab-panels">
@@ -363,14 +380,68 @@
       </div>
     </article>
 
-    <article class="panel" id="panel-scout" aria-hidden="true">
-      <h2 class="panel-title">Intraday Scout</h2>
-      <p class="muted scout-intro">Live equity setups from 1-minute candles — <strong>BUY</strong> / <strong>SELL</strong> / wait. Signals arrive via <strong>WebSocket</strong> on each bar close (see <strong>WS Monitor</strong> tab). Same Zerodha login.</p>
+    <article class="panel" id="panel-scout-signals" aria-hidden="true">
+      <h2 class="panel-title">Intraday Scout — Signals</h2>
+      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
+        <button class="scout-subtab active" data-stab="scout-signals">Signals</button>
+        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
+        <button class="scout-subtab" data-stab="scout-trades">My Trades</button>
+        <button class="scout-subtab" data-stab="scout-history">History</button>
+      </div>
+      <p class="muted scout-intro">Live equity setups from 1-minute candles. Signals arrive via <strong>WebSocket</strong> on each bar close — keep <strong>WS Monitor</strong> connected.</p>
       <div id="scout-status-bar" class="scout-status-bar muted">Loading status…</div>
       <div class="scout-toolbar">
         <button type="button" class="btn btn-ghost" id="scout-refresh">Refresh</button>
       </div>
-      <div id="scout-container" class="loading">Loading…</div>
+      <div id="scout-signals-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-scout-watchlist" aria-hidden="true">
+      <h2 class="panel-title">Intraday Scout — Watchlist</h2>
+      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
+        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
+        <button class="scout-subtab active" data-stab="scout-watchlist">Watchlist</button>
+        <button class="scout-subtab" data-stab="scout-trades">My Trades</button>
+        <button class="scout-subtab" data-stab="scout-history">History</button>
+      </div>
+      <p class="muted scout-intro">Choose which Nifty 50 stocks Scout monitors. Changes apply on the next WS subscription refresh (~1 min).</p>
+      <div class="scout-watchlist-toolbar">
+        <button type="button" class="btn btn-ghost" id="scout-wl-select-all">Select all</button>
+        <button type="button" class="btn btn-ghost" id="scout-wl-select-n50">Select Nifty 50</button>
+        <button type="button" class="btn btn-ghost" id="scout-wl-clear">Clear all</button>
+        <button type="button" class="btn btn-accent" id="scout-wl-save">Save watchlist</button>
+        <span id="scout-wl-count" class="muted scout-wl-count"></span>
+      </div>
+      <div id="scout-watchlist-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-scout-trades" aria-hidden="true">
+      <h2 class="panel-title">Intraday Scout — My Trades</h2>
+      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
+        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
+        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
+        <button class="scout-subtab active" data-stab="scout-trades">My Trades</button>
+        <button class="scout-subtab" data-stab="scout-history">History</button>
+      </div>
+      <p class="muted scout-intro">Trades you took in Zerodha — enter your fill prices here (same flow as Options Advisor mark executed).</p>
+      <div id="scout-trades-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-scout-history" aria-hidden="true">
+      <h2 class="panel-title">Intraday Scout — History</h2>
+      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
+        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
+        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
+        <button class="scout-subtab" data-stab="scout-trades">My Trades</button>
+        <button class="scout-subtab active" data-stab="scout-history">History</button>
+      </div>
+      <div class="filter-row hist-filter-bar scout-hist-filters">
+        <label class="hist-filter-label">From <input type="date" id="scout-hist-from" class="hist-date-input"></label>
+        <label class="hist-filter-label">To <input type="date" id="scout-hist-to" class="hist-date-input"></label>
+        <button type="button" class="btn btn-ghost" id="scout-hist-apply">Apply</button>
+      </div>
+      <div id="scout-history-stats" class="scout-history-stats loading">Loading stats…</div>
+      <div id="scout-history-container" class="loading">Loading…</div>
     </article>
 
     <article class="panel" id="panel-config" aria-hidden="true">
@@ -393,7 +464,7 @@
   <button class="bnav-item" data-tab="notifications">
     <span>🔔</span><span>Alerts</span>
   </button>
-  <button class="bnav-item" data-tab="scout"><span>🔍</span><span>Scout</span></button>
+  <button class="bnav-item" data-tab="scout-signals"><span>🔍</span><span>Scout</span></button>
   <button class="bnav-item" data-tab="config"><span>⚙️</span><span>Cfg</span></button>
 </nav>
 

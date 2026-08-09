@@ -40,7 +40,7 @@ def run_scout_scan(db: SQLServerConnection) -> int:
     err_msg = None
     try:
         mkt = ScoutMarketData()
-        rows, symbols_scanned = scan_watchlist(mkt)
+        rows, symbols_scanned = scan_watchlist(mkt, db)
         triggered = now_ist()
         for row in rows:
             sig_repo.insert(
