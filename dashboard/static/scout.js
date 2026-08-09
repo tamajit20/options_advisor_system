@@ -197,17 +197,50 @@
   let _wlSearchTimer = null;
   let _wlLoading = false;
   let _wlRefreshedAt = '';
+  let _wlZerodhaOk = true;
+  let _wlNotice = '';
+
+  function renderWatchlistNotice() {
+    const el = $('#scout-wl-notice');
+    if (!el) return;
+    if (_wlZerodhaOk || !_wlNotice) {
+      el.hidden = true;
+      el.textContent = '';
+      return;
+    }
+    el.hidden = false;
+    el.textContent = _wlNotice + ' You can still select Nifty 50 below; use 🔑 Login for the full NSE list and search.';
+  }
+
+  function ensureWatchlistRows(symbols, opts = {}) {
+    const seen = new Set(_wlStocks.map(s => s.symbol));
+    symbols.forEach(sym => {
+      if (!sym || seen.has(sym)) return;
+      seen.add(sym);
+      _wlStocks.push({
+        symbol: sym,
+        name: '',
+        is_nifty50: opts.isNifty50 || _wlNifty50.includes(sym),
+        pinned_selected: !!opts.pinned,
+      });
+    });
+  }
 
   function renderWatchlistMeta(data) {
     const meta = $('#scout-wl-meta');
     const cnt = $('#scout-wl-count');
-    if (meta && data) {
+    renderWatchlistNotice();
+    if (meta) {
       const parts = [];
-      parts.push((data.total_equity_count || 0).toLocaleString() + ' NSE stocks');
-      if (data.instrument_refreshed_at) {
+      if (data && data.total_equity_count) {
+        parts.push(data.total_equity_count.toLocaleString() + ' NSE stocks');
+      } else if (!_wlZerodhaOk && _wlNifty50.length) {
+        parts.push('Showing Nifty 50 (' + _wlNifty50.length + ') — log in for full list');
+      }
+      if (data && data.instrument_refreshed_at) {
         parts.push('master updated ' + data.instrument_refreshed_at);
       }
-      if (data.search) parts.push('search: “' + data.search + '”');
+      if (data && data.search) parts.push('search: “' + data.search + '”');
       meta.textContent = parts.join(' · ');
     }
     if (cnt) cnt.textContent = _wlSelected.size + ' selected';
@@ -223,7 +256,10 @@
     if (!c) return;
     if (!_wlStocks.length) {
       c.className = '';
-      c.innerHTML = '<div class="empty">No stocks match your search.</div>';
+      let msg = 'No stocks to show.';
+      if (_wlSearch) msg = 'No stocks match your search.';
+      else if (!_wlZerodhaOk) msg = 'Log in with Zerodha (🔑) to load the full NSE list, or use Select Nifty 50.';
+      c.innerHTML = '<div class="empty">' + escapeHtml(msg) + '</div>';
       renderWatchlistMeta(null);
       return;
     }
@@ -281,6 +317,8 @@
       _wlNifty50 = data.nifty50 || [];
       _wlTotal = data.total_equity_count || 0;
       _wlRefreshedAt = data.instrument_refreshed_at || '';
+      _wlZerodhaOk = data.zerodha_ok !== false;
+      _wlNotice = data.notice || '';
       _wlSelected = new Set(data.selected || _wlSelected);
       const page = data.stocks || [];
       if (append) {
@@ -317,9 +355,15 @@
       renderWatchlist();
     });
     $('#scout-wl-select-n50')?.addEventListener('click', () => {
-      (_wlNifty50.length ? _wlNifty50 : []).forEach(sym => _wlSelected.add(sym));
+      const syms = _wlNifty50.length ? _wlNifty50 : [];
+      if (!syms.length) {
+        toast('Nifty 50 list not loaded yet — open Watchlist again or log in to Zerodha', 'err');
+        return;
+      }
+      syms.forEach(sym => _wlSelected.add(sym));
+      ensureWatchlistRows(syms, { isNifty50: true, pinned: true });
       renderWatchlist();
-      toast('Nifty 50 selected', 'info');
+      toast('Nifty 50 selected (' + syms.length + ')', 'info');
     });
     $('#scout-wl-clear')?.addEventListener('click', () => {
       _wlSelected.clear();

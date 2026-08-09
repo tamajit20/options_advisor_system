@@ -107,6 +107,8 @@ def api_scout_watchlist_get(db: SQLServerConnection):
     default = set(default_watchlist())
     nifty50 = nifty50_symbols()
 
+    zerodha_ok = True
+    notice = None
     try:
         page, total, refreshed_at = nse_equity_universe(
             search=search,
@@ -115,7 +117,18 @@ def api_scout_watchlist_get(db: SQLServerConnection):
             force_refresh=force,
         )
     except ScoutInstrumentError as exc:
-        return jsonify({"error": str(exc)}), 503
+        zerodha_ok = False
+        notice = str(exc)
+        refreshed_at = None
+        if search:
+            page, total = [], 0
+        else:
+            fallback = [
+                {"symbol": sym, "name": "", "is_nifty50": True}
+                for sym in nifty50
+            ]
+            total = len(fallback)
+            page = fallback[offset: offset + limit]
 
     stocks = []
     page_syms = set()
@@ -152,6 +165,8 @@ def api_scout_watchlist_get(db: SQLServerConnection):
         "offset": offset,
         "limit": limit,
         "instrument_refreshed_at": refreshed_at,
+        "zerodha_ok": zerodha_ok,
+        "notice": notice,
     })
 
 
