@@ -21,8 +21,14 @@ from scout.config_loader import (
     default_watchlist,
     get_watchlist,
     invalidate_watchlist_cache,
-    nifty50_universe,
+    is_nifty50,
     watchlist_set,
+)
+from scout.instruments import (
+    ScoutInstrumentError,
+    nse_equity_universe,
+    nifty50_symbols,
+    refresh_nse_equity_master,
 )
 from scout.market_data import zerodha_ready
 from scout.utils import is_market_open
@@ -92,32 +98,71 @@ def api_scout_signals(db: SQLServerConnection):
 @scout_bp.route("/watchlist")
 @_with_db
 def api_scout_watchlist_get(db: SQLServerConnection):
-    universe = nifty50_universe()
+    search = (request.args.get("search") or "").strip()
+    offset = max(int(request.args.get("offset", 0)), 0)
+    limit = min(max(int(request.args.get("limit", 80)), 1), 500)
+    force = request.args.get("refresh", "").lower() in ("1", "true", "yes")
+
     selected = set(get_watchlist(db))
     default = set(default_watchlist())
-    stocks = [
-        {
-            "symbol": sym,
-            "is_nifty50": True,
+    nifty50 = nifty50_symbols()
+
+    try:
+        page, total, refreshed_at = nse_equity_universe(
+            search=search,
+            offset=offset,
+            limit=limit,
+            force_refresh=force,
+        )
+    except ScoutInstrumentError as exc:
+        return jsonify({"error": str(exc)}), 503
+
+    stocks = []
+    page_syms = set()
+    for row in page:
+        sym = row["symbol"]
+        page_syms.add(sym)
+        stocks.append({
+            **row,
             "selected": sym in selected,
             "is_default": sym in default,
-        }
-        for sym in universe
-    ]
-    extra = sorted(selected - set(universe))
-    for sym in extra:
-        stocks.append({
+        })
+
+    # Always surface selected symbols that are not on the current page.
+    for sym in sorted(selected):
+        if sym in page_syms:
+            continue
+        stocks.insert(0, {
             "symbol": sym,
-            "is_nifty50": False,
+            "name": "",
+            "is_nifty50": is_nifty50(sym),
             "selected": True,
             "is_default": sym in default,
+            "pinned_selected": True,
         })
+
     return jsonify({
         "stocks": stocks,
         "selected": sorted(selected),
-        "nifty50_count": len(universe),
         "selected_count": len(selected),
+        "total_equity_count": total,
+        "nifty50": nifty50,
+        "nifty50_count": len(nifty50),
+        "search": search,
+        "offset": offset,
+        "limit": limit,
+        "instrument_refreshed_at": refreshed_at,
     })
+
+
+@scout_bp.route("/watchlist/refresh-instruments", methods=["POST"])
+@_with_db
+def api_scout_watchlist_refresh(db: SQLServerConnection):
+    try:
+        count = refresh_nse_equity_master()
+    except ScoutInstrumentError as exc:
+        return jsonify({"error": str(exc)}), 503
+    return jsonify({"status": "ok", "instrument_count": count})
 
 
 @scout_bp.route("/watchlist", methods=["PUT"])

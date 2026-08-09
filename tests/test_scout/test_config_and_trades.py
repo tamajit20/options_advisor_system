@@ -39,13 +39,26 @@ def test_scout_watchlist_api(client, mocker):
         "scout.routes.get_watchlist",
         return_value=["RELIANCE", "TCS"],
     )
-    mocker.patch("scout.routes.nifty50_universe", return_value=["RELIANCE", "TCS", "INFY"])
     mocker.patch("scout.routes.default_watchlist", return_value=["RELIANCE"])
+    mocker.patch("scout.routes.nifty50_symbols", return_value=["RELIANCE", "TCS", "INFY"])
+    mocker.patch(
+        "scout.routes.nse_equity_universe",
+        return_value=(
+            [
+                {"symbol": "RELIANCE", "name": "Reliance", "is_nifty50": True},
+                {"symbol": "TCS", "name": "TCS", "is_nifty50": True},
+                {"symbol": "INFY", "name": "Infosys", "is_nifty50": True},
+            ],
+            3,
+            "2026-08-09 10:00:00",
+        ),
+    )
     rv = client.get("/api/scout/watchlist")
     assert rv.status_code == 200
     data = rv.get_json()
     assert data["selected_count"] == 2
-    assert len(data["stocks"]) == 3
+    assert data["total_equity_count"] == 3
+    assert len(data["nifty50"]) == 3
 
 
 def test_scout_trades_open(client, mocker):

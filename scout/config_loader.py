@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import List, Optional, Set
 
 from config import NIFTY_50_SYMBOLS, SCOUT_CONFIG
+
+logger = logging.getLogger(__name__)
 
 _WATCHLIST_CACHE: Optional[List[str]] = None
 
@@ -14,7 +17,8 @@ def default_watchlist() -> List[str]:
 
 
 def nifty50_universe() -> List[str]:
-    return list(NIFTY_50_SYMBOLS)
+    from scout.instruments import nifty50_symbols
+    return nifty50_symbols()
 
 
 def get_watchlist(db=None, *, use_cache: bool = True) -> List[str]:
@@ -43,8 +47,18 @@ def invalidate_watchlist_cache() -> None:
 
 def watchlist_set(db, symbols: List[str]) -> List[str]:
     from database.scout_models import ScoutConfigRepo
+    from scout.instruments import valid_nse_symbols
 
-    cleaned = sorted({str(s).upper().strip() for s in symbols if s})
+    raw = [str(s).upper().strip() for s in symbols if s]
+    try:
+        cleaned = valid_nse_symbols(raw)
+    except Exception:
+        cleaned = sorted(set(raw))
+    if len(cleaned) < len(set(raw)):
+        logger.warning(
+            "scout watchlist: dropped %d unknown symbol(s) not in NSE master",
+            len(set(raw)) - len(cleaned),
+        )
     ScoutConfigRepo(db).set_watchlist(cleaned)
     invalidate_watchlist_cache()
     return cleaned

@@ -165,6 +165,21 @@ class InstrumentMaster:
             seen = {e for (n, e, _s, _t) in self._by_option.keys() if n == name}
         return sorted(seen)
 
+    def list_nse_equity(self) -> List[Instrument]:
+        """All NSE cash equities (EQ) — refreshed from Kite instrument master."""
+        with self._lock:
+            out = [
+                inst for inst in self._by_symbol.values()
+                if inst.exchange == "NSE" and inst.instrument_type == "EQ"
+            ]
+        out.sort(key=lambda i: i.tradingsymbol)
+        return out
+
+    @property
+    def loaded_at_monotonic(self) -> Optional[float]:
+        with self._lock:
+            return self._loaded_at
+
     @property
     def loaded(self) -> bool:
         with self._lock:

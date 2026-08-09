@@ -180,7 +180,7 @@ SCHEDULER_CONFIG = {
 # ---------------------------------------------------------------------------
 # Intraday Scout (separate module — scout_* tables, /api/scout/*)
 # ---------------------------------------------------------------------------
-# NSE tradingsymbols for Nifty 50 index (static universe for watchlist UI).
+# Nifty 50 membership flag for watchlist UI (full universe comes from Zerodha master).
 NIFTY_50_SYMBOLS: tuple[str, ...] = (
     "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
     "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL", "BHARTIARTL",

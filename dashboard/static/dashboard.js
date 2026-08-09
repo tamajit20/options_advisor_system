@@ -651,7 +651,9 @@ function switchTab(name) {
   });
   $$('.nav-item, .bnav-item').forEach(b => {
     const tab = b.dataset.tab;
-    const active = tab === name || (tab === 'scout-signals' && name.startsWith('scout-'));
+    const isBottomNav = b.classList.contains('bnav-item');
+    const active = tab === name
+      || (isBottomNav && tab === 'scout-signals' && name.startsWith('scout-'));
     b.classList.toggle('active', active);
   });
   if (name === 'suggestion')    loadSuggestion();

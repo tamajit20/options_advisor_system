@@ -53,7 +53,7 @@
 <main class="app-main">
   <!-- Side nav (desktop) -->
   <nav class="side-nav" aria-label="Primary">
-    <details class="nav-section" id="nav-section-options" open>
+    <details class="nav-section nav-section--options" id="nav-section-options" open>
       <summary class="nav-section-summary">Options Advisor</summary>
       <div class="nav-section-items">
         <button class="nav-item active" data-tab="suggestion">
@@ -404,15 +404,21 @@
         <button class="scout-subtab" data-stab="scout-trades">My Trades</button>
         <button class="scout-subtab" data-stab="scout-history">History</button>
       </div>
-      <p class="muted scout-intro">Choose which Nifty 50 stocks Scout monitors. Changes apply on the next WS subscription refresh (~1 min).</p>
+      <p class="muted scout-intro">All NSE stocks from Zerodha&apos;s instrument master (refreshed daily — new IPOs appear after Zerodha lists them). Search, select, then Save.</p>
       <div class="scout-watchlist-toolbar">
-        <button type="button" class="btn btn-ghost" id="scout-wl-select-all">Select all</button>
+        <input type="search" id="scout-wl-search" class="scout-wl-search" placeholder="Search symbol or name…" autocomplete="off">
+        <button type="button" class="btn btn-ghost" id="scout-wl-refresh-inst">Refresh list</button>
+        <button type="button" class="btn btn-ghost" id="scout-wl-select-shown">Select shown</button>
         <button type="button" class="btn btn-ghost" id="scout-wl-select-n50">Select Nifty 50</button>
         <button type="button" class="btn btn-ghost" id="scout-wl-clear">Clear all</button>
         <button type="button" class="btn btn-accent" id="scout-wl-save">Save watchlist</button>
+      </div>
+      <div id="scout-wl-meta" class="muted scout-wl-meta"></div>
+      <div id="scout-watchlist-container" class="loading">Loading…</div>
+      <div class="scout-wl-footer">
+        <button type="button" class="btn btn-ghost" id="scout-wl-more" hidden>Load more</button>
         <span id="scout-wl-count" class="muted scout-wl-count"></span>
       </div>
-      <div id="scout-watchlist-container" class="loading">Loading…</div>
     </article>
 
     <article class="panel" id="panel-scout-trades" aria-hidden="true">

@@ -189,54 +189,111 @@
   // ---------- Watchlist ----------
   let _wlStocks = [];
   let _wlSelected = new Set();
+  let _wlNifty50 = [];
+  let _wlOffset = 0;
+  let _wlLimit = 80;
+  let _wlTotal = 0;
+  let _wlSearch = '';
+  let _wlSearchTimer = null;
+  let _wlLoading = false;
+  let _wlRefreshedAt = '';
+
+  function renderWatchlistMeta(data) {
+    const meta = $('#scout-wl-meta');
+    const cnt = $('#scout-wl-count');
+    if (meta && data) {
+      const parts = [];
+      parts.push((data.total_equity_count || 0).toLocaleString() + ' NSE stocks');
+      if (data.instrument_refreshed_at) {
+        parts.push('master updated ' + data.instrument_refreshed_at);
+      }
+      if (data.search) parts.push('search: “' + data.search + '”');
+      meta.textContent = parts.join(' · ');
+    }
+    if (cnt) cnt.textContent = _wlSelected.size + ' selected';
+    const more = $('#scout-wl-more');
+    if (more) {
+      const hasMore = _wlOffset + _wlStocks.filter(s => !s.pinned_selected).length < _wlTotal;
+      more.hidden = !hasMore;
+    }
+  }
 
   function renderWatchlist() {
     const c = $('#scout-watchlist-container');
-    const cnt = $('#scout-wl-count');
     if (!c) return;
     if (!_wlStocks.length) {
       c.className = '';
-      c.innerHTML = '<div class="empty">No stocks loaded.</div>';
+      c.innerHTML = '<div class="empty">No stocks match your search.</div>';
+      renderWatchlistMeta(null);
       return;
     }
-    const n50 = _wlStocks.filter(s => s.is_nifty50);
-    const extra = _wlStocks.filter(s => !s.is_nifty50);
-    const grid = (list, title) => {
-      if (!list.length) return '';
-      return `
-        <h3 class="scout-wl-group-title">${escapeHtml(title)} <span class="muted">(${list.length})</span></h3>
-        <div class="scout-wl-grid">
-          ${list.map(s => `
-            <label class="scout-wl-item${s.is_nifty50 ? ' scout-wl-item--n50' : ''}">
-              <input type="checkbox" class="scout-wl-cb" data-symbol="${escapeHtml(s.symbol)}"
-                ${_wlSelected.has(s.symbol) ? 'checked' : ''}>
-              <span>${escapeHtml(s.symbol)}</span>
-            </label>
-          `).join('')}
-        </div>`;
-    };
-    c.className = 'scout-watchlist-wrap';
-    c.innerHTML = grid(n50, 'Nifty 50') + grid(extra, 'Other selected');
-    if (cnt) cnt.textContent = _wlSelected.size + ' selected';
+    c.className = 'scout-wl-grid';
+    c.innerHTML = _wlStocks.map(s => `
+      <label class="scout-wl-item${s.is_nifty50 ? ' scout-wl-item--n50' : ''}${s.pinned_selected ? ' scout-wl-item--pinned' : ''}">
+        <input type="checkbox" class="scout-wl-cb" data-symbol="${escapeHtml(s.symbol)}"
+          ${_wlSelected.has(s.symbol) ? 'checked' : ''}>
+        <span>
+          <span>${escapeHtml(s.symbol)}</span>
+          ${s.name ? `<span class="scout-wl-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span>` : ''}
+        </span>
+      </label>
+    `).join('');
+    renderWatchlistMeta({
+      total_equity_count: _wlTotal,
+      search: _wlSearch,
+      instrument_refreshed_at: _wlRefreshedAt,
+    });
     c.querySelectorAll('.scout-wl-cb').forEach(cb => {
       cb.addEventListener('change', () => {
         const sym = cb.getAttribute('data-symbol');
         if (cb.checked) _wlSelected.add(sym);
         else _wlSelected.delete(sym);
-        if (cnt) cnt.textContent = _wlSelected.size + ' selected';
+        renderWatchlistMeta({
+          total_equity_count: _wlTotal,
+          search: _wlSearch,
+          instrument_refreshed_at: _wlRefreshedAt,
+        });
       });
     });
   }
 
-  async function loadScoutWatchlist() {
+  async function loadScoutWatchlist(opts = {}) {
     const c = $('#scout-watchlist-container');
+    const append = !!opts.append;
+    const refresh = !!opts.refresh;
+    if (_wlLoading) return;
+    _wlLoading = true;
+    if (!append && c) {
+      c.className = 'loading';
+      c.textContent = refresh ? 'Refreshing from Zerodha…' : 'Loading…';
+    }
     try {
-      const data = await scoutApi('/watchlist');
-      _wlStocks = data.stocks || [];
-      _wlSelected = new Set(data.selected || []);
+      if (opts.reset) {
+        _wlOffset = 0;
+      }
+      const q = new URLSearchParams({
+        search: _wlSearch,
+        offset: String(_wlOffset),
+        limit: String(_wlLimit),
+      });
+      if (refresh) q.set('refresh', '1');
+      const data = await scoutApi('/watchlist?' + q.toString());
+      _wlNifty50 = data.nifty50 || [];
+      _wlTotal = data.total_equity_count || 0;
+      _wlRefreshedAt = data.instrument_refreshed_at || '';
+      _wlSelected = new Set(data.selected || _wlSelected);
+      const page = data.stocks || [];
+      if (append) {
+        const seen = new Set(_wlStocks.map(s => s.symbol));
+        page.forEach(s => { if (!seen.has(s.symbol)) _wlStocks.push(s); });
+      } else {
+        _wlStocks = page;
+      }
       renderWatchlist();
     } catch (e) {
       if (c) c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
+    } finally {
+      _wlLoading = false;
     }
   }
 
@@ -248,26 +305,45 @@
       });
       toast('Watchlist saved (' + r.selected_count + ' symbols)', 'ok');
       _wlSelected = new Set(r.selected || []);
-      renderWatchlist();
+      await loadScoutWatchlist({ reset: true });
     } catch (e) {
       toast(e.message, 'err');
     }
   }
 
   function bindWatchlistToolbar() {
-    $('#scout-wl-select-all')?.addEventListener('click', () => {
+    $('#scout-wl-select-shown')?.addEventListener('click', () => {
       _wlStocks.forEach(s => _wlSelected.add(s.symbol));
       renderWatchlist();
     });
     $('#scout-wl-select-n50')?.addEventListener('click', () => {
-      _wlStocks.filter(s => s.is_nifty50).forEach(s => _wlSelected.add(s.symbol));
+      (_wlNifty50.length ? _wlNifty50 : []).forEach(sym => _wlSelected.add(sym));
       renderWatchlist();
+      toast('Nifty 50 selected', 'info');
     });
     $('#scout-wl-clear')?.addEventListener('click', () => {
       _wlSelected.clear();
       renderWatchlist();
     });
     $('#scout-wl-save')?.addEventListener('click', () => saveWatchlist());
+    $('#scout-wl-refresh-inst')?.addEventListener('click', async () => {
+      try {
+        await scoutApi('/watchlist/refresh-instruments', { method: 'POST' });
+        toast('Instrument list refreshed from Zerodha', 'ok');
+        await loadScoutWatchlist({ reset: true, refresh: true });
+      } catch (e) {
+        toast(e.message, 'err');
+      }
+    });
+    $('#scout-wl-more')?.addEventListener('click', () => {
+      _wlOffset += _wlLimit;
+      loadScoutWatchlist({ append: true });
+    });
+    $('#scout-wl-search')?.addEventListener('input', (ev) => {
+      _wlSearch = (ev.target.value || '').trim();
+      clearTimeout(_wlSearchTimer);
+      _wlSearchTimer = setTimeout(() => loadScoutWatchlist({ reset: true }), 300);
+    });
   }
 
   // ---------- My Trades ----------
@@ -455,7 +531,10 @@
       startScoutAutoRefresh();
     } else {
       stopScoutAutoRefresh();
-      if (tab === 'scout-watchlist') loadScoutWatchlist();
+      if (tab === 'scout-watchlist') {
+        _wlSearch = ($('#scout-wl-search')?.value || '').trim();
+        loadScoutWatchlist({ reset: true });
+      }
       if (tab === 'scout-trades') loadScoutTrades();
       if (tab === 'scout-history') loadScoutHistory();
     }
