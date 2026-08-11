@@ -900,7 +900,7 @@ class SuggestionRepo:
         has_pending = any((r.get("status") or "").upper() == "PENDING" for r in rows)
         if not has_pending:
             ignored_rows = self.db.fetch_all(
-                "SELECT TOP (10) * FROM options_suggestions "
+                "SELECT TOP (1) * FROM options_suggestions "
                 "WHERE status = 'IGNORED' AND entry_date >= ? "
                 "ORDER BY generated_on DESC",
                 [today],

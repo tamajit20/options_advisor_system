@@ -142,8 +142,41 @@
     return m + ':' + String(r).padStart(2, '0');
   }
 
-  function renderMetricTile(label, value, extraCls) {
-    return `<div class="scout-metric${extraCls ? ' ' + extraCls : ''}">
+  const SCOUT_HINTS = {
+    LIVE: 'Last traded price from WebSocket ticks — updates every few seconds without refresh.',
+    TRIG: 'Price when the 1-minute bar closed and this signal was triggered.',
+    BAND: 'Price band — enter the trade only while live price stays inside this range.',
+    STOP: 'Invalidation stop — signal is removed if price crosses below (BUY) or above (SELL) this level.',
+    Stock: 'This stock\'s percentage change from today\'s opening price.',
+    Nifty: 'Nifty 50 index percentage change from today\'s open.',
+    RS: 'Relative strength = stock % − Nifty %. Positive means the stock is outperforming the index.',
+    '⏱': 'Time left before this signal expires and disappears from the list.',
+    '→ Stop': 'Distance from live price to the invalidation stop — cushion before the signal is killed.',
+    OR: 'Opening range (first 15 minutes) — high and low levels that were broken.',
+    BOX: 'Compression box — tight range the price consolidated in before breaking out.',
+    Move: 'How far the stock had moved from open when the pullback signal fired.',
+    band: 'Live price is inside the entry band (green = OK to enter).',
+    time: 'Signal is still within its validity window.',
+    stop: 'Price has not hit the invalidation stop yet.',
+  };
+
+  const SCOUT_SETUP_HINTS = {
+    'OR ↑': 'Opening range breakout to the upside — price cleared the first 15m high.',
+    'OR ↓': 'Opening range breakdown — price broke below the first 15m low.',
+    'BOX ↑': 'Compression breakout up — price escaped a tight sideways box.',
+    'BOX ↓': 'Compression breakdown — price broke down from a tight range.',
+    'PB ↑': 'Pullback buy — uptrend paused, bullish reversal candle on 1m.',
+    'PB ↓': 'Pullback sell — downtrend pause, bearish reversal candle on 1m.',
+  };
+
+  function scoutHint(key) {
+    return SCOUT_HINTS[key] || SCOUT_SETUP_HINTS[key] || '';
+  }
+
+  function renderMetricTile(label, value, extraCls, hintKey) {
+    const hint = scoutHint(hintKey || label);
+    const titleAttr = hint ? ` title="${escapeHtml(hint)}"` : '';
+    return `<div class="scout-metric${extraCls ? ' ' + extraCls : ''}"${titleAttr} tabindex="0">
       <span class="scout-metric-k">${escapeHtml(label)}</span>
       <span class="scout-metric-v">${value}</span>
     </div>`;
@@ -159,7 +192,9 @@
     return `<div class="scout-gates">${items.map(it => {
       const cls = it.ok == null ? 'scout-gate--na' : (it.ok ? 'scout-gate--ok' : 'scout-gate--bad');
       const sym = it.ok == null ? '·' : (it.ok ? '✓' : '✗');
-      return `<span class="scout-gate ${cls}" data-gate-id="${it.id}">${sym} ${escapeHtml(it.label)}</span>`;
+      const hint = scoutHint(it.id);
+      const titleAttr = hint ? ` title="${escapeHtml(hint)}"` : '';
+      return `<span class="scout-gate ${cls}" data-gate-id="${it.id}"${titleAttr} tabindex="0">${sym} ${escapeHtml(it.label)}</span>`;
     }).join('')}</div>`;
   }
 
@@ -183,7 +218,7 @@
     const statsHtml = (d.stats || []).map(st => {
       const raw = st.raw != null ? Number(st.raw) : 0;
       const cls = st.key === 'rs' ? (raw >= 0 ? 'scout-metric--pos' : 'scout-metric--neg') : '';
-      return renderMetricTile(st.label, escapeHtml(st.value || fmtPct(st.raw)), cls);
+      return renderMetricTile(st.label, escapeHtml(st.value || fmtPct(st.raw)), cls, st.label);
     }).join('');
 
     const stopDist = d.stop_dist;
@@ -225,6 +260,8 @@
             data-signal-id="${s.id}" aria-label="Quantity">
           <button type="button" class="btn btn-sm btn-accent scout-mark-btn" data-signal-id="${s.id}">Mark taken</button>
         </div>`;
+    const setupHint = scoutHint(setupCode);
+    const setupTitle = setupHint ? ` title="${escapeHtml(setupHint)}"` : '';
     return `
       <div class="scout-card ${cls}" data-signal-id="${s.id}" data-symbol="${escapeHtml(s.symbol)}"
         data-action="${escapeHtml(action)}"
@@ -234,9 +271,9 @@
         data-trade-open="${s.trade_open ? '1' : '0'}">
         <div class="scout-card-head">
           <strong class="scout-symbol">${escapeHtml(s.symbol)}</strong>
-          <span class="scout-action tag tag-${action === 'BUY' ? 'ok' : action === 'SELL' ? 'err' : 'muted'}">${escapeHtml(action)}</span>
-          <span class="scout-setup-code">${escapeHtml(setupCode)}</span>
-          <span class="scout-strength scout-strength--${strength}">${escapeHtml(s.strength || '')}</span>
+          <span class="scout-action tag tag-${action === 'BUY' ? 'ok' : action === 'SELL' ? 'err' : 'muted'}" title="Suggested direction for this intraday setup">${escapeHtml(action)}</span>
+          <span class="scout-setup-code"${setupTitle} tabindex="0">${escapeHtml(setupCode)}</span>
+          <span class="scout-strength scout-strength--${strength}" title="Signal strength from pattern quality and relative strength">${escapeHtml(s.strength || '')}</span>
           <span class="muted scout-age">${escapeHtml(ageLabel(s.triggered_at))}</span>
         </div>
         <div class="scout-card-body">

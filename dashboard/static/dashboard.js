@@ -969,12 +969,26 @@ async function loadSuggestion() {
     const data = await API('/api/suggestion/today');
     const list = data.suggestions || [];
     const sitOut = data.sit_out || [];
+    const active = list.filter(s => {
+      const st = (s.status || '').toUpperCase();
+      return st === 'PENDING' || st === 'EXECUTED';
+    });
+    const retired = list.filter(s => (s.status || '').toUpperCase() === 'IGNORED');
     const parts = [];
-    if (data.market_summary && (sitOut.length || !list.length)) {
+    if (data.market_summary && (sitOut.length || !active.length)) {
       parts.push(renderMarketSitOutSummary(data.market_summary));
     }
-    if (list.length) {
-      parts.push(renderSuggestionList(list));
+    if (active.length) {
+      parts.push(renderSuggestionList(active));
+    } else if (retired.length) {
+      parts.push(
+        '<div class="suggestion-no-active-banner">'
+        + '<strong>No active suggestion.</strong> '
+        + 'Run <strong>Live Suggestion Engine</strong> from the Jobs tab for a fresh signal.'
+        + '<div class="muted" style="margin-top:6px">Most recent retired suggestion shown below for reference.</div>'
+        + '</div>'
+      );
+      parts.push(renderSuggestionList(retired.slice(0, 1)));
     }
     if (sitOut.length) {
       parts.push(sitOut.map(s => renderSitOutCard(s)).join(''));
@@ -2904,7 +2918,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     return renderSitOutCard(s);
   }
   const sugStatus = (s.status || '').toUpperCase();
-  if (sugStatus === 'IGNORED') readOnly = true;
+  const isRetired = sugStatus === 'IGNORED';
   const econ = {
     np: s.net_credit, mp: s.max_profit, ml: s.max_loss,
     pop: s.probability_of_profit,
@@ -3133,8 +3147,8 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     data-short-call-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='CE')||{}).strike||''}"
     data-short-put-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='PE')||{}).strike||''}"`;
   return wrapCollapsibleCard(summaryHtml, bodyHtml, {
-    open: expanded,
-    className: canExecute ? '' : 'suggestion-not-executable',
+    open: expanded && !isRetired,
+    className: [canExecute ? '' : 'suggestion-not-executable', isRetired ? 'suggestion-retired' : ''].filter(Boolean).join(' '),
     attrs: cardAttrs.trim(),
   });
 }

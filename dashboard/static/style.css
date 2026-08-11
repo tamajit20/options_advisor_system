@@ -230,6 +230,19 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
 .card.suggestion-not-executable {
   border-color: rgba(245, 158, 11, .25);
 }
+.card.suggestion-retired {
+  border-color: rgba(148, 163, 184, .25);
+  opacity: .92;
+}
+.suggestion-no-active-banner {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, .08);
+  border: 1px solid rgba(245, 158, 11, .3);
+  font-size: .9rem;
+  line-height: 1.45;
+}
 
 .id-chip {
   font-size: .72rem; font-family: 'Courier New', monospace;
