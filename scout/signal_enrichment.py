@@ -27,37 +27,181 @@ def _entry_band(ltp: float, action: str) -> tuple[float, float]:
     return round(px * (1.0 - slip), 2), round(px * (1.0 + slip * 1.5), 2)
 
 
-def _build_conditions(signal: dict, meta: dict) -> List[str]:
-    conditions: List[str] = []
-    st = str(signal.get("signal_type") or "")
-    action = str(signal.get("action") or "").upper()
+def _setup_label(signal_type: Optional[str]) -> str:
+    st = str(signal_type or "").replace("_", " ").strip()
+    if not st:
+        return "Intraday pattern"
+    return st.title()
 
-    conditions.append("Intraday market session (09:15–15:30 IST)")
-    conditions.append(f"Pattern: {st.replace('_', ' ').title()}")
+
+def _setup_code(signal_type: Optional[str]) -> str:
+    codes = {
+        "OR_BREAK_UP": "OR ↑",
+        "OR_BREAK_DOWN": "OR ↓",
+        "COMPRESSION_BREAK_UP": "BOX ↑",
+        "COMPRESSION_BREAK_DOWN": "BOX ↓",
+        "PULLBACK_UP": "PB ↑",
+        "PULLBACK_DOWN": "PB ↓",
+    }
+    return codes.get(str(signal_type or "").upper(), "SETUP")
+
+
+def _fmt_pct(v: Optional[float]) -> Optional[str]:
+    if v is None:
+        return None
+    try:
+        return f"{float(v):+.2f}%"
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_dashboard(
+    signal: dict,
+    meta: dict,
+    *,
+    entry_min: float,
+    entry_max: float,
+    valid_until: datetime,
+    now: datetime,
+    action: str,
+    live_ltp: Optional[float],
+) -> dict:
+    """Structured metrics for at-a-glance UI (numbers, codes — minimal prose)."""
+    ltp = float(signal.get("ltp") or 0)
+    ref_px = live_ltp if live_ltp is not None and live_ltp > 0 else ltp
+    inv = signal.get("invalidation")
+
+    stats: List[dict] = []
+    stock_pct = meta.get("stock_pct_from_open")
+    nifty_pct = meta.get("nifty_pct_from_open")
+    if stock_pct is not None:
+        stats.append({"key": "stock", "label": "Stock", "value": _fmt_pct(stock_pct), "raw": float(stock_pct)})
+    if nifty_pct is not None:
+        stats.append({"key": "nifty", "label": "Nifty", "value": _fmt_pct(nifty_pct), "raw": float(nifty_pct)})
+    if stock_pct is not None and nifty_pct is not None:
+        rs = round(float(stock_pct) - float(nifty_pct), 3)
+        stats.append({"key": "rs", "label": "RS", "value": _fmt_pct(rs), "raw": rs})
+
+    levels = None
+    if meta.get("or_high") is not None:
+        levels = {
+            "kind": "OR",
+            "low": round(float(meta["or_low"]), 2),
+            "high": round(float(meta["or_high"]), 2),
+        }
+    elif meta.get("box_high") is not None:
+        levels = {
+            "kind": "BOX",
+            "low": round(float(meta["box_low"]), 2),
+            "high": round(float(meta["box_high"]), 2),
+            "range_pct": meta.get("range_pct"),
+        }
+
+    stop_dist = None
+    if inv is not None and ref_px > 0:
+        inv_f = float(inv)
+        if action == "BUY":
+            dist_rs = ref_px - inv_f
+        else:
+            dist_rs = inv_f - ref_px
+        stop_dist = {
+            "rs": round(dist_rs, 2),
+            "pct": round(dist_rs / ref_px * 100.0, 2),
+        }
+
+    secs_left = max(0, int((valid_until - now).total_seconds()))
+    band_ok = ref_px >= entry_min and ref_px <= entry_max if ref_px > 0 else None
+    stop_ok = None
+    if inv is not None and ref_px > 0:
+        inv_f = float(inv)
+        stop_ok = ref_px >= inv_f if action == "BUY" else ref_px <= inv_f
+
+    return {
+        "setup_code": _setup_code(signal.get("signal_type")),
+        "setup_type": str(signal.get("signal_type") or ""),
+        "prices": {
+            "live": live_ltp,
+            "trigger": ltp,
+            "band_lo": entry_min,
+            "band_hi": entry_max,
+            "stop": float(inv) if inv is not None else None,
+        },
+        "stats": stats,
+        "levels": levels,
+        "move_from_open_pct": meta.get("move_from_open_pct"),
+        "timer_secs": secs_left,
+        "timer_until": valid_until.strftime("%H:%M"),
+        "stop_dist": stop_dist,
+        "gates": {
+            "band_ok": band_ok,
+            "time_ok": secs_left > 0,
+            "stop_ok": stop_ok,
+        },
+    }
+
+
+def _build_conditions(
+    signal: dict,
+    meta: dict,
+    *,
+    entry_min: float,
+    entry_max: float,
+    valid_until: datetime,
+    action: str,
+) -> List[dict]:
+    """Short checklist rows: {id, label, value, dynamic?}."""
+    band_label = "Buy between" if action == "BUY" else "Sell between"
+    items: List[dict] = [
+        {"id": "session", "label": "Session", "value": "09:15–15:30 IST"},
+        {"id": "setup", "label": "Setup", "value": _setup_label(signal.get("signal_type"))},
+    ]
 
     stock_pct = meta.get("stock_pct_from_open")
     nifty_pct = meta.get("nifty_pct_from_open")
     if stock_pct is not None and nifty_pct is not None:
-        conditions.append(
-            f"Relative strength vs Nifty OK ({action}: stock {stock_pct:+.2f}% vs Nifty {nifty_pct:+.2f}%)"
-        )
+        items.append({
+            "id": "rs",
+            "label": "vs Nifty",
+            "value": f"stock {stock_pct:+.1f}% · Nifty {nifty_pct:+.1f}%",
+        })
 
     if meta.get("or_high") is not None:
-        conditions.append(
-            f"Opening range {meta.get('or_low'):.2f} – {meta.get('or_high'):.2f}"
-        )
+        items.append({
+            "id": "or",
+            "label": "OR range",
+            "value": f"{float(meta['or_low']):.0f} – {float(meta['or_high']):.0f}",
+        })
     if meta.get("box_high") is not None:
-        conditions.append(
-            f"Compression box {meta.get('box_low'):.2f} – {meta.get('box_high'):.2f}"
-        )
+        items.append({
+            "id": "box",
+            "label": "Box",
+            "value": f"{float(meta['box_low']):.0f} – {float(meta['box_high']):.0f}",
+        })
 
-    conditions.append("Enter within the price band before the validity window ends")
-    if signal.get("invalidation") is not None:
+    items.append({
+        "id": "band",
+        "label": band_label,
+        "value": f"₹{entry_min:.2f} – ₹{entry_max:.2f}",
+        "dynamic": True,
+    })
+    items.append({
+        "id": "window",
+        "label": "Valid until",
+        "value": valid_until.strftime("%H:%M IST"),
+        "dynamic": True,
+    })
+
+    inv = signal.get("invalidation")
+    if inv is not None:
         side = "below" if action == "BUY" else "above"
-        conditions.append(
-            f"Abort if price closes {side} invalidation ({float(signal['invalidation']):.2f})"
-        )
-    return conditions
+        items.append({
+            "id": "stop",
+            "label": "Stop if",
+            "value": f"{side} ₹{float(inv):.2f}",
+            "dynamic": True,
+        })
+
+    return items
 
 
 def _parse_triggered(signal: dict, now: datetime) -> datetime:
@@ -137,7 +281,24 @@ def enrich_signal(
     out["valid_from"] = triggered.isoformat(sep=" ", timespec="seconds")
     out["valid_until"] = valid_until.isoformat(sep=" ", timespec="seconds")
     out["valid_minutes"] = valid_mins
-    out["conditions"] = _build_conditions(signal, meta)
+    out["conditions"] = _build_conditions(
+        signal,
+        meta,
+        entry_min=entry_min,
+        entry_max=entry_max,
+        valid_until=valid_until,
+        action=action,
+    )
+    out["dashboard"] = _build_dashboard(
+        signal,
+        meta,
+        entry_min=entry_min,
+        entry_max=entry_max,
+        valid_until=valid_until,
+        now=now,
+        action=action,
+        live_ltp=live,
+    )
     out["invalidation_side"] = invalidation_side
     out["live_ltp"] = live
     out["live_as_of"] = live_as_of

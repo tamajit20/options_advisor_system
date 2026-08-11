@@ -120,84 +120,148 @@
     }
   }
 
-  function renderSignalConditions(conditions) {
-    if (!conditions || !conditions.length) return '';
-    return `
-      <ul class="scout-conditions">
-        ${conditions.map(c => `<li>${escapeHtml(c)}</li>`).join('')}
-      </ul>`;
+  function fmtPct(v) {
+    if (v == null || isNaN(v)) return '—';
+    const n = Number(v);
+    const sign = n >= 0 ? '+' : '';
+    return sign + n.toFixed(2) + '%';
   }
 
-  function renderLivePrice(s) {
-    const live = s.live_ltp != null ? Number(s.live_ltp) : null;
-    if (live == null || live <= 0) {
-      return '<div class="scout-live muted">Live price: waiting for WS ticks…</div>';
-    }
-    const inBand = live >= Number(s.entry_min) && live <= Number(s.entry_max);
-    const bandCls = inBand ? 'scout-live--ok' : 'scout-live--warn';
-    const asOf = s.live_as_of ? ` <span class="muted">(${escapeHtml(ageLabel(s.live_as_of))})</span>` : '';
-    return `<div class="scout-live ${bandCls}">Live: <strong>${fmtPx(live)}</strong>${asOf}</div>`;
+  function fmtNum(v, digits) {
+    if (v == null || isNaN(v)) return '—';
+    return Number(v).toLocaleString('en-IN', {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    });
   }
 
-  function renderSignals(signals) {
-    const c = $('#scout-signals-container');
-    if (!c) return;
-    if (!signals || !signals.length) {
-      c.className = '';
-      c.innerHTML = '<div class="empty">No actionable scout signals right now. Valid signals appear during market hours with live price in the buy band; expired or invalidated signals are removed automatically.</div>';
-      return;
+  function fmtTimer(secs) {
+    const s = Math.max(0, parseInt(secs, 10) || 0);
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return m + ':' + String(r).padStart(2, '0');
+  }
+
+  function renderMetricTile(label, value, extraCls) {
+    return `<div class="scout-metric${extraCls ? ' ' + extraCls : ''}">
+      <span class="scout-metric-k">${escapeHtml(label)}</span>
+      <span class="scout-metric-v">${value}</span>
+    </div>`;
+  }
+
+  function renderStatusPills(gates) {
+    if (!gates) return '';
+    const items = [
+      { id: 'band', label: 'Band', ok: gates.band_ok },
+      { id: 'time', label: 'Time', ok: gates.time_ok },
+      { id: 'stop', label: 'Stop', ok: gates.stop_ok },
+    ];
+    return `<div class="scout-gates">${items.map(it => {
+      const cls = it.ok == null ? 'scout-gate--na' : (it.ok ? 'scout-gate--ok' : 'scout-gate--bad');
+      const sym = it.ok == null ? '·' : (it.ok ? '✓' : '✗');
+      return `<span class="scout-gate ${cls}" data-gate-id="${it.id}">${sym} ${escapeHtml(it.label)}</span>`;
+    }).join('')}</div>`;
+  }
+
+  function renderSignalDashboard(s) {
+    const d = s.dashboard || {};
+    const p = d.prices || {};
+    const action = (s.action || '').toUpperCase();
+    const live = p.live != null ? Number(p.live) : null;
+    const inBand = live != null && live >= Number(s.entry_min) && live <= Number(s.entry_max);
+    const liveCls = live == null ? 'scout-metric--muted' : (inBand ? 'scout-metric--live-ok' : 'scout-metric--live-warn');
+
+    let levelsHtml = '';
+    if (d.levels) {
+      const lv = d.levels;
+      const extra = lv.range_pct != null ? ` · ${fmtNum(lv.range_pct, 2)}%` : '';
+      levelsHtml = renderMetricTile(lv.kind, `${fmtPx(lv.low)} – ${fmtPx(lv.high)}${extra}`, 'scout-metric--wide');
+    } else if (d.move_from_open_pct != null) {
+      levelsHtml = renderMetricTile('Move', fmtPct(d.move_from_open_pct));
     }
-    c.className = 'scout-signal-list';
-    c.innerHTML = signals.map(s => {
-      const action = (s.action || '').toUpperCase();
-      const cls = action === 'BUY' ? 'scout-buy' : action === 'SELL' ? 'scout-sell' : 'scout-wait';
-      const strength = (s.strength || 'WEAK').toLowerCase();
-      const entryDefault = s.live_ltp != null ? Number(s.live_ltp) : Number(s.ltp || 0);
-      const invSide = s.invalidation_side || (action === 'BUY' ? 'below' : 'above');
-      const markBlock = s.trade_open
-        ? '<span class="muted scout-trade-badge">Trade open</span>'
-        : `<div class="scout-mark-row">
-            <input type="number" step="0.05" class="scout-entry-input" value="${entryDefault}"
-              data-signal-id="${s.id}" aria-label="Entry fill price" title="Your Zerodha fill price">
-            <input type="number" step="1" min="1" class="scout-qty-input" value="1"
-              data-signal-id="${s.id}" aria-label="Quantity">
-            <button type="button" class="btn btn-sm btn-accent scout-mark-btn" data-signal-id="${s.id}">Mark taken</button>
-          </div>`;
-      return `
-        <div class="scout-card ${cls}">
-          <div class="scout-card-head">
-            <strong class="scout-symbol">${escapeHtml(s.symbol)}</strong>
-            <span class="scout-action tag tag-${action === 'BUY' ? 'ok' : action === 'SELL' ? 'err' : 'muted'}">${escapeHtml(action)}</span>
-            <span class="scout-strength scout-strength--${strength}">${escapeHtml(s.strength || '')}</span>
-          </div>
-          <div class="scout-card-body">
-            <div class="scout-price">Signal @ ${fmtPx(s.ltp)} <span class="muted scout-age">${escapeHtml(ageLabel(s.triggered_at))}</span></div>
-            ${renderLivePrice(s)}
-            <div class="scout-entry-band">
-              <span class="scout-entry-label">Buy between</span>
-              <strong>${fmtPx(s.entry_min)} – ${fmtPx(s.entry_max)}</strong>
-            </div>
-            <div class="scout-valid-window muted">
-              Valid ${escapeHtml(fmtTimeShort(s.valid_from))} – ${escapeHtml(fmtTimeShort(s.valid_until))}
-              (${s.valid_minutes || 30} min window)
-            </div>
-            <div class="scout-reason">${escapeHtml(s.reason)}</div>
-            ${s.invalidation != null ? `<div class="scout-inval muted">Invalid if ${invSide}: ${fmtPx(s.invalidation)}</div>` : ''}
-            <div class="scout-type muted">${escapeHtml(s.signal_type || '')}</div>
-            <div class="scout-conditions-wrap">
-              <div class="scout-conditions-title muted">Conditions to buy</div>
-              ${renderSignalConditions(s.conditions)}
-            </div>
-            <div class="scout-card-actions">${markBlock}</div>
-          </div>
-        </div>`;
+
+    const statsHtml = (d.stats || []).map(st => {
+      const raw = st.raw != null ? Number(st.raw) : 0;
+      const cls = st.key === 'rs' ? (raw >= 0 ? 'scout-metric--pos' : 'scout-metric--neg') : '';
+      return renderMetricTile(st.label, escapeHtml(st.value || fmtPct(st.raw)), cls);
     }).join('');
 
-    c.querySelectorAll('.scout-mark-btn').forEach(btn => {
+    const stopDist = d.stop_dist;
+    const stopDistHtml = stopDist
+      ? renderMetricTile('→ Stop', `${fmtPx(stopDist.rs)} · ${fmtPct(stopDist.pct)}`)
+      : '';
+
+    return `
+      <div class="scout-dash">
+        <div class="scout-dash-prices">
+          ${renderMetricTile('LIVE', `<strong class="scout-live-val">${live != null ? fmtPx(live) : '—'}</strong>`, liveCls)}
+          ${renderMetricTile('TRIG', fmtPx(p.trigger))}
+          ${renderMetricTile('BAND', `${fmtPx(p.band_lo)} – ${fmtPx(p.band_hi)}`, 'scout-metric--wide')}
+          ${p.stop != null ? renderMetricTile('STOP', fmtPx(p.stop)) : ''}
+        </div>
+        <div class="scout-dash-stats">
+          ${statsHtml}
+          ${renderMetricTile('⏱', `<span class="scout-timer" data-timer-secs="${d.timer_secs || 0}">${fmtTimer(d.timer_secs)}</span> → ${escapeHtml(d.timer_until || '')}`, 'scout-metric--timer')}
+          ${stopDistHtml}
+          ${levelsHtml}
+        </div>
+        ${renderStatusPills(d.gates)}
+      </div>`;
+  }
+
+  function renderSingleSignalCard(s) {
+    const action = (s.action || '').toUpperCase();
+    const cls = action === 'BUY' ? 'scout-buy' : action === 'SELL' ? 'scout-sell' : 'scout-wait';
+    const strength = (s.strength || 'WEAK').toLowerCase();
+    const d = s.dashboard || {};
+    const setupCode = d.setup_code || (s.signal_type || '').replace(/_/g, ' ');
+    const entryDefault = s.live_ltp != null ? Number(s.live_ltp) : Number(s.ltp || 0);
+    const markBlock = s.trade_open
+      ? '<span class="muted scout-trade-badge">Trade open</span>'
+      : `<div class="scout-mark-row">
+          <input type="number" step="0.05" class="scout-entry-input" value="${entryDefault}"
+            data-signal-id="${s.id}" aria-label="Entry fill price" title="Your Zerodha fill price">
+          <input type="number" step="1" min="1" class="scout-qty-input" value="1"
+            data-signal-id="${s.id}" aria-label="Quantity">
+          <button type="button" class="btn btn-sm btn-accent scout-mark-btn" data-signal-id="${s.id}">Mark taken</button>
+        </div>`;
+    return `
+      <div class="scout-card ${cls}" data-signal-id="${s.id}" data-symbol="${escapeHtml(s.symbol)}"
+        data-action="${escapeHtml(action)}"
+        data-entry-min="${s.entry_min}" data-entry-max="${s.entry_max}"
+        data-invalidation="${s.invalidation != null ? s.invalidation : ''}"
+        data-valid-until="${escapeHtml(s.valid_until || '')}"
+        data-trade-open="${s.trade_open ? '1' : '0'}">
+        <div class="scout-card-head">
+          <strong class="scout-symbol">${escapeHtml(s.symbol)}</strong>
+          <span class="scout-action tag tag-${action === 'BUY' ? 'ok' : action === 'SELL' ? 'err' : 'muted'}">${escapeHtml(action)}</span>
+          <span class="scout-setup-code">${escapeHtml(setupCode)}</span>
+          <span class="scout-strength scout-strength--${strength}">${escapeHtml(s.strength || '')}</span>
+          <span class="muted scout-age">${escapeHtml(ageLabel(s.triggered_at))}</span>
+        </div>
+        <div class="scout-card-body">
+          ${renderSignalDashboard(s)}
+          <div class="scout-card-actions">${markBlock}</div>
+        </div>
+      </div>`;
+  }
+
+  function showEmptySignals() {
+    const c = $('#scout-signals-container');
+    if (!c) return;
+    c.className = '';
+    c.innerHTML = '<div class="empty">No actionable scout signals right now. Valid signals appear during market hours; expired or invalid ones drop off automatically.</div>';
+  }
+
+  function bindSignalMarkButtons(root) {
+    (root || document).querySelectorAll('.scout-mark-btn').forEach(btn => {
+      if (btn.dataset.bound === '1') return;
+      btn.dataset.bound = '1';
       btn.addEventListener('click', async () => {
         const sid = btn.getAttribute('data-signal-id');
-        const entryInp = c.querySelector(`.scout-entry-input[data-signal-id="${sid}"]`);
-        const qtyInp = c.querySelector(`.scout-qty-input[data-signal-id="${sid}"]`);
+        const card = btn.closest('.scout-card');
+        const entryInp = card && card.querySelector(`.scout-entry-input[data-signal-id="${sid}"]`);
+        const qtyInp = card && card.querySelector(`.scout-qty-input[data-signal-id="${sid}"]`);
         const entry = parseFloat(entryInp && entryInp.value);
         const qty = parseInt(qtyInp && qtyInp.value, 10) || 1;
         if (!entry || entry <= 0) {
@@ -221,7 +285,196 @@
     });
   }
 
-  let _scoutPollMs = 15000;
+  let _scoutSignals = new Map();
+  let _scoutPollMs = 10000;
+  let _scoutLivePollMs = 3000;
+  let _scoutLiveTimer = null;
+  let _scoutExpiryTimer = null;
+
+  function parseValidUntilMs(iso) {
+    if (!iso) return NaN;
+    return new Date(String(iso).replace(' ', 'T')).getTime();
+  }
+
+  function evaluateClientValidity(s, liveLtp) {
+    const now = Date.now();
+    const until = parseValidUntilMs(s.valid_until);
+    if (!isNaN(until) && now > until) return 'EXPIRED';
+    const action = (s.action || '').toUpperCase();
+    const ltp = liveLtp != null ? Number(liveLtp) : Number(s.live_ltp);
+    const inv = s.invalidation != null ? Number(s.invalidation) : null;
+    if (inv != null && !isNaN(inv) && ltp > 0) {
+      if (action === 'BUY' && ltp < inv) return 'INVALIDATED';
+      if (action === 'SELL' && ltp > inv) return 'INVALIDATED';
+    }
+    const min = Number(s.entry_min);
+    const max = Number(s.entry_max);
+    if (ltp > 0 && !isNaN(min) && !isNaN(max) && (ltp < min || ltp > max)) return 'OUT_OF_RANGE';
+    return 'ACTIVE';
+  }
+
+  function updateGatePill(card, id, ok) {
+    const el = card.querySelector(`.scout-gate[data-gate-id="${id}"]`);
+    if (!el) return;
+    el.classList.remove('scout-gate--ok', 'scout-gate--bad', 'scout-gate--na');
+    if (ok == null) {
+      el.classList.add('scout-gate--na');
+      el.textContent = '· ' + id.charAt(0).toUpperCase() + id.slice(1);
+    } else {
+      el.classList.add(ok ? 'scout-gate--ok' : 'scout-gate--bad');
+      const label = id.charAt(0).toUpperCase() + id.slice(1);
+      el.textContent = (ok ? '✓ ' : '✗ ') + label;
+    }
+  }
+
+  function updateSignalCardLive(card, s, liveLtp, liveAsOf) {
+    s.live_ltp = liveLtp;
+    s.live_as_of = liveAsOf;
+    if (s.dashboard && s.dashboard.prices) s.dashboard.prices.live = liveLtp;
+
+    const valEl = card.querySelector('.scout-live-val');
+    const liveMetric = valEl && valEl.closest('.scout-metric');
+    if (valEl && liveLtp != null && liveLtp > 0) {
+      valEl.textContent = fmtPx(liveLtp);
+      const inBand = liveLtp >= Number(s.entry_min) && liveLtp <= Number(s.entry_max);
+      if (liveMetric) {
+        liveMetric.classList.remove('scout-metric--muted', 'scout-metric--live-ok', 'scout-metric--live-warn');
+        liveMetric.classList.add(inBand ? 'scout-metric--live-ok' : 'scout-metric--live-warn');
+      }
+    }
+
+    const untilOk = Date.now() <= parseValidUntilMs(s.valid_until);
+    const action = (s.action || '').toUpperCase();
+    const inv = s.invalidation != null ? Number(s.invalidation) : null;
+    let stopOk = null;
+    if (inv != null && liveLtp > 0) {
+      stopOk = action === 'BUY' ? liveLtp >= inv : liveLtp <= inv;
+    }
+    const bandOk = liveLtp > 0 ? (liveLtp >= Number(s.entry_min) && liveLtp <= Number(s.entry_max)) : null;
+
+    updateGatePill(card, 'time', untilOk);
+    updateGatePill(card, 'band', bandOk);
+    updateGatePill(card, 'stop', stopOk);
+
+    if (s.dashboard) {
+      s.dashboard.gates = { band_ok: bandOk, time_ok: untilOk, stop_ok: stopOk };
+      if (inv != null && liveLtp > 0) {
+        const dist = action === 'BUY' ? liveLtp - inv : inv - liveLtp;
+        s.dashboard.stop_dist = {
+          rs: Math.round(dist * 100) / 100,
+          pct: Math.round(dist / liveLtp * 10000) / 100,
+        };
+      }
+    }
+  }
+
+  function tickScoutTimers() {
+    const c = $('#scout-signals-container');
+    if (!c) return;
+    c.querySelectorAll('.scout-timer[data-timer-secs]').forEach(el => {
+      let secs = parseInt(el.getAttribute('data-timer-secs'), 10);
+      if (isNaN(secs)) return;
+      if (secs > 0) {
+        secs -= 1;
+        el.setAttribute('data-timer-secs', String(secs));
+      }
+      el.textContent = fmtTimer(secs);
+      const card = el.closest('.scout-card');
+      if (card && secs <= 0) {
+        const id = card.dataset.signalId;
+        const s = _scoutSignals.get(String(id));
+        if (s && !s.trade_open) dropInvalidSignal(id, card, 'EXPIRED');
+      } else if (card && secs > 0 && secs % 5 === 0) {
+        updateGatePill(card, 'time', true);
+      }
+    });
+  }
+
+  function removeSignalCard(card, _reason) {
+    if (!card || card.dataset.removing === '1') return;
+    card.dataset.removing = '1';
+    card.classList.add('scout-card--exit');
+    setTimeout(() => {
+      card.remove();
+      const c = $('#scout-signals-container');
+      if (c && !c.querySelector('.scout-card')) showEmptySignals();
+    }, 280);
+  }
+
+  function dropInvalidSignal(id, card, reason) {
+    _scoutSignals.delete(String(id));
+    removeSignalCard(card, reason);
+  }
+
+  function checkScoutSignalExpiry() {
+    const c = $('#scout-signals-container');
+    if (!c || !_scoutSignals.size) return;
+    _scoutSignals.forEach((s, id) => {
+      if (s.trade_open) return;
+      const card = c.querySelector(`.scout-card[data-signal-id="${id}"]`);
+      if (!card) return;
+      const status = evaluateClientValidity(s, s.live_ltp);
+      if (status !== 'ACTIVE') dropInvalidSignal(id, card, status);
+      else updateCheckState(card.querySelector('[data-check-id="window"] [data-check-state]'), true);
+    });
+  }
+
+  async function pollScoutLiveQuotes() {
+    const c = $('#scout-signals-container');
+    if (!c || !_scoutSignals.size) return;
+    const symbols = [...new Set([..._scoutSignals.values()].map(s => s.symbol))].join(',');
+    try {
+      const data = await scoutApi('/live-quotes?symbols=' + encodeURIComponent(symbols));
+      if (data.live_poll_seconds) _scoutLivePollMs = Math.max(2, Number(data.live_poll_seconds) * 1000);
+      const quotes = data.quotes || {};
+      _scoutSignals.forEach((s, id) => {
+        if (s.trade_open) return;
+        const card = c.querySelector(`.scout-card[data-signal-id="${id}"]`);
+        if (!card) return;
+        const sym = String(s.symbol).toUpperCase();
+        const q = quotes[sym];
+        const liveLtp = q && q.ltp != null ? Number(q.ltp) : null;
+        if (liveLtp == null) return;
+        updateSignalCardLive(card, s, liveLtp, q.as_of);
+        const status = evaluateClientValidity(s, liveLtp);
+        if (status !== 'ACTIVE') dropInvalidSignal(id, card, status);
+      });
+    } catch (_) { /* keep last price */ }
+  }
+
+  function syncSignalCards(signals) {
+    const c = $('#scout-signals-container');
+    if (!c) return;
+    if (!signals || !signals.length) {
+      _scoutSignals.clear();
+      showEmptySignals();
+      return;
+    }
+    c.className = 'scout-signal-list';
+    const newIds = new Set(signals.map(s => String(s.id)));
+    c.querySelectorAll('.scout-card[data-signal-id]').forEach(card => {
+      if (!newIds.has(card.dataset.signalId)) removeSignalCard(card);
+    });
+    _scoutSignals.clear();
+    signals.forEach(s => {
+      _scoutSignals.set(String(s.id), s);
+      let card = c.querySelector(`.scout-card[data-signal-id="${s.id}"]`);
+      if (!card) {
+        const wrap = document.createElement('div');
+        wrap.innerHTML = renderSingleSignalCard(s);
+        card = wrap.firstElementChild;
+        c.appendChild(card);
+        bindSignalMarkButtons(card);
+      } else {
+        updateSignalCardLive(card, s, s.live_ltp, s.live_as_of);
+      }
+    });
+    bindSignalMarkButtons(c);
+  }
+
+  function renderSignals(signals) {
+    syncSignalCards(signals);
+  }
 
   async function loadScoutSignals() {
     const c = $('#scout-signals-container');
@@ -231,6 +484,7 @@
         scoutApi('/signals?limit=40'),
       ]);
       if (sig.poll_seconds) _scoutPollMs = Math.max(5, Number(sig.poll_seconds) * 1000);
+      if (sig.live_poll_seconds) _scoutLivePollMs = Math.max(2, Number(sig.live_poll_seconds) * 1000);
       renderStatus(st);
       renderSignals(sig.signals || []);
     } catch (e) {
@@ -769,6 +1023,27 @@
   let _scoutTimer = null;
   let _scoutTradesTimer = null;
 
+  function stopScoutLiveRefresh() {
+    if (_scoutLiveTimer) {
+      clearInterval(_scoutLiveTimer);
+      _scoutLiveTimer = null;
+    }
+    if (_scoutExpiryTimer) {
+      clearInterval(_scoutExpiryTimer);
+      _scoutExpiryTimer = null;
+    }
+  }
+
+  function startScoutLiveRefresh() {
+    stopScoutLiveRefresh();
+    pollScoutLiveQuotes();
+    _scoutLiveTimer = setInterval(pollScoutLiveQuotes, _scoutLivePollMs);
+    _scoutExpiryTimer = setInterval(() => {
+      checkScoutSignalExpiry();
+      tickScoutTimers();
+    }, 1000);
+  }
+
   function stopScoutAutoRefresh() {
     if (_scoutTimer) {
       clearInterval(_scoutTimer);
@@ -796,10 +1071,14 @@
   function onScoutTabEnter(tab) {
     updateScoutSubtabs(tab);
     if (tab === 'scout-signals') {
-      loadScoutSignals().then(() => startScoutAutoRefresh());
+      loadScoutSignals().then(() => {
+        startScoutAutoRefresh();
+        startScoutLiveRefresh();
+      });
       stopScoutTradesAutoRefresh();
     } else {
       stopScoutAutoRefresh();
+      stopScoutLiveRefresh();
       if (tab === 'scout-watchlist') {
         _wlSearch = ($('#scout-wl-search')?.value || '').trim();
         loadScoutWatchlist({ reset: true });
@@ -816,6 +1095,7 @@
   function onScoutTabLeave() {
     stopScoutAutoRefresh();
     stopScoutTradesAutoRefresh();
+    stopScoutLiveRefresh();
   }
 
   SCOUT_TABS.forEach(tab => {

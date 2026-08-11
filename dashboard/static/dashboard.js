@@ -2861,7 +2861,7 @@ function suggestionCanExecute(s) {
   return !s.is_stale;
 }
 
-function renderExecutionGateBanner(s) {
+function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
   const status = (s.status || '').toUpperCase();
   if (status === 'EXECUTED') {
     return `<div class="suggestion-gate-banner suggestion-gate-info">
@@ -2869,17 +2869,32 @@ function renderExecutionGateBanner(s) {
       <span>This suggestion was already acted on.</span>
     </div>`;
   }
+  if (status === 'IGNORED') {
+    return `<div class="suggestion-gate-banner suggestion-gate-retired">
+      <div class="suggestion-gate-head">
+        <span class="tag tag-warn">Retired</span>
+        <strong>Not actionable</strong>
+      </div>
+      <p class="suggestion-gate-detail muted">This suggestion was retired (stale or superseded). Run <strong>Live Suggestion Engine</strong> from the Jobs tab for a fresh PENDING suggestion.</p>
+    </div>`;
+  }
   const gate = s.execution_gate;
   if (!gate || gate.ok) return '';
   const label = gate.label || 'Cannot execute';
   const detail = (gate.reason && gate.reason !== 'OK') ? gate.reason : '';
+  const actions = showBlockedActions ? `
+    <div class="suggestion-gate-actions btn-row">
+      <button type="button" class="btn btn-sm btn-accent btn-mark-exec" disabled title="Execution blocked — see notice above">Mark Executed</button>
+      <button type="button" class="btn btn-sm btn-ghost btn-ignore">Ignore / dismiss</button>
+    </div>` : '';
   return `<div class="suggestion-gate-banner suggestion-gate-blocked" role="alert">
     <div class="suggestion-gate-head">
       <span class="tag tag-warn">${escapeHtml(label.toUpperCase())}</span>
       <strong>Execution blocked</strong>
     </div>
     ${detail ? `<p class="suggestion-gate-detail">${escapeHtml(detail)}</p>` : ''}
-    <p class="suggestion-gate-hint muted">Run <strong>Live Suggestion Engine</strong> from the Jobs tab for a fresh PENDING suggestion.</p>
+    <p class="suggestion-gate-hint muted">Run <strong>Live Suggestion Engine</strong> from the Jobs tab for a fresh PENDING suggestion, or dismiss this card.</p>
+    ${actions}
   </div>`;
 }
 
@@ -2888,6 +2903,8 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
   if (isNoSug) {
     return renderSitOutCard(s);
   }
+  const sugStatus = (s.status || '').toUpperCase();
+  if (sugStatus === 'IGNORED') readOnly = true;
   const econ = {
     np: s.net_credit, mp: s.max_profit, ml: s.max_loss,
     pop: s.probability_of_profit,
@@ -2971,12 +2988,15 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       </div>${fillColHtml}
     </div>`;
   }).join('');
-  const sugStatus = (s.status || '').toUpperCase();
   const canExecute = !readOnly && suggestionCanExecute(s);
   const gateLabel = s.execution_gate?.label
     || (s.is_stale ? 'Stale' : null)
     || (sugStatus === 'IGNORED' ? 'Retired' : null);
-  const gateBanner = readOnly ? '' : renderExecutionGateBanner(s);
+  const gateBanner = (readOnly && sugStatus !== 'IGNORED')
+    ? ''
+    : renderExecutionGateBanner(s, {
+      showBlockedActions: !readOnly && sugStatus === 'PENDING' && !canExecute,
+    });
   const summaryHtml = `
     <div class="card-head collapsible-card-head">
       <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
@@ -3082,11 +3102,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     <div class="btn-row" style="margin-top:12px">
       <button class="btn btn-accent btn-mark-exec">Mark Executed</button>
       <button class="btn btn-ghost btn-ignore">Ignore</button>
-    </div>` : (sugStatus === 'PENDING' ? `
-    <div class="btn-row" style="margin-top:12px">
-      <button class="btn btn-accent btn-mark-exec" disabled title="Execution blocked — see notice above">Mark Executed</button>
-      <button class="btn btn-ghost btn-ignore">Ignore</button>
-    </div>` : ''))}`;
+    </div>` : '')}`;
 
   if (readOnly) {
     const detailsCls = inlineHeader

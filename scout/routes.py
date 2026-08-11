@@ -81,7 +81,8 @@ def api_scout_status(db: SQLServerConnection):
         "zerodha_message": msg,
         "watchlist_count": len(selected),
         "push_enabled": bool(SCOUT_CONFIG.get("push_enabled", True)),
-        "signals_poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 15)),
+        "signals_poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
+        "signals_live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
         "signal_valid_minutes": int(SCOUT_CONFIG.get("signal_valid_minutes", 30)),
         "last_signal": last_sig,
     })
@@ -118,8 +119,21 @@ def api_scout_signals(db: SQLServerConnection):
     return jsonify({
         "signals": enriched,
         "count": len(enriched),
-        "poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 15)),
+        "poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
+        "live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
         "market_open": is_market_open(),
+    })
+
+
+@scout_bp.route("/live-quotes")
+def api_scout_live_quotes():
+    """Latest equity LTP from ws_status.json — no DB, for fast UI ticks."""
+    raw = (request.args.get("symbols") or "").strip()
+    symbols = [s.strip().upper() for s in raw.split(",") if s.strip()] or None
+    quotes = latest_equity_ltps(symbols)
+    return jsonify({
+        "quotes": quotes,
+        "live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
     })
 
 
@@ -247,7 +261,7 @@ def api_scout_trades_open(db: SQLServerConnection):
     return jsonify({
         "trades": out,
         "count": len(out),
-        "poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 15)),
+        "poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
     })
 
 

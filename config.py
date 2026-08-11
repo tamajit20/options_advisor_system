@@ -225,7 +225,9 @@ SCOUT_CONFIG: dict = {
     # Entry band around signal LTP (± pct for long; asymmetric for chase limit).
     "entry_slippage_pct": 0.20,
     # Dashboard poll interval for signals + open trades (seconds).
-    "signals_poll_seconds": 15,
+    "signals_poll_seconds": 10,
+    # Live LTP refresh on Signals tab (seconds) — updates price without full card rebuild.
+    "signals_live_poll_seconds": 3,
     # Live WS push (ws_runner): evaluate patterns on each 1m bar close from ticks.
     "push_enabled": True,
     "push_dedupe_minutes": 30,

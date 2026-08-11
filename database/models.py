@@ -894,20 +894,22 @@ class SuggestionRepo:
                 [today, today],
             )
 
-        # Surface today's retired rows so the Suggestions tab does not go blank
-        # when the only actionable suggestion was auto-ignored (validator / regen).
+        # Surface today's retired rows only when nothing is pending — avoids
+        # cluttering the tab with stale cards when a fresh PENDING exists.
         seen = {r["suggestion_id"] for r in rows}
-        ignored_rows = self.db.fetch_all(
-            "SELECT TOP (10) * FROM options_suggestions "
-            "WHERE status = 'IGNORED' AND entry_date >= ? "
-            "ORDER BY generated_on DESC",
-            [today],
-        )
-        for r in ignored_rows:
-            sid = r.get("suggestion_id")
-            if sid and sid not in seen:
-                rows.append(r)
-                seen.add(sid)
+        has_pending = any((r.get("status") or "").upper() == "PENDING" for r in rows)
+        if not has_pending:
+            ignored_rows = self.db.fetch_all(
+                "SELECT TOP (10) * FROM options_suggestions "
+                "WHERE status = 'IGNORED' AND entry_date >= ? "
+                "ORDER BY generated_on DESC",
+                [today],
+            )
+            for r in ignored_rows:
+                sid = r.get("suggestion_id")
+                if sid and sid not in seen:
+                    rows.append(r)
+                    seen.add(sid)
 
         # Fallback for legacy rows without entry_date: only show if generated
         # within the last 1 calendar day — anything older is definitively stale

@@ -271,22 +271,18 @@ class TestSuggestionRepo:
         assert params[-1] == "SUG-1"
         assert "LIVE" in params and "zerodha" in params and "WS_REGEN" in params
 
-    def test_active_pending_includes_today_ignored(self, mock_db, mocker):
+    def test_active_pending_hides_ignored_when_pending_exists(self, mock_db, mocker):
         today = date(2026, 5, 29)
         noon = datetime(2026, 5, 29, 12, 0)
         mocker.patch("database.models.now_ist", return_value=noon)
         pending = {"suggestion_id": "SUG-P", "status": "PENDING", "entry_date": today}
-        ignored = {"suggestion_id": "SUG-I", "status": "IGNORED", "entry_date": today}
         mock_db.fetch_all.side_effect = [
             [pending],
-            [ignored],
         ]
         rows = SuggestionRepo(mock_db).active_pending()
-        assert len(rows) == 2
+        assert len(rows) == 1
         assert rows[0]["suggestion_id"] == "SUG-P"
-        assert rows[1]["suggestion_id"] == "SUG-I"
-        ignored_sql = mock_db.fetch_all.call_args_list[1][0][0]
-        assert "status = 'IGNORED'" in ignored_sql
+        assert mock_db.fetch_all.call_count == 1
 
     def test_active_pending_shows_only_ignored_when_no_pending(self, mock_db, mocker):
         today = date(2026, 5, 29)
