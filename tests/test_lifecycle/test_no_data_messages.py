@@ -9,6 +9,7 @@ from lifecycle.no_data_messages import (
     enrich_with_latest_in_db,
     format_no_data_message,
     latest_available_suffix,
+    reconcile_no_data_with_latest,
 )
 
 
@@ -96,3 +97,30 @@ class TestClarifyMorningNoData:
             msg, job_name="fo_bhav_download", started_at=started,
         )
         assert out == msg
+
+
+class TestReconcileNoDataWithLatest:
+    def test_rewrites_contradictory_message(self):
+        msg = (
+            "FO bhavcopy not available for 2026-08-10 — "
+            "prior trading session (2026-08-10) not published on NSE yet "
+            "(morning pre-market run — today's bhav is not expected)."
+        )
+        out = reconcile_no_data_with_latest(msg, date(2026, 8, 10))
+        assert "already in DB" in out
+        assert "2026-08-10" in out
+        assert "not available" not in out
+
+    def test_enrich_reconciles_instead_of_contradictory_suffix(self, monkeypatch):
+        monkeypatch.setattr(
+            "lifecycle.no_data_messages.latest_trade_date_for_job",
+            lambda _db, _job: date(2026, 8, 10),
+        )
+        msg = (
+            "FO bhavcopy not available for 2026-08-10 — "
+            "prior trading session (2026-08-10) not published on NSE yet "
+            "(morning pre-market run — today's bhav is not expected)."
+        )
+        out = enrich_with_latest_in_db(None, "fo_bhav_download", msg)
+        assert "already in DB" in out
+        assert "Latest available in DB:" not in out

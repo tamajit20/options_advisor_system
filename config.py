@@ -220,6 +220,12 @@ SCOUT_CONFIG: dict = {
     "min_candles": 12,
     "rs_margin_pct": 0.15,
     "signal_display_minutes": 120,
+    # Actionable buy window after trigger (shown in UI; expired signals are hidden).
+    "signal_valid_minutes": 30,
+    # Entry band around signal LTP (± pct for long; asymmetric for chase limit).
+    "entry_slippage_pct": 0.20,
+    # Dashboard poll interval for signals + open trades (seconds).
+    "signals_poll_seconds": 15,
     # Live WS push (ws_runner): evaluate patterns on each 1m bar close from ticks.
     "push_enabled": True,
     "push_dedupe_minutes": 30,

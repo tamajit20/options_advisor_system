@@ -57,7 +57,9 @@ def dates_to_process(
     start = end - timedelta(days=lookback)
     pending = {d for d in weekdays_in_range(start, end) if not has_date(d)}
     if always_refresh_end and end.weekday() < 5:
-        pending.add(end)
+        skip_refresh = is_morning_catchup() and has_date(end)
+        if not skip_refresh:
+            pending.add(end)
     dates = sorted(pending)
     if is_morning_catchup():
         # Never attempt today's bhav during pre-market catchup.

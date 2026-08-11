@@ -87,7 +87,20 @@ class TestMorningDatesToProcess:
                 always_refresh_end=True,
             )
         assert date(2026, 8, 3) not in dates
+        assert date(2026, 7, 31) not in dates  # already in DB — skip morning re-fetch
+
+    def test_morning_still_backfills_missing_prior_session(self, monkeypatch):
+        monkeypatch.setattr(
+            "lifecycle.eod_session.today_ist",
+            lambda: date(2026, 8, 3),
+        )
+        with eod_pipeline_session(morning_catchup=True):
+            dates = bf.dates_to_process(
+                has_date=lambda d: False,
+                always_refresh_end=True,
+            )
         assert date(2026, 7, 31) in dates
+        assert date(2026, 8, 3) not in dates
 
 
 class TestMorningCatchupEntryDay:

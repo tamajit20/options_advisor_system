@@ -59,6 +59,20 @@ def mark_executed(
     if not legs:
         raise ValueError(f"Suggestion {suggestion_id} has no legs")
 
+    has_executed_fills = any(
+        f.executed and f.fill_price is not None for f in fills
+    )
+
+    # User clicked Ignore (no fills) — dismiss without execution gates.
+    if not has_executed_fills:
+        status = (suggestion.get("status") or "").upper()
+        if status != "PENDING":
+            raise ValueError(f"Cannot ignore suggestion with status {status}")
+        sug.update_status(suggestion_id, "IGNORED")
+        db.commit()
+        logger.info("Suggestion %s marked IGNORED by user", suggestion_id)
+        return None
+
     # Read circuit-breaker flag (best-effort — fail-open if the table is
     # not migrated yet so existing tests / fresh installs still work).
     cb_active = False
@@ -97,7 +111,7 @@ def mark_executed(
             not_executed_legs.append(leg)
 
     if not executed_legs:
-        # VOID — nothing to record as a trade. Mark suggestion ignored.
+        # Should not happen — empty fills handled above.
         sug.update_status(suggestion_id, "IGNORED")
         db.commit()
         logger.info("Suggestion %s marked IGNORED — no fills", suggestion_id)

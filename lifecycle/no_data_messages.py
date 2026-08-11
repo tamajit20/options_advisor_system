@@ -156,6 +156,30 @@ def clarify_morning_no_data_message(
     return f"{dataset} not available for {prior} — {new_reason}."
 
 
+def reconcile_no_data_with_latest(
+    message: str,
+    latest: Optional[date],
+) -> str:
+    """Rewrite contradictory NO_DATA when DB already has the target session."""
+    if latest is None:
+        return message
+    m = _NO_DATA_RE.match(message.strip())
+    if not m:
+        return message
+    try:
+        trade_date = date.fromisoformat(m.group("trade_date"))
+    except ValueError:
+        return message
+    if latest >= trade_date:
+        dataset = m.group("dataset")
+        return (
+            f"{dataset} for {trade_date.isoformat()} already in DB "
+            f"(latest stored: {latest.isoformat()}). "
+            f"No NSE re-download needed."
+        )
+    return message
+
+
 def enrich_with_latest_in_db(
     db: "SQLServerConnection",
     job_name: str,
@@ -167,9 +191,12 @@ def enrich_with_latest_in_db(
     message = clarify_morning_no_data_message(
         message, job_name=job_name, started_at=started_at,
     )
+    latest = latest_trade_date_for_job(db, job_name)
+    reconciled = reconcile_no_data_with_latest(message, latest)
+    if reconciled != message:
+        return reconciled
     if "Latest available in DB:" in message or "No data in DB yet" in message:
         return message
-    latest = latest_trade_date_for_job(db, job_name)
     return message.rstrip(".") + "." + latest_available_suffix(latest)
 
 

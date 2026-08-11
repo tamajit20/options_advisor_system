@@ -107,6 +107,43 @@
 .scout-age { font-size: .78rem; font-weight: 500; }
 .scout-reason { font-size: .9rem; line-height: 1.35; margin-bottom: 6px; }
 .scout-inval, .scout-type { font-size: .78rem; }
+.scout-live {
+  font-size: .95rem;
+  margin-bottom: 6px;
+}
+.scout-live--ok strong { color: var(--ok); }
+.scout-live--warn strong { color: var(--accent); }
+.scout-entry-band {
+  font-size: .9rem;
+  margin-bottom: 4px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid #2a3744;
+}
+.scout-entry-label {
+  display: block;
+  font-size: .72rem;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+}
+.scout-valid-window { font-size: .78rem; margin-bottom: 8px; }
+.scout-conditions-wrap { margin-top: 8px; }
+.scout-conditions-title { font-size: .72rem; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.scout-conditions {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: .78rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+.scout-mtm {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 6px 0;
+}
+.scout-mtm--profit { color: var(--ok); }
+.scout-mtm--loss { color: var(--err); }
 .scout-card-actions { margin-top: 10px; }
 .scout-trade-badge { font-size: .78rem; }
 .scout-mark-row {

@@ -30,7 +30,9 @@ from scout.instruments import (
     nifty50_symbols,
     refresh_nse_equity_master,
 )
+from scout.live_quotes import latest_equity_ltps
 from scout.market_data import zerodha_ready
+from scout.signal_enrichment import enrich_signal, scout_trade_mtm
 from scout.utils import is_market_open
 from utils import now_ist, today_ist
 
@@ -79,6 +81,8 @@ def api_scout_status(db: SQLServerConnection):
         "zerodha_message": msg,
         "watchlist_count": len(selected),
         "push_enabled": bool(SCOUT_CONFIG.get("push_enabled", True)),
+        "signals_poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 15)),
+        "signal_valid_minutes": int(SCOUT_CONFIG.get("signal_valid_minutes", 30)),
         "last_signal": last_sig,
     })
 
@@ -87,12 +91,36 @@ def api_scout_status(db: SQLServerConnection):
 @_with_db
 def api_scout_signals(db: SQLServerConnection):
     limit = min(int(request.args.get("limit", 50)), 200)
-    since = min(int(request.args.get("since_minutes", 120)), 24 * 60)
+    default_since = int(SCOUT_CONFIG.get("signal_display_minutes", 120))
+    since = min(int(request.args.get("since_minutes", default_since)), 24 * 60)
     rows = ScoutSignalRepo(db).recent(limit=limit, since_minutes=since)
     open_ids = ScoutTradeRepo(db).open_signal_ids()
+
+    symbols = {str(r["symbol"]).upper() for r in rows}
+    quotes = latest_equity_ltps(symbols)
+    now = now_ist().replace(tzinfo=None)
+
+    enriched = []
     for row in rows:
         row["trade_open"] = row.get("id") in open_ids
-    return jsonify({"signals": rows, "count": len(rows)})
+        sym = str(row["symbol"]).upper()
+        q = quotes.get(sym, {})
+        live_ltp = q.get("ltp")
+        e = enrich_signal(
+            row,
+            live_ltp=live_ltp,
+            live_as_of=q.get("as_of"),
+            now=now,
+        )
+        if e.get("validity_status") == "ACTIVE" or row["trade_open"]:
+            enriched.append(e)
+
+    return jsonify({
+        "signals": enriched,
+        "count": len(enriched),
+        "poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 15)),
+        "market_open": is_market_open(),
+    })
 
 
 @scout_bp.route("/watchlist")
@@ -198,6 +226,8 @@ def api_scout_trades_open(db: SQLServerConnection):
     trade_repo = ScoutTradeRepo(db)
     sig_repo = ScoutSignalRepo(db)
     rows = trade_repo.open_trades()
+    symbols = {str(r["symbol"]).upper() for r in rows}
+    quotes = latest_equity_ltps(symbols)
     out = []
     for r in rows:
         row = dict(r)
@@ -206,8 +236,19 @@ def api_scout_trades_open(db: SQLServerConnection):
             row["signal"] = sig_repo.get(int(sid))
         else:
             row["signal"] = None
+        sym = str(row["symbol"]).upper()
+        q = quotes.get(sym, {})
+        ltp = q.get("ltp")
+        mtm = scout_trade_mtm(row, ltp)
+        if mtm:
+            row.update(mtm)
+            row["live_as_of"] = q.get("as_of")
         out.append(row)
-    return jsonify({"trades": out, "count": len(out)})
+    return jsonify({
+        "trades": out,
+        "count": len(out),
+        "poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 15)),
+    })
 
 
 @scout_bp.route("/signals/<int:signal_id>/mark-taken", methods=["POST"])
@@ -228,6 +269,15 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
 
     if signal_id in trade_repo.open_signal_ids():
         return jsonify({"error": "open trade already exists for this signal"}), 409
+
+    quotes = latest_equity_ltps([sig["symbol"]])
+    q = quotes.get(str(sig["symbol"]).upper(), {})
+    enriched = enrich_signal(sig, live_ltp=q.get("ltp"), now=now_ist().replace(tzinfo=None))
+    if enriched.get("validity_status") != "ACTIVE":
+        return jsonify({
+            "error": f"Signal is no longer valid ({enriched.get('validity_status')})",
+            "validity_status": enriched.get("validity_status"),
+        }), 410
 
     fill = float(entry_price) if entry_price is not None else float(sig["ltp"])
     if fill <= 0:

@@ -109,12 +109,42 @@
     bar.innerHTML = parts.map(p => `<span class="scout-stat">${escapeHtml(p)}</span>`).join('');
   }
 
+  function fmtTimeShort(iso) {
+    if (!iso) return '—';
+    try {
+      const d = new Date(iso.replace(' ', 'T'));
+      if (Number.isNaN(d.getTime())) return iso;
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (_) {
+      return iso;
+    }
+  }
+
+  function renderSignalConditions(conditions) {
+    if (!conditions || !conditions.length) return '';
+    return `
+      <ul class="scout-conditions">
+        ${conditions.map(c => `<li>${escapeHtml(c)}</li>`).join('')}
+      </ul>`;
+  }
+
+  function renderLivePrice(s) {
+    const live = s.live_ltp != null ? Number(s.live_ltp) : null;
+    if (live == null || live <= 0) {
+      return '<div class="scout-live muted">Live price: waiting for WS ticks…</div>';
+    }
+    const inBand = live >= Number(s.entry_min) && live <= Number(s.entry_max);
+    const bandCls = inBand ? 'scout-live--ok' : 'scout-live--warn';
+    const asOf = s.live_as_of ? ` <span class="muted">(${escapeHtml(ageLabel(s.live_as_of))})</span>` : '';
+    return `<div class="scout-live ${bandCls}">Live: <strong>${fmtPx(live)}</strong>${asOf}</div>`;
+  }
+
   function renderSignals(signals) {
     const c = $('#scout-signals-container');
     if (!c) return;
     if (!signals || !signals.length) {
       c.className = '';
-      c.innerHTML = '<div class="empty">No scout signals in the last 2 hours. Ensure <strong>WS Monitor</strong> is connected during market hours.</div>';
+      c.innerHTML = '<div class="empty">No actionable scout signals right now. Valid signals appear during market hours with live price in the buy band; expired or invalidated signals are removed automatically.</div>';
       return;
     }
     c.className = 'scout-signal-list';
@@ -122,11 +152,12 @@
       const action = (s.action || '').toUpperCase();
       const cls = action === 'BUY' ? 'scout-buy' : action === 'SELL' ? 'scout-sell' : 'scout-wait';
       const strength = (s.strength || 'WEAK').toLowerCase();
-      const ltp = Number(s.ltp || 0);
+      const entryDefault = s.live_ltp != null ? Number(s.live_ltp) : Number(s.ltp || 0);
+      const invSide = s.invalidation_side || (action === 'BUY' ? 'below' : 'above');
       const markBlock = s.trade_open
         ? '<span class="muted scout-trade-badge">Trade open</span>'
         : `<div class="scout-mark-row">
-            <input type="number" step="0.05" class="scout-entry-input" value="${ltp}"
+            <input type="number" step="0.05" class="scout-entry-input" value="${entryDefault}"
               data-signal-id="${s.id}" aria-label="Entry fill price" title="Your Zerodha fill price">
             <input type="number" step="1" min="1" class="scout-qty-input" value="1"
               data-signal-id="${s.id}" aria-label="Quantity">
@@ -141,9 +172,22 @@
           </div>
           <div class="scout-card-body">
             <div class="scout-price">Signal @ ${fmtPx(s.ltp)} <span class="muted scout-age">${escapeHtml(ageLabel(s.triggered_at))}</span></div>
+            ${renderLivePrice(s)}
+            <div class="scout-entry-band">
+              <span class="scout-entry-label">Buy between</span>
+              <strong>${fmtPx(s.entry_min)} – ${fmtPx(s.entry_max)}</strong>
+            </div>
+            <div class="scout-valid-window muted">
+              Valid ${escapeHtml(fmtTimeShort(s.valid_from))} – ${escapeHtml(fmtTimeShort(s.valid_until))}
+              (${s.valid_minutes || 30} min window)
+            </div>
             <div class="scout-reason">${escapeHtml(s.reason)}</div>
-            ${s.invalidation != null ? `<div class="scout-inval muted">Invalid if below/above: ${fmtPx(s.invalidation)}</div>` : ''}
+            ${s.invalidation != null ? `<div class="scout-inval muted">Invalid if ${invSide}: ${fmtPx(s.invalidation)}</div>` : ''}
             <div class="scout-type muted">${escapeHtml(s.signal_type || '')}</div>
+            <div class="scout-conditions-wrap">
+              <div class="scout-conditions-title muted">Conditions to buy</div>
+              ${renderSignalConditions(s.conditions)}
+            </div>
             <div class="scout-card-actions">${markBlock}</div>
           </div>
         </div>`;
@@ -177,13 +221,16 @@
     });
   }
 
+  let _scoutPollMs = 15000;
+
   async function loadScoutSignals() {
     const c = $('#scout-signals-container');
     try {
       const [st, sig] = await Promise.all([
         scoutApi('/status'),
-        scoutApi('/signals?limit=40&since_minutes=120'),
+        scoutApi('/signals?limit=40'),
       ]);
+      if (sig.poll_seconds) _scoutPollMs = Math.max(5, Number(sig.poll_seconds) * 1000);
       renderStatus(st);
       renderSignals(sig.signals || []);
     } catch (e) {
@@ -542,6 +589,18 @@
   }
 
   // ---------- My Trades ----------
+  function renderTradeMtm(t) {
+    if (t.mtm == null) {
+      return '<div class="scout-mtm muted">Live P&L: waiting for WS ticks…</div>';
+    }
+    const pnl = Number(t.mtm);
+    const pct = t.mtm_pct != null ? Number(t.mtm_pct) : 0;
+    const cls = pnl >= 0 ? 'scout-mtm--profit' : 'scout-mtm--loss';
+    const sign = pnl >= 0 ? '+' : '';
+    const live = t.live_ltp != null ? ` · LTP ${fmtPx(t.live_ltp)}` : '';
+    return `<div class="scout-mtm ${cls}">Live P&L: <strong>${sign}${pnl.toFixed(2)}</strong> (${sign}${pct.toFixed(2)}%)${live}</div>`;
+  }
+
   function renderOpenTrades(trades) {
     const c = $('#scout-trades-container');
     if (!c) return;
@@ -563,6 +622,7 @@
           </div>
           <div class="scout-card-body">
             <div>Entry fill: ${fmtPx(t.entry_price)} × ${t.quantity || 1} · ${escapeHtml(ageLabel(t.executed_at))}</div>
+            ${renderTradeMtm(t)}
             ${sig.reason ? `<div class="muted scout-reason">${escapeHtml(sig.reason)}</div>` : ''}
             <div class="scout-close-row">
               <label class="muted">Exit fill (Zerodha)</label>
@@ -620,6 +680,7 @@
     const c = $('#scout-trades-container');
     try {
       const data = await scoutApi('/trades/open');
+      if (data.poll_seconds) _scoutPollMs = Math.max(5, Number(data.poll_seconds) * 1000);
       renderOpenTrades(data.trades || []);
     } catch (e) {
       if (c) c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
@@ -706,6 +767,7 @@
 
   // ---------- Tab lifecycle ----------
   let _scoutTimer = null;
+  let _scoutTradesTimer = null;
 
   function stopScoutAutoRefresh() {
     if (_scoutTimer) {
@@ -714,29 +776,46 @@
     }
   }
 
+  function stopScoutTradesAutoRefresh() {
+    if (_scoutTradesTimer) {
+      clearInterval(_scoutTradesTimer);
+      _scoutTradesTimer = null;
+    }
+  }
+
   function startScoutAutoRefresh() {
     stopScoutAutoRefresh();
-    _scoutTimer = setInterval(loadScoutSignals, 60000);
+    _scoutTimer = setInterval(loadScoutSignals, _scoutPollMs);
+  }
+
+  function startScoutTradesAutoRefresh() {
+    stopScoutTradesAutoRefresh();
+    _scoutTradesTimer = setInterval(loadScoutTrades, _scoutPollMs);
   }
 
   function onScoutTabEnter(tab) {
     updateScoutSubtabs(tab);
     if (tab === 'scout-signals') {
-      loadScoutSignals();
-      startScoutAutoRefresh();
+      loadScoutSignals().then(() => startScoutAutoRefresh());
+      stopScoutTradesAutoRefresh();
     } else {
       stopScoutAutoRefresh();
       if (tab === 'scout-watchlist') {
         _wlSearch = ($('#scout-wl-search')?.value || '').trim();
         loadScoutWatchlist({ reset: true });
       }
-      if (tab === 'scout-trades') loadScoutTrades();
+      if (tab === 'scout-trades') {
+        loadScoutTrades().then(() => startScoutTradesAutoRefresh());
+      } else {
+        stopScoutTradesAutoRefresh();
+      }
       if (tab === 'scout-history') loadScoutHistory();
     }
   }
 
   function onScoutTabLeave() {
     stopScoutAutoRefresh();
+    stopScoutTradesAutoRefresh();
   }
 
   SCOUT_TABS.forEach(tab => {

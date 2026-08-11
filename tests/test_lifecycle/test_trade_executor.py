@@ -212,6 +212,23 @@ class TestCloseTradeWithFills:
 class TestCircuitBreakerBlocks:
     """Circuit breaker active → execution blocked (ValueError)."""
 
+    def test_ignore_bypasses_circuit_breaker(
+        self, mock_db, mocker, fake_suggestion, fake_legs
+    ):
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        mocker.patch(
+            "lifecycle.trade_executor.RuntimeFlagsRepo.get_bool",
+            return_value=True,
+        )
+        update_status = mocker.patch(
+            "lifecycle.trade_executor.SuggestionRepo.update_status")
+        result = te.mark_executed(mock_db, "SUG-X", [])
+        assert result is None
+        update_status.assert_called_with("SUG-X", "IGNORED")
+
     def test_blocked_when_circuit_breaker_active(
         self, mock_db, mocker, fake_suggestion, fake_legs
     ):
