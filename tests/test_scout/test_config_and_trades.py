@@ -87,6 +87,20 @@ def test_scout_watchlist_api_without_zerodha(client, mocker):
     assert "nifty50" in data["index_groups"]
 
 
+def test_scout_watchlist_put(client, mocker):
+    mocker.patch(
+        "scout.routes.watchlist_set",
+        return_value=["RELIANCE", "TCS"],
+    )
+    rv = client.put(
+        "/api/scout/watchlist",
+        json={"symbols": ["RELIANCE", "TCS"]},
+    )
+    assert rv.status_code == 200
+    data = rv.get_json()
+    assert data["selected_count"] == 2
+
+
 def test_scout_trades_open(client, mocker):
     mock_repo = MagicMock()
     mock_repo.open_trades.return_value = []

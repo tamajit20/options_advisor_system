@@ -137,7 +137,7 @@ class ScoutConfigRepo:
             ON T.config_key = S.config_key
             WHEN MATCHED THEN UPDATE SET
                 config_value = S.config_value,
-                updated_at = SYSDUTCDATETIME(),
+                updated_at = SYSUTCDATETIME(),
                 updated_by = ?
             WHEN NOT MATCHED THEN INSERT
                 (config_key, config_value, updated_by)

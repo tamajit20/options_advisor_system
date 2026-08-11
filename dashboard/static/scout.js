@@ -13,7 +13,15 @@
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
       ...opts,
     });
-    const data = await res.json().catch(() => ({}));
+    const text = await res.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (_) {
+      if (!res.ok) {
+        throw new Error(res.statusText || 'Request failed');
+      }
+    }
     if (!res.ok) throw new Error(data.error || res.statusText || 'Request failed');
     return data;
   }
