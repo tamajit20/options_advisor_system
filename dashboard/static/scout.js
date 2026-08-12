@@ -251,6 +251,14 @@
       </div>`;
   }
 
+  function isSignalTradeOpen(s) {
+    return !!(s && (s.trade_open === true || s.trade_open === 1));
+  }
+
+  function cloneSignal(s) {
+    return JSON.parse(JSON.stringify(s));
+  }
+
   function renderScoutRefIds(signalId, tradeId) {
     const parts = [];
     if (signalId != null && signalId !== '') {
@@ -282,7 +290,7 @@
     const d = s.dashboard || {};
     const setupCode = d.setup_code || (s.signal_type || '').replace(/_/g, ' ');
     const entryDefault = s.live_ltp != null ? Number(s.live_ltp) : Number(s.ltp || 0);
-    const markBlock = s.trade_open
+    const markBlock = isSignalTradeOpen(s)
       ? `<span class="muted scout-trade-badge">Trade open${s.trade_id ? ` · TRD #${s.trade_id}` : ''}</span>`
       : `<div class="scout-mark-row">
           <input type="number" step="0.05" class="scout-entry-input" value="${entryDefault}"
@@ -299,14 +307,14 @@
         data-entry-min="${s.entry_min}" data-entry-max="${s.entry_max}"
         data-invalidation="${s.invalidation != null ? s.invalidation : ''}"
         data-valid-until="${escapeHtml(s.valid_until || '')}"
-        data-trade-open="${s.trade_open ? '1' : '0'}"
+        data-trade-open="${isSignalTradeOpen(s) ? '1' : '0'}"
         data-trade-id="${s.trade_id != null ? s.trade_id : ''}">
         <div class="scout-card-head">
           <strong class="scout-symbol">${escapeHtml(s.symbol)}</strong>
           <span class="scout-action tag tag-${action === 'BUY' ? 'ok' : action === 'SELL' ? 'err' : 'muted'}" title="Suggested direction for this intraday setup">${escapeHtml(action)}</span>
           <span class="scout-setup-code"${setupTitle} tabindex="0">${escapeHtml(setupCode)}</span>
           <span class="scout-strength scout-strength--${strength}" title="Signal strength from pattern quality and relative strength">${escapeHtml(s.strength || '')}</span>
-          ${renderScoutRefIds(s.id, s.trade_open ? s.trade_id : null)}
+          ${renderScoutRefIds(s.id, isSignalTradeOpen(s) ? s.trade_id : null)}
           <span class="muted scout-age">${escapeHtml(ageLabel(s.triggered_at))}</span>
         </div>
         <div class="scout-card-body">
@@ -324,9 +332,9 @@
   }
 
   function signalCardNeedsRebuild(card, s) {
-    const tradeOpen = s.trade_open ? '1' : '0';
+    const tradeOpen = isSignalTradeOpen(s) ? '1' : '0';
     if (card.dataset.tradeOpen !== tradeOpen) return true;
-    const tid = s.trade_id != null ? String(s.trade_id) : '';
+    const tid = isSignalTradeOpen(s) && s.trade_id != null ? String(s.trade_id) : '';
     if ((card.dataset.tradeId || '') !== tid) return true;
     return false;
   }
@@ -361,17 +369,9 @@
             method: 'POST',
             body: JSON.stringify({ entry_price: entry, quantity: qty }),
           });
-          toast('Trade marked — see My Trades', 'ok');
-          const tradeId = resp.trade_id;
-          const cached = _scoutSignals.get(String(sid));
-          if (cached) {
-            cached.trade_open = true;
-            cached.trade_id = tradeId;
-          }
-          if (card && cached) {
-            replaceSignalCard(card, { ...cached, trade_open: true, trade_id: tradeId });
-          }
-          await Promise.all([loadScoutTrades(), loadScoutSignals()]);
+          toast(`Trade marked — TRD #${resp.trade_id}`, 'ok');
+          await loadScoutTrades();
+          await loadScoutSignals();
           startScoutTradesAutoRefresh();
         } catch (e) {
           toast(e.message, 'err');
@@ -479,7 +479,7 @@
       if (card && secs <= 0) {
         const id = card.dataset.signalId;
         const s = _scoutSignals.get(String(id));
-        if (s && !s.trade_open) dropInvalidSignal(id, card, 'EXPIRED');
+        if (s && !isSignalTradeOpen(s)) dropInvalidSignal(id, card, 'EXPIRED');
       } else if (card && secs > 0 && secs % 5 === 0) {
         updateGatePill(card, 'time', true);
       }
@@ -506,7 +506,7 @@
     const c = $('#scout-signals-container');
     if (!c || !_scoutSignals.size) return;
     _scoutSignals.forEach((s, id) => {
-      if (s.trade_open) return;
+      if (isSignalTradeOpen(s)) return;
       const card = c.querySelector(`.scout-card[data-signal-id="${id}"]`);
       if (!card) return;
       const status = evaluateClientValidity(s, s.live_ltp);
@@ -524,7 +524,7 @@
       if (data.live_poll_seconds) _scoutLivePollMs = Math.max(2, Number(data.live_poll_seconds) * 1000);
       const quotes = data.quotes || {};
       _scoutSignals.forEach((s, id) => {
-        if (s.trade_open) return;
+        if (isSignalTradeOpen(s)) return;
         const card = c.querySelector(`.scout-card[data-signal-id="${id}"]`);
         if (!card) return;
         const sym = String(s.symbol).toUpperCase();
@@ -560,18 +560,19 @@
     });
     _scoutSignals.clear();
     signals.forEach(s => {
-      _scoutSignals.set(String(s.id), s);
-      let card = c.querySelector(`.scout-card[data-signal-id="${s.id}"]`);
+      const snap = cloneSignal(s);
+      _scoutSignals.set(String(snap.id), snap);
+      let card = c.querySelector(`.scout-card[data-signal-id="${snap.id}"]`);
       if (!card) {
         const wrap = document.createElement('div');
-        wrap.innerHTML = renderSingleSignalCard(s);
+        wrap.innerHTML = renderSingleSignalCard(snap);
         card = wrap.firstElementChild;
         c.appendChild(card);
         bindSignalMarkButtons(card);
-      } else if (signalCardNeedsRebuild(card, s)) {
-        replaceSignalCard(card, s);
+      } else if (signalCardNeedsRebuild(card, snap)) {
+        replaceSignalCard(card, snap);
       } else {
-        updateSignalCardLive(card, s, s.live_ltp, s.live_as_of);
+        updateSignalCardLive(card, snap, snap.live_ltp, snap.live_as_of);
       }
     });
     bindSignalMarkButtons(c);

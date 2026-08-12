@@ -83,9 +83,6 @@ class ScoutSignalRepo:
         )
         return _row(row) if row else None
 
-
-        return _row(row) if row else None
-
     def get(self, signal_id: int) -> Optional[dict]:
         row = self.db.fetch_one(
             "SELECT id, scan_id, symbol, exchange, action, signal_type, "

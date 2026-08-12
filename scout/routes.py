@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from functools import wraps
-from typing import Callable
+from typing import Callable, Optional
 
 from flask import Blueprint, jsonify, request
 
@@ -42,6 +42,15 @@ from scout.utils import is_market_open
 from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_int_id(value) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 scout_bp = Blueprint("scout", __name__, url_prefix="/api/scout")
 
@@ -102,12 +111,12 @@ def api_scout_signals(db: SQLServerConnection):
     rows = ScoutSignalRepo(db).recent(limit=limit, since_minutes=since)
     trade_repo = ScoutTradeRepo(db)
     open_trades = trade_repo.open_trades()
-    open_ids = trade_repo.open_signal_ids()
     trade_by_signal = {
-        int(t["signal_id"]): int(t["id"])
+        sid: int(t["id"])
         for t in open_trades
-        if t.get("signal_id") is not None
+        if (sid := _coerce_int_id(t.get("signal_id"))) is not None
     }
+    open_ids = set(trade_by_signal.keys())
 
     symbols = {str(r["symbol"]).upper() for r in rows}
     quotes = latest_equity_ltps(symbols)
@@ -115,9 +124,8 @@ def api_scout_signals(db: SQLServerConnection):
 
     enriched = []
     for row in rows:
-        sid = row.get("id")
-        row["trade_open"] = sid in open_ids
-        row["trade_id"] = trade_by_signal.get(int(sid)) if sid is not None else None
+        sid_int = _coerce_int_id(row.get("id"))
+        has_open_trade = sid_int is not None and sid_int in open_ids
         sym = str(row["symbol"]).upper()
         q = quotes.get(sym, {})
         live_ltp = q.get("ltp")
@@ -127,9 +135,9 @@ def api_scout_signals(db: SQLServerConnection):
             live_as_of=q.get("as_of"),
             now=now,
         )
-        e["trade_open"] = row["trade_open"]
-        e["trade_id"] = row["trade_id"]
-        if e.get("validity_status") == "ACTIVE" or row["trade_open"]:
+        e["trade_open"] = has_open_trade
+        e["trade_id"] = trade_by_signal.get(sid_int) if has_open_trade else None
+        if e.get("validity_status") == "ACTIVE" or has_open_trade:
             enriched.append(e)
 
     return jsonify({
@@ -316,8 +324,22 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
     if not sig:
         return jsonify({"error": "signal not found"}), 404
 
-    if signal_id in trade_repo.open_signal_ids():
+    open_ids = trade_repo.open_signal_ids()
+    if signal_id in open_ids:
         return jsonify({"error": "open trade already exists for this signal"}), 409
+
+    sym_upper = str(sig["symbol"]).upper()
+    for t in trade_repo.open_trades():
+        if str(t.get("symbol") or "").upper() != sym_upper:
+            continue
+        existing_sid = _coerce_int_id(t.get("signal_id"))
+        if existing_sid is not None and existing_sid != signal_id:
+            return jsonify({
+                "error": (
+                    f"Open trade already exists for {sig['symbol']} "
+                    f"(TRD #{t['id']}, SIG #{existing_sid}). Close or void it first."
+                ),
+            }), 409
 
     quotes = latest_equity_ltps([sig["symbol"]])
     q = quotes.get(str(sig["symbol"]).upper(), {})
