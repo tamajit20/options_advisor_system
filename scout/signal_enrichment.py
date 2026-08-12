@@ -19,6 +19,38 @@ def _market_close_dt(day: datetime) -> datetime:
     return day.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
 
 
+def _square_off_dt(day: datetime) -> datetime:
+    close = _market_close_dt(day)
+    mins = int(SCOUT_CONFIG.get("square_off_minutes_before_close", 15))
+    return close - timedelta(minutes=max(0, mins))
+
+
+def _structural_target(signal: dict, meta: dict, action: str) -> Optional[float]:
+    """Pattern-based measured-move target (OR/box extension), when levels exist."""
+    st = str(signal.get("signal_type") or "").upper()
+    action = action.upper()
+    try:
+        if st == "OR_BREAK_UP" and action == "BUY":
+            or_h = float(meta["or_high"])
+            or_l = float(meta["or_low"])
+            return round(or_h + (or_h - or_l), 2)
+        if st == "OR_BREAK_DOWN" and action == "SELL":
+            or_h = float(meta["or_high"])
+            or_l = float(meta["or_low"])
+            return round(or_l - (or_h - or_l), 2)
+        if st == "COMPRESSION_BREAK_UP" and action == "BUY":
+            bh = float(meta["box_high"])
+            bl = float(meta["box_low"])
+            return round(bh + (bh - bl), 2)
+        if st == "COMPRESSION_BREAK_DOWN" and action == "SELL":
+            bh = float(meta["box_high"])
+            bl = float(meta["box_low"])
+            return round(bl - (bh - bl), 2)
+    except (KeyError, TypeError, ValueError):
+        pass
+    return None
+
+
 def _entry_band(ltp: float, action: str) -> tuple[float, float]:
     slip = float(SCOUT_CONFIG.get("entry_slippage_pct", 0.20)) / 100.0
     px = float(ltp)
@@ -305,6 +337,113 @@ def enrich_signal(
     out["validity_status"] = status
     out["is_actionable"] = status == _VALID and not signal.get("trade_open")
     return out
+
+
+def build_exit_plan(
+    signal: dict,
+    *,
+    entry_price: float,
+    executed_at: Any = None,
+    live_ltp: Optional[float] = None,
+    now: Optional[datetime] = None,
+) -> dict:
+    """Intraday exit guidance from fill: stop (invalidation), R-multiple target, square-off time."""
+    now = (now or now_ist()).replace(tzinfo=None)
+    action = str(signal.get("action") or "").upper()
+    entry = float(entry_price or 0)
+    inv = signal.get("invalidation")
+    meta = dict(signal.get("meta") or {})
+    square_off = _square_off_dt(now)
+    r_mult = float(SCOUT_CONFIG.get("target_r_multiple", 1.5))
+    max_r = float(SCOUT_CONFIG.get("target_max_r_multiple", 2.5))
+
+    stop_price = float(inv) if inv is not None else None
+    stop_side = "below" if action == "BUY" else "above"
+    structural = _structural_target(signal, meta, action)
+
+    risk = abs(entry - stop_price) if stop_price is not None and entry > 0 else None
+    target_price: Optional[float] = None
+    if risk and risk > 0 and entry > 0:
+        if action == "BUY":
+            r_target = round(entry + risk * r_mult, 2)
+            cap = round(entry + risk * max_r, 2)
+            if structural is not None and entry < structural <= cap:
+                target_price = structural
+            else:
+                target_price = r_target
+        else:
+            r_target = round(entry - risk * r_mult, 2)
+            cap = round(entry - risk * max_r, 2)
+            if structural is not None and entry > structural >= cap:
+                target_price = structural
+            else:
+                target_price = r_target
+
+    reward = abs(target_price - entry) if target_price is not None and entry > 0 else None
+    ref_px = live_ltp if live_ltp is not None and live_ltp > 0 else entry
+
+    target_dist = stop_dist = None
+    if target_price is not None and ref_px > 0:
+        dist = (target_price - ref_px) if action == "BUY" else (ref_px - target_price)
+        target_dist = {"rs": round(dist, 2), "pct": round(dist / ref_px * 100.0, 2)}
+    if stop_price is not None and ref_px > 0:
+        dist = (ref_px - stop_price) if action == "BUY" else (stop_price - ref_px)
+        stop_dist = {"rs": round(dist, 2), "pct": round(dist / ref_px * 100.0, 2)}
+
+    secs_left = max(0, int((square_off - now).total_seconds()))
+    conditions: List[dict] = [
+        {
+            "id": "target",
+            "label": "Target",
+            "value": f"₹{target_price:.2f}" + (f" ({r_mult}R)" if target_price else ""),
+            "dynamic": True,
+        },
+        {
+            "id": "exit_time",
+            "label": "Square off by",
+            "value": square_off.strftime("%H:%M IST"),
+            "dynamic": True,
+        },
+    ]
+    if stop_price is not None:
+        conditions.insert(1, {
+            "id": "stop",
+            "label": "Stop if",
+            "value": f"{stop_side} ₹{stop_price:.2f}",
+            "dynamic": True,
+        })
+    if structural is not None and structural != target_price:
+        conditions.append({
+            "id": "struct",
+            "label": "Measured move",
+            "value": f"₹{structural:.2f}",
+        })
+
+    return {
+        "stop_price": stop_price,
+        "stop_side": stop_side,
+        "target_price": target_price,
+        "target_r": r_mult,
+        "risk_per_share": round(risk, 2) if risk else None,
+        "reward_per_share": round(reward, 2) if reward else None,
+        "structural_target": structural,
+        "square_off_by": square_off.strftime("%H:%M IST"),
+        "square_off_at": square_off.isoformat(sep=" ", timespec="seconds"),
+        "conditions": conditions,
+        "dashboard": {
+            "prices": {
+                "entry": round(entry, 2) if entry > 0 else None,
+                "stop": stop_price,
+                "target": target_price,
+                "live": live_ltp,
+            },
+            "target_dist": target_dist,
+            "stop_dist": stop_dist,
+            "timer_secs": secs_left,
+            "timer_until": square_off.strftime("%H:%M"),
+            "target_r": r_mult,
+        },
+    }
 
 
 def scout_trade_mtm(trade: dict, live_ltp: Optional[float]) -> Optional[dict]:

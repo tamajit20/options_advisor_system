@@ -228,6 +228,11 @@ SCOUT_CONFIG: dict = {
     "signals_poll_seconds": 10,
     # Live LTP refresh on Signals tab (seconds) — updates price without full card rebuild.
     "signals_live_poll_seconds": 3,
+    # Exit plan for open trades: target = entry ± (risk × R-multiple); risk = |entry − stop|.
+    "target_r_multiple": 1.5,
+    "target_max_r_multiple": 2.5,
+    # Square off all intraday Scout trades this many minutes before market_close.
+    "square_off_minutes_before_close": 15,
     # Live WS push (ws_runner): evaluate patterns on each 1m bar close from ticks.
     "push_enabled": True,
     "push_dedupe_minutes": 30,

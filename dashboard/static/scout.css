@@ -115,6 +115,8 @@
 
 /* Data-driven signal dashboard */
 .scout-dash { display: grid; gap: 10px; }
+.scout-dash--exit { margin-top: 8px; }
+.scout-exit-heading { font-size: .75rem; margin-bottom: 4px; letter-spacing: .04em; text-transform: uppercase; }
 .scout-dash-prices,
 .scout-dash-stats {
   display: grid;
@@ -259,6 +261,8 @@
 .scout-mtm--loss { color: var(--err); }
 .scout-card-actions { margin-top: 10px; }
 .scout-trade-badge { font-size: .78rem; }
+.scout-trade-exit-action { font-size: .78rem; color: var(--text-dim); }
+.scout-trade-exit-action strong.tag { font-size: .7rem; vertical-align: baseline; margin: 0 2px; }
 .scout-mark-row {
   display: flex;
   flex-wrap: wrap;

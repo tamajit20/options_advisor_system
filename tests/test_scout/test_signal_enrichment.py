@@ -10,6 +10,7 @@ import pytest
 
 from scout.live_quotes import latest_equity_ltps
 from scout.signal_enrichment import (
+    build_exit_plan,
     enrich_signal,
     evaluate_signal_status,
     scout_trade_mtm,
@@ -76,6 +77,31 @@ def test_scout_trade_mtm_buy():
     mtm = scout_trade_mtm({"action": "BUY", "entry_price": 100, "quantity": 10}, 102.0)
     assert mtm["mtm"] == 20.0
     assert mtm["mtm_pct"] == 2.0
+
+
+def test_build_exit_plan_buy_or_break():
+    sig = _sample_signal(action="BUY", ltp=100.0, invalidation=98.0)
+    now = datetime(2026, 7, 30, 11, 0, 0)
+    plan = build_exit_plan(sig, entry_price=100.0, live_ltp=101.0, now=now)
+    assert plan["stop_price"] == 98.0
+    assert plan["target_price"] == 103.0  # 1.5R with risk=2
+    assert plan["structural_target"] == 103.0  # or_high + span = 101 + 2
+    assert plan["square_off_by"] == "15:15 IST"
+    assert plan["dashboard"]["target_dist"]["rs"] == 2.0
+    assert plan["dashboard"]["stop_dist"]["rs"] == 3.0
+    assert any(c["id"] == "exit_time" for c in plan["conditions"])
+
+
+def test_build_exit_plan_sell_uses_negative_target():
+    sig = _sample_signal(
+        action="SELL",
+        ltp=100.0,
+        invalidation=102.0,
+        signal_type="OR_BREAK_DOWN",
+    )
+    plan = build_exit_plan(sig, entry_price=100.0, now=datetime(2026, 7, 30, 11, 0, 0))
+    assert plan["target_price"] == 97.0
+    assert plan["stop_side"] == "above"
 
 
 def test_latest_equity_ltps_from_ws_status(tmp_path, monkeypatch):

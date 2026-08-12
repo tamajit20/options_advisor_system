@@ -147,6 +147,11 @@
     TRIG: 'Price when the 1-minute bar closed and this signal was triggered.',
     BAND: 'Price band — enter the trade only while live price stays inside this range.',
     STOP: 'Invalidation stop — signal is removed if price crosses below (BUY) or above (SELL) this level.',
+    TARGET: 'Profit target at 1.5× risk (entry to stop). Book full or partial here.',
+    'EXIT BY': 'Intraday square-off — close the position before this time (default 15:15 IST).',
+    ENTRY: 'Your Zerodha fill price when you marked the trade taken.',
+    '→ Target': 'Distance from live price to the profit target.',
+    STRUCT: 'Measured-move target from the pattern (OR/box height projected from breakout).',
     Stock: 'This stock\'s percentage change from today\'s opening price.',
     Nifty: 'Nifty 50 index percentage change from today\'s open.',
     RS: 'Relative strength = stock % − Nifty %. Positive means the stock is outperforming the index.',
@@ -892,6 +897,63 @@
     return `<div class="scout-mtm ${cls}">Live P&L: <strong>${sign}${pnl.toFixed(2)}</strong> (${sign}${pct.toFixed(2)}%)${live}</div>`;
   }
 
+  function tradePositionMeta(action) {
+    const a = (action || '').toUpperCase();
+    if (a === 'SELL') {
+      return {
+        side: 'SHORT',
+        sideCls: 'err',
+        entryVerb: 'Sold (short)',
+        exitAction: 'BUY',
+        exitLabel: 'Buy-back fill (Zerodha)',
+        exitHint: 'You sold to open this short — enter the price where you bought back to close.',
+      };
+    }
+    return {
+      side: 'LONG',
+      sideCls: 'ok',
+      entryVerb: 'Bought (long)',
+      exitAction: 'SELL',
+      exitLabel: 'Sell fill (Zerodha)',
+      exitHint: 'You bought to open this long — enter the price where you sold to close.',
+    };
+  }
+
+  function renderTradeExitPlan(t) {
+    const plan = t.exit_plan;
+    if (!plan || !plan.dashboard) return '';
+    const d = plan.dashboard;
+    const p = d.prices || {};
+    const targetDist = d.target_dist;
+    const stopDist = d.stop_dist;
+    const struct = plan.structural_target;
+    const structHtml = struct != null && struct !== p.target
+      ? renderMetricTile('STRUCT', fmtPx(struct), 'scout-metric--wide', 'STRUCT')
+      : '';
+    const targetDistHtml = targetDist
+      ? renderMetricTile('→ Target', `${fmtPx(targetDist.rs)} · ${fmtPct(targetDist.pct)}`, '', '→ Target')
+      : '';
+    const stopDistHtml = stopDist
+      ? renderMetricTile('→ Stop', `${fmtPx(stopDist.rs)} · ${fmtPct(stopDist.pct)}`, '', '→ Stop')
+      : '';
+    const rLabel = d.target_r != null ? ` (${d.target_r}R)` : '';
+    return `
+      <div class="scout-dash scout-dash--exit">
+        <div class="muted scout-exit-heading">Exit plan</div>
+        <div class="scout-dash-prices">
+          ${renderMetricTile('ENTRY', fmtPx(p.entry), '', 'ENTRY')}
+          ${p.target != null ? renderMetricTile('TARGET', fmtPx(p.target) + escapeHtml(rLabel), 'scout-metric--pos', 'TARGET') : ''}
+          ${p.stop != null ? renderMetricTile('STOP', fmtPx(p.stop), 'scout-metric--neg', 'STOP') : ''}
+          ${renderMetricTile('EXIT BY', `<span class="scout-timer" data-timer-secs="${d.timer_secs || 0}">${fmtTimer(d.timer_secs)}</span> → ${escapeHtml(d.timer_until || '')}`, 'scout-metric--timer', 'EXIT BY')}
+        </div>
+        <div class="scout-dash-stats">
+          ${structHtml}
+          ${targetDistHtml}
+          ${stopDistHtml}
+        </div>
+      </div>`;
+  }
+
   function renderOpenTrades(trades) {
     const c = $('#scout-trades-container');
     if (!c) return;
@@ -903,20 +965,23 @@
     c.className = 'scout-trade-list';
     c.innerHTML = trades.map(t => {
       const action = (t.action || '').toUpperCase();
+      const pos = tradePositionMeta(action);
       const sig = t.signal || {};
       return `
         <div class="scout-card scout-trade-card">
           <div class="scout-card-head">
             <strong>${escapeHtml(t.symbol)}</strong>
-            <span class="tag tag-${action === 'BUY' ? 'ok' : 'err'}">${escapeHtml(action)}</span>
+            <span class="tag tag-${pos.sideCls}" title="Open position side">${escapeHtml(pos.side)}</span>
+            <span class="scout-trade-exit-action">Close with <strong class="tag tag-${pos.sideCls === 'err' ? 'ok' : 'err'}">${escapeHtml(pos.exitAction)}</strong></span>
             <span class="muted">${escapeHtml(t.signal_type || '')}</span>
           </div>
           <div class="scout-card-body">
-            <div>Entry fill: ${fmtPx(t.entry_price)} × ${t.quantity || 1} · ${escapeHtml(ageLabel(t.executed_at))}</div>
+            <div>${escapeHtml(pos.entryVerb)} @ ${fmtPx(t.entry_price)} × ${t.quantity || 1} · ${escapeHtml(ageLabel(t.executed_at))}</div>
+            ${renderTradeExitPlan(t)}
             ${renderTradeMtm(t)}
             ${sig.reason ? `<div class="muted scout-reason">${escapeHtml(sig.reason)}</div>` : ''}
             <div class="scout-close-row">
-              <label class="muted">Exit fill (Zerodha)</label>
+              <label class="muted" title="${escapeHtml(pos.exitHint)}">${escapeHtml(pos.exitLabel)}</label>
               <input type="number" step="0.05" class="scout-exit-input" placeholder="Exit price"
                 data-trade-id="${t.id}" aria-label="Exit fill price">
               <button type="button" class="btn btn-sm btn-accent scout-close-btn" data-trade-id="${t.id}">Close trade</button>
@@ -1024,15 +1089,16 @@
       const pnl = Number(t.pnl || 0);
       const cls = pnl >= 0 ? 'pnl-profit' : 'pnl-loss';
       const closed = t.closed_at || t.exited_at || '';
+      const pos = tradePositionMeta(t.action);
       return `
         <div class="scout-card">
           <div class="scout-card-head">
             <strong>${escapeHtml(t.symbol)}</strong>
-            <span class="tag tag-${(t.action || '').toUpperCase() === 'BUY' ? 'ok' : 'err'}">${escapeHtml(t.action)}</span>
+            <span class="tag tag-${pos.sideCls}">${escapeHtml(pos.side)}</span>
             <span class="muted">${escapeHtml(t.signal_type || '')}</span>
           </div>
           <div class="scout-card-body">
-            <div>${fmtPx(t.entry_price)} → ${fmtPx(t.exit_price)} · ${escapeHtml(String(closed).slice(0, 16))}</div>
+            <div>${escapeHtml(pos.entryVerb.split(' ')[0])} @ ${fmtPx(t.entry_price)} → ${escapeHtml(pos.exitAction)} @ ${fmtPx(t.exit_price)} · ${escapeHtml(String(closed).slice(0, 16))}</div>
             <div class="${cls}"><strong>${fmtPnl(t.pnl)}</strong> (${Number(t.pnl_pct || 0).toFixed(2)}%)</div>
             ${t.signal_reason ? `<div class="muted scout-reason">${escapeHtml(t.signal_reason)}</div>` : ''}
           </div>

@@ -32,7 +32,7 @@ from scout.instruments import (
 )
 from scout.live_quotes import latest_equity_ltps
 from scout.market_data import zerodha_ready
-from scout.signal_enrichment import enrich_signal, scout_trade_mtm
+from scout.signal_enrichment import build_exit_plan, enrich_signal, scout_trade_mtm
 from scout.utils import is_market_open
 from utils import now_ist, today_ist
 
@@ -242,6 +242,7 @@ def api_scout_trades_open(db: SQLServerConnection):
     rows = trade_repo.open_trades()
     symbols = {str(r["symbol"]).upper() for r in rows}
     quotes = latest_equity_ltps(symbols)
+    now = now_ist().replace(tzinfo=None)
     out = []
     for r in rows:
         row = dict(r)
@@ -257,6 +258,19 @@ def api_scout_trades_open(db: SQLServerConnection):
         if mtm:
             row.update(mtm)
             row["live_as_of"] = q.get("as_of")
+        sig = row.get("signal") or {
+            "action": row.get("action"),
+            "invalidation": None,
+            "signal_type": row.get("signal_type"),
+            "meta": {},
+        }
+        row["exit_plan"] = build_exit_plan(
+            sig,
+            entry_price=float(row.get("entry_price") or 0),
+            executed_at=row.get("executed_at"),
+            live_ltp=ltp,
+            now=now,
+        )
         out.append(row)
     return jsonify({
         "trades": out,
@@ -308,7 +322,15 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
         notes=str(body.get("notes") or "")[:512] or None,
     )
     db.commit()
-    return jsonify({"status": "ok", "trade_id": tid, "trade": trade_repo.get(tid)})
+    trade = dict(trade_repo.get(tid) or {})
+    trade["exit_plan"] = build_exit_plan(
+        sig,
+        entry_price=fill,
+        executed_at=trade.get("executed_at"),
+        live_ltp=q.get("ltp"),
+        now=now_ist().replace(tzinfo=None),
+    )
+    return jsonify({"status": "ok", "trade_id": tid, "trade": trade})
 
 
 @scout_bp.route("/trades/<int:trade_id>/close", methods=["POST"])
