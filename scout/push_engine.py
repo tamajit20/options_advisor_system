@@ -21,16 +21,17 @@ from config import SCOUT_CONFIG
 from database.connection import SQLServerConnection
 from database.scout_models import ScoutSignalRepo
 from providers.base import LiveQuote
-from providers.event_bus import EventBus, TOPIC_TICK, get_event_bus
+from providers.event_bus import EventBus, TOPIC_TICK_INDEX, TOPIC_TICK_SCOUT, get_event_bus
 from scout.candles import Candle
 from scout.filters import min_candles_ok
+from scout.config_loader import get_scout_settings
 from scout.patterns import detect_signals
+from scout.settings_schema import effective_pattern_config
+from scout.tick_filter import is_scout_equity_tick
 from scout.utils import is_market_open, pct_change
 from utils import now_ist
 
 logger = logging.getLogger(__name__)
-
-_INDEX_SYMBOLS = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "VIX"})
 
 
 def _floor_to_minute(dt: datetime) -> datetime:
@@ -39,14 +40,6 @@ def _floor_to_minute(dt: datetime) -> datetime:
 
 def _next_minute_boundary(dt: datetime) -> datetime:
     return _floor_to_minute(dt) + timedelta(minutes=1)
-
-
-def _is_scout_equity(q: LiveQuote, watchlist: Set[str]) -> bool:
-    if q.symbol in _INDEX_SYMBOLS:
-        return False
-    if q.option_type is not None or q.expiry is not None or q.strike is not None:
-        return False
-    return q.symbol in watchlist
 
 
 @dataclass
@@ -103,9 +96,10 @@ class ScoutPushEngine:
         self._bars: Dict[str, _MinuteBar] = {}
         self._session: Dict[str, _SessionStats] = {}
         self._nifty_open: Optional[float] = None
-        self._recent: Dict[Tuple[str, str], datetime] = {}
+        self._recent: Dict[str, datetime] = {}
 
-        self._unsub: Optional[Callable[[], None]] = None
+        self._unsub_scout: Optional[Callable[[], None]] = None
+        self._unsub_index: Optional[Callable[[], None]] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._auto_thread: Optional[threading.Thread] = None
@@ -124,10 +118,11 @@ class ScoutPushEngine:
             logger.info("ScoutPushEngine: push_enabled=false — not starting")
             return
         with self._lock:
-            if self._unsub is not None:
+            if self._unsub_scout is not None:
                 return
             self._seed_history()
-            self._unsub = self._bus.subscribe(TOPIC_TICK, self._on_tick)
+            self._unsub_scout = self._bus.subscribe(TOPIC_TICK_SCOUT, self._on_tick)
+            self._unsub_index = self._bus.subscribe(TOPIC_TICK_INDEX, self._on_tick)
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run,
@@ -147,11 +142,14 @@ class ScoutPushEngine:
 
     def stop(self, timeout: float = 5.0) -> None:
         with self._lock:
-            if self._unsub is not None:
-                try:
-                    self._unsub()
-                finally:
-                    self._unsub = None
+            for unsub in (self._unsub_scout, self._unsub_index):
+                if unsub is not None:
+                    try:
+                        unsub()
+                    finally:
+                        pass
+            self._unsub_scout = None
+            self._unsub_index = None
         self._stop_event.set()
         t = self._thread
         if t is not None:
@@ -219,7 +217,7 @@ class ScoutPushEngine:
             return
         if q.symbol == "NIFTY" and self._nifty_open is None and q.last_price:
             self._nifty_open = float(q.last_price)
-        if not _is_scout_equity(q, self._watchlist):
+        if not is_scout_equity_tick(q, self._watchlist):
             return
         ts = q.timestamp or self._clock()
         minute = _floor_to_minute(ts)
@@ -291,6 +289,11 @@ class ScoutPushEngine:
         if not symbols_to_eval:
             return
 
+        settings = get_scout_settings(self._db, use_cache=False)
+        cfg = effective_pattern_config(settings)
+        dedupe_mins = int(settings.get("push_dedupe_minutes", self._dedupe_minutes))
+        dedupe_per_symbol = bool(settings.get("dedupe_per_symbol", False))
+
         bench_pct = self._benchmark_pct()
         scan_id = f"scout-push-{boundary.strftime('%Y%m%d-%H%M')}-{uuid.uuid4().hex[:4]}"
         triggered = boundary
@@ -301,7 +304,7 @@ class ScoutPushEngine:
             with self._lock:
                 candles = list(self._history.get(sym) or [])
                 sess = self._session.get(sym) or _SessionStats()
-            if not min_candles_ok(candles):
+            if not min_candles_ok(candles, cfg=cfg):
                 continue
             open_px = sess.open or (candles[0].open if candles else 0.0)
             ltp = candles[-1].close
@@ -315,9 +318,10 @@ class ScoutPushEngine:
                 day_low=day_low,
                 stock_pct=stock_pct,
                 bench_pct=bench_pct,
+                cfg=cfg,
             ):
-                key = (sym, sig.signal_type)
-                if self._is_duplicate(key, triggered):
+                dedupe_key = sym if dedupe_per_symbol else f"{sym}:{sig.signal_type}"
+                if self._is_duplicate(dedupe_key, triggered, dedupe_mins):
                     continue
                 row = sig.to_dict()
                 signal_id = self._sig_repo.insert(
@@ -340,7 +344,7 @@ class ScoutPushEngine:
                 )
                 if signal_id:
                     inserted_ids.append(signal_id)
-                self._recent[key] = triggered
+                self._recent[dedupe_key] = triggered
                 signals += 1
 
         if signals:
@@ -362,8 +366,9 @@ class ScoutPushEngine:
             return 0.0
         return pct_change(self._nifty_open, float(ltp))
 
-    def _is_duplicate(self, key: Tuple[str, str], at: datetime) -> bool:
+    def _is_duplicate(self, key: str, at: datetime, dedupe_minutes: Optional[int] = None) -> bool:
         prev = self._recent.get(key)
         if prev is None:
             return False
-        return (at - prev).total_seconds() < self._dedupe_minutes * 60
+        mins = dedupe_minutes if dedupe_minutes is not None else self._dedupe_minutes
+        return (at - prev).total_seconds() < mins * 60

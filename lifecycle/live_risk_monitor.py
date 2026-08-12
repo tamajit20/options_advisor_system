@@ -73,12 +73,14 @@ from engine.sl_threshold import effective_sl_rs
 from providers.base import LiveQuote
 from providers.event_bus import (
     EventBus,
-    TOPIC_TICK,
+    TOPIC_TICK_INDEX,
+    TOPIC_TICK_OPTIONS,
     TOPIC_TRADE_CLOSED,
     TOPIC_TRADE_MTM,
     TOPIC_TRADE_OPENED,
     get_event_bus,
 )
+from providers.tick_routing import options_index_symbols
 from utils import days_between, now_ist
 
 
@@ -443,7 +445,8 @@ class LiveRiskMonitor:
             logger.info("LiveRiskMonitor disabled via config")
             return
         self._reload(prime=True)
-        self._unsubscribers.append(self._bus.subscribe(TOPIC_TICK, self._on_tick))
+        self._unsubscribers.append(self._bus.subscribe(TOPIC_TICK_OPTIONS, self._on_tick))
+        self._unsubscribers.append(self._bus.subscribe(TOPIC_TICK_INDEX, self._on_tick))
         self._unsubscribers.append(
             self._bus.subscribe(TOPIC_TRADE_OPENED, self._on_trade_event))
         self._unsubscribers.append(
@@ -619,6 +622,9 @@ class LiveRiskMonitor:
 
     def _handle_spot_tick(self, quote: LiveQuote) -> None:
         if not self._spot_sl_enabled:
+            return
+        sym = str(quote.symbol or "").upper()
+        if sym not in options_index_symbols():
             return
         ltp = float(quote.last_price or 0.0)
         if ltp <= 0:

@@ -99,6 +99,9 @@
         <button class="nav-item" data-tab="scout-history">
           <span class="nav-icon">📈</span><span class="nav-label">History</span>
         </button>
+        <button class="nav-item" data-tab="scout-config">
+          <span class="nav-icon">⚙️</span><span class="nav-label">Scout Config</span>
+        </button>
       </div>
     </details>
   </nav>
@@ -387,6 +390,7 @@
         <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
         <button class="scout-subtab" data-stab="scout-trades">My Trades</button>
         <button class="scout-subtab" data-stab="scout-history">History</button>
+        <button class="scout-subtab" data-stab="scout-config">Config</button>
       </div>
       <div class="scout-header-compact">
         <div id="scout-status-bar" class="scout-status-bar muted">Loading status…</div>
@@ -412,6 +416,7 @@
         <button class="scout-subtab active" data-stab="scout-watchlist">Watchlist</button>
         <button class="scout-subtab" data-stab="scout-trades">My Trades</button>
         <button class="scout-subtab" data-stab="scout-history">History</button>
+        <button class="scout-subtab" data-stab="scout-config">Config</button>
       </div>
       <p class="muted scout-intro">All NSE stocks from Zerodha&apos;s instrument master (refreshed daily — new IPOs appear after Zerodha lists them). Search, select, then Save.</p>
       <div class="scout-watchlist-toolbar">
@@ -443,6 +448,7 @@
         <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
         <button class="scout-subtab active" data-stab="scout-trades">My Trades</button>
         <button class="scout-subtab" data-stab="scout-history">History</button>
+        <button class="scout-subtab" data-stab="scout-config">Config</button>
       </div>
       <p class="muted scout-intro">Trades you took in Zerodha — enter your fill prices here (same flow as Options Advisor mark executed).</p>
       <div id="scout-trades-container" class="loading">Loading…</div>
@@ -455,6 +461,7 @@
         <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
         <button class="scout-subtab" data-stab="scout-trades">My Trades</button>
         <button class="scout-subtab active" data-stab="scout-history">History</button>
+        <button class="scout-subtab" data-stab="scout-config">Config</button>
       </div>
       <div class="filter-row hist-filter-bar scout-hist-filters">
         <label class="hist-filter-label">From <input type="date" id="scout-hist-from" class="hist-date-input"></label>
@@ -462,6 +469,132 @@
         <button type="button" class="btn btn-ghost" id="scout-hist-apply">Apply</button>
       </div>
       <div id="scout-history-panel" class="scout-history-panel loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-scout-config" aria-hidden="true">
+      <h2 class="panel-title">Intraday Scout — Config</h2>
+      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
+        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
+        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
+        <button class="scout-subtab" data-stab="scout-trades">My Trades</button>
+        <button class="scout-subtab" data-stab="scout-history">History</button>
+        <button class="scout-subtab active" data-stab="scout-config">Config</button>
+      </div>
+      <p class="muted scout-intro">Tune automation, position sizing, trade limits, and signal filters. Changes apply immediately to new signals and auto-enter.</p>
+      <div id="scout-config-notice" class="scout-config-notice" hidden></div>
+      <form id="scout-config-form" class="scout-config-form" autocomplete="off">
+        <section class="scout-config-section">
+          <h3 class="scout-config-heading">Automation</h3>
+          <div class="scout-config-grid">
+            <label class="scout-config-check">
+              <input type="checkbox" name="auto_execute_signals" id="cfg-auto-execute">
+              <span>Auto-enter signals at live LTP (paper)</span>
+            </label>
+            <label class="scout-config-check">
+              <input type="checkbox" name="auto_close_trades" id="cfg-auto-close">
+              <span>Auto-close on target, stop, or square-off</span>
+            </label>
+          </div>
+        </section>
+        <section class="scout-config-section">
+          <h3 class="scout-config-heading">Position sizing</h3>
+          <div class="scout-config-grid">
+            <label class="scout-config-field">
+              <span class="scout-config-label">Use investment-based quantity</span>
+              <input type="checkbox" name="use_investment_sizing" id="cfg-use-investment">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Investment per trade (₹)</span>
+              <input type="number" name="investment_per_trade_inr" id="cfg-investment" min="1000" step="1000" value="20000">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Fixed quantity (when investment sizing off)</span>
+              <input type="number" name="auto_trade_quantity" id="cfg-fixed-qty" min="1" step="1" value="1">
+            </label>
+          </div>
+        </section>
+        <section class="scout-config-section">
+          <h3 class="scout-config-heading">Trade limits</h3>
+          <div class="scout-config-grid">
+            <label class="scout-config-field">
+              <span class="scout-config-label">Max trades per day</span>
+              <input type="number" name="max_trades_per_day" id="cfg-max-trades" min="0" max="100" step="1" value="5">
+            </label>
+            <label class="scout-config-check">
+              <input type="checkbox" name="one_trade_per_symbol_per_day" id="cfg-one-per-symbol">
+              <span>One trade per symbol per day</span>
+            </label>
+            <p class="muted scout-config-hint" id="cfg-trades-today">Trades opened today: —</p>
+          </div>
+        </section>
+        <section class="scout-config-section">
+          <h3 class="scout-config-heading">Auto-enter strength</h3>
+          <div class="scout-config-strengths">
+            <label class="scout-config-check"><input type="checkbox" name="auto_enter_strengths" value="WEAK"> WEAK</label>
+            <label class="scout-config-check"><input type="checkbox" name="auto_enter_strengths" value="MEDIUM"> MEDIUM</label>
+            <label class="scout-config-check"><input type="checkbox" name="auto_enter_strengths" value="HIGH"> HIGH</label>
+          </div>
+        </section>
+        <section class="scout-config-section">
+          <h3 class="scout-config-heading">Trading window (IST)</h3>
+          <div class="scout-config-grid scout-config-grid--inline">
+            <label class="scout-config-field">
+              <span class="scout-config-label">Start</span>
+              <input type="time" name="trade_window_start" id="cfg-window-start" value="09:45">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">End</span>
+              <input type="time" name="trade_window_end" id="cfg-window-end" value="14:30">
+            </label>
+          </div>
+        </section>
+        <section class="scout-config-section">
+          <h3 class="scout-config-heading">Signal dedupe</h3>
+          <div class="scout-config-grid">
+            <label class="scout-config-field">
+              <span class="scout-config-label">Cooldown (minutes)</span>
+              <input type="number" name="push_dedupe_minutes" id="cfg-dedupe-mins" min="5" max="240" step="5" value="60">
+            </label>
+            <label class="scout-config-check">
+              <input type="checkbox" name="dedupe_per_symbol" id="cfg-dedupe-symbol">
+              <span>Dedupe per symbol (ignore pattern type)</span>
+            </label>
+          </div>
+        </section>
+        <section class="scout-config-section">
+          <h3 class="scout-config-heading">Signal filters</h3>
+          <div class="scout-config-grid">
+            <label class="scout-config-field">
+              <span class="scout-config-label">Signal valid (minutes)</span>
+              <input type="number" name="signal_valid_minutes" min="5" max="120" step="1" value="30">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Max move from open (%)</span>
+              <input type="number" name="max_move_from_open_pct" min="0.3" max="5" step="0.1" value="1.0">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">RS margin vs Nifty (%)</span>
+              <input type="number" name="rs_margin_pct" min="0" max="2" step="0.05" value="0.25">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Compression range (%)</span>
+              <input type="number" name="compression_range_pct" min="0.1" max="2" step="0.05" value="0.30">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Entry band slippage (%)</span>
+              <input type="number" name="entry_slippage_pct" min="0.05" max="1" step="0.05" value="0.20">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Min candles before signals</span>
+              <input type="number" name="min_candles" min="5" max="60" step="1" value="12">
+            </label>
+          </div>
+        </section>
+        <div class="scout-config-actions">
+          <button type="submit" class="btn btn-accent" id="scout-config-save">Save settings</button>
+          <button type="button" class="btn btn-ghost" id="scout-config-reload">Reload</button>
+        </div>
+      </form>
     </article>
 
     <article class="panel" id="panel-config" aria-hidden="true">

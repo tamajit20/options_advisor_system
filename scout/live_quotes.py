@@ -43,7 +43,10 @@ def latest_equity_ltps(symbols: Optional[Iterable[str]] = None) -> Dict[str, dic
     out: Dict[str, dict] = {}
     events = snap.get("recent_events") or []
     for ev in reversed(events):
-        if str(ev.get("topic", "")).lower() != "tick":
+        topic = str(ev.get("topic") or "")
+        if topic and topic not in ("tick.scout", "tick"):
+            continue
+        if topic == "tick" and ev.get("option_type"):
             continue
         sym = str(ev.get("symbol") or "").upper()
         if not sym or sym in _INDEX_SYMBOLS:

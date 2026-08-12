@@ -12,7 +12,9 @@ import pytest
 from providers.event_bus import (
     EventBus,
     TOPIC_CONNECTION_STATE,
-    TOPIC_TICK,
+    TOPIC_TICK_INDEX,
+    TOPIC_TICK_OPTIONS,
+    TOPIC_TICK_SCOUT,
     TOPIC_TOKEN_EXPIRED,
 )
 from providers.ws_monitor import WSMonitor
@@ -71,9 +73,9 @@ def monitor(tmp_path: Path, bus: EventBus, clock: _Clock):
 # ---------------------------------------------------------------------------
 class TestTickHandling:
     def test_tick_increments_total_and_per_symbol(self, monitor, bus):
-        bus.publish(TOPIC_TICK, _make_quote("NIFTY", 22500, "CE", 12.5))
-        bus.publish(TOPIC_TICK, _make_quote("NIFTY", 22500, "CE", 12.6))
-        bus.publish(TOPIC_TICK, _make_quote("BANKNIFTY", 49000, "PE", 88.0))
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote("NIFTY", 22500, "CE", 12.5))
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote("NIFTY", 22500, "CE", 12.6))
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote("BANKNIFTY", 49000, "PE", 88.0))
 
         snap = monitor.snapshot()
         assert snap["tick_count_total"] == 3
@@ -82,10 +84,10 @@ class TestTickHandling:
         assert sym_map["BANKNIFTY"] == 1
 
     def test_tick_appears_in_recent_events(self, monitor, bus):
-        bus.publish(TOPIC_TICK, _make_quote("NIFTY", 22500, "CE", 12.5))
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote("NIFTY", 22500, "CE", 12.5))
         events = monitor.snapshot()["recent_events"]
         assert len(events) == 1
-        assert events[0]["topic"] == "tick"
+        assert events[0]["topic"] == TOPIC_TICK_OPTIONS
         assert events[0]["symbol"] == "NIFTY"
         assert events[0]["last_price"] == 12.5
 
@@ -94,7 +96,7 @@ class TestTickHandling:
         class _Boom:
             def __getattr__(self, name):
                 raise RuntimeError("boom")
-        bus.publish(TOPIC_TICK, _Boom())  # must not raise
+        bus.publish(TOPIC_TICK_OPTIONS, _Boom())  # must not raise
         # Counter unchanged.
         assert monitor.snapshot()["tick_count_total"] == 0
 
@@ -106,13 +108,13 @@ class TestRateWindow:
     def test_rate_reflects_window(self, monitor, bus, clock):
         # 5 ticks in 1 second, window = 10s → rate = 0.5/s
         for _ in range(5):
-            bus.publish(TOPIC_TICK, _make_quote())
+            bus.publish(TOPIC_TICK_OPTIONS, _make_quote())
         snap = monitor.snapshot()
         assert snap["tick_rate_per_sec"] == pytest.approx(0.5, abs=1e-6)
 
     def test_old_ticks_drop_out_of_window(self, monitor, bus, clock):
         for _ in range(5):
-            bus.publish(TOPIC_TICK, _make_quote())
+            bus.publish(TOPIC_TICK_OPTIONS, _make_quote())
         clock.advance(20.0)  # window is 10s, so all 5 ticks expire
         snap = monitor.snapshot()
         assert snap["tick_rate_per_sec"] == pytest.approx(0.0)
@@ -151,9 +153,9 @@ class TestConnectionState:
 # ---------------------------------------------------------------------------
 class TestAutoPrune:
     def test_events_older_than_retention_are_dropped(self, monitor, bus, clock):
-        bus.publish(TOPIC_TICK, _make_quote("NIFTY"))
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote("NIFTY"))
         clock.advance(60.0)  # retention = 30s
-        bus.publish(TOPIC_TICK, _make_quote("BANKNIFTY"))
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote("BANKNIFTY"))
         events = monitor.snapshot()["recent_events"]
         assert len(events) == 1
         assert events[0]["symbol"] == "BANKNIFTY"
@@ -161,7 +163,7 @@ class TestAutoPrune:
     def test_ring_buffer_capped(self, monitor, bus):
         # max_recent_events=10
         for i in range(25):
-            bus.publish(TOPIC_TICK, _make_quote(f"SYM{i:02d}"))
+            bus.publish(TOPIC_TICK_OPTIONS, _make_quote(f"SYM{i:02d}"))
         events = monitor.snapshot()["recent_events"]
         assert len(events) == 10
         assert events[0]["symbol"] == "SYM15"
@@ -183,7 +185,7 @@ class TestSnapshotFile:
         )
         m.start()
         try:
-            bus.publish(TOPIC_TICK, _make_quote())
+            bus.publish(TOPIC_TICK_OPTIONS, _make_quote())
         finally:
             m.stop()
         assert path.exists()
@@ -309,14 +311,20 @@ class TestDefaults:
 # Lifecycle
 # ---------------------------------------------------------------------------
 class TestLifecycle:
+    _TICK_TOPICS = (TOPIC_TICK_OPTIONS, TOPIC_TICK_INDEX, TOPIC_TICK_SCOUT)
+
+    @classmethod
+    def _tick_subscribers(cls, bus) -> int:
+        return sum(bus.subscriber_count(t) for t in cls._TICK_TOPICS)
+
     def test_double_start_is_idempotent(self, tmp_path, bus, clock):
         m = WSMonitor(snapshot_path=tmp_path / "x.json", event_bus=bus,
                       snapshot_interval_seconds=60.0, clock=clock)
         m.start()
         try:
-            n_subs_after_first = bus.subscriber_count(TOPIC_TICK)
+            n_subs_after_first = self._tick_subscribers(bus)
             m.start()  # no-op
-            assert bus.subscriber_count(TOPIC_TICK) == n_subs_after_first
+            assert self._tick_subscribers(bus) == n_subs_after_first
         finally:
             m.stop()
 
@@ -324,9 +332,9 @@ class TestLifecycle:
         m = WSMonitor(snapshot_path=tmp_path / "x.json", event_bus=bus,
                       snapshot_interval_seconds=60.0, clock=clock)
         m.start()
-        assert bus.subscriber_count(TOPIC_TICK) >= 1
+        assert self._tick_subscribers(bus) >= 3
         m.stop()
-        assert bus.subscriber_count(TOPIC_TICK) == 0
+        assert self._tick_subscribers(bus) == 0
         assert bus.subscriber_count(TOPIC_CONNECTION_STATE) == 0
         assert bus.subscriber_count(TOPIC_TOKEN_EXPIRED) == 0
 
@@ -335,7 +343,7 @@ class TestLifecycle:
                       snapshot_interval_seconds=60.0, clock=clock)
         m.start()
         m.stop()
-        bus.publish(TOPIC_TICK, _make_quote())
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote())
         snap = m.snapshot()
         # After stop the handlers are detached; counter must not advance.
         assert snap["tick_count_total"] == 0
@@ -348,7 +356,7 @@ class TestLifecycle:
         m.start()
         try:
             singleton = eb.get_event_bus()
-            assert singleton.subscriber_count(TOPIC_TICK) >= 1
+            assert sum(singleton.subscriber_count(t) for t in TestLifecycle._TICK_TOPICS) >= 3
         finally:
             m.stop()
             eb.reset_event_bus()
@@ -384,11 +392,11 @@ class TestSnapshotShape:
 
     def test_top_symbols_are_sorted_descending(self, monitor, bus):
         for _ in range(3):
-            bus.publish(TOPIC_TICK, _make_quote("NIFTY"))
+            bus.publish(TOPIC_TICK_OPTIONS, _make_quote("NIFTY"))
         for _ in range(7):
-            bus.publish(TOPIC_TICK, _make_quote("BANKNIFTY"))
+            bus.publish(TOPIC_TICK_OPTIONS, _make_quote("BANKNIFTY"))
         for _ in range(1):
-            bus.publish(TOPIC_TICK, _make_quote("FINNIFTY"))
+            bus.publish(TOPIC_TICK_OPTIONS, _make_quote("FINNIFTY"))
         top = monitor.snapshot()["top_symbols"]
         counts = [row["ticks"] for row in top]
         assert counts == sorted(counts, reverse=True)
@@ -397,12 +405,12 @@ class TestSnapshotShape:
 
     def test_top_symbols_capped_at_20(self, monitor, bus):
         for i in range(50):
-            bus.publish(TOPIC_TICK, _make_quote(f"SYM{i:02d}"))
+            bus.publish(TOPIC_TICK_OPTIONS, _make_quote(f"SYM{i:02d}"))
         top = monitor.snapshot()["top_symbols"]
         assert len(top) <= 20
 
     def test_snapshot_is_json_serialisable(self, monitor, bus):
-        bus.publish(TOPIC_TICK, _make_quote())
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote())
         bus.publish(TOPIC_CONNECTION_STATE,
                     {"provider": "zerodha", "state": "connected"})
         snap = monitor.snapshot()
@@ -419,7 +427,7 @@ class TestTickPayloadVariants:
     def test_tick_with_none_strike_and_price(self, monitor, bus):
         q = SimpleNamespace(symbol="VIX", strike=None,
                             option_type=None, last_price=None)
-        bus.publish(TOPIC_TICK, q)
+        bus.publish(TOPIC_TICK_OPTIONS, q)
         ev = monitor.snapshot()["recent_events"][0]
         assert ev["symbol"] == "VIX"
         assert ev["strike"] is None
@@ -427,21 +435,21 @@ class TestTickPayloadVariants:
 
     def test_tick_without_symbol_attribute(self, monitor, bus):
         q = SimpleNamespace(strike=100, option_type="CE", last_price=10.0)
-        bus.publish(TOPIC_TICK, q)
+        bus.publish(TOPIC_TICK_OPTIONS, q)
         # symbol falls back to "?"
         ev = monitor.snapshot()["recent_events"][0]
         assert ev["symbol"] == "?"
 
     def test_tick_with_falsy_symbol_coerces_to_question_mark(self, monitor, bus):
         q = SimpleNamespace(symbol="", strike=1, option_type="CE", last_price=1.0)
-        bus.publish(TOPIC_TICK, q)
+        bus.publish(TOPIC_TICK_OPTIONS, q)
         ev = monitor.snapshot()["recent_events"][0]
         assert ev["symbol"] == "?"
 
     def test_strike_is_coerced_to_float(self, monitor, bus):
         q = SimpleNamespace(symbol="NIFTY", strike="22500",
                             option_type="CE", last_price="12.5")
-        bus.publish(TOPIC_TICK, q)
+        bus.publish(TOPIC_TICK_OPTIONS, q)
         ev = monitor.snapshot()["recent_events"][0]
         assert ev["strike"] == 22500.0
         assert ev["last_price"] == 12.5
@@ -449,10 +457,10 @@ class TestTickPayloadVariants:
         assert isinstance(ev["last_price"], float)
 
     def test_last_tick_at_updates(self, monitor, bus, clock):
-        bus.publish(TOPIC_TICK, _make_quote())
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote())
         first = monitor.snapshot()["last_tick_at"]
         clock.advance(3.0)
-        bus.publish(TOPIC_TICK, _make_quote())
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote())
         second = monitor.snapshot()["last_tick_at"]
         assert second > first
 
@@ -601,7 +609,7 @@ class TestConcurrency:
 
         def _producer():
             for _ in range(PER):
-                bus.publish(TOPIC_TICK, _make_quote("NIFTY"))
+                bus.publish(TOPIC_TICK_OPTIONS, _make_quote("NIFTY"))
 
         threads = [threading.Thread(target=_producer) for _ in range(N_THREADS)]
         for t in threads:
@@ -701,12 +709,12 @@ class TestDefensivePaths:
 # ---------------------------------------------------------------------------
 class TestRecentEventOrdering:
     def test_events_appended_in_chronological_order(self, monitor, bus, clock):
-        bus.publish(TOPIC_TICK, _make_quote("A"))
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote("A"))
         clock.advance(1)
         bus.publish(TOPIC_CONNECTION_STATE,
                     {"provider": "zerodha", "state": "connected"})
         clock.advance(1)
-        bus.publish(TOPIC_TICK, _make_quote("B"))
+        bus.publish(TOPIC_TICK_OPTIONS, _make_quote("B"))
         events = monitor.snapshot()["recent_events"]
         # Snapshot returns oldest-first.
         symbols_or_topics = [e.get("symbol", e.get("topic")) for e in events]

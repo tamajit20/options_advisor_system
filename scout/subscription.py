@@ -1,4 +1,8 @@
-"""WS subscription helpers for Intraday Scout (equity watchlist only)."""
+"""WS subscription helpers for Intraday Scout (equity watchlist only).
+
+Scout equities are tagged ``product=scout_equity`` in SubscriptionManager and
+published on ``tick.scout`` — they never reach Options tick handlers.
+"""
 
 from __future__ import annotations
 

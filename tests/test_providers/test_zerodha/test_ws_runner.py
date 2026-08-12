@@ -28,7 +28,7 @@ import pytest
 
 from providers.base import DataSource, LiveQuote
 from providers.cache import TTLCache
-from providers.event_bus import EventBus, TOPIC_CONNECTION_STATE, TOPIC_TICK, TOPIC_TOKEN_EXPIRED
+from providers.event_bus import EventBus, TOPIC_CONNECTION_STATE, TOPIC_TICK_OPTIONS, TOPIC_TOKEN_EXPIRED
 from providers.zerodha.ws_runner import (
     ConnState,
     KiteWSRunner,
@@ -251,12 +251,18 @@ def test_unsubscribe_applies(runner: KiteWSRunner):
 # ---------------------------------------------------------------------------
 def test_on_ticks_publishes_and_caches(runner: KiteWSRunner, cache: TTLCache, bus: EventBus):
     received: list = []
-    bus.subscribe(TOPIC_TICK, received.append)
+    bus.subscribe(TOPIC_TICK_OPTIONS, received.append)
 
     expiry_dt = datetime(2026, 5, 28, tzinfo=timezone.utc)
     runner.set_token_meta(
         12345,
-        TokenMeta(symbol="NIFTY", expiry=expiry_dt, strike=23000.0, option_type="CE"),
+        TokenMeta(
+            symbol="NIFTY",
+            expiry=expiry_dt,
+            strike=23000.0,
+            option_type="CE",
+            product="options_leg",
+        ),
     )
     _wire_runner(runner)
     runner._on_connect(ws=None, response={})

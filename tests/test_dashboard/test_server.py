@@ -238,7 +238,7 @@ class TestApiSuggestionToday:
         assert "execution_gate" in s
         assert s["execution_gate"]["ok"] is True
 
-    def test_excludes_non_actionable_suggestions(self, client, mocker):
+    def test_includes_blocked_pending_with_execution_gate(self, client, mocker):
         from datetime import timedelta
         from utils import now_ist
 
@@ -278,7 +278,11 @@ class TestApiSuggestionToday:
         )
         resp = client.get("/api/suggestion/today")
         assert resp.status_code == 200
-        assert resp.get_json()["suggestions"] == []
+        data = resp.get_json()
+        assert len(data["suggestions"]) == 1
+        gate = data["suggestions"][0]["execution_gate"]
+        assert gate["ok"] is False
+        assert gate["vetoes"]
 
 
 class TestApiTradesOpen:

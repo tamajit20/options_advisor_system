@@ -1,4 +1,4 @@
-"""Resolve Scout watchlist and automation settings from DB (UI) or config defaults."""
+"""Resolve Scout watchlist and settings from DB (UI) or config defaults."""
 
 from __future__ import annotations
 
@@ -6,11 +6,12 @@ import logging
 from typing import List, Optional, Set
 
 from config import NIFTY_50_SYMBOLS, SCOUT_CONFIG
+from scout.settings_schema import default_scout_settings, merge_scout_settings, validate_scout_settings
 
 logger = logging.getLogger(__name__)
 
 _WATCHLIST_CACHE: Optional[List[str]] = None
-_AUTOMATION_CACHE: Optional[dict] = None
+_SETTINGS_CACHE: Optional[dict] = None
 
 
 def default_watchlist() -> List[str]:
@@ -18,10 +19,11 @@ def default_watchlist() -> List[str]:
 
 
 def default_automation() -> dict:
+    s = default_scout_settings()
     return {
-        "auto_execute_signals": bool(SCOUT_CONFIG.get("auto_execute_signals", False)),
-        "auto_close_trades": bool(SCOUT_CONFIG.get("auto_close_trades", False)),
-        "auto_trade_quantity": max(1, int(SCOUT_CONFIG.get("auto_trade_quantity", 1))),
+        "auto_execute_signals": s["auto_execute_signals"],
+        "auto_close_trades": s["auto_close_trades"],
+        "auto_trade_quantity": s["auto_trade_quantity"],
     }
 
 
@@ -49,42 +51,59 @@ def get_watchlist(db=None, *, use_cache: bool = True) -> List[str]:
     return wl
 
 
-def get_automation(db=None, *, use_cache: bool = True) -> dict:
-    """Automation toggles for auto-enter and auto-close."""
-    global _AUTOMATION_CACHE
-    base = default_automation()
+def get_scout_settings(db=None, *, use_cache: bool = True) -> dict:
+    """Full Scout settings (automation, limits, filters, sizing)."""
+    global _SETTINGS_CACHE
     if db is not None:
         from database.scout_models import ScoutConfigRepo
 
-        saved = ScoutConfigRepo(db).get_automation()
-        if saved:
-            merged = {
-                **base,
-                "auto_execute_signals": bool(saved.get("auto_execute_signals", base["auto_execute_signals"])),
-                "auto_close_trades": bool(saved.get("auto_close_trades", base["auto_close_trades"])),
-                "auto_trade_quantity": max(1, int(saved.get("auto_trade_quantity", base["auto_trade_quantity"]))),
-            }
-            if use_cache:
-                _AUTOMATION_CACHE = dict(merged)
-            return merged
-    if use_cache and _AUTOMATION_CACHE is not None:
-        return dict(_AUTOMATION_CACHE)
+        repo = ScoutConfigRepo(db)
+        saved = repo.get_settings()
+        if saved is None:
+            legacy = repo.get_automation()
+            if legacy:
+                saved = {**default_scout_settings(), **legacy}
+        merged = merge_scout_settings(saved)
+        if use_cache:
+            _SETTINGS_CACHE = dict(merged)
+        return merged
+    if use_cache and _SETTINGS_CACHE is not None:
+        return dict(_SETTINGS_CACHE)
+    base = default_scout_settings()
     if use_cache:
-        _AUTOMATION_CACHE = dict(base)
+        _SETTINGS_CACHE = dict(base)
     return base
 
 
-def set_automation(db, settings: dict, *, updated_by: str = "ui") -> dict:
+def get_automation(db=None, *, use_cache: bool = True) -> dict:
+    """Automation toggles (subset of scout settings)."""
+    s = get_scout_settings(db, use_cache=use_cache)
+    return {
+        "auto_execute_signals": bool(s.get("auto_execute_signals")),
+        "auto_close_trades": bool(s.get("auto_close_trades")),
+        "auto_trade_quantity": max(1, int(s.get("auto_trade_quantity", 1))),
+    }
+
+
+def set_scout_settings(db, settings: dict, *, updated_by: str = "ui") -> dict:
     from database.scout_models import ScoutConfigRepo
 
-    cleaned = {
-        "auto_execute_signals": bool(settings.get("auto_execute_signals")),
-        "auto_close_trades": bool(settings.get("auto_close_trades")),
-        "auto_trade_quantity": max(1, int(settings.get("auto_trade_quantity", 1))),
-    }
-    ScoutConfigRepo(db).set_automation(cleaned, updated_by=updated_by)
-    invalidate_automation_cache()
+    cleaned = validate_scout_settings(settings)
+    ScoutConfigRepo(db).set_settings(cleaned, updated_by=updated_by)
+    invalidate_settings_cache()
     return cleaned
+
+
+def set_automation(db, settings: dict, *, updated_by: str = "ui") -> dict:
+    """Merge automation patch into full settings and save."""
+    current = get_scout_settings(db, use_cache=False)
+    patch = {
+        "auto_execute_signals": bool(settings.get("auto_execute_signals", current["auto_execute_signals"])),
+        "auto_close_trades": bool(settings.get("auto_close_trades", current["auto_close_trades"])),
+    }
+    if "auto_trade_quantity" in settings:
+        patch["auto_trade_quantity"] = max(1, int(settings["auto_trade_quantity"]))
+    return set_scout_settings(db, {**current, **patch}, updated_by=updated_by)
 
 
 def invalidate_watchlist_cache() -> None:
@@ -92,9 +111,13 @@ def invalidate_watchlist_cache() -> None:
     _WATCHLIST_CACHE = None
 
 
+def invalidate_settings_cache() -> None:
+    global _SETTINGS_CACHE
+    _SETTINGS_CACHE = None
+
+
 def invalidate_automation_cache() -> None:
-    global _AUTOMATION_CACHE
-    _AUTOMATION_CACHE = None
+    invalidate_settings_cache()
 
 
 def watchlist_set(db, symbols: List[str]) -> List[str]:

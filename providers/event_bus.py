@@ -5,10 +5,11 @@ providers/event_bus.py
 Tiny in-process pub/sub bus.
 
 Used by:
-    - `providers/zerodha/ws_runner.py` (publisher) — emits `tick` and
-      `connection_state` events as ticks arrive over the WebSocket.
-    - `lifecycle/intraday_monitor.py` (subscriber) — PERFECT_ENTRY on pending suggestions.
-    - `lifecycle/live_risk_monitor.py` (subscriber) — whole-trade MTM alerts.
+    - `providers/zerodha/ws_runner.py` (publisher) — emits scoped tick topics and
+      connection events as ticks arrive over the WebSocket.
+    - Options handlers → `tick.options` / `tick.index`
+    - Scout handlers → `tick.scout` / `tick.index` (NIFTY benchmark only)
+    - `providers/ws_monitor.py` — subscribes to all tick topics for telemetry
 
 Design:
     - Synchronous dispatch (subscriber callbacks run on the publisher's thread).
@@ -33,7 +34,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Well-known topics
 # ---------------------------------------------------------------------------
-TOPIC_TICK = "tick"                          # payload: LiveQuote
+TOPIC_TICK = "tick"                          # legacy; prefer scoped topics below
+TOPIC_TICK_OPTIONS = "tick.options"          # payload: LiveQuote (option legs)
+TOPIC_TICK_INDEX = "tick.index"              # payload: LiveQuote (index/VIX spots)
+TOPIC_TICK_SCOUT = "tick.scout"              # payload: LiveQuote (scout watchlist EQ)
 TOPIC_CONNECTION_STATE = "connection_state"  # payload: {"provider": str, "state": "connected"/"disconnected"/"degraded", "detail": str}
 TOPIC_TOKEN_EXPIRED = "token_expired"        # payload: {"provider": str}
 TOPIC_TRADE_OPENED = "trade_opened"          # payload: {"trade_id": str}

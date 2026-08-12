@@ -197,7 +197,7 @@ def _cmd_zerodha_logout() -> int:
     return 0
 
 
-def _run_ws_runner_once(session, stop_event, bus, latest_spots: dict) -> str:
+def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots: dict) -> str:
     """Run one WS session until logout, token rotation, or WS disconnect.
 
     Returns a reason string: ``logout``, ``token_rotated``, ``process_restart``,
@@ -256,7 +256,7 @@ def _run_ws_runner_once(session, stop_event, bus, latest_spots: dict) -> str:
             make_watchlist_leg_loader(
                 master,
                 underlyings=STRATEGY_CONFIG.get("underlyings", []),
-                spot_lookup=lambda s: latest_spots.get(s),
+                spot_lookup=lambda s: index_spots.get(s),
                 band_pct=PROVIDERS_CONFIG.get("watchlist_band_pct", 0.05),
                 expiries_per_underlying=int(
                     PROVIDERS_CONFIG.get("watchlist_expiries_per_underlying", 2)
@@ -283,7 +283,7 @@ def _run_ws_runner_once(session, stop_event, bus, latest_spots: dict) -> str:
 
     scout_push = ScoutPushEngine(
         db=db,
-        spot_lookup=lambda s: latest_spots.get(s),
+        spot_lookup=lambda s: index_spots.get(s) or scout_spots.get(s),
         event_bus=bus,
     )
 
@@ -458,18 +458,30 @@ def _cmd_ws_runner() -> int:
     signal.signal(signal.SIGINT, _on_sig)
     signal.signal(signal.SIGTERM, _on_sig)
 
-    bus = get_event_bus()
-    latest_spots: dict = {}
+    from providers.event_bus import TOPIC_TICK_INDEX, TOPIC_TICK_SCOUT
 
-    def _capture_spot(quote) -> None:
+    bus = get_event_bus()
+    index_spots: dict = {}
+    scout_spots: dict = {}
+
+    def _capture_index(quote) -> None:
         if quote is None or quote.option_type is not None:
             return
         try:
-            latest_spots[quote.symbol] = float(quote.last_price)
+            index_spots[quote.symbol] = float(quote.last_price)
         except (TypeError, ValueError):
             pass
 
-    bus.subscribe("tick", _capture_spot)
+    def _capture_scout_equity(quote) -> None:
+        if quote is None or quote.option_type is not None:
+            return
+        try:
+            scout_spots[quote.symbol] = float(quote.last_price)
+        except (TypeError, ValueError):
+            pass
+
+    bus.subscribe(TOPIC_TICK_INDEX, _capture_index)
+    bus.subscribe(TOPIC_TICK_SCOUT, _capture_scout_equity)
     snapshot_path = default_snapshot_path()
 
     while not stop_event.is_set():
@@ -487,7 +499,7 @@ def _cmd_ws_runner() -> int:
                 return 0
             continue
 
-        reason = _run_ws_runner_once(session, stop_event, bus, latest_spots)
+        reason = _run_ws_runner_once(session, stop_event, bus, index_spots, scout_spots)
         if stop_event.is_set() or reason == "stopped":
             return 0
         if reason in ("logout", "token_rotated", "process_restart", "token_expired"):

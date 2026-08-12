@@ -110,6 +110,7 @@ class ScoutSignalRepo:
 class ScoutConfigRepo:
     WATCHLIST_KEY = "watchlist"
     AUTOMATION_KEY = "automation"
+    SETTINGS_KEY = "settings"
 
     def __init__(self, db: SQLServerConnection):
         self.db = db
@@ -148,8 +149,14 @@ class ScoutConfigRepo:
     def get_automation(self) -> Optional[dict]:
         return self.get_json(self.AUTOMATION_KEY)
 
+    def get_settings(self) -> Optional[dict]:
+        return self.get_json(self.SETTINGS_KEY)
+
     def set_automation(self, settings: dict, *, updated_by: str = "ui") -> None:
         self._merge_json(self.AUTOMATION_KEY, settings, updated_by=updated_by)
+
+    def set_settings(self, settings: dict, *, updated_by: str = "ui") -> None:
+        self._merge_json(self.SETTINGS_KEY, settings, updated_by=updated_by)
 
     def get_watchlist(self) -> Optional[List[str]]:
         row = self.db.fetch_one(
@@ -227,6 +234,24 @@ class ScoutTradeRepo:
             "SELECT signal_id FROM scout_trades WHERE status = 'OPEN' AND signal_id IS NOT NULL",
         )
         return {int(r["signal_id"]) for r in rows if r.get("signal_id") is not None}
+
+    def count_trades_opened_today(self) -> int:
+        from utils import today_ist
+
+        row = self.db.fetch_one(
+            "SELECT COUNT(*) AS n FROM scout_trades WHERE CONVERT(date, executed_at) = ?",
+            [today_ist().isoformat()],
+        )
+        return int(row["n"]) if row and row.get("n") is not None else 0
+
+    def symbol_has_trade_today(self, symbol: str) -> bool:
+        from utils import today_ist
+
+        row = self.db.fetch_one(
+            "SELECT TOP 1 id FROM scout_trades WHERE symbol = ? AND CONVERT(date, executed_at) = ?",
+            [str(symbol).upper(), today_ist().isoformat()],
+        )
+        return row is not None
 
     def get(self, trade_id: int) -> Optional[dict]:
         row = self.db.fetch_one(

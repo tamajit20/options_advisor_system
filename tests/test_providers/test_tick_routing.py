@@ -1,0 +1,35 @@
+"""Tests for product-scoped WS tick routing."""
+
+from __future__ import annotations
+
+from providers.tick_routing import (
+    PRODUCT_OPTIONS_INDEX,
+    PRODUCT_OPTIONS_LEG,
+    PRODUCT_SCOUT_EQUITY,
+    TOPIC_TICK_INDEX,
+    TOPIC_TICK_OPTIONS,
+    TOPIC_TICK_SCOUT,
+    options_index_symbols,
+    options_underlyings,
+    resolve_product,
+    topic_for_meta,
+)
+from providers.zerodha.ws_runner import TokenMeta
+
+
+def test_resolve_product_option_leg():
+    meta = TokenMeta(symbol="NIFTY", option_type="CE", strike=22000.0, product=PRODUCT_OPTIONS_LEG)
+    assert resolve_product(meta) == PRODUCT_OPTIONS_LEG
+    assert topic_for_meta(meta) == TOPIC_TICK_OPTIONS
+
+
+def test_resolve_product_scout_equity():
+    meta = TokenMeta(symbol="BPCL", product=PRODUCT_SCOUT_EQUITY)
+    assert resolve_product(meta) == PRODUCT_SCOUT_EQUITY
+    assert topic_for_meta(meta) == TOPIC_TICK_SCOUT
+
+
+def test_options_index_includes_vix():
+    assert "VIX" in options_index_symbols()
+    assert "VIX" not in options_underlyings()
+    assert "NIFTY" in options_underlyings()

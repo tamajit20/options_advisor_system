@@ -4,7 +4,7 @@
 (function () {
   'use strict';
 
-  const SCOUT_TABS = ['scout-signals', 'scout-watchlist', 'scout-trades', 'scout-history'];
+  const SCOUT_TABS = ['scout-signals', 'scout-watchlist', 'scout-trades', 'scout-history', 'scout-config'];
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
@@ -111,6 +111,19 @@
       if (st.automation.auto_execute_signals) auto.push('auto-enter');
       if (st.automation.auto_close_trades) auto.push('auto-close');
       parts.push(auto.length ? '⚡ ' + auto.join(' + ') : '✋ manual mode');
+    }
+    if (st.settings) {
+      const s = st.settings;
+      if (s.max_trades_per_day > 0) {
+        const n = st.trades_opened_today != null ? st.trades_opened_today : '—';
+        parts.push(`📊 ${n}/${s.max_trades_per_day} trades today`);
+      }
+      if (s.use_investment_sizing) {
+        parts.push('₹' + Number(s.investment_per_trade_inr || 0).toLocaleString('en-IN') + '/trade');
+      }
+      if (s.trade_window_start && s.trade_window_end) {
+        parts.push(`🕐 ${s.trade_window_start}–${s.trade_window_end} IST`);
+      }
     }
     bar.innerHTML = parts.map(p => `<span class="scout-stat">${escapeHtml(p)}</span>`).join('');
     syncAutomationUI(st.automation);
@@ -323,6 +336,7 @@
 
   function renderMarkTakenBlock(s) {
     const entryDefault = s.live_ltp != null ? Number(s.live_ltp) : Number(s.ltp || 0);
+    const qtyDefault = Math.max(1, parseInt(s.suggested_quantity, 10) || 1);
     if (isSignalTradeOpen(s)) {
       return `<span class="muted scout-trade-badge">Trade open${s.trade_id ? ` · TRD #${s.trade_id}` : ''}</span>`;
     }
@@ -336,8 +350,8 @@
     return `<div class="scout-mark-row">
           <input type="number" step="0.05" class="scout-entry-input" value="${entryDefault}"
             data-signal-id="${s.id}" aria-label="Entry fill price" title="Your Zerodha fill price">
-          <input type="number" step="1" min="1" class="scout-qty-input" value="1"
-            data-signal-id="${s.id}" aria-label="Quantity">
+          <input type="number" step="1" min="1" class="scout-qty-input" value="${qtyDefault}"
+            data-signal-id="${s.id}" aria-label="Quantity" title="Suggested from investment per trade setting">
           <button type="button" class="btn btn-sm btn-accent scout-mark-btn" data-signal-id="${s.id}">Mark taken</button>
         </div>`;
   }
@@ -1238,6 +1252,142 @@
     }
   }
 
+  // ---------- Config ----------
+  let _scoutSettings = null;
+
+  function setConfigNotice(msg, ok) {
+    const el = $('#scout-config-notice');
+    if (!el) return;
+    if (!msg) {
+      el.hidden = true;
+      el.textContent = '';
+      el.classList.remove('scout-config-notice--ok');
+      return;
+    }
+    el.hidden = false;
+    el.textContent = msg;
+    el.classList.toggle('scout-config-notice--ok', !!ok);
+  }
+
+  function fillConfigForm(settings, tradesToday) {
+    const form = $('#scout-config-form');
+    if (!form || !settings) return;
+    _scoutSettings = settings;
+    const setCheck = (name, val) => {
+      const el = form.querySelector(`[name="${name}"]`);
+      if (el && el.type === 'checkbox') el.checked = !!val;
+    };
+    const setVal = (name, val) => {
+      const el = form.querySelector(`[name="${name}"]`);
+      if (el && el.type !== 'checkbox') el.value = val != null ? String(val) : '';
+    };
+    setCheck('auto_execute_signals', settings.auto_execute_signals);
+    setCheck('auto_close_trades', settings.auto_close_trades);
+    setCheck('use_investment_sizing', settings.use_investment_sizing);
+    setCheck('one_trade_per_symbol_per_day', settings.one_trade_per_symbol_per_day);
+    setCheck('dedupe_per_symbol', settings.dedupe_per_symbol);
+    setVal('investment_per_trade_inr', settings.investment_per_trade_inr);
+    setVal('auto_trade_quantity', settings.auto_trade_quantity);
+    setVal('max_trades_per_day', settings.max_trades_per_day);
+    setVal('trade_window_start', settings.trade_window_start);
+    setVal('trade_window_end', settings.trade_window_end);
+    setVal('push_dedupe_minutes', settings.push_dedupe_minutes);
+    setVal('signal_valid_minutes', settings.signal_valid_minutes);
+    setVal('max_move_from_open_pct', settings.max_move_from_open_pct);
+    setVal('rs_margin_pct', settings.rs_margin_pct);
+    setVal('compression_range_pct', settings.compression_range_pct);
+    setVal('entry_slippage_pct', settings.entry_slippage_pct);
+    setVal('min_candles', settings.min_candles);
+    const allowed = new Set((settings.auto_enter_strengths || []).map(s => String(s).toUpperCase()));
+    form.querySelectorAll('input[name="auto_enter_strengths"]').forEach(cb => {
+      cb.checked = allowed.has(cb.value);
+    });
+    const hint = $('#cfg-trades-today');
+    if (hint) {
+      const max = settings.max_trades_per_day || 0;
+      hint.textContent = max > 0
+        ? `Trades opened today: ${tradesToday != null ? tradesToday : '—'} / ${max} max`
+        : 'Daily trade cap disabled (0 = unlimited)';
+    }
+    syncAutomationUI({
+      auto_execute_signals: settings.auto_execute_signals,
+      auto_close_trades: settings.auto_close_trades,
+    });
+  }
+
+  function readConfigForm() {
+    const form = $('#scout-config-form');
+    if (!form) return {};
+    const strengths = [];
+    form.querySelectorAll('input[name="auto_enter_strengths"]:checked').forEach(cb => {
+      strengths.push(cb.value);
+    });
+    const num = (name) => {
+      const el = form.querySelector(`[name="${name}"]`);
+      if (!el) return undefined;
+      if (el.type === 'checkbox') return el.checked;
+      if (el.type === 'number') return el.value === '' ? undefined : Number(el.value);
+      return el.value;
+    };
+    return {
+      auto_execute_signals: !!form.querySelector('[name="auto_execute_signals"]')?.checked,
+      auto_close_trades: !!form.querySelector('[name="auto_close_trades"]')?.checked,
+      use_investment_sizing: !!form.querySelector('[name="use_investment_sizing"]')?.checked,
+      one_trade_per_symbol_per_day: !!form.querySelector('[name="one_trade_per_symbol_per_day"]')?.checked,
+      dedupe_per_symbol: !!form.querySelector('[name="dedupe_per_symbol"]')?.checked,
+      investment_per_trade_inr: num('investment_per_trade_inr'),
+      auto_trade_quantity: num('auto_trade_quantity'),
+      max_trades_per_day: num('max_trades_per_day'),
+      trade_window_start: form.querySelector('[name="trade_window_start"]')?.value,
+      trade_window_end: form.querySelector('[name="trade_window_end"]')?.value,
+      push_dedupe_minutes: num('push_dedupe_minutes'),
+      signal_valid_minutes: num('signal_valid_minutes'),
+      max_move_from_open_pct: num('max_move_from_open_pct'),
+      rs_margin_pct: num('rs_margin_pct'),
+      compression_range_pct: num('compression_range_pct'),
+      entry_slippage_pct: num('entry_slippage_pct'),
+      min_candles: num('min_candles'),
+      auto_enter_strengths: strengths,
+    };
+  }
+
+  async function loadScoutConfig() {
+    const form = $('#scout-config-form');
+    if (!form) return;
+    setConfigNotice('');
+    try {
+      const data = await scoutApi('/settings');
+      fillConfigForm(data.settings || {}, data.trades_opened_today);
+    } catch (e) {
+      setConfigNotice('Failed to load settings: ' + e.message, false);
+    }
+  }
+
+  async function saveScoutConfig(ev) {
+    if (ev) ev.preventDefault();
+    const body = readConfigForm();
+    try {
+      const data = await scoutApi('/settings', {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      });
+      const fresh = await scoutApi('/settings');
+      fillConfigForm(data.settings || fresh.settings || body, fresh.trades_opened_today);
+      setConfigNotice('Settings saved.', true);
+      toast('Scout settings saved', 'info');
+      const st = await scoutApi('/status');
+      renderStatus(st);
+    } catch (e) {
+      setConfigNotice('Save failed: ' + e.message, false);
+      toast('Settings save failed: ' + e.message, 'error');
+    }
+  }
+
+  function bindConfigForm() {
+    $('#scout-config-form')?.addEventListener('submit', saveScoutConfig);
+    $('#scout-config-reload')?.addEventListener('click', () => loadScoutConfig());
+  }
+
   // ---------- History (expandable grids) ----------
   function defaultHistDates() {
     const to = new Date();
@@ -1752,6 +1902,7 @@
         stopScoutTradesAutoRefresh();
       }
       if (tab === 'scout-history') loadScoutHistory();
+      if (tab === 'scout-config') loadScoutConfig();
     }
   }
 
@@ -1770,12 +1921,14 @@
   window.loadScoutSignals = loadScoutSignals;
   window.loadScoutTrades = loadScoutTrades;
   window.loadScoutHistory = loadScoutHistory;
+  window.loadScoutConfig = loadScoutConfig;
 
   document.addEventListener('DOMContentLoaded', () => {
     bindScoutSubtabs();
     bindNavSections();
     bindWatchlistToolbar();
     bindAutomationControls();
+    bindConfigForm();
     $('#scout-refresh')?.addEventListener('click', () => loadScoutSignals());
     $('#scout-hist-apply')?.addEventListener('click', () => loadScoutHistory());
   });

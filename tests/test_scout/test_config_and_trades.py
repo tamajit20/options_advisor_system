@@ -111,6 +111,40 @@ def test_scout_watchlist_put(client, mocker):
     assert data["selected_count"] == 2
 
 
+def test_scout_settings_api_get(client, mocker):
+    mocker.patch(
+        "scout.routes.get_scout_settings",
+        return_value={"max_trades_per_day": 5, "investment_per_trade_inr": 20000},
+    )
+    mock_repo = MagicMock()
+    mock_repo.count_trades_opened_today.return_value = 2
+    mocker.patch("scout.routes.ScoutTradeRepo", return_value=mock_repo)
+    rv = client.get("/api/scout/settings")
+    assert rv.status_code == 200
+    data = rv.get_json()
+    assert data["settings"]["max_trades_per_day"] == 5
+    assert data["trades_opened_today"] == 2
+
+
+def test_scout_settings_api_put(client, mocker):
+    mocker.patch(
+        "scout.routes.get_scout_settings",
+        return_value={"max_trades_per_day": 5},
+    )
+    mocker.patch(
+        "scout.routes.set_scout_settings",
+        return_value={"max_trades_per_day": 3, "investment_per_trade_inr": 25000},
+    )
+    rv = client.put(
+        "/api/scout/settings",
+        json={"max_trades_per_day": 3, "investment_per_trade_inr": 25000},
+    )
+    assert rv.status_code == 200
+    data = rv.get_json()
+    assert data["status"] == "ok"
+    assert data["settings"]["max_trades_per_day"] == 3
+
+
 def test_scout_trades_open(client, mocker):
     mock_repo = MagicMock()
     mock_repo.open_trades.return_value = []

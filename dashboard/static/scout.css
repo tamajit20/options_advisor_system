@@ -141,6 +141,61 @@
   color: var(--text-dim);
 }
 .scout-strength--medium { color: var(--accent); background: rgba(245,158,11,.12); }
+.scout-strength--high { color: #34d399; background: rgba(52,211,153,.14); }
+.scout-strength--weak { color: var(--text-dim); }
+
+/* Scout config page */
+.scout-config-form { display: grid; gap: 20px; max-width: 920px; }
+.scout-config-section {
+  padding: 14px 16px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 10px;
+  background: rgba(0,0,0,.12);
+}
+.scout-config-heading {
+  margin: 0 0 12px;
+  font-size: .85rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.scout-config-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+.scout-config-grid--inline { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); max-width: 360px; }
+.scout-config-field { display: grid; gap: 4px; }
+.scout-config-label { font-size: .78rem; color: var(--text-dim); }
+.scout-config-field input[type="number"],
+.scout-config-field input[type="time"] {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.2);
+  color: inherit;
+}
+.scout-config-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: .9rem;
+  cursor: pointer;
+}
+.scout-config-strengths { display: flex; flex-wrap: wrap; gap: 14px; }
+.scout-config-hint { margin: 4px 0 0; font-size: .82rem; grid-column: 1 / -1; }
+.scout-config-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.scout-config-notice {
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  background: rgba(245,158,11,.12);
+  border: 1px solid rgba(245,158,11,.25);
+}
+.scout-config-notice--ok {
+  background: rgba(52,211,153,.1);
+  border-color: rgba(52,211,153,.25);
+}
 
 /* Data-driven signal dashboard */
 .scout-dash { display: grid; gap: 10px; }

@@ -43,7 +43,9 @@ from typing import Any, Callable, Deque, Dict, List, Optional
 from providers.event_bus import (
     EventBus,
     TOPIC_CONNECTION_STATE,
-    TOPIC_TICK,
+    TOPIC_TICK_INDEX,
+    TOPIC_TICK_OPTIONS,
+    TOPIC_TICK_SCOUT,
     TOPIC_TOKEN_EXPIRED,
     get_event_bus,
 )
@@ -142,7 +144,10 @@ class WSMonitor:
             return
         bus = self._bus or get_event_bus()
         self._bus = bus
-        self._unsubs.append(bus.subscribe(TOPIC_TICK, self._on_tick))
+        for topic in (TOPIC_TICK_OPTIONS, TOPIC_TICK_INDEX, TOPIC_TICK_SCOUT):
+            self._unsubs.append(
+                bus.subscribe(topic, lambda q, t=topic: self._on_tick(q, t))
+            )
         self._unsubs.append(bus.subscribe(TOPIC_CONNECTION_STATE, self._on_state))
         self._unsubs.append(bus.subscribe(TOPIC_TOKEN_EXPIRED, self._on_token_expired))
 
@@ -176,7 +181,7 @@ class WSMonitor:
         self._started = False
 
     # ------------------------------------------------------------------ event handlers
-    def _on_tick(self, payload: Any) -> None:
+    def _on_tick(self, payload: Any, topic: str = TOPIC_TICK_INDEX) -> None:
         """`payload` is a `LiveQuote`. Never raise — runner thread depends on us."""
         try:
             now = self._clock()
@@ -194,7 +199,7 @@ class WSMonitor:
                 self._prune_rate_window_locked(now)
                 self._recent.append({
                     "ts":          now.isoformat(),
-                    "topic":       "tick",
+                    "topic":       topic,
                     "symbol":      symbol,
                     "option_type": opt,
                     "strike":      float(strike) if strike is not None else None,

@@ -20,12 +20,16 @@ from database.scout_models import (
 from scout.config_loader import (
     default_watchlist,
     get_automation,
+    get_scout_settings,
     get_watchlist,
     invalidate_automation_cache,
+    invalidate_settings_cache,
     invalidate_watchlist_cache,
     set_automation,
+    set_scout_settings,
     watchlist_set,
 )
+from scout.settings_schema import suggested_quantity
 from scout.index_groups import INDEX_GROUPS, index_tags, nifty_bank_symbols
 from scout.instruments import (
     ScoutInstrumentError,
@@ -114,7 +118,9 @@ def api_scout_status(db: SQLServerConnection):
     ok, msg = zerodha_ready()
     last_sig = ScoutSignalRepo(db).last_signal()
     selected = get_watchlist(db)
+    settings = get_scout_settings(db)
     automation = get_automation(db)
+    trade_repo = ScoutTradeRepo(db)
     return jsonify({
         "enabled": bool(SCOUT_CONFIG.get("enabled", True)),
         "mode": "websocket",
@@ -125,9 +131,11 @@ def api_scout_status(db: SQLServerConnection):
         "push_enabled": bool(SCOUT_CONFIG.get("push_enabled", True)),
         "signals_poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
         "signals_live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
-        "signal_valid_minutes": int(SCOUT_CONFIG.get("signal_valid_minutes", 30)),
+        "signal_valid_minutes": int(settings.get("signal_valid_minutes", 30)),
         "auto_close_poll_seconds": int(SCOUT_CONFIG.get("auto_close_poll_seconds", 10)),
         "automation": automation,
+        "settings": settings,
+        "trades_opened_today": trade_repo.count_trades_opened_today(),
         "last_signal": last_sig,
     })
 
@@ -140,6 +148,7 @@ def api_scout_signals(db: SQLServerConnection):
     since = min(int(request.args.get("since_minutes", default_since)), 24 * 60)
     rows = ScoutSignalRepo(db).recent(limit=limit, since_minutes=since)
     trade_repo = ScoutTradeRepo(db)
+    settings = get_scout_settings(db)
     open_trades = trade_repo.open_trades()
     trade_by_signal = {
         sid: int(t["id"])
@@ -173,7 +182,10 @@ def api_scout_signals(db: SQLServerConnection):
             live_ltp=live_ltp,
             live_as_of=q.get("as_of"),
             now=now,
+            settings=settings,
         )
+        ref_px = live_ltp if live_ltp is not None and live_ltp > 0 else float(row.get("ltp") or 0)
+        e["suggested_quantity"] = suggested_quantity(settings, ref_px)
         e["trade_open"] = has_open_trade
         e["trade_id"] = trade_by_signal.get(sid_int) if has_open_trade else None
         sym_open = open_trade_by_symbol.get(sym)
@@ -303,6 +315,31 @@ def api_scout_automation_put(db: SQLServerConnection):
     return jsonify({"status": "ok", "automation": cleaned})
 
 
+@scout_bp.route("/settings")
+@_with_db
+def api_scout_settings_get(db: SQLServerConnection):
+    settings = get_scout_settings(db)
+    trade_repo = ScoutTradeRepo(db)
+    return jsonify({
+        "settings": settings,
+        "trades_opened_today": trade_repo.count_trades_opened_today(),
+    })
+
+
+@scout_bp.route("/settings", methods=["PUT"])
+@_with_db
+def api_scout_settings_put(db: SQLServerConnection):
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"error": "body must be a JSON object"}), 400
+    current = get_scout_settings(db, use_cache=False)
+    merged = {**current, **body}
+    cleaned = set_scout_settings(db, merged)
+    db.commit()
+    invalidate_settings_cache()
+    return jsonify({"status": "ok", "settings": cleaned})
+
+
 @scout_bp.route("/watchlist/refresh-instruments", methods=["POST"])
 @_with_db
 def api_scout_watchlist_refresh(db: SQLServerConnection):
@@ -385,10 +422,8 @@ def api_scout_trades_open(db: SQLServerConnection):
 def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
     """Record execution — enter fill price/qty from your Zerodha order (like mark-executed)."""
     body = request.get_json(silent=True) or {}
-    quantity = int(body.get("quantity") or 1)
+    settings = get_scout_settings(db, use_cache=False)
     entry_price = body.get("entry_price")
-    if quantity < 1:
-        return jsonify({"error": "quantity must be >= 1"}), 400
 
     sig_repo = ScoutSignalRepo(db)
     trade_repo = ScoutTradeRepo(db)
@@ -415,7 +450,12 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
 
     quotes = latest_equity_ltps([sig["symbol"]])
     q = quotes.get(str(sig["symbol"]).upper(), {})
-    enriched = enrich_signal(sig, live_ltp=q.get("ltp"), now=now_ist().replace(tzinfo=None))
+    enriched = enrich_signal(
+        sig,
+        live_ltp=q.get("ltp"),
+        now=now_ist().replace(tzinfo=None),
+        settings=settings,
+    )
     if enriched.get("validity_status") != "ACTIVE":
         return jsonify({
             "error": f"Signal is no longer valid ({enriched.get('validity_status')})",
@@ -425,6 +465,13 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
     fill = float(entry_price) if entry_price is not None else float(sig["ltp"])
     if fill <= 0:
         return jsonify({"error": "entry_price must be positive"}), 400
+
+    if body.get("quantity") is None:
+        quantity = suggested_quantity(settings, fill)
+    else:
+        quantity = int(body.get("quantity") or 1)
+    if quantity < 1:
+        return jsonify({"error": "quantity must be >= 1"}), 400
 
     tid = trade_repo.mark_taken(
         signal_id=signal_id,

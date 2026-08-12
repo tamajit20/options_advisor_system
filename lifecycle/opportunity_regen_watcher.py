@@ -15,9 +15,14 @@ per IST day when:
 
 * VIX moves more than `STRATEGY_CONFIG["regen_vix_pct_threshold"]` (default
   5%) vs the day's first observed VIX tick.
-* Any subscribed underlying spot moves more than
+* Any **options underlying** spot (NIFTY / BANKNIFTY / FINNIFTY from
+  `STRATEGY_CONFIG["underlyings"]`) moves more than
   `STRATEGY_CONFIG["regen_spot_pct_threshold"]` (default 0.7%) vs the day's
   first observed spot tick.
+
+Scout watchlist equities (BPCL, RELIANCE, …) share the same WebSocket tick
+bus but are **ignored** here — they are not options underlyings and must not
+produce "re-run the suggestion engine" hints.
 
 Why baseline = first observed tick (not yesterday's close)?
     The baseline is the price the morning suggestions were built on. When
@@ -55,7 +60,8 @@ from typing import Callable, Dict, Optional, Set, Tuple
 
 from config import STRATEGY_CONFIG
 from providers.base import LiveQuote
-from providers.event_bus import EventBus, TOPIC_TICK, get_event_bus
+from providers.event_bus import EventBus, TOPIC_TICK_INDEX, get_event_bus
+from providers.tick_routing import options_index_symbols, options_underlyings
 from utils import now_ist
 
 
@@ -130,6 +136,7 @@ class OpportunityRegenWatcher:
             if iv_threshold_vol_points is not None
             else STRATEGY_CONFIG.get("regen_iv_pct_threshold", 5.0)
         )
+        self._options_underlyings = options_underlyings()
         if self._vix_threshold <= 0 or self._spot_threshold <= 0:
             raise ValueError("thresholds must be positive percentages")
         if self._iv_threshold <= 0:
@@ -145,7 +152,8 @@ class OpportunityRegenWatcher:
             return
         bus = self._bus or get_event_bus()
         self._bus = bus
-        self._unsub = bus.subscribe(TOPIC_TICK, self.on_tick)
+        self._unsub = bus.subscribe(TOPIC_TICK_INDEX, self.on_tick)
+        self._options_underlyings = options_underlyings()
         self._started = True
         logger.info(
             "OpportunityRegenWatcher started (vix=±%.2f%%, spot=±%.2f%%)",
@@ -186,6 +194,9 @@ class OpportunityRegenWatcher:
 
     def _on_iv_locked(self, symbol: str, iv_pct: float) -> None:
         if not symbol or iv_pct <= 0:
+            return
+        sym = str(symbol).upper()
+        if sym not in self._options_underlyings:
             return
         today = self._clock().date()
         with self._lock:
@@ -239,8 +250,10 @@ class OpportunityRegenWatcher:
             return
         if ltp <= 0:
             return
-        symbol = str(getattr(quote, "symbol", "") or "")
+        symbol = str(getattr(quote, "symbol", "") or "").upper()
         if not symbol:
+            return
+        if symbol != _VIX_SYMBOL and symbol not in self._options_underlyings:
             return
 
         today = self._clock().date()

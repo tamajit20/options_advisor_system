@@ -17,8 +17,10 @@ What gets subscribed?
     2. Option legs of every PENDING row in `options_suggestions` for *today*
        — needed for PERFECT_ENTRY re-evaluation.
     3. The index spots configured in `STRATEGY_CONFIG["underlyings"]`
-       (NIFTY 50 / NIFTY BANK / NIFTY FIN SERVICE) plus INDIA VIX — needed
-       for opportunity regeneration.
+       (NIFTY 50 / NIFTY BANK / NIFTY FIN SERVICE) plus INDIA VIX — Options
+       index ticks only (`product=options_index`).
+    4. Scout watchlist NSE equities via `equity_loader` — Scout only
+       (`product=scout_equity`). Never mixed into Options tick handlers.
 
 If the resulting set is empty the manager pushes an empty set, which causes
 the runner to unsubscribe everything. The runner remains connected; the
@@ -237,7 +239,11 @@ class SubscriptionManager:
             tokens.add(inst.instrument_token)
             self._runner.set_token_meta(
                 inst.instrument_token,
-                TokenMeta(symbol=spec.internal_symbol, is_index=True),
+                TokenMeta(
+                    symbol=spec.internal_symbol,
+                    is_index=True,
+                    product="options_index",
+                ),
             )
 
         for (underlying, expiry, strike, opt_type) in legs:
@@ -265,6 +271,7 @@ class SubscriptionManager:
                     strike=float(strike),
                     option_type=opt_type,
                     is_index=False,
+                    product="options_leg",
                 ),
             )
 
@@ -280,7 +287,7 @@ class SubscriptionManager:
             tokens.add(inst.instrument_token)
             self._runner.set_token_meta(
                 inst.instrument_token,
-                TokenMeta(symbol=sym, is_index=False),
+                TokenMeta(symbol=sym, is_index=False, product="scout_equity"),
             )
 
         current = self._runner.desired_tokens()

@@ -8,7 +8,12 @@ from typing import Callable, List, Optional
 from config import SCOUT_CONFIG
 from database.connection import SQLServerConnection
 from database.scout_models import ScoutSignalRepo, ScoutTradeRepo
-from scout.config_loader import get_automation
+from scout.config_loader import get_scout_settings
+from scout.settings_schema import (
+    compute_trade_quantity,
+    in_trading_window,
+    strength_allowed,
+)
 from scout.signal_enrichment import build_exit_plan, enrich_signal, evaluate_exit_alerts
 from scout.trade_audit import build_entry_audit
 from scout.utils import is_market_open
@@ -37,6 +42,29 @@ def _symbol_has_other_open_trade(trade_repo: ScoutTradeRepo, symbol: str, signal
     return False
 
 
+def _auto_enter_block_reason(
+    trade_repo: ScoutTradeRepo,
+    settings: dict,
+    *,
+    signal_id: int,
+    symbol: str,
+    strength: str,
+) -> Optional[str]:
+    if not in_trading_window(settings):
+        return "outside trading window"
+    max_day = int(settings.get("max_trades_per_day") or 0)
+    if max_day > 0 and trade_repo.count_trades_opened_today() >= max_day:
+        return f"daily trade cap ({max_day}) reached"
+    sym = str(symbol).upper()
+    if settings.get("one_trade_per_symbol_per_day") and trade_repo.symbol_has_trade_today(sym):
+        return f"symbol already traded today ({sym})"
+    if _symbol_has_other_open_trade(trade_repo, sym, signal_id):
+        return f"open trade already exists for {sym}"
+    if not strength_allowed(settings, strength):
+        return f"strength {strength} not in auto-enter list"
+    return None
+
+
 def try_auto_execute_signal(
     db: SQLServerConnection,
     *,
@@ -44,7 +72,7 @@ def try_auto_execute_signal(
     spot_lookup: Callable[[str], Optional[float]],
 ) -> Optional[dict]:
     """Mark a new signal taken at live LTP when auto_execute_signals is enabled."""
-    settings = get_automation(db, use_cache=False)
+    settings = get_scout_settings(db, use_cache=False)
     if not settings.get("auto_execute_signals"):
         return None
     if not SCOUT_CONFIG.get("enabled", True):
@@ -60,11 +88,16 @@ def try_auto_execute_signal(
 
     if signal_id in trade_repo.open_signal_ids():
         return None
-    if _symbol_has_other_open_trade(trade_repo, str(sig["symbol"]), signal_id):
-        logger.info(
-            "Scout auto-enter skip SIG #%s — open trade already exists for %s",
-            signal_id, sig["symbol"],
-        )
+
+    block = _auto_enter_block_reason(
+        trade_repo,
+        settings,
+        signal_id=signal_id,
+        symbol=str(sig["symbol"]),
+        strength=str(sig.get("strength") or "WEAK"),
+    )
+    if block:
+        logger.info("Scout auto-enter skip SIG #%s — %s", signal_id, block)
         return None
 
     sym = str(sig["symbol"]).upper()
@@ -74,7 +107,12 @@ def try_auto_execute_signal(
     if ltp <= 0:
         return None
 
-    enriched = enrich_signal(sig, live_ltp=float(ltp), now=now_ist().replace(tzinfo=None))
+    enriched = enrich_signal(
+        sig,
+        live_ltp=float(ltp),
+        now=now_ist().replace(tzinfo=None),
+        settings=settings,
+    )
     if enriched.get("validity_status") != "ACTIVE":
         logger.info(
             "Scout auto-enter skip SIG #%s — status %s",
@@ -82,7 +120,7 @@ def try_auto_execute_signal(
         )
         return None
 
-    qty = max(1, int(settings.get("auto_trade_quantity") or 1))
+    qty = compute_trade_quantity(settings, float(ltp))
     executed_at = now_ist()
     tid = trade_repo.mark_taken(
         signal_id=signal_id,
@@ -119,7 +157,7 @@ def try_auto_close_trades(
     spot_lookup: Callable[[str], Optional[float]],
 ) -> List[dict]:
     """Close open trades when target/stop/square-off triggers and auto_close is enabled."""
-    settings = get_automation(db, use_cache=False)
+    settings = get_scout_settings(db, use_cache=False)
     if not settings.get("auto_close_trades"):
         return []
     if not SCOUT_CONFIG.get("enabled", True):
@@ -201,7 +239,7 @@ def on_signals_committed(
     """Run auto-enter for freshly committed signal rows."""
     if not signal_ids:
         return
-    settings = get_automation(db, use_cache=False)
+    settings = get_scout_settings(db, use_cache=False)
     if not settings.get("auto_execute_signals"):
         return
     for sid in signal_ids:

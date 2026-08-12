@@ -6,7 +6,14 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from config import SCOUT_CONFIG
+from scout.settings_schema import effective_pattern_config
 from utils import now_ist
+
+
+def _cfg(settings: Optional[dict] = None) -> dict:
+    if settings is not None:
+        return effective_pattern_config(settings)
+    return dict(SCOUT_CONFIG)
 
 _VALID = "ACTIVE"
 _EXPIRED = "EXPIRED"
@@ -51,8 +58,9 @@ def _structural_target(signal: dict, meta: dict, action: str) -> Optional[float]
     return None
 
 
-def _entry_band(ltp: float, action: str) -> tuple[float, float]:
-    slip = float(SCOUT_CONFIG.get("entry_slippage_pct", 0.20)) / 100.0
+def _entry_band(ltp: float, action: str, settings: Optional[dict] = None) -> tuple[float, float]:
+    cfg = _cfg(settings)
+    slip = float(cfg.get("entry_slippage_pct", 0.20)) / 100.0
     px = float(ltp)
     if str(action).upper() == "SELL":
         return round(px * (1.0 - slip * 1.5), 2), round(px * (1.0 + slip), 2)
@@ -253,10 +261,12 @@ def evaluate_signal_status(
     *,
     live_ltp: Optional[float] = None,
     now: Optional[datetime] = None,
+    settings: Optional[dict] = None,
 ) -> str:
     now = (now or now_ist()).replace(tzinfo=None)
     triggered = _parse_triggered(signal, now)
-    valid_mins = int(SCOUT_CONFIG.get("signal_valid_minutes", 30))
+    cfg = _cfg(settings)
+    valid_mins = int(cfg.get("signal_valid_minutes", 30))
     valid_until = min(triggered + timedelta(minutes=valid_mins), _market_close_dt(triggered))
 
     if now > valid_until:
@@ -275,7 +285,7 @@ def evaluate_signal_status(
         if action == "SELL" and ltp > inv_f:
             return _INVALIDATED
 
-    entry_min, entry_max = _entry_band(float(signal.get("ltp") or 0), action)
+    entry_min, entry_max = _entry_band(float(signal.get("ltp") or 0), action, settings)
     if ltp > 0 and (ltp < entry_min or ltp > entry_max):
         return _OUT_OF_RANGE
 
@@ -288,15 +298,17 @@ def enrich_signal(
     live_ltp: Optional[float] = None,
     live_as_of: Optional[str] = None,
     now: Optional[datetime] = None,
+    settings: Optional[dict] = None,
 ) -> dict:
     """Add trade plan + validity fields; does not mutate input."""
     now = (now or now_ist()).replace(tzinfo=None)
     meta = dict(signal.get("meta") or {})
     action = str(signal.get("action") or "").upper()
     ltp_signal = float(signal.get("ltp") or 0)
-    entry_min, entry_max = _entry_band(ltp_signal, action)
+    entry_min, entry_max = _entry_band(ltp_signal, action, settings)
     triggered = _parse_triggered(signal, now)
-    valid_mins = int(SCOUT_CONFIG.get("signal_valid_minutes", 30))
+    cfg = _cfg(settings)
+    valid_mins = int(cfg.get("signal_valid_minutes", 30))
     valid_until = min(triggered + timedelta(minutes=valid_mins), _market_close_dt(triggered))
 
     inv = signal.get("invalidation")
@@ -304,7 +316,7 @@ def enrich_signal(
     if inv is not None:
         invalidation_side = "below" if action == "BUY" else "above"
 
-    status = evaluate_signal_status(signal, live_ltp=live_ltp, now=now)
+    status = evaluate_signal_status(signal, live_ltp=live_ltp, now=now, settings=settings)
     live = live_ltp if live_ltp is not None else None
 
     out = dict(signal)

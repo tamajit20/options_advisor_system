@@ -806,8 +806,6 @@ def create_app() -> Flask:
             )
             if (r.get("status") or "").upper() != "PENDING":
                 continue
-            if not gate.ok:
-                continue
             r_out["execution_gate"] = {
                 "ok": gate.ok,
                 "vetoes": list(gate.vetoes),

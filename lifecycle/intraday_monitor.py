@@ -30,7 +30,7 @@ from datetime import date, datetime
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from providers.base import LiveQuote
-from providers.event_bus import EventBus, TOPIC_TICK, get_event_bus
+from providers.event_bus import EventBus, TOPIC_TICK_OPTIONS, get_event_bus
 from utils import now_ist
 
 
@@ -153,7 +153,7 @@ class IntradayMonitor:
             if self._unsub is not None:
                 return
             self._reload_locked()
-            self._unsub = self._bus.subscribe(TOPIC_TICK, self.on_tick)
+            self._unsub = self._bus.subscribe(TOPIC_TICK_OPTIONS, self.on_tick)
         logger.info("IntradayMonitor: started (entry-band only)")
 
     def stop(self) -> None:

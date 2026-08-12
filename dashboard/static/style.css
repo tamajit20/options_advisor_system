@@ -185,6 +185,11 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
 .sit-out-conf { margin: 0 0 4px; }
 .sit-out-hint { margin: 8px 0 0; }
 
+.suggestion-blocked-intro {
+  margin: 12px 0 8px;
+  font-size: .88rem;
+}
+
 .suggestion-gate-banner {
   margin-bottom: 12px;
   padding: 10px 12px;

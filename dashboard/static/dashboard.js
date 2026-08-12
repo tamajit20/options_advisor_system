@@ -969,10 +969,9 @@ async function loadSuggestion() {
     const data = await API('/api/suggestion/today');
     const list = data.suggestions || [];
     const sitOut = data.sit_out || [];
-    const actionable = list.filter(s => {
-      const st = (s.status || '').toUpperCase();
-      return st === 'PENDING' && s.execution_gate && s.execution_gate.ok;
-    });
+    const pending = list.filter(s => (s.status || '').toUpperCase() === 'PENDING');
+    const actionable = pending.filter(s => s.execution_gate && s.execution_gate.ok);
+    const blocked = pending.filter(s => s.execution_gate && !s.execution_gate.ok);
     const parts = [];
     if (data.market_summary && (sitOut.length || !actionable.length)) {
       parts.push(renderMarketSitOutSummary(data.market_summary));
@@ -980,12 +979,16 @@ async function loadSuggestion() {
     if (actionable.length) {
       parts.push(renderSuggestionList(actionable));
     }
+    if (blocked.length) {
+      parts.push(`<div class="suggestion-blocked-intro muted">These suggestions were generated but cannot be executed yet — see the banner on each card.</div>`);
+      parts.push(renderSuggestionList(blocked));
+    }
     if (sitOut.length) {
       parts.push(sitOut.map(s => renderSitOutCard(s)).join(''));
     }
     if (!parts.length) {
       c.className = '';
-      c.innerHTML = '<div class="empty">No actionable suggestion right now. Run <strong>Live Suggestion Engine</strong> from the Jobs tab during market hours — ignored, expired, and blocked signals are hidden.</div>';
+      c.innerHTML = '<div class="empty">No actionable suggestion right now. Run <strong>Live Suggestion Engine</strong> from the Jobs tab during market hours — ignored and expired signals are hidden; blocked cards appear below when the engine generated a setup that failed execution checks.</div>';
       return;
     }
     c.className = '';

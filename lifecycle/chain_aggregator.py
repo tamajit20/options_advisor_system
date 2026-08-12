@@ -49,7 +49,8 @@ from database.connection import SQLServerConnection
 from database.models import AtmIvTimeseriesRepo, ChainTimeseriesRepo
 from engine.iv_calculator import implied_vol
 from providers.base import LiveQuote
-from providers.event_bus import EventBus, TOPIC_TICK, get_event_bus
+from providers.event_bus import EventBus, TOPIC_TICK_INDEX, TOPIC_TICK_OPTIONS, get_event_bus
+from providers.tick_routing import options_index_symbols
 from utils import now_ist
 
 
@@ -125,16 +126,18 @@ class ChainTickAggregator:
         self._buckets: Dict[BucketKey, _StrikeBucket] = {}
         self._spots: Dict[str, _SpotBucket] = {}
 
-        self._unsub: Optional[Callable[[], None]] = None
+        self._unsub_options: Optional[Callable[[], None]] = None
+        self._unsub_index: Optional[Callable[[], None]] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
         with self._lock:
-            if self._unsub is not None:
+            if self._unsub_options is not None:
                 return
-            self._unsub = self._bus.subscribe(TOPIC_TICK, self._on_tick)
+            self._unsub_options = self._bus.subscribe(TOPIC_TICK_OPTIONS, self._on_option_tick)
+            self._unsub_index = self._bus.subscribe(TOPIC_TICK_INDEX, self._on_index_tick)
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run, name="chain-aggregator-flush", daemon=True,
@@ -144,11 +147,14 @@ class ChainTickAggregator:
 
     def stop(self, timeout: float = 5.0) -> None:
         with self._lock:
-            if self._unsub is not None:
-                try:
-                    self._unsub()
-                finally:
-                    self._unsub = None
+            for unsub in (self._unsub_options, self._unsub_index):
+                if unsub is not None:
+                    try:
+                        unsub()
+                    finally:
+                        pass
+            self._unsub_options = None
+            self._unsub_index = None
         self._stop_event.set()
         t = self._thread
         if t is not None:
@@ -157,15 +163,21 @@ class ChainTickAggregator:
         logger.info("ChainTickAggregator: stopped")
 
     # ------------------------------------------------------------------ tick
-    def _on_tick(self, q: LiveQuote) -> None:
+    def _on_index_tick(self, q: LiveQuote) -> None:
         if q is None:
             return
-        # Spot/index — keep only latest price for ATM-strike resolution.
+        sym = str(q.symbol or "").upper()
+        if sym not in options_index_symbols():
+            return
+        with self._lock:
+            sb = self._spots.setdefault(sym, _SpotBucket())
+            sb.last_price = q.last_price
+            sb.last_tick_at = q.timestamp or self._clock()
+
+    def _on_option_tick(self, q: LiveQuote) -> None:
+        if q is None:
+            return
         if q.option_type is None or q.expiry is None or q.strike is None:
-            with self._lock:
-                sb = self._spots.setdefault(q.symbol, _SpotBucket())
-                sb.last_price = q.last_price
-                sb.last_tick_at = q.timestamp or self._clock()
             return
         key: BucketKey = (q.symbol, q.expiry, float(q.strike), str(q.option_type))
         with self._lock:
@@ -187,6 +199,15 @@ class ChainTickAggregator:
                 b.volume = int(q.volume)
             b.last_tick_at = q.timestamp or self._clock()
             b.sample_count += 1
+
+    def _on_tick(self, q: LiveQuote) -> None:
+        """Test/back-compat entry — routes to product-specific handlers."""
+        if q is None:
+            return
+        if q.option_type is None or q.expiry is None or q.strike is None:
+            self._on_index_tick(q)
+        else:
+            self._on_option_tick(q)
 
     # ------------------------------------------------------------------ flush loop
     def _run(self) -> None:

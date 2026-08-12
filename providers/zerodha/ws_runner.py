@@ -64,10 +64,10 @@ from providers.cache import TTLCache
 from providers.event_bus import (
     EventBus,
     TOPIC_CONNECTION_STATE,
-    TOPIC_TICK,
     TOPIC_TOKEN_EXPIRED,
     get_event_bus,
 )
+from providers.tick_routing import topic_for_meta
 
 
 logger = logging.getLogger(__name__)
@@ -143,6 +143,8 @@ class TokenMeta:
     strike: Optional[float] = None
     option_type: Optional[str] = None
     is_index: bool = False
+    # options_index | options_leg | scout_equity — set by SubscriptionManager.
+    product: Optional[str] = None
 
 
 # Backwards-compat private alias used internally.
@@ -516,7 +518,8 @@ class KiteWSRunner:
                 logger.exception("cache.set failed for spot=%s", meta.symbol)
 
         try:
-            self._event_bus.publish(TOPIC_TICK, quote)
+            scoped = topic_for_meta(meta)
+            self._event_bus.publish(scoped, quote)
         except Exception:
             logger.exception("event_bus.publish failed for tick")
 

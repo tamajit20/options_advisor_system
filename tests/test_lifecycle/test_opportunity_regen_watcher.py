@@ -15,7 +15,7 @@ import pytest
 
 from lifecycle.opportunity_regen_watcher import OpportunityRegenWatcher
 from providers.base import LiveQuote
-from providers.event_bus import EventBus, TOPIC_TICK
+from providers.event_bus import EventBus, TOPIC_TICK_INDEX
 
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -139,6 +139,15 @@ class TestSpotTrigger:
         titles = " | ".join(e["title"] for e in notif.events)
         assert "NIFTY" in titles and "BANKNIFTY" in titles
 
+    def test_scout_equity_ticks_ignored(self):
+        """Scout watchlist stocks share the WS bus but are not options underlyings."""
+        w, notif, _ = _make_watcher(spot=0.7)
+        w.on_tick(_quote("BPCL", 312.55))
+        w.on_tick(_quote("BPCL", 314.90))   # +0.75% — would fire if not filtered
+        w.on_tick(_quote("RELIANCE", 2500.0))
+        w.on_tick(_quote("RELIANCE", 2520.0))
+        assert notif.events == []
+
 
 # ---------------------------------------------------------------------------
 # VIX trigger uses its own threshold
@@ -224,14 +233,14 @@ class TestLifecycle:
         notif = w._notifier
         w.start()
         try:
-            bus.publish(TOPIC_TICK, _quote("NIFTY", 22000.0))
-            bus.publish(TOPIC_TICK, _quote("NIFTY", 22000.0 * 1.01))
+            bus.publish(TOPIC_TICK_INDEX, _quote("NIFTY", 22000.0))
+            bus.publish(TOPIC_TICK_INDEX, _quote("NIFTY", 22000.0 * 1.01))
             assert len(notif.events) == 1
         finally:
             w.stop()
         # After stop, further publishes must not reach the watcher.
-        bus.publish(TOPIC_TICK, _quote("BANKNIFTY", 50000.0))
-        bus.publish(TOPIC_TICK, _quote("BANKNIFTY", 50000.0 * 1.05))
+        bus.publish(TOPIC_TICK_INDEX, _quote("BANKNIFTY", 50000.0))
+        bus.publish(TOPIC_TICK_INDEX, _quote("BANKNIFTY", 50000.0 * 1.05))
         assert len(notif.events) == 1   # unchanged
 
     def test_start_is_idempotent(self):
