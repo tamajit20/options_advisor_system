@@ -1274,6 +1274,184 @@
     return `<span class="scout-hist-pill ${cls}">${escapeHtml(label || (mode === 'auto' ? 'Auto' : 'Manual'))}</span>`;
   }
 
+  function tradeExecutionModes(t) {
+    const entry = ((t.execution || {}).entry || {}).mode === 'auto' ? 'auto' : 'manual';
+    const exit = ((t.execution || {}).exit || {}).mode === 'auto' ? 'auto' : 'manual';
+    return { entry, exit, flowKey: `${entry}-${exit}` };
+  }
+
+  function flowLabel(entry, exit) {
+    const e = entry === 'auto' ? 'Auto' : 'Manual';
+    const x = exit === 'auto' ? 'Auto' : 'Manual';
+    return `${e} → ${x}`;
+  }
+
+  function flowCell(entry, exit) {
+    const key = `${entry}-${exit}`;
+    const clsMap = {
+      'auto-auto': 'scout-hist-flow--aa',
+      'auto-manual': 'scout-hist-flow--am',
+      'manual-auto': 'scout-hist-flow--ma',
+      'manual-manual': 'scout-hist-flow--mm',
+    };
+    const cls = clsMap[key] || 'scout-hist-flow--mm';
+    const title = key === 'auto-auto'
+      ? 'Fully automated — auto-enter and auto-close'
+      : `Entry: ${entry === 'auto' ? 'Auto' : 'Manual'}, Exit: ${exit === 'auto' ? 'Auto' : 'Manual'}`;
+    return `<span class="scout-hist-flow ${cls}" title="${escapeHtml(title)}">${escapeHtml(flowLabel(entry, exit))}</span>`;
+  }
+
+  let _scoutHistTrades = [];
+  let _scoutHistStats = null;
+  let _scoutHistSummaryExtra = '';
+  let _scoutHistFilters = { entry: 'all', exit: 'all', preset: '' };
+
+  function defaultHistFilters() {
+    return { entry: 'all', exit: 'all', preset: '' };
+  }
+
+  function matchesHistFilter(t, filters) {
+    const { entry, exit } = tradeExecutionModes(t);
+    const f = filters || _scoutHistFilters;
+    if (f.preset === 'full-auto') return entry === 'auto' && exit === 'auto';
+    if (f.preset === 'auto-enter') return entry === 'auto';
+    if (f.preset === 'auto-close') return exit === 'auto';
+    if (f.entry !== 'all' && entry !== f.entry) return false;
+    if (f.exit !== 'all' && exit !== f.exit) return false;
+    return true;
+  }
+
+  function filterHistTrades(trades, filters) {
+    return (trades || []).filter(t => matchesHistFilter(t, filters));
+  }
+
+  function countFullAuto(trades) {
+    return (trades || []).filter(t => {
+      const m = tradeExecutionModes(t);
+      return m.entry === 'auto' && m.exit === 'auto';
+    }).length;
+  }
+
+  function renderHistFilterBar(totalCount) {
+    const f = _scoutHistFilters;
+    const presetActive = p => f.preset === p ? ' active' : '';
+    const entryChecked = v => f.preset ? '' : (f.entry === v ? ' checked' : '');
+    const exitChecked = v => f.preset ? '' : (f.exit === v ? ' checked' : '');
+    const entryDisabled = f.preset ? ' disabled' : '';
+    const exitDisabled = f.preset ? ' disabled' : '';
+    return `
+      <div class="scout-hist-filters-grid" id="scout-hist-main-filters">
+        <div class="scout-hist-filter-group">
+          <span class="muted">Entry</span>
+          <label class="scout-hist-filter-opt"><input type="radio" name="hist-f-entry" value="all"${entryChecked('all')}${entryDisabled}> All</label>
+          <label class="scout-hist-filter-opt"><input type="radio" name="hist-f-entry" value="auto"${entryChecked('auto')}${entryDisabled}> Auto</label>
+          <label class="scout-hist-filter-opt"><input type="radio" name="hist-f-entry" value="manual"${entryChecked('manual')}${entryDisabled}> Manual</label>
+        </div>
+        <div class="scout-hist-filter-group">
+          <span class="muted">Exit</span>
+          <label class="scout-hist-filter-opt"><input type="radio" name="hist-f-exit" value="all"${exitChecked('all')}${exitDisabled}> All</label>
+          <label class="scout-hist-filter-opt"><input type="radio" name="hist-f-exit" value="auto"${exitChecked('auto')}${exitDisabled}> Auto</label>
+          <label class="scout-hist-filter-opt"><input type="radio" name="hist-f-exit" value="manual"${exitChecked('manual')}${exitDisabled}> Manual</label>
+        </div>
+        <div class="scout-hist-filter-group">
+          <span class="muted">Presets</span>
+          <button type="button" class="btn btn-sm btn-ghost scout-hist-preset-btn${presetActive('full-auto')}" data-hist-preset="full-auto">Full auto</button>
+          <button type="button" class="btn btn-sm btn-ghost scout-hist-preset-btn${presetActive('auto-enter')}" data-hist-preset="auto-enter">Auto-enter</button>
+          <button type="button" class="btn btn-sm btn-ghost scout-hist-preset-btn${presetActive('auto-close')}" data-hist-preset="auto-close">Auto-close</button>
+          <button type="button" class="btn btn-sm btn-ghost" id="scout-hist-filter-clear">Clear</button>
+        </div>
+        <div class="scout-hist-filter-result" id="scout-hist-filter-result"></div>
+      </div>`;
+  }
+
+  function renderHistFilterResult(filtered, total) {
+    const agg = aggregateTrades(filtered);
+    const fullAuto = countFullAuto(filtered);
+    const totalFullAuto = countFullAuto(total);
+    const pnlCls = agg.pnl >= 0 ? 'pnl-profit' : 'pnl-loss';
+    const showing = filtered.length === total.length
+      ? `Showing all <strong>${total.length}</strong> trades`
+      : `Showing <strong>${filtered.length}</strong> of <strong>${total.length}</strong> trades`;
+    return `${showing} · Win <strong>${agg.win_pct}%</strong> · P&amp;L <strong class="${pnlCls}">${fmtPnl(agg.pnl)}</strong> · Full auto <strong>${fullAuto}</strong>${filtered.length !== total.length ? ` <span class="muted">(${totalFullAuto} in period)</span>` : ''}`;
+  }
+
+  function updateAllTradesGridView(panel) {
+    const host = panel.querySelector('#scout-hist-all-grid-host');
+    const resultEl = panel.querySelector('#scout-hist-filter-result');
+    const summaryEl = panel.querySelector('#scout-hist-all-summary-extra');
+    if (!host) return;
+    const filtered = filterHistTrades(_scoutHistTrades, _scoutHistFilters);
+    host.innerHTML = renderTradeGrid(filtered, 'scout-hist-all');
+    bindHistoryGridToggles(host);
+    if (resultEl) {
+      resultEl.innerHTML = renderHistFilterResult(filtered, _scoutHistTrades);
+    }
+    if (summaryEl) {
+      const agg = aggregateTrades(filtered);
+      const isFiltered = filtered.length !== _scoutHistTrades.length || _scoutHistFilters.preset
+        || _scoutHistFilters.entry !== 'all' || _scoutHistFilters.exit !== 'all';
+      summaryEl.innerHTML = isFiltered
+        ? renderSummaryCells(agg, `<span class="scout-hist-sum-meta"><span class="muted">Filtered</span> <strong>${filtered.length}/${_scoutHistTrades.length}</strong></span>`)
+        : renderSummaryCells(aggregateTrades(_scoutHistTrades), _scoutHistSummaryExtra);
+    }
+  }
+
+  function bindHistoryFilters(panel) {
+    const bar = panel.querySelector('#scout-hist-main-filters');
+    if (!bar || bar.dataset.bound === '1') return;
+    bar.dataset.bound = '1';
+
+    bar.querySelectorAll('input[name="hist-f-entry"]').forEach(inp => {
+      inp.addEventListener('change', () => {
+        if (inp.disabled) return;
+        _scoutHistFilters = { entry: inp.value, exit: _scoutHistFilters.exit, preset: '' };
+        syncHistFilterControls(panel);
+        updateAllTradesGridView(panel);
+      });
+    });
+    bar.querySelectorAll('input[name="hist-f-exit"]').forEach(inp => {
+      inp.addEventListener('change', () => {
+        if (inp.disabled) return;
+        _scoutHistFilters = { entry: _scoutHistFilters.entry, exit: inp.value, preset: '' };
+        syncHistFilterControls(panel);
+        updateAllTradesGridView(panel);
+      });
+    });
+    bar.querySelectorAll('[data-hist-preset]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = btn.getAttribute('data-hist-preset');
+        _scoutHistFilters = _scoutHistFilters.preset === p
+          ? defaultHistFilters()
+          : { entry: 'all', exit: 'all', preset: p };
+        syncHistFilterControls(panel);
+        updateAllTradesGridView(panel);
+      });
+    });
+    bar.querySelector('#scout-hist-filter-clear')?.addEventListener('click', () => {
+      _scoutHistFilters = defaultHistFilters();
+      syncHistFilterControls(panel);
+      updateAllTradesGridView(panel);
+    });
+  }
+
+  function syncHistFilterControls(panel) {
+    const bar = panel.querySelector('#scout-hist-main-filters');
+    if (!bar) return;
+    const f = _scoutHistFilters;
+    const presetActive = !!f.preset;
+    bar.querySelectorAll('input[name="hist-f-entry"]').forEach(inp => {
+      inp.disabled = presetActive;
+      inp.checked = !presetActive && inp.value === f.entry;
+    });
+    bar.querySelectorAll('input[name="hist-f-exit"]').forEach(inp => {
+      inp.disabled = presetActive;
+      inp.checked = !presetActive && inp.value === f.exit;
+    });
+    bar.querySelectorAll('[data-hist-preset]').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-hist-preset') === f.preset);
+    });
+  }
+
   function pnlCell(pnl, pct) {
     const n = Number(pnl || 0);
     const cls = n >= 0 ? 'pnl-profit' : 'pnl-loss';
@@ -1330,9 +1508,10 @@
       const exec = t.execution || {};
       const entry = exec.entry || {};
       const exit = exec.exit || {};
+      const modes = tradeExecutionModes(t);
       const rowId = `${gridId}-r-${t.id}`;
       return `
-        <tr data-hist-row="${rowId}">
+        <tr data-hist-row="${rowId}" data-flow="${modes.flowKey}">
           <td><button type="button" class="scout-hist-expand-btn" data-hist-toggle="${rowId}" aria-label="Toggle detail">▶</button></td>
           <td>TRD #${escapeHtml(String(t.id))}</td>
           <td>${t.signal_id != null ? 'SIG #' + escapeHtml(String(t.signal_id)) : '—'}</td>
@@ -1344,13 +1523,14 @@
           <td class="num">${fmtPx(t.exit_price)}</td>
           <td>${fmtDateTimeShort(t.closed_at || t.exited_at)}</td>
           <td class="num">${pnlCell(t.pnl, t.pnl_pct)}</td>
+          <td>${flowCell(modes.entry, modes.exit)}</td>
           <td>${modePill(entry.mode, entry.mode === 'auto' ? 'Auto-enter' : 'Manual')}</td>
           <td>${modePill(exit.mode, exit.mode === 'auto' ? 'Auto-close' : 'Manual')}</td>
           <td>${escapeHtml(exit.trigger_label || '—')}</td>
           <td class="scout-hist-cond-short">${escapeHtml(conditionsShort(entry, exit))}</td>
         </tr>
         <tr class="scout-hist-detail-row" data-hist-detail="${rowId}" hidden>
-          <td colspan="15">
+          <td colspan="16">
             <div class="scout-hist-detail-inner">
               ${renderConditionDetail('Entry', entry)}
               ${renderConditionDetail('Exit', exit)}
@@ -1376,6 +1556,7 @@
               <th>Exit ₹</th>
               <th>Closed</th>
               <th>P&amp;L</th>
+              <th>Flow</th>
               <th>Entry mode</th>
               <th>Exit mode</th>
               <th>Exit trigger</th>
@@ -1452,6 +1633,10 @@
     const panel = $('#scout-history-panel');
     if (!panel) return;
 
+    _scoutHistTrades = trades || [];
+    _scoutHistStats = stats;
+    _scoutHistFilters = defaultHistFilters();
+
     if (!trades || !trades.length) {
       panel.className = 'scout-history-panel';
       panel.innerHTML = '<div class="empty">No closed trades in this period.</div>';
@@ -1460,6 +1645,12 @@
 
     const allAgg = aggregateTrades(trades);
     const auto = (stats && stats.automation) || {};
+    const fullAutoTotal = countFullAuto(trades);
+    const summaryExtra = `
+            <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Auto-in</span> <strong>${auto.auto_entry_count || 0}</strong></span>
+            <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Auto-out</span> <strong>${auto.auto_exit_count || 0}</strong></span>
+            <span class="scout-hist-sum-meta"><span class="muted">Full auto</span> <strong>${fullAutoTotal}</strong></span>`;
+    _scoutHistSummaryExtra = summaryExtra;
     const typeGroups = groupTradesByType(trades);
     const entryGroups = groupTradesByEntryMode(trades);
     const exitGroups = groupTradesByExitMode(trades);
@@ -1496,12 +1687,10 @@
       <details class="scout-hist-section" open>
         <summary>
           <span class="scout-hist-sum-label">All closed trades</span>
-          ${renderSummaryCells(allAgg, `
-            <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Auto-in</span> <strong>${auto.auto_entry_count || 0}</strong></span>
-            <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Auto-out</span> <strong>${auto.auto_exit_count || 0}</strong></span>
-          `)}
+          <span id="scout-hist-all-summary-extra">${renderSummaryCells(allAgg, summaryExtra)}</span>
         </summary>
-        ${renderTradeGrid(trades, 'scout-hist-all')}
+        ${renderHistFilterBar(trades.length)}
+        <div id="scout-hist-all-grid-host">${renderTradeGrid(trades, 'scout-hist-all')}</div>
       </details>
 
       <details class="scout-hist-section">
@@ -1533,6 +1722,11 @@
       </details>`;
 
     bindHistoryGridToggles(panel);
+    bindHistoryFilters(panel);
+    const resultEl = panel.querySelector('#scout-hist-filter-result');
+    if (resultEl) {
+      resultEl.innerHTML = renderHistFilterResult(trades, trades);
+    }
   }
 
   async function loadScoutHistory() {
