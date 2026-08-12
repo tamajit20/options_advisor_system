@@ -188,13 +188,16 @@ def enrich_with_latest_in_db(
     started_at: datetime | None = None,
 ) -> str:
     """Append latest-available suffix when *message* does not already include it."""
+    original = message
     message = clarify_morning_no_data_message(
         message, job_name=job_name, started_at=started_at,
     )
+    morning_clarified = message != original
     latest = latest_trade_date_for_job(db, job_name)
-    reconciled = reconcile_no_data_with_latest(message, latest)
-    if reconciled != message:
-        return reconciled
+    if not morning_clarified:
+        reconciled = reconcile_no_data_with_latest(message, latest)
+        if reconciled != message:
+            return reconciled
     if "Latest available in DB:" in message or "No data in DB yet" in message:
         return message
     return message.rstrip(".") + "." + latest_available_suffix(latest)

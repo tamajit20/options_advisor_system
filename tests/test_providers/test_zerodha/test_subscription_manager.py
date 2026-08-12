@@ -148,10 +148,10 @@ def test_default_indexes_resolved_and_subscribed(master, runner):
     tokens = mgr.reconcile_once()
     assert tokens == {256265, 260105, 257801, 264969}
     # Each is tagged is_index=True with the canonical internal symbol
-    assert runner.token_meta[256265] == TokenMeta(symbol="NIFTY", is_index=True)
-    assert runner.token_meta[260105] == TokenMeta(symbol="BANKNIFTY", is_index=True)
-    assert runner.token_meta[257801] == TokenMeta(symbol="FINNIFTY", is_index=True)
-    assert runner.token_meta[264969] == TokenMeta(symbol="VIX", is_index=True)
+    assert runner.token_meta[256265] == TokenMeta(symbol="NIFTY", is_index=True, product="options_index")
+    assert runner.token_meta[260105] == TokenMeta(symbol="BANKNIFTY", is_index=True, product="options_index")
+    assert runner.token_meta[257801] == TokenMeta(symbol="FINNIFTY", is_index=True, product="options_index")
+    assert runner.token_meta[264969] == TokenMeta(symbol="VIX", is_index=True, product="options_index")
     assert runner.replace_calls == [{256265, 260105, 257801, 264969}]
 
 

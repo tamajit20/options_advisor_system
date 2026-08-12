@@ -91,6 +91,23 @@ class TestTickHandling:
         assert events[0]["symbol"] == "NIFTY"
         assert events[0]["last_price"] == 12.5
 
+    def test_index_tick_recorded_with_tick_index_topic(self, monitor, bus):
+        from providers.base import LiveQuote
+        q = LiveQuote(symbol="NIFTY", expiry=None, strike=None, option_type=None, last_price=23000.0)
+        bus.publish(TOPIC_TICK_INDEX, q)
+        events = monitor.snapshot()["recent_events"]
+        assert len(events) == 1
+        assert events[0]["topic"] == TOPIC_TICK_INDEX
+
+    def test_scout_equity_tick_recorded_with_tick_scout_topic(self, monitor, bus):
+        from providers.base import LiveQuote
+        q = LiveQuote(symbol="RELIANCE", expiry=None, strike=None, option_type=None, last_price=2500.0)
+        bus.publish(TOPIC_TICK_SCOUT, q)
+        events = monitor.snapshot()["recent_events"]
+        assert len(events) == 1
+        assert events[0]["topic"] == TOPIC_TICK_SCOUT
+        assert events[0]["symbol"] == "RELIANCE"
+
     def test_tick_handler_swallows_exceptions(self, monitor, bus):
         # An object whose attribute access raises should not crash the handler.
         class _Boom:

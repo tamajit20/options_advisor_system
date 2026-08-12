@@ -28,7 +28,7 @@ import pytest
 
 from providers.base import DataSource, LiveQuote
 from providers.cache import TTLCache
-from providers.event_bus import EventBus, TOPIC_CONNECTION_STATE, TOPIC_TICK_OPTIONS, TOPIC_TOKEN_EXPIRED
+from providers.event_bus import EventBus, TOPIC_CONNECTION_STATE, TOPIC_TICK_INDEX, TOPIC_TICK_OPTIONS, TOPIC_TICK_SCOUT, TOPIC_TOKEN_EXPIRED
 from providers.zerodha.ws_runner import (
     ConnState,
     KiteWSRunner,
@@ -280,6 +280,34 @@ def test_on_ticks_publishes_and_caches(runner: KiteWSRunner, cache: TTLCache, bu
     assert cache.get(key) is q
     # last_tick_at populated
     assert runner.status().last_tick_at is not None
+
+
+def test_on_ticks_publishes_index_to_tick_index_topic(runner: KiteWSRunner, bus: EventBus):
+    received: list = []
+    bus.subscribe(TOPIC_TICK_INDEX, received.append)
+    runner.set_token_meta(
+        256265,
+        TokenMeta(symbol="NIFTY 50", is_index=True, product="options_index"),
+    )
+    _wire_runner(runner)
+    runner._on_connect(ws=None, response={})
+    runner._on_ticks(ws=None, ticks=[{"instrument_token": 256265, "last_price": 23456.5}])
+    assert len(received) == 1
+    assert received[0].symbol == "NIFTY 50"
+
+
+def test_on_ticks_publishes_scout_equity_to_tick_scout_topic(runner: KiteWSRunner, bus: EventBus):
+    received: list = []
+    bus.subscribe(TOPIC_TICK_SCOUT, received.append)
+    runner.set_token_meta(
+        123456,
+        TokenMeta(symbol="BPCL", product="scout_equity"),
+    )
+    _wire_runner(runner)
+    runner._on_connect(ws=None, response={})
+    runner._on_ticks(ws=None, ticks=[{"instrument_token": 123456, "last_price": 312.5}])
+    assert len(received) == 1
+    assert received[0].symbol == "BPCL"
 
 
 def test_on_ticks_handles_empty_list(runner: KiteWSRunner):

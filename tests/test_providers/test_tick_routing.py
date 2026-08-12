@@ -33,3 +33,26 @@ def test_options_index_includes_vix():
     assert "VIX" in options_index_symbols()
     assert "VIX" not in options_underlyings()
     assert "NIFTY" in options_underlyings()
+
+
+def test_resolve_product_options_index_nifty():
+    meta = TokenMeta(symbol="NIFTY 50", is_index=True)
+    assert resolve_product(meta) == PRODUCT_OPTIONS_INDEX
+    assert topic_for_meta(meta) == TOPIC_TICK_INDEX
+
+
+def test_resolve_product_infers_index_from_symbol():
+    meta = TokenMeta(symbol="BANKNIFTY")
+    assert resolve_product(meta) == PRODUCT_OPTIONS_INDEX
+
+
+def test_resolve_product_null_meta_defaults_scout_equity():
+    assert resolve_product(None) == PRODUCT_SCOUT_EQUITY
+
+
+def test_topic_for_product_maps_all_products():
+    from providers.tick_routing import topic_for_product
+
+    assert topic_for_product(PRODUCT_OPTIONS_LEG) == TOPIC_TICK_OPTIONS
+    assert topic_for_product(PRODUCT_OPTIONS_INDEX) == TOPIC_TICK_INDEX
+    assert topic_for_product(PRODUCT_SCOUT_EQUITY) == TOPIC_TICK_SCOUT

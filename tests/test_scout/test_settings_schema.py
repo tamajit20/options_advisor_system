@@ -65,3 +65,33 @@ def test_in_trading_window(mock_now):
 def test_suggested_quantity_fallback():
     settings = {"use_investment_sizing": False, "auto_trade_quantity": 2}
     assert suggested_quantity(settings, None) == 2
+
+
+def test_suggested_quantity_investment_sizing():
+    settings = {"use_investment_sizing": True, "investment_per_trade_inr": 20_000}
+    assert suggested_quantity(settings, 2500.0) == 8
+
+
+def test_validate_swaps_inverted_window():
+    out = validate_scout_settings({
+        "trade_window_start": "15:00",
+        "trade_window_end": "09:00",
+    })
+    assert out["trade_window_start"] == "09:45"
+    assert out["trade_window_end"] == "14:30"
+
+
+def test_validate_filters_invalid_strengths():
+    out = validate_scout_settings({
+        "auto_enter_strengths": ["WEAK", "INVALID", "medium", "HIGH"],
+    })
+    assert out["auto_enter_strengths"] == ["WEAK", "MEDIUM", "HIGH"]
+
+
+def test_effective_pattern_config_merges_settings():
+    from scout.settings_schema import effective_pattern_config
+
+    cfg = effective_pattern_config({"min_candles": 20, "entry_slippage_pct": 0.5})
+    assert cfg["min_candles"] == 20
+    assert cfg["entry_slippage_pct"] == 0.5
+    assert "or_minutes" in cfg

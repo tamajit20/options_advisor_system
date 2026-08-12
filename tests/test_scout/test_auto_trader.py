@@ -9,6 +9,7 @@ import json
 import pytest
 
 from scout.auto_trader import (
+    _auto_enter_block_reason,
     on_signals_committed,
     try_auto_close_trades,
     try_auto_execute_signal,
@@ -232,3 +233,145 @@ def test_scout_automation_api_put(client, mocker):
     data = rv.get_json()
     assert data["status"] == "ok"
     assert data["automation"]["auto_close_trades"] is True
+
+
+def _block_settings(**overrides):
+    return _scout_settings(auto_execute_signals=True, **overrides)
+
+
+def _setup_signal_mocks(mocker, *, strength="HIGH", symbol="TCS", ltp=100.0):
+    mocker.patch("scout.auto_trader.is_market_open", return_value=True)
+    mocker.patch("scout.auto_trader.SCOUT_CONFIG", {"enabled": True})
+    mocker.patch(
+        "scout.auto_trader.enrich_signal",
+        return_value={"validity_status": "ACTIVE"},
+    )
+    sig_repo = MagicMock()
+    sig_repo.get.return_value = {
+        "id": 1,
+        "symbol": symbol,
+        "action": "BUY",
+        "signal_type": "OR_BREAK",
+        "ltp": ltp,
+        "strength": strength,
+    }
+    trade_repo = MagicMock()
+    trade_repo.open_signal_ids.return_value = []
+    trade_repo.open_trades.return_value = []
+    trade_repo.count_trades_opened_today.return_value = 0
+    trade_repo.symbol_has_trade_today.return_value = False
+    mocker.patch("scout.auto_trader.ScoutSignalRepo", return_value=sig_repo)
+    mocker.patch("scout.auto_trader.ScoutTradeRepo", return_value=trade_repo)
+    return sig_repo, trade_repo
+
+
+def test_auto_enter_block_reason_daily_cap():
+    trade_repo = MagicMock()
+    trade_repo.count_trades_opened_today.return_value = 5
+    reason = _auto_enter_block_reason(
+        trade_repo,
+        _block_settings(max_trades_per_day=5),
+        signal_id=1,
+        symbol="TCS",
+        strength="HIGH",
+    )
+    assert reason == "daily trade cap (5) reached"
+
+
+def test_auto_enter_block_reason_symbol_already_traded_today():
+    trade_repo = MagicMock()
+    trade_repo.count_trades_opened_today.return_value = 1
+    trade_repo.symbol_has_trade_today.return_value = True
+    reason = _auto_enter_block_reason(
+        trade_repo,
+        _block_settings(one_trade_per_symbol_per_day=True),
+        signal_id=2,
+        symbol="RELIANCE",
+        strength="HIGH",
+    )
+    assert "symbol already traded today" in reason
+
+
+def test_auto_enter_block_reason_strength_not_allowed():
+    trade_repo = MagicMock()
+    trade_repo.count_trades_opened_today.return_value = 0
+    trade_repo.symbol_has_trade_today.return_value = False
+    reason = _auto_enter_block_reason(
+        trade_repo,
+        _block_settings(auto_enter_strengths=["MEDIUM", "HIGH"]),
+        signal_id=3,
+        symbol="TCS",
+        strength="WEAK",
+    )
+    assert "strength WEAK not in auto-enter list" in reason
+
+
+def test_auto_enter_block_reason_open_trade_same_symbol():
+    trade_repo = MagicMock()
+    trade_repo.count_trades_opened_today.return_value = 0
+    trade_repo.symbol_has_trade_today.return_value = False
+    trade_repo.open_trades.return_value = [
+        {"id": 7, "signal_id": 10, "symbol": "TCS"},
+    ]
+    reason = _auto_enter_block_reason(
+        trade_repo,
+        _block_settings(),
+        signal_id=11,
+        symbol="TCS",
+        strength="HIGH",
+    )
+    assert "open trade already exists for TCS" in reason
+
+
+def test_try_auto_execute_skipped_at_daily_cap(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_block_settings(max_trades_per_day=3),
+    )
+    _, trade_repo = _setup_signal_mocks(mocker)
+    trade_repo.count_trades_opened_today.return_value = 3
+    assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.0) is None
+
+
+def test_try_auto_execute_skipped_symbol_already_traded_today(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_block_settings(one_trade_per_symbol_per_day=True),
+    )
+    _, trade_repo = _setup_signal_mocks(mocker)
+    trade_repo.symbol_has_trade_today.return_value = True
+    assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.0) is None
+
+
+def test_try_auto_execute_skipped_weak_strength(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_block_settings(auto_enter_strengths=["MEDIUM", "HIGH"]),
+    )
+    _setup_signal_mocks(mocker, strength="WEAK")
+    assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.0) is None
+
+
+def test_try_auto_execute_skipped_open_trade_same_symbol(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_block_settings(),
+    )
+    _, trade_repo = _setup_signal_mocks(mocker)
+    trade_repo.open_trades.return_value = [
+        {"id": 7, "signal_id": 10, "symbol": "TCS"},
+    ]
+    assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.0) is None
+
+
+def test_try_auto_execute_skipped_non_active_signal(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_block_settings(),
+    )
+    _setup_signal_mocks(mocker)
+    mocker.patch(
+        "scout.auto_trader.enrich_signal",
+        return_value={"validity_status": "EXPIRED"},
+    )
+    assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.0) is None

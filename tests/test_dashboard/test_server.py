@@ -62,6 +62,28 @@ class TestJsonHelpers:
         assert out["score"] == 75
 
 
+class TestExecutionGateLabel:
+    def _gate(self, *, ok=False, vetoes=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(ok=ok, vetoes=vetoes or [])
+
+    def test_returns_none_when_gate_ok(self):
+        assert server._execution_gate_label(self._gate(ok=True), {"status": "PENDING"}) is None
+
+    def test_stale_suggestion_label(self):
+        gate = self._gate(vetoes=["Suggestion generated 90 minutes ago"])
+        assert server._execution_gate_label(gate, {"status": "PENDING"}) == "Stale"
+
+    def test_circuit_breaker_label(self):
+        gate = self._gate(vetoes=["daily P&L circuit breaker is active"])
+        assert server._execution_gate_label(gate, {"status": "PENDING"}) == "Circuit breaker"
+
+    def test_stale_at_open_label(self):
+        gate = self._gate(vetoes=["validator failed"])
+        row = {"status": "PENDING", "validator_status": "STALE_0935"}
+        assert server._execution_gate_label(gate, row) == "Stale at open"
+
+
 class TestHistoryFilterHelpers:
     def test_append_quality_band_excellent(self):
         params: list = []
@@ -283,6 +305,94 @@ class TestApiSuggestionToday:
         gate = data["suggestions"][0]["execution_gate"]
         assert gate["ok"] is False
         assert gate["vetoes"]
+
+    def test_includes_age_minutes_and_is_stale_flags(self, client, mocker):
+        from datetime import timedelta
+        from utils import now_ist
+
+        now = now_ist()
+        old_gen = now - timedelta(minutes=90)
+        sug_row = {
+            "suggestion_id": "SUG-AGE",
+            "underlying": "NIFTY",
+            "strategy": "BULL_PUT_SPREAD",
+            "status": "PENDING",
+            "data_source": "LIVE",
+            "generated_on": old_gen,
+            "entry_date": now.date(),
+            "spot_at_generation": 23000.0,
+            "net_credit_suggested": 100.0,
+        }
+        leg_row = {
+            "leg_order": 1, "strike": 22800.0, "option_type": "PE",
+            "action": "SELL", "lots": 1, "lot_size": 75,
+            "suggested_price": 50.0,
+        }
+        mocker.patch("dashboard.server.SuggestionRepo.active_pending", return_value=[sug_row])
+        mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today", return_value=[])
+        mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[leg_row])
+        mocker.patch(
+            "database.runtime_flags.RuntimeFlagsRepo",
+            return_value=mocker.Mock(get_bool=mocker.Mock(return_value=False)),
+        )
+        resp = client.get("/api/suggestion/today")
+        s = resp.get_json()["suggestions"][0]
+        assert s["age_minutes"] > 30
+        assert s["is_stale"] is True
+        assert s["execution_gate"]["label"] is not None
+
+    def test_blocked_by_circuit_breaker_active(self, client, mocker):
+        from utils import now_ist
+
+        now = now_ist()
+        sug_row = {
+            "suggestion_id": "SUG-CB",
+            "underlying": "NIFTY",
+            "strategy": "BULL_PUT_SPREAD",
+            "status": "PENDING",
+            "data_source": "LIVE",
+            "generated_on": now,
+            "entry_date": now.date(),
+            "spot_at_generation": 23000.0,
+            "net_credit_suggested": 100.0,
+        }
+        leg_row = {
+            "leg_order": 1, "strike": 22800.0, "option_type": "PE",
+            "action": "SELL", "lots": 1, "lot_size": 75,
+            "suggested_price": 50.0,
+        }
+        mocker.patch("dashboard.server.SuggestionRepo.active_pending", return_value=[sug_row])
+        mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today", return_value=[])
+        mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[leg_row])
+        mocker.patch(
+            "database.runtime_flags.RuntimeFlagsRepo",
+            return_value=mocker.Mock(get_bool=mocker.Mock(return_value=True)),
+        )
+        resp = client.get("/api/suggestion/today")
+        gate = resp.get_json()["suggestions"][0]["execution_gate"]
+        assert gate["ok"] is False
+        assert any("circuit breaker" in v.lower() for v in gate["vetoes"])
+        assert gate["label"] == "Circuit breaker"
+
+    def test_non_pending_rows_excluded_from_suggestions(self, client, mocker):
+        sug_row = {
+            "suggestion_id": "SUG-EXEC",
+            "underlying": "NIFTY",
+            "strategy": "BULL_PUT_SPREAD",
+            "status": "EXECUTED",
+            "generated_on": datetime(2026, 5, 4, 9, 0),
+            "entry_date": date(2026, 5, 4),
+            "net_credit_suggested": 100.0,
+        }
+        mocker.patch("dashboard.server.SuggestionRepo.active_pending", return_value=[sug_row])
+        mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today", return_value=[])
+        mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[])
+        mocker.patch(
+            "database.runtime_flags.RuntimeFlagsRepo",
+            return_value=mocker.Mock(get_bool=mocker.Mock(return_value=False)),
+        )
+        resp = client.get("/api/suggestion/today")
+        assert resp.get_json()["suggestions"] == []
 
 
 class TestApiTradesOpen:

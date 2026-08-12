@@ -327,6 +327,7 @@ def test_run_with_timeout_preserves_contextvars():
     """EOD morning session must survive the watchdog worker thread."""
     from datetime import date
 
+    import lifecycle.eod_session as es
     from lifecycle.eod_session import eod_pipeline_session, effective_bhav_end_date
 
     mock_db = MagicMock()
@@ -336,15 +337,14 @@ def test_run_with_timeout_preserves_contextvars():
 
     probe._run_job_timeout = 5.0  # type: ignore[attr-defined]
 
-    with eod_pipeline_session(morning_catchup=True):
-        # Monkeypatch today inside session — Aug 4 Tue → prior Mon Aug 3
-        import lifecycle.eod_session as es
-        orig = es.today_ist
-        es.today_ist = lambda: date(2026, 8, 4)
-        try:
+    # Patch before session entry — bhav_end_date is fixed when the context opens.
+    orig = es.today_ist
+    es.today_ist = lambda: date(2026, 8, 4)
+    try:
+        with eod_pipeline_session(morning_catchup=True):
             result = sched._run_with_timeout("fo_bhav_download", probe, mock_db)
-        finally:
-            es.today_ist = orig
+    finally:
+        es.today_ist = orig
 
     assert result == date(2026, 8, 3)
     # Connection must NOT be closed by the watchdog when the worker

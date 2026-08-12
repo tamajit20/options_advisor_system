@@ -57,6 +57,25 @@ def test_enrich_signal_adds_entry_band_and_conditions():
     assert dash.get("gates") is not None
 
 
+def test_enrich_signal_uses_settings_entry_slippage():
+    now = datetime(2026, 7, 30, 10, 5, 0)
+    default = enrich_signal(_sample_signal(), live_ltp=100.0, now=now)
+    tight = enrich_signal(
+        _sample_signal(),
+        live_ltp=100.0,
+        now=now,
+        settings={"entry_slippage_pct": 0.05},
+    )
+    wide = enrich_signal(
+        _sample_signal(),
+        live_ltp=100.0,
+        now=now,
+        settings={"entry_slippage_pct": 1.0},
+    )
+    assert tight["entry_max"] - tight["entry_min"] < default["entry_max"] - default["entry_min"]
+    assert wide["entry_max"] - wide["entry_min"] > default["entry_max"] - default["entry_min"]
+
+
 def test_expired_signal_status():
     triggered = datetime(2026, 7, 30, 9, 0, 0)
     now = triggered + timedelta(minutes=45)

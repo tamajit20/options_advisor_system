@@ -174,3 +174,48 @@ class TestLoadTrajectory:
         assert traj.atm_iv_series == [0.16, 0.17, 0.18]
         assert traj.latest_call_spread_bps == 25.0
         assert traj.latest_put_spread_bps == 30.0
+
+
+class TestSplitTickHandlers:
+    def test_on_index_tick_ignores_scout_equity_symbol(self, mock_db):
+        agg = ChainTickAggregator(
+            db=mock_db,
+            expiry_provider=lambda s: [],
+            event_bus=MagicMock(),
+        )
+        agg._on_index_tick(_spot("BPCL", 312.0))
+        assert "BPCL" not in agg._spots
+
+    def test_on_index_tick_updates_spot_for_nifty(self, mock_db):
+        agg = ChainTickAggregator(
+            db=mock_db,
+            expiry_provider=lambda s: [],
+            event_bus=MagicMock(),
+        )
+        agg._on_index_tick(_spot("NIFTY", 23000.0))
+        assert agg._spots["NIFTY"].last_price == 23000.0
+
+    def test_on_option_tick_ignores_index_spot_ticks(self, mock_db):
+        agg = ChainTickAggregator(
+            db=mock_db,
+            expiry_provider=lambda s: [],
+            event_bus=MagicMock(),
+        )
+        agg._on_option_tick(_spot("NIFTY", 23000.0))
+        assert not agg._buckets
+
+    def test_start_subscribes_options_and_index_topics(self, mock_db):
+        from providers.event_bus import EventBus, TOPIC_TICK_INDEX, TOPIC_TICK_OPTIONS
+
+        bus = EventBus()
+        agg = ChainTickAggregator(
+            db=mock_db,
+            expiry_provider=lambda s: [],
+            event_bus=bus,
+        )
+        agg.start()
+        try:
+            assert bus.subscriber_count(TOPIC_TICK_OPTIONS) >= 1
+            assert bus.subscriber_count(TOPIC_TICK_INDEX) >= 1
+        finally:
+            agg.stop()

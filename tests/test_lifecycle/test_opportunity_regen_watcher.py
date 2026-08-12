@@ -15,7 +15,7 @@ import pytest
 
 from lifecycle.opportunity_regen_watcher import OpportunityRegenWatcher
 from providers.base import LiveQuote
-from providers.event_bus import EventBus, TOPIC_TICK_INDEX
+from providers.event_bus import EventBus, TOPIC_TICK_INDEX, TOPIC_TICK_OPTIONS, TOPIC_TICK_SCOUT
 
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -252,6 +252,40 @@ class TestLifecycle:
         w.start()
         w.start()   # second call is a no-op, must not raise
         w.stop()
+
+    def test_scout_topic_publish_does_not_trigger_watcher(self):
+        bus = EventBus()
+        notif = _StubNotifier()
+        w = OpportunityRegenWatcher(
+            notif,
+            event_bus=bus,
+            spot_threshold_pct=0.7,
+            clock=lambda: datetime(2026, 5, 4, 10, 0, tzinfo=_IST),
+        )
+        w.start()
+        try:
+            bus.publish(TOPIC_TICK_SCOUT, _quote("BPCL", 312.0))
+            bus.publish(TOPIC_TICK_SCOUT, _quote("BPCL", 320.0))
+        finally:
+            w.stop()
+        assert notif.events == []
+
+    def test_options_topic_publish_does_not_trigger_watcher(self):
+        bus = EventBus()
+        notif = _StubNotifier()
+        w = OpportunityRegenWatcher(
+            notif,
+            event_bus=bus,
+            spot_threshold_pct=0.7,
+            clock=lambda: datetime(2026, 5, 4, 10, 0, tzinfo=_IST),
+        )
+        w.start()
+        try:
+            bus.publish(TOPIC_TICK_OPTIONS, _quote("NIFTY", 22000.0))
+            bus.publish(TOPIC_TICK_OPTIONS, _quote("NIFTY", 22200.0))
+        finally:
+            w.stop()
+        assert notif.events == []
 
 @pytest.mark.future
 @pytest.mark.skip(reason="future: PCR-band-cross trigger needs live chain OI (FUTURE_ENHANCEMENT_SCOPES.md -> Risk & Monitoring)")

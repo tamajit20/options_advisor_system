@@ -152,3 +152,102 @@ def test_scout_trades_open(client, mocker):
     rv = client.get("/api/scout/trades/open")
     assert rv.status_code == 200
     assert rv.get_json()["count"] == 0
+
+
+def test_scout_config_repo_get_set_settings_roundtrip():
+    import json
+
+    db = MagicMock()
+    stored: dict = {}
+
+    def _execute(query, params):
+        if "MERGE scout_config" in query:
+            key, val = params[0], params[1]
+            stored[key] = json.loads(val)
+
+    def _fetch_one(query, params):
+        if params and params[0] == ScoutConfigRepo.SETTINGS_KEY:
+            raw = stored.get(ScoutConfigRepo.SETTINGS_KEY)
+            return {"config_value": json.dumps(raw)} if raw else None
+        return None
+
+    db.execute.side_effect = _execute
+    db.fetch_one.side_effect = _fetch_one
+
+    repo = ScoutConfigRepo(db)
+    assert repo.get_settings() is None
+    payload = {"max_trades_per_day": 3, "investment_per_trade_inr": 15000}
+    repo.set_settings(payload)
+    assert repo.get_settings() == payload
+
+
+def test_scout_trade_repo_count_trades_opened_today(mocker):
+    from datetime import date
+
+    from database.scout_models import ScoutTradeRepo
+
+    mocker.patch("utils.today_ist", return_value=date(2026, 8, 12))
+    db = MagicMock()
+    db.fetch_one.return_value = {"n": 4}
+    assert ScoutTradeRepo(db).count_trades_opened_today() == 4
+
+
+def test_scout_trade_repo_symbol_has_trade_today(mocker):
+    from datetime import date
+
+    from database.scout_models import ScoutTradeRepo
+
+    mocker.patch("utils.today_ist", return_value=date(2026, 8, 12))
+    db = MagicMock()
+    db.fetch_one.return_value = {"id": 9}
+    assert ScoutTradeRepo(db).symbol_has_trade_today("RELIANCE") is True
+
+
+def test_get_scout_settings_loads_from_db(mocker):
+    from scout.config_loader import get_scout_settings, invalidate_settings_cache
+
+    invalidate_settings_cache()
+    mock_repo = MagicMock()
+    mock_repo.get_settings.return_value = {"max_trades_per_day": 7}
+    mock_repo.get_automation.return_value = None
+    mocker.patch("database.scout_models.ScoutConfigRepo", return_value=mock_repo)
+
+    settings = get_scout_settings(MagicMock(), use_cache=False)
+    assert settings["max_trades_per_day"] == 7
+    assert settings["investment_per_trade_inr"] == 20_000
+
+
+def test_get_scout_settings_legacy_automation_fallback(mocker):
+    from scout.config_loader import get_scout_settings, invalidate_settings_cache
+
+    invalidate_settings_cache()
+    mock_repo = MagicMock()
+    mock_repo.get_settings.return_value = None
+    mock_repo.get_automation.return_value = {
+        "auto_execute_signals": True,
+        "auto_trade_quantity": 3,
+    }
+    mocker.patch("database.scout_models.ScoutConfigRepo", return_value=mock_repo)
+
+    settings = get_scout_settings(MagicMock(), use_cache=False)
+    assert settings["auto_execute_signals"] is True
+    assert settings["auto_trade_quantity"] == 3
+
+
+def test_set_scout_settings_invalidates_cache(mocker):
+    from scout import config_loader
+    from scout.config_loader import set_scout_settings
+
+    config_loader._SETTINGS_CACHE = {"max_trades_per_day": 99}
+    mock_repo = MagicMock()
+    mocker.patch("database.scout_models.ScoutConfigRepo", return_value=mock_repo)
+
+    set_scout_settings(MagicMock(), {"max_trades_per_day": 2})
+    assert config_loader._SETTINGS_CACHE is None
+    mock_repo.set_settings.assert_called_once()
+
+
+def test_scout_settings_api_put_rejects_non_object_body(client):
+    rv = client.put("/api/scout/settings", json=1)
+    assert rv.status_code == 400
+    assert "JSON object" in rv.get_json()["error"]
