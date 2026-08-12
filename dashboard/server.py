@@ -98,7 +98,7 @@ def kite_console_redirect_url() -> str:
 
 
 def _zerodha_status_payload() -> dict:
-    from providers.zerodha.session import is_token_valid, load_session
+    from providers.zerodha.session import is_token_valid, load_session, token_valid_until
 
     callback = zerodha_callback_url()
     manual_paste = kite_redirect_https_required(callback)
@@ -119,13 +119,16 @@ def _zerodha_status_payload() -> dict:
             "valid": False,
             "user_id": None,
             "generated_at": None,
+            "valid_until": None,
         }
+    until = token_valid_until(s)
     return {
         **base,
         "has_session": True,
         "valid": bool(is_token_valid(s)),
         "user_id": s.user_id,
         "generated_at": s.generated_at.isoformat(),
+        "valid_until": until.isoformat() if until else None,
     }
 
 

@@ -1586,34 +1586,6 @@
     return Object.keys(map).sort().map(k => ({ key: k, trades: map[k], agg: aggregateTrades(map[k]) }));
   }
 
-  function groupTradesByEntryMode(trades) {
-    const auto = [];
-    const manual = [];
-    (trades || []).forEach(t => {
-      const mode = ((t.execution || {}).entry || {}).mode;
-      if (mode === 'auto') auto.push(t);
-      else manual.push(t);
-    });
-    return [
-      { key: 'auto-enter', label: 'Auto-enter', trades: auto, agg: aggregateTrades(auto) },
-      { key: 'manual-enter', label: 'Manual enter', trades: manual, agg: aggregateTrades(manual) },
-    ];
-  }
-
-  function groupTradesByExitMode(trades) {
-    const auto = [];
-    const manual = [];
-    (trades || []).forEach(t => {
-      const mode = ((t.execution || {}).exit || {}).mode;
-      if (mode === 'auto') auto.push(t);
-      else manual.push(t);
-    });
-    return [
-      { key: 'auto-exit', label: 'Auto-close', trades: auto, agg: aggregateTrades(auto) },
-      { key: 'manual-exit', label: 'Manual close', trades: manual, agg: aggregateTrades(manual) },
-    ];
-  }
-
   function bindHistoryGridToggles(root) {
     (root || document).querySelectorAll('[data-hist-toggle]').forEach(btn => {
       if (btn.dataset.bound === '1') return;
@@ -1652,8 +1624,6 @@
             <span class="scout-hist-sum-meta"><span class="muted">Full auto</span> <strong>${fullAutoTotal}</strong></span>`;
     _scoutHistSummaryExtra = summaryExtra;
     const typeGroups = groupTradesByType(trades);
-    const entryGroups = groupTradesByEntryMode(trades);
-    const exitGroups = groupTradesByExitMode(trades);
 
     const typeSubsections = typeGroups.map((g, i) => `
       <details class="scout-hist-subsection">
@@ -1662,24 +1632,6 @@
           ${renderSummaryCells(g.agg)}
         </summary>
         ${renderTradeGrid(g.trades, `scout-hist-type-${i}`)}
-      </details>`).join('');
-
-    const entrySubsections = entryGroups.filter(g => g.agg.count).map((g, i) => `
-      <details class="scout-hist-subsection">
-        <summary>
-          <span class="scout-hist-sum-label">${escapeHtml(g.label)}</span>
-          ${renderSummaryCells(g.agg)}
-        </summary>
-        ${renderTradeGrid(g.trades, `scout-hist-entry-${i}`)}
-      </details>`).join('');
-
-    const exitSubsections = exitGroups.filter(g => g.agg.count).map((g, i) => `
-      <details class="scout-hist-subsection">
-        <summary>
-          <span class="scout-hist-sum-label">${escapeHtml(g.label)}</span>
-          ${renderSummaryCells(g.agg)}
-        </summary>
-        ${renderTradeGrid(g.trades, `scout-hist-exit-${i}`)}
       </details>`).join('');
 
     panel.className = 'scout-history-panel';
@@ -1701,24 +1653,6 @@
           <span class="scout-hist-sum-meta"><span class="muted">Total P&amp;L</span> <strong class="${allAgg.pnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${fmtPnl(allAgg.pnl)}</strong></span>
         </summary>
         <div class="scout-hist-subsections">${typeSubsections}</div>
-      </details>
-
-      <details class="scout-hist-section">
-        <summary>
-          <span class="scout-hist-sum-label">By entry mode</span>
-          <span class="scout-hist-sum-meta"><span class="muted">Auto</span> <strong>${auto.auto_entry_count || 0}</strong> · ${fmtPnl(auto.auto_entry_pnl)}</span>
-          <span class="scout-hist-sum-meta"><span class="muted">Manual</span> <strong>${auto.manual_entry_count || 0}</strong> · ${fmtPnl(auto.manual_entry_pnl)}</span>
-        </summary>
-        <div class="scout-hist-subsections">${entrySubsections}</div>
-      </details>
-
-      <details class="scout-hist-section">
-        <summary>
-          <span class="scout-hist-sum-label">By exit mode</span>
-          <span class="scout-hist-sum-meta"><span class="muted">Auto-close</span> <strong>${auto.auto_exit_count || 0}</strong></span>
-          <span class="scout-hist-sum-meta"><span class="muted">Manual</span> <strong>${auto.manual_exit_count || 0}</strong></span>
-        </summary>
-        <div class="scout-hist-subsections">${exitSubsections}</div>
       </details>`;
 
     bindHistoryGridToggles(panel);

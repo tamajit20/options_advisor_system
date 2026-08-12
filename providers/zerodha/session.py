@@ -105,6 +105,13 @@ def _next_reset_after(generated_at: datetime) -> datetime:
     return today_reset + timedelta(days=1)
 
 
+def token_valid_until(session: Optional[ZerodhaSession]) -> Optional[datetime]:
+    """Next 06:00 IST boundary after which the persisted token expires."""
+    if session is None or not session.access_token:
+        return None
+    return _next_reset_after(session.generated_at)
+
+
 def is_token_valid(session: Optional[ZerodhaSession], now: Optional[datetime] = None) -> bool:
     """True iff the session token is still within its daily validity window."""
     if session is None or not session.access_token:
@@ -113,7 +120,8 @@ def is_token_valid(session: Optional[ZerodhaSession], now: Optional[datetime] = 
         now = datetime.now(tz=_IST)
     elif now.tzinfo is None:
         now = now.replace(tzinfo=_IST)
-    return now < _next_reset_after(session.generated_at)
+    until = token_valid_until(session)
+    return until is not None and now < until
 
 
 # ---------------------------------------------------------------------------

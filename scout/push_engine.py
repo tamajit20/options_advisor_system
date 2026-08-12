@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -188,7 +189,10 @@ class ScoutPushEngine:
             nifty_ltp = self._spot_lookup("NIFTY")
             if nifty_ltp and bench_pct:
                 self._nifty_open = float(nifty_ltp) / (1.0 + bench_pct / 100.0)
-            for sym in sorted(self._watchlist):
+            for i, sym in enumerate(sorted(self._watchlist)):
+                if i:
+                    # Kite historical_data ≈3 req/s — avoid burst on ws_runner start.
+                    time.sleep(0.35)
                 try:
                     candles, stats = mkt.minute_bars(sym)
                     if candles:

@@ -368,8 +368,14 @@ class KiteWSRunner:
                 self._wire_handlers()
                 self._connect_blocking()
             except _TokenExpired as exc:
+                if self._probe_token_still_valid():
+                    logger.warning(
+                        "WS token error but REST probe OK — reconnecting (%s)", exc
+                    )
+                    self._safe_close()
+                    continue
                 self._handle_token_expiry(str(exc))
-                return  # terminal — restart needed via re-login
+                return  # terminal — re-login required
             except _ProcessRestartRequired:
                 self._safe_close()
                 raise
@@ -639,6 +645,25 @@ class KiteWSRunner:
         except Exception:
             logger.exception("event_bus.publish failed for token_expired")
         self._stop_event.set()
+
+    def _probe_token_still_valid(self) -> bool:
+        """REST sanity check before treating a WS 403 as a dead session."""
+        try:
+            from providers.zerodha.facade import KiteFacade
+            from providers.zerodha.session import is_token_valid, load_session
+
+            sess = load_session()
+            if sess is None or not is_token_valid(sess):
+                return False
+            if sess.access_token != self._access_token:
+                return False
+            KiteFacade(
+                api_key=self._api_key, access_token=self._access_token
+            ).ltp(["NSE:NIFTY 50"])
+            return True
+        except Exception as exc:
+            logger.warning("token REST probe failed: %s", exc)
+            return False
 
     def _safe_close(self) -> None:
         t = self._ticker

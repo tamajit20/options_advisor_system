@@ -5506,7 +5506,8 @@ async function loadZerodhaStatus() {
         headerIcon.textContent = '✓';
         headerLabel.textContent = 'Zerodha';
         headerBtn.style.color = '#047857';
-        headerBtn.title = `Zerodha session valid (user_id ${d.user_id || ''}).`;
+        const untilTip = d.valid_until ? ` until ${d.valid_until.slice(0, 16)}` : '';
+        headerBtn.title = `Zerodha session valid (user_id ${d.user_id || ''}${untilTip}).`;
       } else {
         headerIcon.textContent = '⚠';
         headerLabel.textContent = 'Re-login';
@@ -5520,9 +5521,12 @@ async function loadZerodhaStatus() {
         el.innerHTML = '<span style="color:#b91c1c;font-weight:600;">✗ No session.</span> ' +
           'Click <em>Open Login Flow</em> to mint today\'s token.';
       } else if (d.valid) {
+        const untilLine = d.valid_until
+          ? ` &middot; valid until <code>${escapeHtml(d.valid_until.slice(0, 16))}</code>`
+          : '';
         el.innerHTML = `<span style="color:#047857;font-weight:600;">✓ Valid</span> ` +
           `&middot; user_id <code>${escapeHtml(d.user_id || '')}</code> ` +
-          `&middot; generated <code>${escapeHtml(d.generated_at || '')}</code>`;
+          `&middot; generated <code>${escapeHtml(d.generated_at || '')}</code>${untilLine}`;
       } else {
         el.innerHTML = '<span style="color:#b45309;font-weight:600;">⚠ Expired.</span> ' +
           'Re-login required (token resets daily at 06:00 IST).';

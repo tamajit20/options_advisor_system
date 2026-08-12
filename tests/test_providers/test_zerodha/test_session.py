@@ -20,6 +20,7 @@ from providers.zerodha.session import (
     is_token_valid,
     load_session,
     save_session,
+    token_valid_until,
 )
 
 
@@ -124,3 +125,11 @@ def test_token_generated_pre_06_expires_same_day():
     )
     assert is_token_valid(s, now=datetime(2026, 5, 4, 5, 30, tzinfo=_IST)) is True
     assert is_token_valid(s, now=datetime(2026, 5, 4, 6, 0, tzinfo=_IST)) is False
+
+
+def test_token_valid_until_next_06_ist():
+    s = ZerodhaSession(
+        api_key="k", access_token="tok", user_id="x",
+        generated_at=datetime(2026, 5, 4, 8, 0, tzinfo=_IST),
+    )
+    assert token_valid_until(s) == datetime(2026, 5, 5, 6, 0, tzinfo=_IST)
