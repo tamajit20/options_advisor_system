@@ -801,6 +801,10 @@ def create_app() -> Flask:
             gate = validate_execution(
                 r, legs_out, now=now, circuit_breaker_active=cb_active,
             )
+            if (r.get("status") or "").upper() != "PENDING":
+                continue
+            if not gate.ok:
+                continue
             r_out["execution_gate"] = {
                 "ok": gate.ok,
                 "vetoes": list(gate.vetoes),

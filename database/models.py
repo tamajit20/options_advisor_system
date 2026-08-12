@@ -851,73 +851,38 @@ class SuggestionRepo:
         )
 
     def active_pending(self) -> List[dict]:
-        """Return suggestions that are still relevant on the Suggestions page.
+        """Return PENDING suggestions still within their entry window.
 
-        Display rules by status:
-          PENDING  — shown while the entry window is still open on the entry
-                     day (until 15:30 IST market close), or any time before
-                     entry_date. The live suggestion engine can emit fresh
-                     intraday PENDING rows with entry_date=today right up to
-                     15:30, so we keep showing them until the close.
-          EXECUTED — always shown for entry_date >= today so the user can see
-                     what trade was placed, regardless of the time of day.
-          IGNORED  — shown for entry_date >= today so the UI can explain why
-                     execution is blocked (retired / stale). When a fresh PENDING
-                     row exists, both may appear; the IGNORED card is read-only.
-
-        Fallback: legacy rows without entry_date are shown for up to 1 calendar day.
+        Executed, ignored, and retired rows are excluded — those belong on
+        My Trades / History. The API filters further to execution-gate-passing
+        (actionable) suggestions only.
         """
         from utils import now_ist
         now = now_ist()
         today = now.date()
         from datetime import time as _time
-        # Keep same-day PENDING visible until after the EOD suggestion_engine run
-        # (20:30 IST) plus a review buffer — see SCHEDULER_CONFIG.
         visible_until = _time(21, 30)
 
         if now.time() <= visible_until:
-            # Still within visibility window: show PENDING and EXECUTED for today and future.
             rows = self.db.fetch_all(
                 "SELECT * FROM options_suggestions "
-                "WHERE status IN ('PENDING', 'EXECUTED') "
+                "WHERE status = 'PENDING' "
                 "AND entry_date >= ? "
                 "ORDER BY generated_on DESC",
                 [today],
             )
         else:
-            # After 7pm: only future PENDING, but EXECUTED for today still visible.
             rows = self.db.fetch_all(
                 "SELECT * FROM options_suggestions "
-                "WHERE (status = 'PENDING' AND entry_date > ?) "
-                "   OR (status = 'EXECUTED' AND entry_date >= ?) "
-                "ORDER BY generated_on DESC",
-                [today, today],
-            )
-
-        # Surface today's retired rows only when nothing is pending — avoids
-        # cluttering the tab with stale cards when a fresh PENDING exists.
-        seen = {r["suggestion_id"] for r in rows}
-        has_pending = any((r.get("status") or "").upper() == "PENDING" for r in rows)
-        if not has_pending:
-            ignored_rows = self.db.fetch_all(
-                "SELECT TOP (1) * FROM options_suggestions "
-                "WHERE status = 'IGNORED' AND entry_date >= ? "
+                "WHERE status = 'PENDING' AND entry_date > ? "
                 "ORDER BY generated_on DESC",
                 [today],
             )
-            for r in ignored_rows:
-                sid = r.get("suggestion_id")
-                if sid and sid not in seen:
-                    rows.append(r)
-                    seen.add(sid)
 
-        # Fallback for legacy rows without entry_date: only show if generated
-        # within the last 1 calendar day — anything older is definitively stale
-        # (we can't tell the entry day, so we err on the side of hiding).
         if not rows:
             rows = self.db.fetch_all(
                 "SELECT TOP (5) * FROM options_suggestions "
-                "WHERE status IN ('PENDING', 'IGNORED') "
+                "WHERE status = 'PENDING' "
                 "AND entry_date IS NULL "
                 "AND generated_on >= DATEADD(day, -1, SYSDATETIME()) "
                 "ORDER BY generated_on DESC"

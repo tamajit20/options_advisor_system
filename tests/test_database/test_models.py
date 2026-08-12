@@ -284,18 +284,17 @@ class TestSuggestionRepo:
         assert rows[0]["suggestion_id"] == "SUG-P"
         assert mock_db.fetch_all.call_count == 1
 
-    def test_active_pending_shows_only_ignored_when_no_pending(self, mock_db, mocker):
+    def test_active_pending_excludes_ignored_when_no_pending(self, mock_db, mocker):
         today = date(2026, 5, 29)
         noon = datetime(2026, 5, 29, 12, 0)
         mocker.patch("database.models.now_ist", return_value=noon)
-        ignored = {"suggestion_id": "SUG-20260529-008", "status": "IGNORED", "entry_date": today}
         mock_db.fetch_all.side_effect = [
             [],
-            [ignored],
+            [],
         ]
         rows = SuggestionRepo(mock_db).active_pending()
-        assert len(rows) == 1
-        assert rows[0]["suggestion_id"] == "SUG-20260529-008"
+        assert rows == []
+        assert mock_db.fetch_all.call_count == 2
 
 
 class TestSafeFloat:

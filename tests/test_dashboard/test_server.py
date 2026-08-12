@@ -238,7 +238,7 @@ class TestApiSuggestionToday:
         assert "execution_gate" in s
         assert s["execution_gate"]["ok"] is True
 
-    def test_surfaces_execution_gate_when_blocked(self, client, mocker):
+    def test_excludes_non_actionable_suggestions(self, client, mocker):
         from datetime import timedelta
         from utils import now_ist
 
@@ -248,7 +248,7 @@ class TestApiSuggestionToday:
             "suggestion_id": "SUG-STALE",
             "underlying": "NIFTY",
             "strategy": "BULL_PUT_SPREAD",
-            "status": "IGNORED",
+            "status": "PENDING",
             "data_source": "LIVE",
             "generated_on": old_gen,
             "entry_date": now.date(),
@@ -278,10 +278,7 @@ class TestApiSuggestionToday:
         )
         resp = client.get("/api/suggestion/today")
         assert resp.status_code == 200
-        s = resp.get_json()["suggestions"][0]
-        assert s["execution_gate"]["ok"] is False
-        assert s["execution_gate"]["label"] == "Retired"
-        assert any("IGNORED" in v for v in s["execution_gate"]["vetoes"])
+        assert resp.get_json()["suggestions"] == []
 
 
 class TestApiTradesOpen:

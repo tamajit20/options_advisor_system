@@ -969,33 +969,23 @@ async function loadSuggestion() {
     const data = await API('/api/suggestion/today');
     const list = data.suggestions || [];
     const sitOut = data.sit_out || [];
-    const active = list.filter(s => {
+    const actionable = list.filter(s => {
       const st = (s.status || '').toUpperCase();
-      return st === 'PENDING' || st === 'EXECUTED';
+      return st === 'PENDING' && s.execution_gate && s.execution_gate.ok;
     });
-    const retired = list.filter(s => (s.status || '').toUpperCase() === 'IGNORED');
     const parts = [];
-    if (data.market_summary && (sitOut.length || !active.length)) {
+    if (data.market_summary && (sitOut.length || !actionable.length)) {
       parts.push(renderMarketSitOutSummary(data.market_summary));
     }
-    if (active.length) {
-      parts.push(renderSuggestionList(active));
-    } else if (retired.length) {
-      parts.push(
-        '<div class="suggestion-no-active-banner">'
-        + '<strong>No active suggestion.</strong> '
-        + 'Run <strong>Live Suggestion Engine</strong> from the Jobs tab for a fresh signal.'
-        + '<div class="muted" style="margin-top:6px">Most recent retired suggestion shown below for reference.</div>'
-        + '</div>'
-      );
-      parts.push(renderSuggestionList(retired.slice(0, 1)));
+    if (actionable.length) {
+      parts.push(renderSuggestionList(actionable));
     }
     if (sitOut.length) {
       parts.push(sitOut.map(s => renderSitOutCard(s)).join(''));
     }
     if (!parts.length) {
       c.className = '';
-      c.innerHTML = '<div class="empty">No suggestion yet — run the suggestion engine after EOD data is ready.</div>';
+      c.innerHTML = '<div class="empty">No actionable suggestion right now. Run <strong>Live Suggestion Engine</strong> from the Jobs tab during market hours — ignored, expired, and blocked signals are hidden.</div>';
       return;
     }
     c.className = '';
