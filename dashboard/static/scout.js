@@ -1238,7 +1238,7 @@
     }
   }
 
-  // ---------- History ----------
+  // ---------- History (expandable grids) ----------
   function defaultHistDates() {
     const to = new Date();
     const from = new Date();
@@ -1251,100 +1251,305 @@
     return { from: fEl?.value || fmt(from), to: tEl?.value || fmt(to) };
   }
 
-  function renderExecutionBlock(title, execInfo) {
+  function fmtDateTimeShort(iso) {
+    if (!iso) return '—';
+    const s = String(iso).replace(' ', 'T');
+    try {
+      const d = new Date(s);
+      if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16);
+      return d.toLocaleString('en-IN', {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      });
+    } catch (_) {
+      return String(iso).slice(0, 16);
+    }
+  }
+
+  function setupLabel(raw) {
+    return String(raw || '—').replace(/_/g, ' ');
+  }
+
+  function modePill(mode, label) {
+    const cls = mode === 'auto' ? 'scout-hist-pill--auto' : 'scout-hist-pill--manual';
+    return `<span class="scout-hist-pill ${cls}">${escapeHtml(label || (mode === 'auto' ? 'Auto' : 'Manual'))}</span>`;
+  }
+
+  function pnlCell(pnl, pct) {
+    const n = Number(pnl || 0);
+    const cls = n >= 0 ? 'pnl-profit' : 'pnl-loss';
+    const pill = n >= 0 ? 'scout-hist-pill--win' : 'scout-hist-pill--loss';
+    return `<span class="${cls}"><strong>${fmtPnl(n)}</strong></span> <span class="scout-hist-pill ${pill}">${Number(pct || 0).toFixed(2)}%</span>`;
+  }
+
+  function conditionsShort(entry, exit) {
+    const parts = [];
+    (entry && entry.conditions || []).slice(0, 2).forEach(c => {
+      parts.push(`${c.label}: ${c.value}`);
+    });
+    if (exit && exit.trigger_label) parts.push(`Exit: ${exit.trigger_label}`);
+    return parts.join(' · ') || '—';
+  }
+
+  function renderConditionDetail(title, execInfo) {
     if (!execInfo) return '';
-    const modeCls = execInfo.mode === 'auto' ? 'scout-exec--auto' : 'scout-exec--manual';
-    const conds = (execInfo.conditions || []).map(c => {
-      const okCls = c.ok === true ? ' scout-exec-cond--ok' : (c.ok === false ? ' scout-exec-cond--bad' : '');
-      return `<li class="scout-exec-cond${okCls}"><span class="scout-exec-cond-k">${escapeHtml(c.label)}</span> ${escapeHtml(c.value || '')}</li>`;
+    const items = (execInfo.conditions || []).map(c => {
+      const cls = c.ok === true ? 'scout-hist-cond-ok' : (c.ok === false ? 'scout-hist-cond-bad' : '');
+      return `<li class="${cls}"><strong>${escapeHtml(c.label)}</strong> — ${escapeHtml(c.value || '')}</li>`;
     }).join('');
     return `
-      <div class="scout-exec-block ${modeCls}">
-        <div class="scout-exec-head">
-          <span class="scout-exec-title">${escapeHtml(title)}</span>
-          <span class="scout-exec-badge">${escapeHtml(execInfo.mode_label || execInfo.mode || '')}</span>
-          ${execInfo.trigger_label ? `<span class="scout-exec-trigger">${escapeHtml(execInfo.trigger_label)}</span>` : ''}
-        </div>
-        ${conds ? `<ul class="scout-exec-conds">${conds}</ul>` : ''}
+      <div class="scout-hist-detail-col">
+        <h4>${escapeHtml(title)} · ${escapeHtml(execInfo.mode_label || '')}${execInfo.trigger_label ? ' · ' + escapeHtml(execInfo.trigger_label) : ''}</h4>
+        ${items ? `<ul>${items}</ul>` : '<span class="muted">No detail recorded</span>'}
       </div>`;
   }
 
-  function renderHistoryStats(stats) {
-    const el = $('#scout-history-stats');
-    if (!el || !stats) return;
-    el.className = 'scout-history-stats';
-    const types = stats.by_signal_type || {};
-    const auto = stats.automation || {};
-    const typeRows = Object.keys(types).sort().map(k => {
-      const b = types[k];
-      const wr = b.count ? Math.round(b.wins / b.count * 100) : 0;
-      return `<tr><td>${escapeHtml(k)}</td><td>${b.count}</td><td>${wr}%</td><td>${fmtPnl(b.pnl)}</td></tr>`;
-    }).join('');
-    el.innerHTML = `
-      <div class="scout-stats-grid">
-        <div class="scout-stat-box"><span class="muted">Trades</span><strong>${stats.total_trades || 0}</strong></div>
-        <div class="scout-stat-box"><span class="muted">Win rate</span><strong>${stats.win_rate_pct || 0}%</strong></div>
-        <div class="scout-stat-box"><span class="muted">Total P&amp;L</span><strong class="${(stats.total_pnl || 0) >= 0 ? 'pnl-profit' : 'pnl-loss'}">${fmtPnl(stats.total_pnl)}</strong></div>
-        <div class="scout-stat-box"><span class="muted">Avg P&amp;L</span><strong>${fmtPnl(stats.avg_pnl)}</strong></div>
-      </div>
-      <div class="scout-stats-grid scout-stats-grid--auto">
-        <div class="scout-stat-box"><span class="muted">Auto-enter</span><strong>${auto.auto_entry_count || 0}</strong><span class="muted scout-stat-sub">${fmtPnl(auto.auto_entry_pnl)}</span></div>
-        <div class="scout-stat-box"><span class="muted">Manual enter</span><strong>${auto.manual_entry_count || 0}</strong><span class="muted scout-stat-sub">${fmtPnl(auto.manual_entry_pnl)}</span></div>
-        <div class="scout-stat-box"><span class="muted">Auto-close</span><strong>${auto.auto_exit_count || 0}</strong></div>
-        <div class="scout-stat-box"><span class="muted">Manual close</span><strong>${auto.manual_exit_count || 0}</strong></div>
-      </div>
-      ${typeRows ? `<table class="scout-stats-table"><thead><tr><th>Signal type</th><th>Count</th><th>Win%</th><th>P&amp;L</th></tr></thead><tbody>${typeRows}</tbody></table>` : ''}`;
+  function aggregateTrades(trades) {
+    let wins = 0;
+    let pnl = 0;
+    (trades || []).forEach(t => {
+      const p = Number(t.pnl || 0);
+      pnl += p;
+      if (p > 0) wins += 1;
+    });
+    const n = (trades || []).length;
+    return {
+      count: n,
+      wins,
+      win_pct: n ? Math.round(wins / n * 100) : 0,
+      pnl: Math.round(pnl * 100) / 100,
+    };
   }
 
-  function renderHistoryTrades(trades) {
-    const c = $('#scout-history-container');
-    if (!c) return;
+  function renderTradeGrid(trades, gridId) {
     if (!trades || !trades.length) {
-      c.className = '';
-      c.innerHTML = '<div class="empty">No closed trades in this period.</div>';
-      return;
+      return '<div class="empty" style="padding:12px">No trades in this group.</div>';
     }
-    c.className = 'scout-trade-list';
-    c.innerHTML = trades.map(t => {
+    const rows = trades.map(t => {
       const pnl = Number(t.pnl || 0);
-      const cls = pnl >= 0 ? 'pnl-profit' : 'pnl-loss';
-      const closed = t.closed_at || t.exited_at || '';
       const pos = tradePositionMeta(t.action);
       const exec = t.execution || {};
       const entry = exec.entry || {};
       const exit = exec.exit || {};
+      const rowId = `${gridId}-r-${t.id}`;
       return `
-        <div class="scout-card scout-history-card">
-          <div class="scout-card-head">
-            <strong>${escapeHtml(t.symbol)}</strong>
-            <span class="tag tag-${pos.sideCls}">${escapeHtml(pos.side)}</span>
-            <span class="muted">${escapeHtml(t.signal_type || '')}</span>
-            ${renderScoutRefIds(t.signal_id, t.id)}
-          </div>
-          <div class="scout-card-body">
-            <div>${escapeHtml(pos.entryVerb.split(' ')[0])} @ ${fmtPx(t.entry_price)} → ${escapeHtml(pos.exitAction)} @ ${fmtPx(t.exit_price)} · ${escapeHtml(String(closed).slice(0, 16))}</div>
-            <div class="${cls}"><strong>${fmtPnl(t.pnl)}</strong> (${Number(t.pnl_pct || 0).toFixed(2)}%) · qty ${escapeHtml(String(t.quantity || 1))}</div>
-            ${renderExecutionBlock('Entry', entry)}
-            ${renderExecutionBlock('Exit', exit)}
-            ${t.signal_reason ? `<div class="muted scout-reason">${escapeHtml(t.signal_reason)}</div>` : ''}
-          </div>
-        </div>`;
+        <tr data-hist-row="${rowId}">
+          <td><button type="button" class="scout-hist-expand-btn" data-hist-toggle="${rowId}" aria-label="Toggle detail">▶</button></td>
+          <td>TRD #${escapeHtml(String(t.id))}</td>
+          <td>${t.signal_id != null ? 'SIG #' + escapeHtml(String(t.signal_id)) : '—'}</td>
+          <td><strong>${escapeHtml(t.symbol)}</strong></td>
+          <td>${escapeHtml(setupLabel(t.signal_type))}</td>
+          <td><span class="tag tag-${pos.sideCls}">${escapeHtml(pos.side)}</span></td>
+          <td class="num">${escapeHtml(String(t.quantity || 1))}</td>
+          <td class="num">${fmtPx(t.entry_price)}</td>
+          <td class="num">${fmtPx(t.exit_price)}</td>
+          <td>${fmtDateTimeShort(t.closed_at || t.exited_at)}</td>
+          <td class="num">${pnlCell(t.pnl, t.pnl_pct)}</td>
+          <td>${modePill(entry.mode, entry.mode === 'auto' ? 'Auto-enter' : 'Manual')}</td>
+          <td>${modePill(exit.mode, exit.mode === 'auto' ? 'Auto-close' : 'Manual')}</td>
+          <td>${escapeHtml(exit.trigger_label || '—')}</td>
+          <td class="scout-hist-cond-short">${escapeHtml(conditionsShort(entry, exit))}</td>
+        </tr>
+        <tr class="scout-hist-detail-row" data-hist-detail="${rowId}" hidden>
+          <td colspan="15">
+            <div class="scout-hist-detail-inner">
+              ${renderConditionDetail('Entry', entry)}
+              ${renderConditionDetail('Exit', exit)}
+              ${t.signal_reason ? `<div class="scout-hist-detail-col"><h4>Signal reason</h4><p class="muted">${escapeHtml(t.signal_reason)}</p></div>` : ''}
+            </div>
+          </td>
+        </tr>`;
     }).join('');
+
+    return `
+      <div class="scout-hist-grid-wrap">
+        <table class="scout-hist-grid" id="${escapeHtml(gridId)}">
+          <thead>
+            <tr>
+              <th></th>
+              <th>TRD#</th>
+              <th>SIG#</th>
+              <th>Symbol</th>
+              <th>Setup</th>
+              <th>Side</th>
+              <th>Qty</th>
+              <th>Entry ₹</th>
+              <th>Exit ₹</th>
+              <th>Closed</th>
+              <th>P&amp;L</th>
+              <th>Entry mode</th>
+              <th>Exit mode</th>
+              <th>Exit trigger</th>
+              <th>Conditions</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  function renderSummaryCells(agg, extra) {
+    const pnlCls = agg.pnl >= 0 ? 'pnl-profit' : 'pnl-loss';
+    return `
+      <span class="scout-hist-sum-meta"><span class="muted">Trades</span> <strong>${agg.count}</strong></span>
+      <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Win%</span> <strong>${agg.win_pct}%</strong></span>
+      <span class="scout-hist-sum-meta"><span class="muted">P&amp;L</span> <strong class="${pnlCls}">${fmtPnl(agg.pnl)}</strong></span>
+      ${extra || ''}`;
+  }
+
+  function groupTradesByType(trades) {
+    const map = {};
+    (trades || []).forEach(t => {
+      const k = String(t.signal_type || 'UNKNOWN');
+      (map[k] = map[k] || []).push(t);
+    });
+    return Object.keys(map).sort().map(k => ({ key: k, trades: map[k], agg: aggregateTrades(map[k]) }));
+  }
+
+  function groupTradesByEntryMode(trades) {
+    const auto = [];
+    const manual = [];
+    (trades || []).forEach(t => {
+      const mode = ((t.execution || {}).entry || {}).mode;
+      if (mode === 'auto') auto.push(t);
+      else manual.push(t);
+    });
+    return [
+      { key: 'auto-enter', label: 'Auto-enter', trades: auto, agg: aggregateTrades(auto) },
+      { key: 'manual-enter', label: 'Manual enter', trades: manual, agg: aggregateTrades(manual) },
+    ];
+  }
+
+  function groupTradesByExitMode(trades) {
+    const auto = [];
+    const manual = [];
+    (trades || []).forEach(t => {
+      const mode = ((t.execution || {}).exit || {}).mode;
+      if (mode === 'auto') auto.push(t);
+      else manual.push(t);
+    });
+    return [
+      { key: 'auto-exit', label: 'Auto-close', trades: auto, agg: aggregateTrades(auto) },
+      { key: 'manual-exit', label: 'Manual close', trades: manual, agg: aggregateTrades(manual) },
+    ];
+  }
+
+  function bindHistoryGridToggles(root) {
+    (root || document).querySelectorAll('[data-hist-toggle]').forEach(btn => {
+      if (btn.dataset.bound === '1') return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-hist-toggle');
+        const detail = (root || document).querySelector(`[data-hist-detail="${id}"]`);
+        if (!detail) return;
+        const open = detail.hidden;
+        detail.hidden = !open;
+        btn.textContent = open ? '▼' : '▶';
+      });
+    });
+  }
+
+  function renderHistoryPanel(stats, trades) {
+    const panel = $('#scout-history-panel');
+    if (!panel) return;
+
+    if (!trades || !trades.length) {
+      panel.className = 'scout-history-panel';
+      panel.innerHTML = '<div class="empty">No closed trades in this period.</div>';
+      return;
+    }
+
+    const allAgg = aggregateTrades(trades);
+    const auto = (stats && stats.automation) || {};
+    const typeGroups = groupTradesByType(trades);
+    const entryGroups = groupTradesByEntryMode(trades);
+    const exitGroups = groupTradesByExitMode(trades);
+
+    const typeSubsections = typeGroups.map((g, i) => `
+      <details class="scout-hist-subsection">
+        <summary>
+          <span class="scout-hist-sum-label">${escapeHtml(setupLabel(g.key))}</span>
+          ${renderSummaryCells(g.agg)}
+        </summary>
+        ${renderTradeGrid(g.trades, `scout-hist-type-${i}`)}
+      </details>`).join('');
+
+    const entrySubsections = entryGroups.filter(g => g.agg.count).map((g, i) => `
+      <details class="scout-hist-subsection">
+        <summary>
+          <span class="scout-hist-sum-label">${escapeHtml(g.label)}</span>
+          ${renderSummaryCells(g.agg)}
+        </summary>
+        ${renderTradeGrid(g.trades, `scout-hist-entry-${i}`)}
+      </details>`).join('');
+
+    const exitSubsections = exitGroups.filter(g => g.agg.count).map((g, i) => `
+      <details class="scout-hist-subsection">
+        <summary>
+          <span class="scout-hist-sum-label">${escapeHtml(g.label)}</span>
+          ${renderSummaryCells(g.agg)}
+        </summary>
+        ${renderTradeGrid(g.trades, `scout-hist-exit-${i}`)}
+      </details>`).join('');
+
+    panel.className = 'scout-history-panel';
+    panel.innerHTML = `
+      <details class="scout-hist-section" open>
+        <summary>
+          <span class="scout-hist-sum-label">All closed trades</span>
+          ${renderSummaryCells(allAgg, `
+            <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Auto-in</span> <strong>${auto.auto_entry_count || 0}</strong></span>
+            <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Auto-out</span> <strong>${auto.auto_exit_count || 0}</strong></span>
+          `)}
+        </summary>
+        ${renderTradeGrid(trades, 'scout-hist-all')}
+      </details>
+
+      <details class="scout-hist-section">
+        <summary>
+          <span class="scout-hist-sum-label">By signal type</span>
+          <span class="scout-hist-sum-meta"><span class="muted">Types</span> <strong>${typeGroups.length}</strong></span>
+          <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Trades</span> <strong>${allAgg.count}</strong></span>
+          <span class="scout-hist-sum-meta"><span class="muted">Total P&amp;L</span> <strong class="${allAgg.pnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${fmtPnl(allAgg.pnl)}</strong></span>
+        </summary>
+        <div class="scout-hist-subsections">${typeSubsections}</div>
+      </details>
+
+      <details class="scout-hist-section">
+        <summary>
+          <span class="scout-hist-sum-label">By entry mode</span>
+          <span class="scout-hist-sum-meta"><span class="muted">Auto</span> <strong>${auto.auto_entry_count || 0}</strong> · ${fmtPnl(auto.auto_entry_pnl)}</span>
+          <span class="scout-hist-sum-meta"><span class="muted">Manual</span> <strong>${auto.manual_entry_count || 0}</strong> · ${fmtPnl(auto.manual_entry_pnl)}</span>
+        </summary>
+        <div class="scout-hist-subsections">${entrySubsections}</div>
+      </details>
+
+      <details class="scout-hist-section">
+        <summary>
+          <span class="scout-hist-sum-label">By exit mode</span>
+          <span class="scout-hist-sum-meta"><span class="muted">Auto-close</span> <strong>${auto.auto_exit_count || 0}</strong></span>
+          <span class="scout-hist-sum-meta"><span class="muted">Manual</span> <strong>${auto.manual_exit_count || 0}</strong></span>
+        </summary>
+        <div class="scout-hist-subsections">${exitSubsections}</div>
+      </details>`;
+
+    bindHistoryGridToggles(panel);
   }
 
   async function loadScoutHistory() {
     const dates = defaultHistDates();
     const q = '?from_date=' + encodeURIComponent(dates.from) + '&to_date=' + encodeURIComponent(dates.to);
+    const panel = $('#scout-history-panel');
     try {
       const [stats, hist] = await Promise.all([
         scoutApi('/history/stats' + q),
         scoutApi('/history/trades' + q),
       ]);
-      renderHistoryStats(stats);
-      renderHistoryTrades(hist.trades || []);
+      renderHistoryPanel(stats, hist.trades || []);
     } catch (e) {
-      const c = $('#scout-history-container');
-      if (c) c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
+      if (panel) {
+        panel.className = 'scout-history-panel';
+        panel.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
+      }
     }
   }
 
