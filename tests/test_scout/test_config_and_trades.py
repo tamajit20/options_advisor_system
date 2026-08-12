@@ -34,6 +34,16 @@ def test_config_loader_default_without_db():
     assert wl == default_watchlist()
 
 
+def test_config_loader_automation_defaults():
+    from scout.config_loader import default_automation, get_automation, invalidate_automation_cache
+
+    invalidate_automation_cache()
+    auto = get_automation(None, use_cache=False)
+    assert auto == default_automation()
+    assert auto["auto_execute_signals"] is False
+    assert auto["auto_close_trades"] is False
+
+
 def test_scout_watchlist_api(client, mocker):
     mocker.patch(
         "scout.routes.get_watchlist",

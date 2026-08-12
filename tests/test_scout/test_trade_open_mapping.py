@@ -38,8 +38,47 @@ def test_signals_trade_open_only_for_linked_signal(client, mocker):
     signals = {s["id"]: s for s in rv.get_json()["signals"]}
     assert signals[10]["trade_open"] is True
     assert signals[10]["trade_id"] == 7
+    assert signals[10]["can_mark_taken"] is False
     assert signals[11]["trade_open"] is False
     assert signals[11]["trade_id"] is None
+    assert signals[11]["symbol_trade_blocked"] is True
+    assert signals[11]["can_mark_taken"] is False
+    assert signals[11]["blocking_trade_id"] == 7
+    assert signals[11]["blocking_signal_id"] == 10
+
+
+def test_signals_sorted_open_opportunities_first(client, mocker):
+    sig_rows = [
+        {"id": 10, "symbol": "RELIANCE", "action": "SELL", "ltp": 100.0,
+         "invalidation": 102.0, "signal_type": "OR_BREAK_DOWN", "reason": "r1",
+         "triggered_at": "2026-08-12 10:10:00", "meta_json": None, "strength": "WEAK"},
+        {"id": 11, "symbol": "RELIANCE", "action": "SELL", "ltp": 101.0,
+         "invalidation": 103.0, "signal_type": "PULLBACK_DOWN", "reason": "r2",
+         "triggered_at": "2026-08-12 10:05:00", "meta_json": None, "strength": "WEAK"},
+        {"id": 12, "symbol": "TCS", "action": "BUY", "ltp": 4000.0,
+         "invalidation": 3950.0, "signal_type": "OR_BREAK_UP", "reason": "r3",
+         "triggered_at": "2026-08-12 10:00:00", "meta_json": None, "strength": "WEAK"},
+    ]
+    mock_sig = MagicMock()
+    mock_sig.recent.return_value = sig_rows
+
+    mock_trade = MagicMock()
+    mock_trade.open_trades.return_value = [
+        {"id": 7, "signal_id": 10, "symbol": "RELIANCE", "action": "SELL"},
+    ]
+
+    mocker.patch("scout.routes.ScoutSignalRepo", return_value=mock_sig)
+    mocker.patch("scout.routes.ScoutTradeRepo", return_value=mock_trade)
+    mocker.patch("scout.routes.latest_equity_ltps", return_value={})
+    mocker.patch("scout.routes.is_market_open", return_value=True)
+    mocker.patch(
+        "scout.routes.enrich_signal",
+        side_effect=lambda row, **kw: {**row, "validity_status": "ACTIVE", "dashboard": {}},
+    )
+
+    rv = client.get("/api/scout/signals")
+    ids = [s["id"] for s in rv.get_json()["signals"]]
+    assert ids == [12, 10, 11]
 
 
 def test_mark_taken_rejects_second_open_trade_same_symbol(client, mocker):

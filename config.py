@@ -235,6 +235,11 @@ SCOUT_CONFIG: dict = {
     "square_off_minutes_before_close": 15,
     # Warn on open trades this many minutes before square-off time.
     "square_off_warn_minutes": 5,
+    # Automation (persisted in scout_config; defaults here).
+    "auto_execute_signals": False,
+    "auto_close_trades": False,
+    "auto_trade_quantity": 1,
+    "auto_close_poll_seconds": 10,
     # Live WS push (ws_runner): evaluate patterns on each 1m bar close from ticks.
     "push_enabled": True,
     "push_dedupe_minutes": 30,

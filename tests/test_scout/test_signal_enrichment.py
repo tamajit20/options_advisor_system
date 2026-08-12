@@ -78,6 +78,17 @@ def test_scout_trade_mtm_buy():
     mtm = scout_trade_mtm({"action": "BUY", "entry_price": 100, "quantity": 10}, 102.0)
     assert mtm["mtm"] == 20.0
     assert mtm["mtm_pct"] == 2.0
+    assert mtm["mtm_per_share"] == 2.0
+    assert mtm["position_value"] == 1020.0
+    assert mtm["entry_value"] == 1000.0
+    assert mtm["quantity"] == 10
+
+
+def test_scout_trade_mtm_sell_total():
+    mtm = scout_trade_mtm({"action": "SELL", "entry_price": 1319.5, "quantity": 5}, 1312.3)
+    assert mtm["mtm_per_share"] == 7.2
+    assert mtm["mtm"] == 36.0
+    assert mtm["position_value"] == 6561.5
 
 
 def test_build_exit_plan_buy_or_break():

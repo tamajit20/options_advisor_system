@@ -40,11 +40,12 @@ class ScoutSignalRepo:
         strength: str,
         triggered_at: datetime,
         meta: Optional[dict] = None,
-    ) -> None:
-        self.db.execute(
+    ) -> int:
+        cur = self.db.execute(
             "INSERT INTO scout_signals "
             "(scan_id, symbol, exchange, action, signal_type, reason, ltp, "
             " invalidation, strength, triggered_at, meta_json) "
+            "OUTPUT INSERTED.id "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 scan_id, symbol, exchange, action, signal_type, reason, ltp,
@@ -52,6 +53,9 @@ class ScoutSignalRepo:
                 json.dumps(meta) if meta else None,
             ],
         )
+        row = cur.fetchone()
+        cur.close()
+        return int(row[0]) if row else 0
 
     def recent(self, limit: int = 50, since_minutes: int = 120) -> List[dict]:
         since = now_ist() - timedelta(minutes=since_minutes)
@@ -105,9 +109,47 @@ class ScoutSignalRepo:
 
 class ScoutConfigRepo:
     WATCHLIST_KEY = "watchlist"
+    AUTOMATION_KEY = "automation"
 
     def __init__(self, db: SQLServerConnection):
         self.db = db
+
+    def _merge_json(self, key: str, payload: dict, *, updated_by: str = "ui") -> None:
+        val = json.dumps(payload)
+        self.db.execute(
+            """
+            MERGE scout_config AS T
+            USING (SELECT ? AS config_key, ? AS config_value) AS S
+            ON T.config_key = S.config_key
+            WHEN MATCHED THEN UPDATE SET
+                config_value = S.config_value,
+                updated_at = SYSUTCDATETIME(),
+                updated_by = ?
+            WHEN NOT MATCHED THEN INSERT
+                (config_key, config_value, updated_by)
+                VALUES (S.config_key, S.config_value, ?);
+            """,
+            [key, val, updated_by, updated_by],
+        )
+
+    def get_json(self, key: str) -> Optional[dict]:
+        row = self.db.fetch_one(
+            "SELECT config_value FROM scout_config WHERE config_key = ?",
+            [key],
+        )
+        if not row or not row.get("config_value"):
+            return None
+        try:
+            data = json.loads(row["config_value"])
+            return data if isinstance(data, dict) else None
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    def get_automation(self) -> Optional[dict]:
+        return self.get_json(self.AUTOMATION_KEY)
+
+    def set_automation(self, settings: dict, *, updated_by: str = "ui") -> None:
+        self._merge_json(self.AUTOMATION_KEY, settings, updated_by=updated_by)
 
     def get_watchlist(self) -> Optional[List[str]]:
         row = self.db.fetch_one(
@@ -126,22 +168,7 @@ class ScoutConfigRepo:
 
     def set_watchlist(self, symbols: List[str], *, updated_by: str = "ui") -> None:
         cleaned = sorted({str(s).upper().strip() for s in symbols if s and str(s).strip()})
-        val = json.dumps(cleaned)
-        self.db.execute(
-            """
-            MERGE scout_config AS T
-            USING (SELECT ? AS config_key, ? AS config_value) AS S
-            ON T.config_key = S.config_key
-            WHEN MATCHED THEN UPDATE SET
-                config_value = S.config_value,
-                updated_at = SYSUTCDATETIME(),
-                updated_by = ?
-            WHEN NOT MATCHED THEN INSERT
-                (config_key, config_value, updated_by)
-                VALUES (S.config_key, S.config_value, ?);
-            """,
-            [self.WATCHLIST_KEY, val, updated_by, updated_by],
-        )
+        self._merge_json(self.WATCHLIST_KEY, cleaned, updated_by=updated_by)
 
 
 def _trade_pnl(action: str, entry: float, exit_px: float, qty: int) -> tuple[float, float]:

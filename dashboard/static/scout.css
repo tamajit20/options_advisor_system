@@ -68,9 +68,30 @@
 .scout-stat { white-space: nowrap; }
 .scout-toolbar {
   display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
+  gap: 8px 16px;
+  margin-bottom: 8px;
   flex-wrap: wrap;
+  align-items: center;
+}
+.scout-auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .88rem;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.scout-auto-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.scout-auto-hint {
+  margin: 0 0 12px;
+  font-size: .82rem;
+  max-width: 52rem;
 }
 .scout-signal-list {
   display: grid;
@@ -261,6 +282,7 @@
 .scout-mtm--loss { color: var(--err); }
 .scout-card-actions { margin-top: 10px; }
 .scout-trade-badge { font-size: .78rem; }
+.scout-trade-badge--blocked { color: var(--text-dim); cursor: help; }
 .scout-trade-exit-action { font-size: .78rem; color: var(--text-dim); }
 .scout-trade-exit-action strong.tag { font-size: .7rem; vertical-align: baseline; margin: 0 2px; }
 

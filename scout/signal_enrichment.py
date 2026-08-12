@@ -539,17 +539,27 @@ def scout_trade_mtm(trade: dict, live_ltp: Optional[float]) -> Optional[dict]:
     if live_ltp is None or live_ltp <= 0:
         return None
     entry = float(trade.get("entry_price") or 0)
-    qty = int(trade.get("quantity") or 1)
-    if entry <= 0 or qty <= 0:
+    try:
+        qty = max(1, int(float(trade.get("quantity") or 1)))
+    except (TypeError, ValueError):
+        qty = 1
+    if entry <= 0:
         return None
     action = str(trade.get("action") or "").upper()
+    ltp = float(live_ltp)
     if action == "BUY":
-        pnl = (live_ltp - entry) * qty
+        pnl_per_share = ltp - entry
     else:
-        pnl = (entry - live_ltp) * qty
-    pct = (pnl / (entry * qty)) * 100.0 if entry else 0.0
+        pnl_per_share = entry - ltp
+    pnl = pnl_per_share * qty
+    notional = entry * qty
+    pct = (pnl / notional) * 100.0 if notional else 0.0
     return {
-        "live_ltp": live_ltp,
+        "live_ltp": ltp,
+        "quantity": qty,
         "mtm": round(pnl, 2),
         "mtm_pct": round(pct, 2),
+        "mtm_per_share": round(pnl_per_share, 2),
+        "position_value": round(ltp * qty, 2),
+        "entry_value": round(notional, 2),
     }

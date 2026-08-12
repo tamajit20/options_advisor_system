@@ -107,6 +107,7 @@ class ScoutPushEngine:
         self._unsub: Optional[Callable[[], None]] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._auto_thread: Optional[threading.Thread] = None
         self._seeded = False
 
     def _reload_watchlist(self) -> None:
@@ -133,6 +134,12 @@ class ScoutPushEngine:
             daemon=True,
         )
         self._thread.start()
+        self._auto_thread = threading.Thread(
+            target=self._auto_close_loop,
+            name="scout-auto-close",
+            daemon=True,
+        )
+        self._auto_thread.start()
         logger.info(
             "ScoutPushEngine: started (%d watchlist symbols)", len(self._watchlist)
         )
@@ -149,7 +156,23 @@ class ScoutPushEngine:
         if t is not None:
             t.join(timeout=timeout)
         self._thread = None
+        at = self._auto_thread
+        if at is not None:
+            at.join(timeout=timeout)
+        self._auto_thread = None
         logger.info("ScoutPushEngine: stopped")
+
+    def _auto_close_loop(self) -> None:
+        poll = max(5, int(SCOUT_CONFIG.get("auto_close_poll_seconds", 10)))
+        while not self._stop_event.wait(timeout=poll):
+            try:
+                from scout.auto_trader import try_auto_close_trades
+                closed = try_auto_close_trades(self._db, spot_lookup=self._spot_lookup)
+                if closed:
+                    self._db.commit()
+            except Exception:
+                self._db.rollback()
+                logger.exception("ScoutPushEngine: auto-close poll failed")
 
     def _seed_history(self) -> None:
         if self._seeded or not self._watchlist:
@@ -268,6 +291,7 @@ class ScoutPushEngine:
         scan_id = f"scout-push-{boundary.strftime('%Y%m%d-%H%M')}-{uuid.uuid4().hex[:4]}"
         triggered = boundary
         signals = 0
+        inserted_ids: List[int] = []
 
         for sym in symbols_to_eval:
             with self._lock:
@@ -292,7 +316,7 @@ class ScoutPushEngine:
                 if self._is_duplicate(key, triggered):
                     continue
                 row = sig.to_dict()
-                self._sig_repo.insert(
+                signal_id = self._sig_repo.insert(
                     scan_id=scan_id,
                     symbol=sym,
                     exchange="NSE",
@@ -310,6 +334,8 @@ class ScoutPushEngine:
                         "nifty_pct_from_open": round(bench_pct, 3),
                     },
                 )
+                if signal_id:
+                    inserted_ids.append(signal_id)
                 self._recent[key] = triggered
                 signals += 1
 
@@ -319,6 +345,9 @@ class ScoutPushEngine:
                 logger.info(
                     "ScoutPushEngine: %d signal(s) at %s", signals, boundary.isoformat()
                 )
+                from scout.auto_trader import on_signals_committed
+                on_signals_committed(self._db, inserted_ids, self._spot_lookup)
+                self._db.commit()
             except Exception:
                 self._db.rollback()
                 logger.exception("ScoutPushEngine: commit failed")

@@ -5,7 +5,7 @@ scout/routes.py — Flask blueprint for Intraday Scout (/api/scout/*).
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import wraps
 from typing import Callable, Optional
 
@@ -19,8 +19,11 @@ from database.scout_models import (
 )
 from scout.config_loader import (
     default_watchlist,
+    get_automation,
     get_watchlist,
+    invalidate_automation_cache,
     invalidate_watchlist_cache,
+    set_automation,
     watchlist_set,
 )
 from scout.index_groups import INDEX_GROUPS, index_tags, nifty_bank_symbols
@@ -51,6 +54,29 @@ def _coerce_int_id(value) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _signal_trigger_ts(signal: dict) -> float:
+    raw = str(signal.get("triggered_at") or "")
+    try:
+        return datetime.fromisoformat(raw.replace(" ", "T")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _signal_display_sort_key(signal: dict) -> tuple:
+    """Open opportunities first; executed/blocked signals later (newest first within tier)."""
+    if signal.get("can_mark_taken"):
+        tier = 0
+    elif signal.get("trade_open"):
+        tier = 1
+    else:
+        tier = 2
+    return tier, -_signal_trigger_ts(signal)
+
+
+def _sort_signals_for_display(signals: list) -> list:
+    return sorted(signals, key=_signal_display_sort_key)
 
 scout_bp = Blueprint("scout", __name__, url_prefix="/api/scout")
 
@@ -87,6 +113,7 @@ def api_scout_status(db: SQLServerConnection):
     ok, msg = zerodha_ready()
     last_sig = ScoutSignalRepo(db).last_signal()
     selected = get_watchlist(db)
+    automation = get_automation(db)
     return jsonify({
         "enabled": bool(SCOUT_CONFIG.get("enabled", True)),
         "mode": "websocket",
@@ -98,6 +125,8 @@ def api_scout_status(db: SQLServerConnection):
         "signals_poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
         "signals_live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
         "signal_valid_minutes": int(SCOUT_CONFIG.get("signal_valid_minutes", 30)),
+        "auto_close_poll_seconds": int(SCOUT_CONFIG.get("auto_close_poll_seconds", 10)),
+        "automation": automation,
         "last_signal": last_sig,
     })
 
@@ -117,6 +146,15 @@ def api_scout_signals(db: SQLServerConnection):
         if (sid := _coerce_int_id(t.get("signal_id"))) is not None
     }
     open_ids = set(trade_by_signal.keys())
+    open_trade_by_symbol: dict[str, dict] = {}
+    for t in open_trades:
+        sym_key = str(t.get("symbol") or "").upper()
+        if not sym_key or sym_key in open_trade_by_symbol:
+            continue
+        open_trade_by_symbol[sym_key] = {
+            "trade_id": int(t["id"]),
+            "signal_id": _coerce_int_id(t.get("signal_id")),
+        }
 
     symbols = {str(r["symbol"]).upper() for r in rows}
     quotes = latest_equity_ltps(symbols)
@@ -137,8 +175,23 @@ def api_scout_signals(db: SQLServerConnection):
         )
         e["trade_open"] = has_open_trade
         e["trade_id"] = trade_by_signal.get(sid_int) if has_open_trade else None
+        sym_open = open_trade_by_symbol.get(sym)
+        symbol_blocked = (
+            sym_open is not None
+            and not has_open_trade
+        )
+        e["symbol_trade_blocked"] = symbol_blocked
+        e["can_mark_taken"] = not has_open_trade and not symbol_blocked
+        if symbol_blocked:
+            e["blocking_trade_id"] = sym_open.get("trade_id")
+            e["blocking_signal_id"] = sym_open.get("signal_id")
+        else:
+            e["blocking_trade_id"] = None
+            e["blocking_signal_id"] = None
         if e.get("validity_status") == "ACTIVE" or has_open_trade:
             enriched.append(e)
+
+    enriched = _sort_signals_for_display(enriched)
 
     return jsonify({
         "signals": enriched,
@@ -229,6 +282,24 @@ def api_scout_watchlist_get(db: SQLServerConnection):
         "zerodha_ok": zerodha_ok,
         "notice": notice,
     })
+
+
+@scout_bp.route("/automation")
+@_with_db
+def api_scout_automation_get(db: SQLServerConnection):
+    return jsonify(get_automation(db))
+
+
+@scout_bp.route("/automation", methods=["PUT"])
+@_with_db
+def api_scout_automation_put(db: SQLServerConnection):
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"error": "body must be a JSON object"}), 400
+    cleaned = set_automation(db, body)
+    db.commit()
+    invalidate_automation_cache()
+    return jsonify({"status": "ok", "automation": cleaned})
 
 
 @scout_bp.route("/watchlist/refresh-instruments", methods=["POST"])
