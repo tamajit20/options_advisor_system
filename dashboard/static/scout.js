@@ -1152,8 +1152,11 @@
       const urg = (t.exit_alerts && t.exit_alerts.urgency) || 'none';
       const urgCls = urg === 'now' ? ' scout-trade-card--close-now' : (urg === 'warn' ? ' scout-trade-card--close-soon' : '');
       const closeBtnCls = urg === 'now' ? ' scout-close-btn--pulse' : '';
+      const exitCode = (t.exit_alerts && t.exit_alerts.close_now && t.exit_alerts.alerts && t.exit_alerts.alerts[0])
+        ? String(t.exit_alerts.alerts[0].code || 'manual').toLowerCase()
+        : 'manual';
       return `
-        <div class="scout-card scout-trade-card${urgCls}" data-trade-id="${t.id}" data-signal-id="${t.signal_id || ''}">
+        <div class="scout-card scout-trade-card${urgCls}" data-trade-id="${t.id}" data-signal-id="${t.signal_id || ''}" data-exit-reason="${escapeHtml(exitCode)}">
           <div class="scout-card-head">
             <strong>${escapeHtml(t.symbol)}</strong>
             <span class="tag tag-${pos.sideCls}" title="Open position side">${escapeHtml(pos.side)}</span>
@@ -1190,9 +1193,11 @@
         }
         btn.disabled = true;
         try {
+          const card = btn.closest('.scout-trade-card');
+          const exitReason = (card && card.dataset.exitReason) || 'manual';
           await scoutApi('/trades/' + tid + '/close', {
             method: 'POST',
-            body: JSON.stringify({ exit_price: px }),
+            body: JSON.stringify({ exit_price: px, exit_reason: exitReason }),
           });
           toast('Trade closed', 'ok');
           await loadScoutTrades();
@@ -1246,11 +1251,30 @@
     return { from: fEl?.value || fmt(from), to: tEl?.value || fmt(to) };
   }
 
+  function renderExecutionBlock(title, execInfo) {
+    if (!execInfo) return '';
+    const modeCls = execInfo.mode === 'auto' ? 'scout-exec--auto' : 'scout-exec--manual';
+    const conds = (execInfo.conditions || []).map(c => {
+      const okCls = c.ok === true ? ' scout-exec-cond--ok' : (c.ok === false ? ' scout-exec-cond--bad' : '');
+      return `<li class="scout-exec-cond${okCls}"><span class="scout-exec-cond-k">${escapeHtml(c.label)}</span> ${escapeHtml(c.value || '')}</li>`;
+    }).join('');
+    return `
+      <div class="scout-exec-block ${modeCls}">
+        <div class="scout-exec-head">
+          <span class="scout-exec-title">${escapeHtml(title)}</span>
+          <span class="scout-exec-badge">${escapeHtml(execInfo.mode_label || execInfo.mode || '')}</span>
+          ${execInfo.trigger_label ? `<span class="scout-exec-trigger">${escapeHtml(execInfo.trigger_label)}</span>` : ''}
+        </div>
+        ${conds ? `<ul class="scout-exec-conds">${conds}</ul>` : ''}
+      </div>`;
+  }
+
   function renderHistoryStats(stats) {
     const el = $('#scout-history-stats');
     if (!el || !stats) return;
     el.className = 'scout-history-stats';
     const types = stats.by_signal_type || {};
+    const auto = stats.automation || {};
     const typeRows = Object.keys(types).sort().map(k => {
       const b = types[k];
       const wr = b.count ? Math.round(b.wins / b.count * 100) : 0;
@@ -1262,6 +1286,12 @@
         <div class="scout-stat-box"><span class="muted">Win rate</span><strong>${stats.win_rate_pct || 0}%</strong></div>
         <div class="scout-stat-box"><span class="muted">Total P&amp;L</span><strong class="${(stats.total_pnl || 0) >= 0 ? 'pnl-profit' : 'pnl-loss'}">${fmtPnl(stats.total_pnl)}</strong></div>
         <div class="scout-stat-box"><span class="muted">Avg P&amp;L</span><strong>${fmtPnl(stats.avg_pnl)}</strong></div>
+      </div>
+      <div class="scout-stats-grid scout-stats-grid--auto">
+        <div class="scout-stat-box"><span class="muted">Auto-enter</span><strong>${auto.auto_entry_count || 0}</strong><span class="muted scout-stat-sub">${fmtPnl(auto.auto_entry_pnl)}</span></div>
+        <div class="scout-stat-box"><span class="muted">Manual enter</span><strong>${auto.manual_entry_count || 0}</strong><span class="muted scout-stat-sub">${fmtPnl(auto.manual_entry_pnl)}</span></div>
+        <div class="scout-stat-box"><span class="muted">Auto-close</span><strong>${auto.auto_exit_count || 0}</strong></div>
+        <div class="scout-stat-box"><span class="muted">Manual close</span><strong>${auto.manual_exit_count || 0}</strong></div>
       </div>
       ${typeRows ? `<table class="scout-stats-table"><thead><tr><th>Signal type</th><th>Count</th><th>Win%</th><th>P&amp;L</th></tr></thead><tbody>${typeRows}</tbody></table>` : ''}`;
   }
@@ -1280,8 +1310,11 @@
       const cls = pnl >= 0 ? 'pnl-profit' : 'pnl-loss';
       const closed = t.closed_at || t.exited_at || '';
       const pos = tradePositionMeta(t.action);
+      const exec = t.execution || {};
+      const entry = exec.entry || {};
+      const exit = exec.exit || {};
       return `
-        <div class="scout-card">
+        <div class="scout-card scout-history-card">
           <div class="scout-card-head">
             <strong>${escapeHtml(t.symbol)}</strong>
             <span class="tag tag-${pos.sideCls}">${escapeHtml(pos.side)}</span>
@@ -1290,7 +1323,9 @@
           </div>
           <div class="scout-card-body">
             <div>${escapeHtml(pos.entryVerb.split(' ')[0])} @ ${fmtPx(t.entry_price)} → ${escapeHtml(pos.exitAction)} @ ${fmtPx(t.exit_price)} · ${escapeHtml(String(closed).slice(0, 16))}</div>
-            <div class="${cls}"><strong>${fmtPnl(t.pnl)}</strong> (${Number(t.pnl_pct || 0).toFixed(2)}%)</div>
+            <div class="${cls}"><strong>${fmtPnl(t.pnl)}</strong> (${Number(t.pnl_pct || 0).toFixed(2)}%) · qty ${escapeHtml(String(t.quantity || 1))}</div>
+            ${renderExecutionBlock('Entry', entry)}
+            ${renderExecutionBlock('Exit', exit)}
             ${t.signal_reason ? `<div class="muted scout-reason">${escapeHtml(t.signal_reason)}</div>` : ''}
           </div>
         </div>`;

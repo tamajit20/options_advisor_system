@@ -41,6 +41,7 @@ from scout.signal_enrichment import (
     evaluate_exit_alerts,
     scout_trade_mtm,
 )
+from scout.trade_audit import build_entry_audit, enrich_history_trade
 from scout.utils import is_market_open
 from utils import now_ist, today_ist
 
@@ -433,7 +434,13 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
         entry_price=fill,
         quantity=quantity,
         executed_at=now_ist(),
-        notes=str(body.get("notes") or "")[:512] or None,
+        notes=build_entry_audit(
+            sig,
+            entry_price=fill,
+            executed_at=now_ist(),
+            mode="manual",
+            source="manual",
+        ),
     )
     db.commit()
     trade = dict(trade_repo.get(tid) or {})
@@ -497,7 +504,8 @@ def api_scout_history_trades(db: SQLServerConnection):
         symbol=symbol,
         limit=limit,
     )
-    return jsonify({"trades": rows, "count": len(rows), "from_date": from_d, "to_date": to_d})
+    enriched = [enrich_history_trade(r) for r in rows]
+    return jsonify({"trades": enriched, "count": len(enriched), "from_date": from_d, "to_date": to_d})
 
 
 @scout_bp.route("/history/stats")

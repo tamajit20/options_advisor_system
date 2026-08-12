@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+import json
 import pytest
 
 from scout.auto_trader import (
@@ -57,7 +58,9 @@ def test_try_auto_execute_marks_taken(db, mocker):
     assert kwargs["signal_id"] == 5
     assert kwargs["entry_price"] == 2510.0
     assert kwargs["quantity"] == 2
-    assert kwargs["notes"] == "auto_execute"
+    notes = kwargs["notes"]
+    assert "auto_execute" in notes
+    assert json.loads(notes)["mode"] == "auto"
 
 
 def test_try_auto_close_skipped_when_disabled(db, mocker):

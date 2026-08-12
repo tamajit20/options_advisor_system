@@ -10,6 +10,7 @@ from database.connection import SQLServerConnection
 from database.scout_models import ScoutSignalRepo, ScoutTradeRepo
 from scout.config_loader import get_automation
 from scout.signal_enrichment import build_exit_plan, enrich_signal, evaluate_exit_alerts
+from scout.trade_audit import build_entry_audit
 from scout.utils import is_market_open
 from utils import now_ist
 
@@ -82,6 +83,7 @@ def try_auto_execute_signal(
         return None
 
     qty = max(1, int(settings.get("auto_trade_quantity") or 1))
+    executed_at = now_ist()
     tid = trade_repo.mark_taken(
         signal_id=signal_id,
         symbol=str(sig["symbol"]),
@@ -89,8 +91,14 @@ def try_auto_execute_signal(
         signal_type=str(sig.get("signal_type") or ""),
         entry_price=float(ltp),
         quantity=qty,
-        executed_at=now_ist(),
-        notes="auto_execute",
+        executed_at=executed_at,
+        notes=build_entry_audit(
+            sig,
+            entry_price=float(ltp),
+            executed_at=executed_at,
+            mode="auto",
+            source="auto_execute",
+        ),
     )
     logger.info(
         "Scout auto-enter: SIG #%s → TRD #%s %s %s @ %.2f × %d",
@@ -178,6 +186,7 @@ def try_auto_close_trades(
                 "symbol": sym,
                 "exit_price": float(ltp),
                 "exit_reason": reason,
+                "exit_alert": (alerts.get("alerts") or [{}])[0],
                 "pnl": result.get("pnl"),
             })
 

@@ -277,7 +277,9 @@ class ScoutTradeRepo:
         limit: int = 100,
     ) -> List[dict]:
         sql = (
-            "SELECT TOP (?) t.*, s.reason AS signal_reason, s.strength AS signal_strength "
+            "SELECT TOP (?) t.*, s.reason AS signal_reason, s.strength AS signal_strength, "
+            "       s.ltp AS signal_ltp, s.invalidation, s.triggered_at AS signal_triggered_at, "
+            "       s.meta_json, s.action AS signal_action "
             "FROM scout_trades t "
             "LEFT JOIN scout_signals s ON s.id = t.signal_id "
             "WHERE t.status = 'CLOSED' "
@@ -302,7 +304,7 @@ class ScoutTradeRepo:
         to_date: Optional[str] = None,
     ) -> dict:
         sql = (
-            "SELECT t.pnl, t.pnl_pct, t.action, t.signal_type, t.symbol "
+            "SELECT t.pnl, t.pnl_pct, t.action, t.signal_type, t.symbol, t.notes, t.exit_reason "
             "FROM scout_trades t WHERE t.status = 'CLOSED' "
         )
         params: List[Any] = []
@@ -319,6 +321,8 @@ class ScoutTradeRepo:
         flat = total - wins - losses
         total_pnl = sum(float(r["pnl"] or 0) for r in rows)
         by_type: Dict[str, dict] = {}
+        auto_entry = manual_entry = auto_exit = manual_exit = 0
+        auto_pnl = manual_pnl = 0.0
         for r in rows:
             st = str(r.get("signal_type") or "UNKNOWN")
             bucket = by_type.setdefault(st, {"count": 0, "wins": 0, "pnl": 0.0})
@@ -327,6 +331,25 @@ class ScoutTradeRepo:
             bucket["pnl"] += pnl
             if pnl > 0:
                 bucket["wins"] += 1
+
+            from scout.trade_audit import _exit_mode, _norm_exit_code, _parse_notes_audit
+
+            notes_audit = _parse_notes_audit(r.get("notes"))
+            if notes_audit and notes_audit.get("mode") == "auto":
+                auto_entry += 1
+                auto_pnl += pnl
+            elif str(r.get("notes") or "").strip().lower() in ("auto_execute", "auto_enter"):
+                auto_entry += 1
+                auto_pnl += pnl
+            else:
+                manual_entry += 1
+                manual_pnl += pnl
+
+            if _exit_mode(_norm_exit_code(r.get("exit_reason"))) == "auto":
+                auto_exit += 1
+            else:
+                manual_exit += 1
+
         return {
             "total_trades": total,
             "wins": wins,
@@ -336,6 +359,14 @@ class ScoutTradeRepo:
             "total_pnl": round(total_pnl, 2),
             "avg_pnl": round(total_pnl / total, 2) if total else 0.0,
             "by_signal_type": by_type,
+            "automation": {
+                "auto_entry_count": auto_entry,
+                "manual_entry_count": manual_entry,
+                "auto_exit_count": auto_exit,
+                "manual_exit_count": manual_exit,
+                "auto_entry_pnl": round(auto_pnl, 2),
+                "manual_entry_pnl": round(manual_pnl, 2),
+            },
         }
 
 
