@@ -388,20 +388,20 @@
         <button class="scout-subtab" data-stab="scout-trades">My Trades</button>
         <button class="scout-subtab" data-stab="scout-history">History</button>
       </div>
-      <p class="muted scout-intro">Live equity setups from 1-minute candles. Signals arrive via <strong>WebSocket</strong> on each bar close — keep <strong>WS Monitor</strong> connected.</p>
-      <div id="scout-status-bar" class="scout-status-bar muted">Loading status…</div>
-      <div class="scout-toolbar">
-        <label class="scout-auto-toggle" title="Paper enter at live LTP when a new signal arrives — not a Zerodha order">
-          <input type="checkbox" id="scout-auto-execute">
-          <span>Auto-enter signals</span>
-        </label>
-        <label class="scout-auto-toggle" title="Paper close at live LTP when target, stop, or square-off (15:15 IST) is hit">
-          <input type="checkbox" id="scout-auto-close">
-          <span>Auto-close trades</span>
-        </label>
-        <button type="button" class="btn btn-ghost" id="scout-refresh">Refresh</button>
+      <div class="scout-header-compact">
+        <div id="scout-status-bar" class="scout-status-bar muted">Loading status…</div>
+        <div class="scout-toolbar">
+          <label class="scout-auto-toggle" title="Paper enter at live LTP when a new signal arrives — not a Zerodha order">
+            <input type="checkbox" id="scout-auto-execute">
+            <span>Auto-enter</span>
+          </label>
+          <label class="scout-auto-toggle" title="Paper close at live LTP when target, stop, or square-off (15:15 IST) is hit">
+            <input type="checkbox" id="scout-auto-close">
+            <span>Auto-close</span>
+          </label>
+          <button type="button" class="btn btn-ghost btn-sm" id="scout-refresh">Refresh</button>
+        </div>
       </div>
-      <p class="muted scout-auto-hint">Automation uses live LTP for paper tracking only — uncheck either box to require manual Mark taken / Close.</p>
       <div id="scout-signals-container" class="loading">Loading…</div>
     </article>
 
