@@ -233,6 +233,8 @@ SCOUT_CONFIG: dict = {
     "target_max_r_multiple": 2.5,
     # Square off all intraday Scout trades this many minutes before market_close.
     "square_off_minutes_before_close": 15,
+    # Warn on open trades this many minutes before square-off time.
+    "square_off_warn_minutes": 5,
     # Live WS push (ws_runner): evaluate patterns on each 1m bar close from ticks.
     "push_enabled": True,
     "push_dedupe_minutes": 30,

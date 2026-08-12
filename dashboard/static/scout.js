@@ -152,6 +152,8 @@
     ENTRY: 'Your Zerodha fill price when you marked the trade taken.',
     '→ Target': 'Distance from live price to the profit target.',
     STRUCT: 'Measured-move target from the pattern (OR/box height projected from breakout).',
+    'SIG #': 'Signal ID — match this with the same SIG # on My Trades.',
+    'TRD #': 'Trade ID — your open/closed trade record linked to the signal.',
     Stock: 'This stock\'s percentage change from today\'s opening price.',
     Nifty: 'Nifty 50 index percentage change from today\'s open.',
     RS: 'Relative strength = stock % − Nifty %. Positive means the stock is outperforming the index.',
@@ -249,6 +251,30 @@
       </div>`;
   }
 
+  function renderScoutRefIds(signalId, tradeId) {
+    const parts = [];
+    if (signalId != null && signalId !== '') {
+      parts.push(`<span class="scout-ref-id" title="${escapeHtml(scoutHint('SIG #'))}">SIG #${escapeHtml(String(signalId))}</span>`);
+    }
+    if (tradeId != null && tradeId !== '') {
+      parts.push(`<span class="scout-ref-id scout-ref-id--trade" title="${escapeHtml(scoutHint('TRD #'))}">TRD #${escapeHtml(String(tradeId))}</span>`);
+    }
+    return parts.length ? `<span class="scout-ref-ids">${parts.join('')}</span>` : '';
+  }
+
+  function renderExitAlertBanner(exitAlerts) {
+    if (!exitAlerts || !exitAlerts.alerts || !exitAlerts.alerts.length) return '';
+    const urg = exitAlerts.urgency || 'none';
+    if (urg === 'none') return '';
+    const detail = exitAlerts.alerts.map(a => escapeHtml(a.label || '')).join(' · ');
+    const headline = exitAlerts.close_now ? 'Close now' : 'Exit approaching';
+    return `<div class="scout-exit-alert scout-exit-alert--${urg}" role="alert">
+      <span class="scout-exit-alert-dot" aria-hidden="true"></span>
+      <strong>${headline}</strong>
+      <span class="scout-exit-alert-detail">${detail}</span>
+    </div>`;
+  }
+
   function renderSingleSignalCard(s) {
     const action = (s.action || '').toUpperCase();
     const cls = action === 'BUY' ? 'scout-buy' : action === 'SELL' ? 'scout-sell' : 'scout-wait';
@@ -257,7 +283,7 @@
     const setupCode = d.setup_code || (s.signal_type || '').replace(/_/g, ' ');
     const entryDefault = s.live_ltp != null ? Number(s.live_ltp) : Number(s.ltp || 0);
     const markBlock = s.trade_open
-      ? '<span class="muted scout-trade-badge">Trade open</span>'
+      ? `<span class="muted scout-trade-badge">Trade open${s.trade_id ? ` · TRD #${s.trade_id}` : ''}</span>`
       : `<div class="scout-mark-row">
           <input type="number" step="0.05" class="scout-entry-input" value="${entryDefault}"
             data-signal-id="${s.id}" aria-label="Entry fill price" title="Your Zerodha fill price">
@@ -273,12 +299,14 @@
         data-entry-min="${s.entry_min}" data-entry-max="${s.entry_max}"
         data-invalidation="${s.invalidation != null ? s.invalidation : ''}"
         data-valid-until="${escapeHtml(s.valid_until || '')}"
-        data-trade-open="${s.trade_open ? '1' : '0'}">
+        data-trade-open="${s.trade_open ? '1' : '0'}"
+        data-trade-id="${s.trade_id != null ? s.trade_id : ''}">
         <div class="scout-card-head">
           <strong class="scout-symbol">${escapeHtml(s.symbol)}</strong>
           <span class="scout-action tag tag-${action === 'BUY' ? 'ok' : action === 'SELL' ? 'err' : 'muted'}" title="Suggested direction for this intraday setup">${escapeHtml(action)}</span>
           <span class="scout-setup-code"${setupTitle} tabindex="0">${escapeHtml(setupCode)}</span>
           <span class="scout-strength scout-strength--${strength}" title="Signal strength from pattern quality and relative strength">${escapeHtml(s.strength || '')}</span>
+          ${renderScoutRefIds(s.id, s.trade_open ? s.trade_id : null)}
           <span class="muted scout-age">${escapeHtml(ageLabel(s.triggered_at))}</span>
         </div>
         <div class="scout-card-body">
@@ -293,6 +321,23 @@
     if (!c) return;
     c.className = '';
     c.innerHTML = '<div class="empty">No actionable scout signals right now. Valid signals appear during market hours; expired or invalid ones drop off automatically.</div>';
+  }
+
+  function signalCardNeedsRebuild(card, s) {
+    const tradeOpen = s.trade_open ? '1' : '0';
+    if (card.dataset.tradeOpen !== tradeOpen) return true;
+    const tid = s.trade_id != null ? String(s.trade_id) : '';
+    if ((card.dataset.tradeId || '') !== tid) return true;
+    return false;
+  }
+
+  function replaceSignalCard(card, s) {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = renderSingleSignalCard(s);
+    const next = wrap.firstElementChild;
+    card.replaceWith(next);
+    bindSignalMarkButtons(next);
+    return next;
   }
 
   function bindSignalMarkButtons(root) {
@@ -312,13 +357,22 @@
         }
         btn.disabled = true;
         try {
-          await scoutApi('/signals/' + sid + '/mark-taken', {
+          const resp = await scoutApi('/signals/' + sid + '/mark-taken', {
             method: 'POST',
             body: JSON.stringify({ entry_price: entry, quantity: qty }),
           });
           toast('Trade marked — see My Trades', 'ok');
-          await loadScoutSignals();
-          if (typeof window.loadScoutTrades === 'function') window.loadScoutTrades();
+          const tradeId = resp.trade_id;
+          const cached = _scoutSignals.get(String(sid));
+          if (cached) {
+            cached.trade_open = true;
+            cached.trade_id = tradeId;
+          }
+          if (card && cached) {
+            replaceSignalCard(card, { ...cached, trade_open: true, trade_id: tradeId });
+          }
+          await Promise.all([loadScoutTrades(), loadScoutSignals()]);
+          startScoutTradesAutoRefresh();
         } catch (e) {
           toast(e.message, 'err');
           btn.disabled = false;
@@ -484,6 +538,12 @@
     } catch (_) { /* keep last price */ }
   }
 
+  function clearContainerPlaceholder(c) {
+    Array.from(c.childNodes).forEach(n => {
+      if (n.nodeType === Node.TEXT_NODE) n.remove();
+    });
+  }
+
   function syncSignalCards(signals) {
     const c = $('#scout-signals-container');
     if (!c) return;
@@ -493,6 +553,7 @@
       return;
     }
     c.className = 'scout-signal-list';
+    clearContainerPlaceholder(c);
     const newIds = new Set(signals.map(s => String(s.id)));
     c.querySelectorAll('.scout-card[data-signal-id]').forEach(card => {
       if (!newIds.has(card.dataset.signalId)) removeSignalCard(card);
@@ -507,6 +568,8 @@
         card = wrap.firstElementChild;
         c.appendChild(card);
         bindSignalMarkButtons(card);
+      } else if (signalCardNeedsRebuild(card, s)) {
+        replaceSignalCard(card, s);
       } else {
         updateSignalCardLive(card, s, s.live_ltp, s.live_as_of);
       }
@@ -924,6 +987,7 @@
     if (!plan || !plan.dashboard) return '';
     const d = plan.dashboard;
     const p = d.prices || {};
+    const flags = (t.exit_alerts && t.exit_alerts.flags) || {};
     const targetDist = d.target_dist;
     const stopDist = d.stop_dist;
     const struct = plan.structural_target;
@@ -937,14 +1001,19 @@
       ? renderMetricTile('→ Stop', `${fmtPx(stopDist.rs)} · ${fmtPct(stopDist.pct)}`, '', '→ Stop')
       : '';
     const rLabel = d.target_r != null ? ` (${d.target_r}R)` : '';
+    const targetCls = flags.target_hit ? 'scout-metric--hit-target' : 'scout-metric--pos';
+    const stopCls = flags.stop_hit ? 'scout-metric--hit-stop' : 'scout-metric--neg';
+    const exitCls = (flags.square_off_due ? 'scout-metric--hit-exit' : '')
+      + (flags.square_off_soon && !flags.square_off_due ? ' scout-metric--warn-exit' : '')
+      + ' scout-metric--timer';
     return `
       <div class="scout-dash scout-dash--exit">
         <div class="muted scout-exit-heading">Exit plan</div>
         <div class="scout-dash-prices">
           ${renderMetricTile('ENTRY', fmtPx(p.entry), '', 'ENTRY')}
-          ${p.target != null ? renderMetricTile('TARGET', fmtPx(p.target) + escapeHtml(rLabel), 'scout-metric--pos', 'TARGET') : ''}
-          ${p.stop != null ? renderMetricTile('STOP', fmtPx(p.stop), 'scout-metric--neg', 'STOP') : ''}
-          ${renderMetricTile('EXIT BY', `<span class="scout-timer" data-timer-secs="${d.timer_secs || 0}">${fmtTimer(d.timer_secs)}</span> → ${escapeHtml(d.timer_until || '')}`, 'scout-metric--timer', 'EXIT BY')}
+          ${p.target != null ? renderMetricTile('TARGET', fmtPx(p.target) + escapeHtml(rLabel), targetCls, 'TARGET') : ''}
+          ${p.stop != null ? renderMetricTile('STOP', fmtPx(p.stop), stopCls, 'STOP') : ''}
+          ${renderMetricTile('EXIT BY', `<span class="scout-timer" data-timer-secs="${d.timer_secs || 0}">${fmtTimer(d.timer_secs)}</span> → ${escapeHtml(d.timer_until || '')}`, exitCls.trim(), 'EXIT BY')}
         </div>
         <div class="scout-dash-stats">
           ${structHtml}
@@ -967,15 +1036,20 @@
       const action = (t.action || '').toUpperCase();
       const pos = tradePositionMeta(action);
       const sig = t.signal || {};
+      const urg = (t.exit_alerts && t.exit_alerts.urgency) || 'none';
+      const urgCls = urg === 'now' ? ' scout-trade-card--close-now' : (urg === 'warn' ? ' scout-trade-card--close-soon' : '');
+      const closeBtnCls = urg === 'now' ? ' scout-close-btn--pulse' : '';
       return `
-        <div class="scout-card scout-trade-card">
+        <div class="scout-card scout-trade-card${urgCls}" data-trade-id="${t.id}" data-signal-id="${t.signal_id || ''}">
           <div class="scout-card-head">
             <strong>${escapeHtml(t.symbol)}</strong>
             <span class="tag tag-${pos.sideCls}" title="Open position side">${escapeHtml(pos.side)}</span>
             <span class="scout-trade-exit-action">Close with <strong class="tag tag-${pos.sideCls === 'err' ? 'ok' : 'err'}">${escapeHtml(pos.exitAction)}</strong></span>
             <span class="muted">${escapeHtml(t.signal_type || '')}</span>
+            ${renderScoutRefIds(t.signal_id, t.id)}
           </div>
           <div class="scout-card-body">
+            ${renderExitAlertBanner(t.exit_alerts)}
             <div>${escapeHtml(pos.entryVerb)} @ ${fmtPx(t.entry_price)} × ${t.quantity || 1} · ${escapeHtml(ageLabel(t.executed_at))}</div>
             ${renderTradeExitPlan(t)}
             ${renderTradeMtm(t)}
@@ -983,8 +1057,9 @@
             <div class="scout-close-row">
               <label class="muted" title="${escapeHtml(pos.exitHint)}">${escapeHtml(pos.exitLabel)}</label>
               <input type="number" step="0.05" class="scout-exit-input" placeholder="Exit price"
-                data-trade-id="${t.id}" aria-label="Exit fill price">
-              <button type="button" class="btn btn-sm btn-accent scout-close-btn" data-trade-id="${t.id}">Close trade</button>
+                data-trade-id="${t.id}" aria-label="Exit fill price"
+                ${t.live_ltp != null && urg === 'now' ? ` value="${Number(t.live_ltp)}"` : ''}>
+              <button type="button" class="btn btn-sm btn-accent scout-close-btn${closeBtnCls}" data-trade-id="${t.id}">Close trade</button>
               <button type="button" class="btn btn-sm btn-ghost scout-void-btn" data-trade-id="${t.id}">Void</button>
             </div>
           </div>
@@ -1034,12 +1109,14 @@
 
   async function loadScoutTrades() {
     const c = $('#scout-trades-container');
+    if (!c) return;
     try {
       const data = await scoutApi('/trades/open');
       if (data.poll_seconds) _scoutPollMs = Math.max(5, Number(data.poll_seconds) * 1000);
       renderOpenTrades(data.trades || []);
     } catch (e) {
-      if (c) c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
+      c.className = '';
+      c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
     }
   }
 
@@ -1096,6 +1173,7 @@
             <strong>${escapeHtml(t.symbol)}</strong>
             <span class="tag tag-${pos.sideCls}">${escapeHtml(pos.side)}</span>
             <span class="muted">${escapeHtml(t.signal_type || '')}</span>
+            ${renderScoutRefIds(t.signal_id, t.id)}
           </div>
           <div class="scout-card-body">
             <div>${escapeHtml(pos.entryVerb.split(' ')[0])} @ ${fmtPx(t.entry_price)} → ${escapeHtml(pos.exitAction)} @ ${fmtPx(t.exit_price)} · ${escapeHtml(String(closed).slice(0, 16))}</div>
@@ -1178,7 +1256,8 @@
         startScoutAutoRefresh();
         startScoutLiveRefresh();
       });
-      stopScoutTradesAutoRefresh();
+      // Keep open trades fresh if user marked taken from Signals without switching tab.
+      loadScoutTrades().then(() => startScoutTradesAutoRefresh());
     } else {
       stopScoutAutoRefresh();
       stopScoutLiveRefresh();
@@ -1188,7 +1267,7 @@
       }
       if (tab === 'scout-trades') {
         loadScoutTrades().then(() => startScoutTradesAutoRefresh());
-      } else {
+      } else if (tab !== 'scout-signals') {
         stopScoutTradesAutoRefresh();
       }
       if (tab === 'scout-history') loadScoutHistory();

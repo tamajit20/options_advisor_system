@@ -446,6 +446,95 @@ def build_exit_plan(
     }
 
 
+def evaluate_exit_alerts(
+    *,
+    action: str,
+    live_ltp: Optional[float],
+    exit_plan: dict,
+) -> dict:
+    """Flag when target, stop, or square-off time requires closing the open trade."""
+    action = str(action or "").upper()
+    dash = dict(exit_plan.get("dashboard") or {})
+    prices = dict(dash.get("prices") or {})
+    target = prices.get("target")
+    stop = prices.get("stop")
+    timer_secs = int(dash.get("timer_secs") or 0)
+    warn_mins = int(SCOUT_CONFIG.get("square_off_warn_minutes", 5))
+    warn_secs = max(0, warn_mins * 60)
+
+    flags = {
+        "target_hit": False,
+        "stop_hit": False,
+        "square_off_due": False,
+        "square_off_soon": False,
+    }
+    alerts: List[dict] = []
+
+    ltp = float(live_ltp) if live_ltp is not None and float(live_ltp) > 0 else None
+    if ltp is not None:
+        if target is not None:
+            tgt = float(target)
+            if action == "BUY" and ltp >= tgt:
+                flags["target_hit"] = True
+                alerts.append({
+                    "code": "TARGET_HIT",
+                    "level": "now",
+                    "label": f"Target hit (LTP ₹{ltp:.2f} ≥ ₹{tgt:.2f})",
+                })
+            elif action == "SELL" and ltp <= tgt:
+                flags["target_hit"] = True
+                alerts.append({
+                    "code": "TARGET_HIT",
+                    "level": "now",
+                    "label": f"Target hit (LTP ₹{ltp:.2f} ≤ ₹{tgt:.2f})",
+                })
+        if stop is not None:
+            stp = float(stop)
+            if action == "BUY" and ltp <= stp:
+                flags["stop_hit"] = True
+                alerts.append({
+                    "code": "STOP_HIT",
+                    "level": "now",
+                    "label": f"Stop hit (LTP ₹{ltp:.2f} ≤ ₹{stp:.2f})",
+                })
+            elif action == "SELL" and ltp >= stp:
+                flags["stop_hit"] = True
+                alerts.append({
+                    "code": "STOP_HIT",
+                    "level": "now",
+                    "label": f"Stop hit (LTP ₹{ltp:.2f} ≥ ₹{stp:.2f})",
+                })
+
+    if timer_secs <= 0:
+        flags["square_off_due"] = True
+        alerts.append({
+            "code": "SQUARE_OFF_DUE",
+            "level": "now",
+            "label": f"Square-off time ({exit_plan.get('square_off_by') or 'now'})",
+        })
+    elif timer_secs <= warn_secs:
+        flags["square_off_soon"] = True
+        mins = max(1, int(timer_secs / 60))
+        alerts.append({
+            "code": "SQUARE_OFF_SOON",
+            "level": "warn",
+            "label": f"Square-off in {mins}m ({exit_plan.get('square_off_by') or ''})",
+        })
+
+    urgency = "none"
+    if any(a.get("level") == "now" for a in alerts):
+        urgency = "now"
+    elif alerts:
+        urgency = "warn"
+
+    return {
+        "alerts": alerts,
+        "urgency": urgency,
+        "flags": flags,
+        "close_now": urgency == "now",
+    }
+
+
 def scout_trade_mtm(trade: dict, live_ltp: Optional[float]) -> Optional[dict]:
     if live_ltp is None or live_ltp <= 0:
         return None

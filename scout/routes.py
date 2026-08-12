@@ -32,7 +32,12 @@ from scout.instruments import (
 )
 from scout.live_quotes import latest_equity_ltps
 from scout.market_data import zerodha_ready
-from scout.signal_enrichment import build_exit_plan, enrich_signal, scout_trade_mtm
+from scout.signal_enrichment import (
+    build_exit_plan,
+    enrich_signal,
+    evaluate_exit_alerts,
+    scout_trade_mtm,
+)
 from scout.utils import is_market_open
 from utils import now_ist, today_ist
 
@@ -95,7 +100,14 @@ def api_scout_signals(db: SQLServerConnection):
     default_since = int(SCOUT_CONFIG.get("signal_display_minutes", 120))
     since = min(int(request.args.get("since_minutes", default_since)), 24 * 60)
     rows = ScoutSignalRepo(db).recent(limit=limit, since_minutes=since)
-    open_ids = ScoutTradeRepo(db).open_signal_ids()
+    trade_repo = ScoutTradeRepo(db)
+    open_trades = trade_repo.open_trades()
+    open_ids = trade_repo.open_signal_ids()
+    trade_by_signal = {
+        int(t["signal_id"]): int(t["id"])
+        for t in open_trades
+        if t.get("signal_id") is not None
+    }
 
     symbols = {str(r["symbol"]).upper() for r in rows}
     quotes = latest_equity_ltps(symbols)
@@ -103,7 +115,9 @@ def api_scout_signals(db: SQLServerConnection):
 
     enriched = []
     for row in rows:
-        row["trade_open"] = row.get("id") in open_ids
+        sid = row.get("id")
+        row["trade_open"] = sid in open_ids
+        row["trade_id"] = trade_by_signal.get(int(sid)) if sid is not None else None
         sym = str(row["symbol"]).upper()
         q = quotes.get(sym, {})
         live_ltp = q.get("ltp")
@@ -113,6 +127,8 @@ def api_scout_signals(db: SQLServerConnection):
             live_as_of=q.get("as_of"),
             now=now,
         )
+        e["trade_open"] = row["trade_open"]
+        e["trade_id"] = row["trade_id"]
         if e.get("validity_status") == "ACTIVE" or row["trade_open"]:
             enriched.append(e)
 
@@ -271,6 +287,11 @@ def api_scout_trades_open(db: SQLServerConnection):
             live_ltp=ltp,
             now=now,
         )
+        row["exit_alerts"] = evaluate_exit_alerts(
+            action=str(row.get("action") or ""),
+            live_ltp=ltp,
+            exit_plan=row["exit_plan"],
+        )
         out.append(row)
     return jsonify({
         "trades": out,
@@ -329,6 +350,11 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
         executed_at=trade.get("executed_at"),
         live_ltp=q.get("ltp"),
         now=now_ist().replace(tzinfo=None),
+    )
+    trade["exit_alerts"] = evaluate_exit_alerts(
+        action=str(sig.get("action") or ""),
+        live_ltp=q.get("ltp"),
+        exit_plan=trade["exit_plan"],
     )
     return jsonify({"status": "ok", "trade_id": tid, "trade": trade})
 

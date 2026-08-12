@@ -12,6 +12,7 @@ from scout.live_quotes import latest_equity_ltps
 from scout.signal_enrichment import (
     build_exit_plan,
     enrich_signal,
+    evaluate_exit_alerts,
     evaluate_signal_status,
     scout_trade_mtm,
 )
@@ -102,6 +103,31 @@ def test_build_exit_plan_sell_uses_negative_target():
     plan = build_exit_plan(sig, entry_price=100.0, now=datetime(2026, 7, 30, 11, 0, 0))
     assert plan["target_price"] == 97.0
     assert plan["stop_side"] == "above"
+
+
+def test_exit_alerts_target_hit_on_short():
+    sig = _sample_signal(action="SELL", invalidation=102.0)
+    plan = build_exit_plan(sig, entry_price=100.0, live_ltp=97.0, now=datetime(2026, 7, 30, 11, 0, 0))
+    alerts = evaluate_exit_alerts(action="SELL", live_ltp=97.0, exit_plan=plan)
+    assert alerts["flags"]["target_hit"] is True
+    assert alerts["urgency"] == "now"
+    assert alerts["close_now"] is True
+
+
+def test_exit_alerts_stop_hit_on_long():
+    sig = _sample_signal(action="BUY", invalidation=98.0)
+    plan = build_exit_plan(sig, entry_price=100.0, live_ltp=97.5, now=datetime(2026, 7, 30, 11, 0, 0))
+    alerts = evaluate_exit_alerts(action="BUY", live_ltp=97.5, exit_plan=plan)
+    assert alerts["flags"]["stop_hit"] is True
+    assert alerts["urgency"] == "now"
+
+
+def test_exit_alerts_square_off_soon():
+    sig = _sample_signal(action="BUY", invalidation=98.0)
+    plan = build_exit_plan(sig, entry_price=100.0, now=datetime(2026, 7, 30, 15, 12, 0))
+    alerts = evaluate_exit_alerts(action="BUY", live_ltp=101.0, exit_plan=plan)
+    assert alerts["flags"]["square_off_soon"] is True
+    assert alerts["urgency"] == "warn"
 
 
 def test_latest_equity_ltps_from_ws_status(tmp_path, monkeypatch):
