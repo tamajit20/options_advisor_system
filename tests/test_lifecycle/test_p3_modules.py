@@ -64,6 +64,7 @@ def test_scout_schema_sql_contains_core_tables():
     assert "scout_signals" in ddl
     assert "scout_trades" in ddl
     assert "scout_config" in ddl
+    assert "filled_quantity" in ddl
     names = scout_table_names()
     assert "scout_signals" in names
 

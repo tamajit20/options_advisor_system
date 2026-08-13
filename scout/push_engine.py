@@ -97,6 +97,7 @@ class ScoutPushEngine:
         self._session: Dict[str, _SessionStats] = {}
         self._nifty_open: Optional[float] = None
         self._recent: Dict[str, datetime] = {}
+        self._prior_day: Dict[str, dict] = {}
 
         self._unsub_scout: Optional[Callable[[], None]] = None
         self._unsub_index: Optional[Callable[[], None]] = None
@@ -203,6 +204,9 @@ class ScoutPushEngine:
                         high=float(stats.get("high") or 0),
                         low=float(stats.get("low") or 0),
                     )
+                    prior = mkt.prior_day_ohlc(sym)
+                    if prior:
+                        self._prior_day[sym] = prior
                 except ScoutMarketError as exc:
                     logger.warning("ScoutPushEngine seed skip %s: %s", sym, exc)
             self._seeded = True
@@ -314,6 +318,9 @@ class ScoutPushEngine:
             day_high = sess.high or max(c.high for c in candles)
             day_low = sess.low or min(c.low for c in candles)
             stock_pct = pct_change(open_px, ltp)
+            prior = self._prior_day.get(sym) or {}
+            pdh = prior.get("pdh")
+            pdl = prior.get("pdl")
             for sig in detect_signals(
                 candles,
                 open_px=open_px,
@@ -321,6 +328,8 @@ class ScoutPushEngine:
                 day_low=day_low,
                 stock_pct=stock_pct,
                 bench_pct=bench_pct,
+                pdh=pdh,
+                pdl=pdl,
                 cfg=cfg,
             ):
                 dedupe_key = sym if dedupe_per_symbol else f"{sym}:{sig.signal_type}"
@@ -343,6 +352,9 @@ class ScoutPushEngine:
                         "source": "ws_push",
                         "stock_pct_from_open": round(stock_pct, 3),
                         "nifty_pct_from_open": round(bench_pct, 3),
+                        "nifty_open": self._nifty_open,
+                        "pdh": pdh,
+                        "pdl": pdl,
                     },
                 )
                 if signal_id:

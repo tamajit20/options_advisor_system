@@ -62,6 +62,20 @@ def default_scout_settings() -> dict:
         "compression_range_pct": float(SCOUT_CONFIG.get("compression_range_pct", 0.30)),
         "entry_slippage_pct": float(SCOUT_CONFIG.get("entry_slippage_pct", 0.20)),
         "min_candles": int(SCOUT_CONFIG.get("min_candles", 12)),
+        # Regime filters
+        "index_trend_filter_enabled": True,
+        "index_trend_min_pct": -0.20,
+        "index_trend_max_pct": 0.20,
+        "pdh_pdl_filter_enabled": True,
+        "pdh_pdl_buffer_pct": 0.15,
+        # Liquidity
+        "liquidity_filter_enabled": True,
+        "min_bar_volume": 500,
+        "min_volume_vs_avg": 0.8,
+        "min_turnover_inr": 100_000,
+        "liquidity_lookback_bars": 10,
+        # Live entry lifecycle
+        "entry_pending_max_minutes": 15,
     }
 
 
@@ -128,6 +142,22 @@ def validate_scout_settings(raw: dict) -> dict:
     d["compression_range_pct"] = max(0.1, min(float(src.get("compression_range_pct", d["compression_range_pct"])), 2.0))
     d["entry_slippage_pct"] = max(0.05, min(float(src.get("entry_slippage_pct", d["entry_slippage_pct"])), 1.0))
     d["min_candles"] = max(5, min(int(src.get("min_candles", d["min_candles"])), 60))
+
+    d["index_trend_filter_enabled"] = bool(
+        src.get("index_trend_filter_enabled", d["index_trend_filter_enabled"])
+    )
+    d["index_trend_min_pct"] = max(-5.0, min(float(src.get("index_trend_min_pct", d["index_trend_min_pct"])), 0.0))
+    d["index_trend_max_pct"] = max(0.0, min(float(src.get("index_trend_max_pct", d["index_trend_max_pct"])), 5.0))
+    d["pdh_pdl_filter_enabled"] = bool(src.get("pdh_pdl_filter_enabled", d["pdh_pdl_filter_enabled"]))
+    d["pdh_pdl_buffer_pct"] = max(0.0, min(float(src.get("pdh_pdl_buffer_pct", d["pdh_pdl_buffer_pct"])), 1.0))
+    d["liquidity_filter_enabled"] = bool(src.get("liquidity_filter_enabled", d["liquidity_filter_enabled"]))
+    d["min_bar_volume"] = max(0.0, min(float(src.get("min_bar_volume", d["min_bar_volume"])), 1_000_000.0))
+    d["min_volume_vs_avg"] = max(0.0, min(float(src.get("min_volume_vs_avg", d["min_volume_vs_avg"])), 5.0))
+    d["min_turnover_inr"] = max(0.0, min(float(src.get("min_turnover_inr", d["min_turnover_inr"])), 50_000_000.0))
+    d["liquidity_lookback_bars"] = max(3, min(int(src.get("liquidity_lookback_bars", d["liquidity_lookback_bars"])), 60))
+    d["entry_pending_max_minutes"] = max(
+        1, min(int(src.get("entry_pending_max_minutes", d["entry_pending_max_minutes"])), 120),
+    )
 
     types = src.get("auto_enter_signal_types", d["auto_enter_signal_types"])
     if isinstance(types, str):
@@ -200,6 +230,16 @@ def effective_pattern_config(settings: Optional[dict] = None) -> dict:
         "signal_valid_minutes",
         "entry_slippage_pct",
         "push_dedupe_minutes",
+        "index_trend_filter_enabled",
+        "index_trend_min_pct",
+        "index_trend_max_pct",
+        "pdh_pdl_filter_enabled",
+        "pdh_pdl_buffer_pct",
+        "liquidity_filter_enabled",
+        "min_bar_volume",
+        "min_volume_vs_avg",
+        "min_turnover_inr",
+        "liquidity_lookback_bars",
     ):
         if key in s:
             merged[key] = s[key]

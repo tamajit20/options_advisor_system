@@ -12,6 +12,7 @@ database only — no Kite order calls.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import SCOUT_CONFIG
@@ -249,12 +250,25 @@ def _sync_order_status(order_repo: ScoutTradeOrderRepo, order_row: dict, live: b
     hist = client.order_history(str(oid))
     st = client.latest_status(hist)
     status = str(st.get("status") or "UNKNOWN").upper()
+    filled_qty: Optional[int] = None
+    raw_fq = st.get("filled_quantity")
+    if raw_fq is not None:
+        try:
+            filled_qty = int(raw_fq)
+        except (TypeError, ValueError):
+            filled_qty = None
+    elif status in _ORDER_COMPLETE:
+        try:
+            filled_qty = int(order_row.get("quantity") or 0)
+        except (TypeError, ValueError):
+            filled_qty = None
     order_repo.update_status(
         int(order_row["id"]),
         status=status,
         status_message=st.get("status_message"),
         exchange_order_id=st.get("exchange_order_id"),
         price=float(st["average_price"]) if st.get("average_price") else None,
+        filled_quantity=filled_qty,
     )
     return order_repo.get_leg(int(order_row["trade_id"]), str(order_row["leg"])) or order_row
 
@@ -585,6 +599,46 @@ def execute_entry(
     return {"trade_id": tid, "signal_id": signal_id, "status": "OPEN", "execution_mode": mode}
 
 
+def _pending_entry_cancel_reason(
+    *,
+    trade: dict,
+    signal: dict,
+    spot_lookup: Callable[[str], Optional[float]],
+    settings: dict,
+) -> Optional[str]:
+    """Return cancel reason for unfilled live entry orders, or None to keep working."""
+    from scout.signal_enrichment import enrich_signal, evaluate_signal_status
+
+    sym = str(trade.get("symbol") or "").upper()
+    ltp = spot_lookup(sym)
+    if ltp is None or float(ltp) <= 0:
+        ltp = float(trade.get("entry_price") or signal.get("ltp") or 0)
+
+    status = evaluate_signal_status(signal, live_ltp=float(ltp) if ltp else None, settings=settings)
+    if status != "ACTIVE":
+        return f"entry_cancel_{status.lower()}"
+
+    max_mins = int(settings.get("entry_pending_max_minutes") or settings.get("signal_valid_minutes", 30))
+    executed_at = trade.get("executed_at")
+    if executed_at is not None:
+        if isinstance(executed_at, str):
+            try:
+                executed_at = datetime.fromisoformat(executed_at.replace("Z", "+00:00"))
+            except ValueError:
+                executed_at = None
+        if isinstance(executed_at, datetime) and executed_at.tzinfo:
+            executed_at = executed_at.replace(tzinfo=None)
+        if isinstance(executed_at, datetime):
+            age_s = (now_ist().replace(tzinfo=None) - executed_at).total_seconds()
+            if age_s > max_mins * 60:
+                return "entry_cancel_timeout"
+
+    enriched = enrich_signal(signal, live_ltp=float(ltp) if ltp else None, settings=settings)
+    if enriched.get("validity_status") != "ACTIVE":
+        return f"entry_cancel_{str(enriched.get('validity_status') or 'inactive').lower()}"
+    return None
+
+
 def process_pending_entries(
     db: SQLServerConnection,
     *,
@@ -613,13 +667,6 @@ def process_pending_entries(
             trade_repo.mark_failed(tid, reason=f"entry_{st.lower()}")
             results.append({"trade_id": tid, "event": "entry_failed", "status": st})
             continue
-        if st not in _ORDER_COMPLETE:
-            continue
-
-        fill_px = float(entry_row.get("price") or trade.get("entry_price") or 0)
-        if fill_px <= 0:
-            ltp = spot_lookup(sym)
-            fill_px = float(ltp) if ltp else float(trade.get("entry_price") or 0)
 
         sid = trade.get("signal_id")
         sig = sig_repo.get(int(sid)) if sid else None
@@ -631,48 +678,27 @@ def process_pending_entries(
                 "meta": {},
             }
 
-        qty = int(trade.get("quantity") or 1)
-        from scout.profit_gate import entry_profit_block_reason
-
-        profit_block = entry_profit_block_reason(
-            signal=sig,
-            entry=fill_px,
-            qty=qty,
-            settings=settings,
-        )
-        if profit_block:
-            trade_repo.activate_from_fill(tid, entry_price=fill_px, executed_at=now_ist())
-            action = str(trade.get("action") or "BUY").upper()
-            exit_txn = _exit_txn(action)
-            oid, exit_st = _place_exit_market(
-                symbol=sym, exit_txn=exit_txn, quantity=qty, live=True,
+        if st not in _ORDER_COMPLETE:
+            cancel_reason = _pending_entry_cancel_reason(
+                trade=trade, signal=sig, spot_lookup=spot_lookup, settings=settings,
             )
-            _record_order(
-                order_repo,
-                trade_id=tid,
-                step_num=3,
-                leg="EXIT",
-                quantity=qty,
-                order_type=str(SCOUT_CONFIG.get("zerodha_exit_order_type", "MARKET")),
-                transaction_type=exit_txn,
-                product=str(SCOUT_CONFIG.get("zerodha_product", "MIS")),
-                price=fill_px,
-                status=exit_st,
-                kite_order_id=oid,
-                meta={"reason": "profit_gate_post_fill", "detail": profit_block[:200]},
-            )
-            _close_trade(db, tid, exit_price=fill_px, reason="profit_gate_post_fill")
-            logger.warning(
-                "Scout TRD #%s filled @ %.2f but profit gate failed — flattened: %s",
-                tid, fill_px, profit_block,
-            )
-            results.append({
-                "trade_id": tid,
-                "event": "entry_flattened_profit_gate",
-                "entry_price": fill_px,
-                "reason": profit_block,
-            })
+            if cancel_reason:
+                _cancel_broker_order(entry_row, live=True)
+                trade_repo.mark_failed(tid, reason=cancel_reason)
+                logger.info(
+                    "Scout TRD #%s entry cancelled — %s", tid, cancel_reason,
+                )
+                results.append({
+                    "trade_id": tid,
+                    "event": "entry_cancelled",
+                    "reason": cancel_reason,
+                })
             continue
+
+        fill_px = float(entry_row.get("price") or trade.get("entry_price") or 0)
+        if fill_px <= 0:
+            ltp = spot_lookup(sym)
+            fill_px = float(ltp) if ltp else float(trade.get("entry_price") or 0)
 
         trade_repo.activate_from_fill(tid, entry_price=fill_px, executed_at=now_ist())
         trade = trade_repo.get(tid) or trade
@@ -819,6 +845,27 @@ def _manage_unprotected_trade(
         peak_price=trade.get("peak_price"),
         settings=settings,
     )
+    from scout.regime import failed_breakout_detected
+    if failed_breakout_detected(signal, float(live_ltp)):
+        if live:
+            _cancel_broker_order(order_repo.get_leg(tid, "TARGET"), live=True)
+            oid, st = _place_exit_market(
+                symbol=sym, exit_txn=exit_txn, quantity=qty, live=True,
+            )
+            _record_order(
+                order_repo,
+                trade_id=tid,
+                step_num=3,
+                leg="EXIT",
+                quantity=qty,
+                order_type=str(SCOUT_CONFIG.get("zerodha_exit_order_type", "MARKET")),
+                transaction_type=exit_txn,
+                product=str(SCOUT_CONFIG.get("zerodha_product", "MIS")),
+                status=st,
+                kite_order_id=oid,
+                meta={"reason": "failed_breakout", "unprotected": True},
+            )
+        return _close_trade(db, tid, exit_price=float(live_ltp), reason="failed_breakout")
     if not alerts.get("close_now"):
         return None
 
@@ -892,6 +939,31 @@ def manage_open_trade_step3(
         now=now,
         settings=settings,
     )
+
+    from scout.regime import failed_breakout_detected
+    if failed_breakout_detected(signal, float(live_ltp)):
+        if live:
+            stop_row = order_repo.get_leg(tid, "STOP_LOSS")
+            target_row = order_repo.get_leg(tid, "TARGET")
+            _cancel_broker_order(stop_row, live=True)
+            _cancel_broker_order(target_row, live=True)
+            oid, st = _place_exit_market(
+                symbol=sym, exit_txn=exit_txn, quantity=qty, live=True,
+            )
+            _record_order(
+                order_repo,
+                trade_id=tid,
+                step_num=3,
+                leg="EXIT",
+                quantity=qty,
+                order_type=str(SCOUT_CONFIG.get("zerodha_exit_order_type", "MARKET")),
+                transaction_type=exit_txn,
+                product=str(SCOUT_CONFIG.get("zerodha_product", "MIS")),
+                status=st,
+                kite_order_id=oid,
+                meta={"reason": "failed_breakout"},
+            )
+        return _close_trade(db, tid, exit_price=float(live_ltp), reason="failed_breakout")
 
     peak = trade.get("peak_price")
     peak_f = float(peak) if peak is not None else None

@@ -398,3 +398,88 @@ def test_try_auto_execute_skipped_non_active_signal(db, mocker):
         return_value={"validity_status": "EXPIRED"},
     )
     assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.0) is None
+
+
+def test_try_auto_execute_skipped_weak_index(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_block_settings(),
+    )
+    _setup_signal_mocks(mocker)
+    mock_enter = mocker.patch("scout.auto_trader.execute_entry")
+    mocker.patch("scout.auto_trader.live_benchmark_pct", return_value=-0.45)
+    mocker.patch(
+        "scout.auto_trader.index_trend_allows",
+        return_value=(False, "Nifty weak (-0.45% from open < -0.20% — skip long)"),
+    )
+    assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.0) is None
+    mock_enter.assert_not_called()
+
+
+def test_try_auto_execute_skipped_pdh_block(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_block_settings(),
+    )
+    sig_repo, _ = _setup_signal_mocks(mocker)
+    sig_repo.get.return_value["meta"]["pdh"] = 101.0
+    mock_enter = mocker.patch("scout.auto_trader.execute_entry")
+    mocker.patch("scout.auto_trader.live_benchmark_pct", return_value=0.1)
+    mocker.patch("scout.auto_trader.index_trend_allows", return_value=(True, ""))
+    mocker.patch(
+        "scout.auto_trader.pdh_pdl_allows",
+        return_value=(False, "long into prior day high ₹101.00"),
+    )
+    assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.0) is None
+    mock_enter.assert_not_called()
+
+
+def test_try_auto_execute_skipped_failed_breakout_status(db, mocker):
+    """Real enrich_signal marks FAILED_BREAKOUT before regime re-check."""
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_block_settings(),
+    )
+    mocker.patch("scout.auto_trader.is_market_open", return_value=True)
+    mocker.patch("scout.auto_trader.SCOUT_CONFIG", {"enabled": True})
+    sig_repo = MagicMock()
+    sig_repo.get.return_value = {
+        "id": 1,
+        "symbol": "TCS",
+        "action": "BUY",
+        "signal_type": "OR_BREAK_UP",
+        "ltp": 101.0,
+        "invalidation": 99.0,
+        "strength": "HIGH",
+        "meta": {"or_high": 101.0, "or_low": 99.0},
+    }
+    trade_repo = MagicMock()
+    trade_repo.open_signal_ids.return_value = []
+    trade_repo.open_trades.return_value = []
+    trade_repo.count_trades_opened_today.return_value = 0
+    trade_repo.symbol_has_trade_today.return_value = False
+    mocker.patch("scout.auto_trader.ScoutSignalRepo", return_value=sig_repo)
+    mocker.patch("scout.auto_trader.ScoutTradeRepo", return_value=trade_repo)
+    mock_enter = mocker.patch("scout.auto_trader.execute_entry")
+    assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.5) is None
+    mock_enter.assert_not_called()
+
+
+def test_try_auto_execute_passes_regime_when_clear(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_block_settings(auto_trade_quantity=1),
+    )
+    sig_repo, _ = _setup_signal_mocks(mocker, ltp=101.0)
+    sig_repo.get.return_value["meta"]["pdh"] = 110.0
+    sig_repo.get.return_value["meta"]["pdl"] = 90.0
+    mocker.patch("scout.auto_trader.live_benchmark_pct", return_value=0.15)
+    mocker.patch("scout.auto_trader.index_trend_allows", return_value=(True, ""))
+    mocker.patch("scout.auto_trader.pdh_pdl_allows", return_value=(True, ""))
+    mock_enter = mocker.patch(
+        "scout.auto_trader.execute_entry",
+        return_value={"trade_id": 42, "signal_id": 1, "execution_mode": "paper"},
+    )
+    out = try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 101.05)
+    assert out["trade_id"] == 42
+    mock_enter.assert_called_once()

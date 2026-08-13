@@ -60,3 +60,39 @@ def relative_strength_ok(
 
 def min_candles_ok(candles: list[Candle], cfg: Optional[dict] = None) -> bool:
     return len(candles) >= int(_cfg(cfg).get("min_candles", 12))
+
+
+def passes_liquidity(
+    candles: list[Candle],
+    ltp: float,
+    cfg: Optional[dict] = None,
+) -> tuple[bool, str]:
+    """Min bar volume, vs recent average, and notional turnover on the signal bar."""
+    c = _cfg(cfg)
+    if not c.get("liquidity_filter_enabled", True):
+        return True, ""
+    if not candles:
+        return False, "no candles for liquidity check"
+    last = candles[-1]
+    px = float(ltp or last.close or 0)
+    if px <= 0:
+        return False, "no price for liquidity check"
+
+    min_vol = float(c.get("min_bar_volume", 500))
+    min_vs_avg = float(c.get("min_volume_vs_avg", 0.8))
+    min_turnover = float(c.get("min_turnover_inr", 200_000))
+    lookback = max(3, int(c.get("liquidity_lookback_bars", 10)))
+
+    bar_vol = float(last.volume or 0)
+    if bar_vol < min_vol:
+        return False, f"bar volume {bar_vol:.0f} < min {min_vol:.0f}"
+
+    recent = candles[-lookback:]
+    avg_vol = sum(float(x.volume or 0) for x in recent) / max(len(recent), 1)
+    if avg_vol > 0 and bar_vol < avg_vol * min_vs_avg:
+        return False, f"volume {bar_vol:.0f} below {lookback}m avg × {min_vs_avg}"
+
+    turnover = bar_vol * px
+    if turnover < min_turnover:
+        return False, f"turnover ₹{turnover:,.0f} < min ₹{min_turnover:,.0f}"
+    return True, ""

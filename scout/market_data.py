@@ -115,6 +115,31 @@ class ScoutMarketData:
             stats["low"] = min(c.low for c in candles)
         return candles, stats
 
+    def prior_day_ohlc(self, symbol: str) -> dict:
+        """Previous completed session high/low for PDH/PDL filters."""
+        from datetime import timedelta
+
+        token = self._token(symbol)
+        start_today = session_start_dt()
+        end = start_today - timedelta(minutes=1)
+        start = end - timedelta(days=7)
+        try:
+            raw = self._facade.historical_data(token, start, end, "day", oi=False)
+        except Exception as exc:
+            logger.warning("Scout prior day OHLC failed for %s: %s", symbol, exc)
+            return {}
+        if not raw:
+            return {}
+        row = raw[-1]
+        try:
+            return {
+                "pdh": float(row["high"]),
+                "pdl": float(row["low"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            return {}
+
     @staticmethod
     def watchlist(db=None) -> List[str]:
+        from scout.config_loader import get_watchlist
         return get_watchlist(db)

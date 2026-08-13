@@ -59,8 +59,8 @@ def test_detect_signals_returns_first_match_only():
     candles = []
     for i in range(15):
         candles.append(_candle(i, 100, 100.2, 99.8, 100, 800))
-    candles.append(_candle(15, 100.1, 100.5, 100.0, 100.45, 1500))
-    candles.append(_candle(16, 100.45, 100.55, 100.4, 100.5, 1200))
+    candles.append(_candle(15, 100.1, 100.5, 100.0, 100.45, 2500))
+    candles.append(_candle(16, 100.45, 100.55, 100.4, 100.5, 2500))
     out = detect_signals(
         candles,
         open_px=100,

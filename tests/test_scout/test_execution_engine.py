@@ -140,3 +140,137 @@ def test_place_protection_records_failed_stop():
         )
     assert result["stop_ok"] is False
     assert rec.called
+
+
+def test_process_pending_entries_cancels_stale_order(sample_signal):
+    from scout.execution_engine import process_pending_entries
+
+    fake_db = MagicMock()
+    trade_repo = MagicMock()
+    order_repo = MagicMock()
+    trade_repo.pending_entry_trades.return_value = [{
+        "id": 7,
+        "signal_id": 1,
+        "symbol": "RELIANCE",
+        "action": "BUY",
+        "signal_type": "OR_BREAK_UP",
+        "entry_price": 100.5,
+        "quantity": 10,
+        "executed_at": datetime(2026, 7, 30, 9, 0, 0),
+    }]
+    order_repo.get_leg.return_value = {
+        "id": 1,
+        "trade_id": 7,
+        "leg": "ENTRY",
+        "status": "OPEN",
+        "kite_order_id": "OID1",
+    }
+
+    with patch("scout.execution_engine.ScoutTradeRepo", return_value=trade_repo), \
+         patch("scout.execution_engine.ScoutTradeOrderRepo", return_value=order_repo), \
+         patch("database.scout_models.ScoutSignalRepo") as sig_cls, \
+         patch("scout.execution_engine._sync_order_status", side_effect=lambda repo, row, live: row), \
+         patch("scout.execution_engine._cancel_broker_order") as cancel, \
+         patch("scout.execution_engine.zerodha_execute_enabled", return_value=True), \
+         patch("scout.signal_enrichment.evaluate_signal_status", return_value="FAILED_BREAKOUT"):
+        sig_cls.return_value.get.return_value = sample_signal
+        out = process_pending_entries(
+            fake_db,
+            spot_lookup=lambda s: 100.0,
+            settings={"entry_pending_max_minutes": 15, "signal_valid_minutes": 30},
+        )
+
+    assert out[0]["event"] == "entry_cancelled"
+    assert "failed_breakout" in out[0]["reason"]
+    cancel.assert_called_once()
+    trade_repo.mark_failed.assert_called_once()
+
+
+def test_sync_order_status_persists_filled_quantity_on_partial():
+    from scout.execution_engine import _sync_order_status
+
+    order_repo = MagicMock()
+    order_row = {
+        "id": 7,
+        "trade_id": 3,
+        "leg": "ENTRY",
+        "quantity": 10,
+        "kite_order_id": "OID123",
+    }
+    order_repo.get_leg.return_value = {
+        **order_row,
+        "status": "OPEN",
+        "filled_quantity": 8,
+        "price": 100.5,
+    }
+
+    with patch("providers.zerodha.order_client.KiteOrderClient") as kite_cls:
+        kite_cls.return_value.order_history.return_value = [{"status": "OPEN"}]
+        kite_cls.return_value.latest_status.return_value = {
+            "status": "OPEN",
+            "average_price": 100.5,
+            "filled_quantity": 8,
+        }
+        out = _sync_order_status(order_repo, order_row, live=True)
+
+    order_repo.update_status.assert_called_once()
+    kwargs = order_repo.update_status.call_args.kwargs
+    assert kwargs["status"] == "OPEN"
+    assert kwargs["filled_quantity"] == 8
+    assert kwargs["price"] == 100.5
+    assert out["filled_quantity"] == 8
+
+
+def test_sync_order_status_updates_filled_quantity_on_later_poll():
+    from scout.execution_engine import _sync_order_status
+
+    order_repo = MagicMock()
+    order_row = {
+        "id": 7,
+        "trade_id": 3,
+        "leg": "ENTRY",
+        "quantity": 10,
+        "kite_order_id": "OID123",
+        "filled_quantity": 3,
+    }
+    order_repo.get_leg.return_value = {
+        **order_row,
+        "status": "OPEN",
+        "filled_quantity": 8,
+        "price": 100.5,
+    }
+
+    with patch("providers.zerodha.order_client.KiteOrderClient") as kite_cls:
+        kite_cls.return_value.order_history.return_value = [{"status": "OPEN"}]
+        kite_cls.return_value.latest_status.return_value = {
+            "status": "OPEN",
+            "average_price": 100.5,
+            "filled_quantity": 8,
+        }
+        _sync_order_status(order_repo, order_row, live=True)
+
+    assert order_repo.update_status.call_args.kwargs["filled_quantity"] == 8
+
+
+def test_sync_order_status_complete_without_filled_qty_uses_order_quantity():
+    from scout.execution_engine import _sync_order_status
+
+    order_repo = MagicMock()
+    order_row = {
+        "id": 7,
+        "trade_id": 3,
+        "leg": "ENTRY",
+        "quantity": 10,
+        "kite_order_id": "OID123",
+    }
+    order_repo.get_leg.return_value = {**order_row, "status": "COMPLETE", "filled_quantity": 10}
+
+    with patch("providers.zerodha.order_client.KiteOrderClient") as kite_cls:
+        kite_cls.return_value.order_history.return_value = [{"status": "COMPLETE"}]
+        kite_cls.return_value.latest_status.return_value = {
+            "status": "COMPLETE",
+            "average_price": 100.5,
+        }
+        _sync_order_status(order_repo, order_row, live=True)
+
+    assert order_repo.update_status.call_args.kwargs["filled_quantity"] == 10

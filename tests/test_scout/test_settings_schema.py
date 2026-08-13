@@ -33,6 +33,43 @@ def test_validate_clamps_auto_close_poll_seconds():
     assert validate_scout_settings({"auto_close_poll_seconds": 999})["auto_close_poll_seconds"] == 120
 
 
+def test_validate_regime_and_liquidity_settings():
+    out = validate_scout_settings({
+        "index_trend_min_pct": -10,
+        "index_trend_max_pct": 10,
+        "pdh_pdl_buffer_pct": 5,
+        "min_bar_volume": -100,
+        "min_turnover_inr": 99_999_999,
+        "entry_pending_max_minutes": 999,
+    })
+    assert out["index_trend_min_pct"] == -5.0
+    assert out["index_trend_max_pct"] == 5.0
+    assert out["pdh_pdl_buffer_pct"] == 1.0
+    assert out["min_bar_volume"] == 0.0
+    assert out["min_turnover_inr"] == 50_000_000.0
+    assert out["entry_pending_max_minutes"] == 120
+
+
+def test_default_settings_has_regime_filters():
+    d = default_scout_settings()
+    assert d["index_trend_filter_enabled"] is True
+    assert d["liquidity_filter_enabled"] is True
+    assert d["entry_pending_max_minutes"] == 15
+
+
+def test_effective_pattern_config_includes_regime_keys():
+    from scout.settings_schema import effective_pattern_config
+
+    cfg = effective_pattern_config({
+        "index_trend_min_pct": -0.5,
+        "min_bar_volume": 1000,
+        "liquidity_filter_enabled": False,
+    })
+    assert cfg["index_trend_min_pct"] == -0.5
+    assert cfg["min_bar_volume"] == 1000
+    assert cfg["liquidity_filter_enabled"] is False
+
+
 def test_default_settings_has_wallet_limits():
     d = default_scout_settings()
     assert d["wallet_utilization_pct"] == 90.0

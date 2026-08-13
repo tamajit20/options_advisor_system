@@ -19,6 +19,7 @@ _VALID = "ACTIVE"
 _EXPIRED = "EXPIRED"
 _INVALIDATED = "INVALIDATED"
 _OUT_OF_RANGE = "OUT_OF_RANGE"
+_FAILED_BREAKOUT = "FAILED_BREAKOUT"
 
 
 def _market_close_dt(day: datetime) -> datetime:
@@ -294,6 +295,10 @@ def evaluate_signal_status(
         if action == "SELL" and ltp > inv_f:
             return _INVALIDATED
 
+    from scout.regime import failed_breakout_detected
+    if failed_breakout_detected(signal, ltp):
+        return _FAILED_BREAKOUT
+
     entry_min, entry_max = _entry_band(float(signal.get("ltp") or 0), action, settings)
     if ltp > 0 and (ltp < entry_min or ltp > entry_max):
         return _OUT_OF_RANGE
@@ -540,6 +545,7 @@ def evaluate_exit_alerts(
         "square_off_due": False,
         "square_off_soon": False,
         "breakeven_armed": False,
+        "failed_breakout": False,
     }
     alerts: List[dict] = []
 

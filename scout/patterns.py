@@ -14,7 +14,8 @@ from scout.candles import (
     lower_highs,
     range_high_low,
 )
-from scout.filters import passes_anti_chase, relative_strength_ok, _cfg
+from scout.filters import passes_anti_chase, passes_liquidity, relative_strength_ok, _cfg
+from scout.regime import signal_passes_regime
 from scout.utils import pct_change
 
 
@@ -70,8 +71,11 @@ def detect_opening_range_break(
     last = candles[-1]
     ltp = last.close
 
-    ok, why = passes_anti_chase(open_px=open_px, ltp=ltp, day_high=day_high, day_low=day_low, cfg=c)
+    ok, _ = passes_anti_chase(open_px=open_px, ltp=ltp, day_high=day_high, day_low=day_low, cfg=c)
     if not ok:
+        return None
+    liq_ok, _ = passes_liquidity(list(candles), ltp, cfg=c)
+    if not liq_ok:
         return None
 
     if ltp > or_high and last.close > last.open:
@@ -135,6 +139,9 @@ def detect_compression_break(
     ok, _ = passes_anti_chase(open_px=open_px, ltp=ltp, day_high=day_high, day_low=day_low, cfg=c)
     if not ok:
         return None
+    liq_ok, _ = passes_liquidity(list(candles), ltp, cfg=c)
+    if not liq_ok:
+        return None
 
     vol_ok = last.volume > 0 and (
         sum(c.volume for c in box) / max(len(box), 1) * 1.2 <= last.volume
@@ -189,6 +196,9 @@ def detect_pullback(
     ok, _ = passes_anti_chase(open_px=open_px, ltp=ltp, day_high=day_high, day_low=day_low, cfg=c)
     if not ok:
         return None
+    liq_ok, _ = passes_liquidity(list(candles), ltp, cfg=c)
+    if not liq_ok:
+        return None
 
     up_ctx = higher_lows(candles[-6:-1], count=3)
     dn_ctx = lower_highs(candles[-6:-1], count=3)
@@ -233,9 +243,12 @@ def detect_signals(
     day_low: float,
     stock_pct: float,
     bench_pct: float,
+    pdh: Optional[float] = None,
+    pdl: Optional[float] = None,
     cfg: Optional[dict] = None,
 ) -> List[ScoutSignal]:
     """Run all v1 detectors; return at most one signal (highest priority first)."""
+    c = _cfg(cfg)
     detectors = (
         detect_opening_range_break,
         detect_compression_break,
@@ -249,8 +262,13 @@ def detect_signals(
             day_low=day_low,
             stock_pct=stock_pct,
             bench_pct=bench_pct,
-            cfg=cfg,
+            cfg=c,
         )
         if sig:
+            ok, _reason = signal_passes_regime(
+                sig, bench_pct=bench_pct, pdh=pdh, pdl=pdl, cfg=c,
+            )
+            if not ok:
+                return []
             return [sig]
     return []

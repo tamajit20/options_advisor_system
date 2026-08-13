@@ -82,6 +82,7 @@ SCOUT_TABLE_DDL: List[str] = [
         transaction_type    NVARCHAR(8)    NULL,
         product             NVARCHAR(8)    NULL,
         quantity            INT            NOT NULL,
+        filled_quantity     INT            NULL,
         price               DECIMAL(18,4)  NULL,
         trigger_price       DECIMAL(18,4)  NULL,
         status              NVARCHAR(24)   NOT NULL DEFAULT 'PENDING',
@@ -133,6 +134,7 @@ def create_scout_tables(db: SQLServerConnection) -> None:
     _migrate_scout_trades_net_pnl(db)
     _migrate_scout_trades_execution(db)
     _migrate_scout_trades_signal_unique(db)
+    _migrate_scout_trade_orders_filled_quantity(db)
     logger.info("Scout tables ensured (%d DDL statements).", len(SCOUT_TABLE_DDL))
 
 
@@ -201,6 +203,23 @@ def _migrate_scout_trades_signal_unique(db: SQLServerConnection) -> None:
     )
     cur.close()
     logger.info("scout_trades: added filtered unique index on signal_id")
+
+
+def _migrate_scout_trade_orders_filled_quantity(db: SQLServerConnection) -> None:
+    """Track broker-reported filled qty on order legs (entry poll / future partial fills)."""
+    exists = db.fetch_one(
+        "SELECT 1 AS ok FROM sys.tables WHERE name = 'scout_trade_orders'"
+    )
+    if not exists:
+        return
+    row = db.fetch_one(
+        "SELECT 1 AS ok FROM sys.columns "
+        "WHERE object_id = OBJECT_ID('scout_trade_orders') AND name = 'filled_quantity'",
+    )
+    if not row:
+        cur = db.execute("ALTER TABLE scout_trade_orders ADD filled_quantity INT NULL")
+        cur.close()
+        logger.info("scout_trade_orders: added column filled_quantity")
 
 
 def _migrate_paper_trades_to_trades(db: SQLServerConnection) -> None:

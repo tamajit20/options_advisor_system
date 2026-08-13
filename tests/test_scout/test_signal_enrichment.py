@@ -41,15 +41,15 @@ def _sample_signal(**overrides):
 
 def test_enrich_signal_adds_entry_band_and_conditions():
     now = datetime(2026, 7, 30, 10, 5, 0)
-    out = enrich_signal(_sample_signal(), live_ltp=100.1, now=now)
+    out = enrich_signal(_sample_signal(), live_ltp=100.2, now=now)
     assert out["entry_min"] < 100.0 < out["entry_max"]
-    assert out["validity_status"] == "ACTIVE"
-    assert out["is_actionable"] is True
+    assert out["validity_status"] == "FAILED_BREAKOUT"
+    assert out["is_actionable"] is False
     assert len(out["conditions"]) >= 3
     assert isinstance(out["conditions"][0], dict)
     assert "label" in out["conditions"][0]
     assert "value" in out["conditions"][0]
-    assert out["live_ltp"] == 100.1
+    assert out["live_ltp"] == 100.2
     dash = out.get("dashboard") or {}
     assert dash.get("setup_code") == "OR ↑"
     assert dash.get("prices", {}).get("trigger") == 100.0
@@ -108,6 +108,62 @@ def test_scout_trade_mtm_sell_total():
     assert mtm["mtm_per_share"] == 7.2
     assert mtm["mtm"] == 36.0
     assert mtm["position_value"] == 6561.5
+
+
+def test_evaluate_signal_status_failed_breakout_or_down():
+    sig = {
+        "action": "SELL",
+        "signal_type": "OR_BREAK_DOWN",
+        "ltp": 99.0,
+        "invalidation": 101.0,
+        "meta": {"or_high": 101.0, "or_low": 99.0},
+        "triggered_at": datetime(2026, 7, 30, 10, 0, 0),
+    }
+    now = datetime(2026, 7, 30, 10, 5, 0)
+    assert evaluate_signal_status(sig, live_ltp=99.5, now=now) == "FAILED_BREAKOUT"
+
+
+def test_evaluate_signal_status_range_break_failed():
+    sig = {
+        "action": "BUY",
+        "signal_type": "RANGE_BREAK_UP",
+        "ltp": 105.0,
+        "invalidation": 100.0,
+        "meta": {"box_high": 104.0, "box_low": 100.0},
+        "triggered_at": datetime(2026, 7, 30, 10, 0, 0),
+    }
+    now = datetime(2026, 7, 30, 10, 5, 0)
+    assert evaluate_signal_status(sig, live_ltp=103.5, now=now) == "FAILED_BREAKOUT"
+
+
+def test_enrich_signal_active_when_above_break_level():
+    now = datetime(2026, 7, 30, 10, 5, 0)
+    sig = _sample_signal(ltp=101.0, meta={"or_high": 101.0, "or_low": 99.0})
+    out = enrich_signal(sig, live_ltp=101.05, now=now)
+    assert out["validity_status"] == "ACTIVE"
+    assert out["is_actionable"] is True
+
+
+def test_evaluate_signal_status_failed_breakout():
+    sig = {
+        "action": "BUY",
+        "signal_type": "OR_BREAK_UP",
+        "ltp": 101.0,
+        "invalidation": 99.0,
+        "meta": {"or_high": 101.0, "or_low": 99.0},
+        "triggered_at": datetime(2026, 7, 30, 10, 0, 0),
+    }
+    now = datetime(2026, 7, 30, 10, 5, 0)
+    assert evaluate_signal_status(sig, live_ltp=100.5, now=now) == "FAILED_BREAKOUT"
+
+
+def test_enrich_signal_failed_breakout_conditions_not_actionable():
+    now = datetime(2026, 7, 30, 10, 5, 0)
+    sig = _sample_signal(ltp=101.0, meta={"or_high": 101.0, "or_low": 99.0})
+    out = enrich_signal(sig, live_ltp=100.8, now=now)
+    assert out["validity_status"] == "FAILED_BREAKOUT"
+    assert out["is_actionable"] is False
+    assert out["entry_min"] < out["entry_max"]
 
 
 def test_build_exit_plan_buy_or_break():

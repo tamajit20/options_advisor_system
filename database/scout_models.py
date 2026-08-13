@@ -728,6 +728,7 @@ class ScoutTradeOrderRepo:
         exchange_order_id: Optional[str] = None,
         price: Optional[float] = None,
         trigger_price: Optional[float] = None,
+        filled_quantity: Optional[int] = None,
     ) -> None:
         sets = ["status = ?", "updated_at = SYSUTCDATETIME()"]
         params: List[Any] = [status]
@@ -747,6 +748,9 @@ class ScoutTradeOrderRepo:
         if trigger_price is not None:
             sets.append("trigger_price = ?")
             params.append(trigger_price)
+        if filled_quantity is not None:
+            sets.append("filled_quantity = ?")
+            params.append(int(filled_quantity))
         params.append(order_row_id)
         self.db.execute(
             f"UPDATE scout_trade_orders SET {', '.join(sets)} WHERE id = ?",

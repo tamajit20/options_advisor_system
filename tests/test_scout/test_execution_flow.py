@@ -64,9 +64,12 @@ def test_format_order_leg_labels():
         "order_type": "SL-M",
         "transaction_type": "SELL",
         "status": "PLACED",
+        "quantity": 10,
+        "filled_quantity": 8,
     })
     assert out["leg_label"] == "Stop loss"
     assert out["status_class"] == "active"
+    assert out["filled_quantity"] == 8
 
 
 @pytest.mark.parametrize(
@@ -76,6 +79,7 @@ def test_format_order_leg_labels():
         (True, "EXPIRED", False),
         (True, "INVALIDATED", False),
         (True, "OUT_OF_RANGE", False),
+        (True, "FAILED_BREAKOUT", False),
         (False, "ACTIVE", False),
         (False, "EXPIRED", False),
     ],

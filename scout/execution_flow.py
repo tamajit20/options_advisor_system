@@ -85,6 +85,7 @@ def _format_order(o: dict) -> dict:
         "transaction_type": o.get("transaction_type"),
         "product": o.get("product"),
         "quantity": o.get("quantity"),
+        "filled_quantity": o.get("filled_quantity"),
         "price": o.get("price"),
         "trigger_price": o.get("trigger_price"),
         "status": o.get("status"),

@@ -21,8 +21,10 @@ from scout.execution_engine import (
 from scout.wallet import cap_quantity_for_wallet, entry_wallet_block_reason
 from scout.entry_pricing import entry_limit_price
 from scout.profit_gate import entry_profit_block_reason, signal_type_allowed
+from scout.regime import index_trend_allows, live_benchmark_pct, pdh_pdl_allows
 from scout.settings_schema import (
     compute_trade_quantity,
+    effective_pattern_config,
     in_trading_window,
     strength_allowed,
 )
@@ -138,6 +140,25 @@ def try_auto_execute_signal(
         return None
 
     entry_px = entry_limit_price(enriched, sig, float(ltp))
+
+    cfg = effective_pattern_config(settings)
+    meta = dict(sig.get("meta") or {})
+    bench_pct = live_benchmark_pct(spot_lookup, meta)
+    regime_ok, regime_msg = index_trend_allows(str(sig.get("action") or "BUY"), bench_pct, cfg)
+    if not regime_ok:
+        logger.info("Scout auto-enter skip SIG #%s — %s", signal_id, regime_msg)
+        return None
+    pdh_ok, pdh_msg = pdh_pdl_allows(
+        str(sig.get("action") or "BUY"),
+        float(entry_px),
+        meta.get("pdh"),
+        meta.get("pdl"),
+        cfg,
+    )
+    if not pdh_ok:
+        logger.info("Scout auto-enter skip SIG #%s — %s", signal_id, pdh_msg)
+        return None
+
     if zerodha_execute_enabled(settings):
         wallet_block = entry_wallet_block_reason(
             db, entry_price=entry_px, quantity=qty, settings=settings,
