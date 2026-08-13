@@ -885,6 +885,20 @@
 .scout-hist-sum-label { font-weight: 700; }
 .scout-hist-sum-meta { color: var(--text-dim); text-align: right; white-space: nowrap; }
 .scout-hist-sum-meta strong { color: var(--text); }
+.scout-hist-sum-meta strong.pnl-profit,
+.scout-hist-stats-banner .pnl-profit,
+.scout-hist-grid .pnl-profit { color: var(--ok); font-weight: 600; }
+.scout-hist-sum-meta strong.pnl-loss,
+.scout-hist-stats-banner .pnl-loss,
+.scout-hist-grid .pnl-loss { color: var(--err); font-weight: 600; }
+.scout-hist-sum-meta strong.pnl-charge { color: #fbbf24; font-weight: 600; }
+.scout-hist-sum-meta strong.pnl-winpct-good { color: var(--ok); font-weight: 600; }
+.scout-hist-sum-meta strong.pnl-winpct-bad { color: var(--err); font-weight: 600; }
+.scout-hist-sum-meta strong.pnl-winpct-neutral { color: var(--text); }
+.scout-hist-filter-result .pnl-profit { color: var(--ok); }
+.scout-hist-filter-result .pnl-loss { color: var(--err); }
+.scout-hist-filter-result .pnl-winpct-good { color: var(--ok); }
+.scout-hist-filter-result .pnl-winpct-bad { color: var(--err); }
 
 .scout-hist-subsections { border-top: 1px solid #2a3744; }
 .scout-hist-subsection {

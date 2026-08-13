@@ -46,6 +46,24 @@
     return sign + '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 });
   }
 
+  function pnlClass(v) {
+    if (v == null || v === '' || isNaN(v)) return '';
+    return Number(v) >= 0 ? 'pnl-profit' : 'pnl-loss';
+  }
+
+  function winPctClass(pct) {
+    const p = Number(pct);
+    if (Number.isNaN(p)) return '';
+    if (p >= 55) return 'pnl-winpct-good';
+    if (p < 45) return 'pnl-winpct-bad';
+    return 'pnl-winpct-neutral';
+  }
+
+  function pfClass(pf) {
+    if (pf == null || pf === '' || Number.isNaN(Number(pf))) return '';
+    return Number(pf) >= 1 ? 'pnl-profit' : 'pnl-loss';
+  }
+
   function ageLabel(iso) {
     if (!iso) return '';
     const t = new Date(String(iso).replace(' ', 'T'));
@@ -1849,11 +1867,12 @@
     const agg = aggregateTrades(filtered);
     const fullAuto = countFullAuto(filtered);
     const totalFullAuto = countFullAuto(total);
-    const pnlCls = agg.pnl >= 0 ? 'pnl-profit' : 'pnl-loss';
+    const pnlCls = pnlClass(agg.net_pnl != null ? agg.net_pnl : agg.pnl);
+    const winCls = winPctClass(agg.win_pct);
     const showing = filtered.length === total.length
       ? `Showing all <strong>${total.length}</strong> trades`
       : `Showing <strong>${filtered.length}</strong> of <strong>${total.length}</strong> trades`;
-    return `${showing} · Win <strong>${agg.win_pct}%</strong> · P&amp;L <strong class="${pnlCls}">${fmtPnl(agg.pnl)}</strong> · Full auto <strong>${fullAuto}</strong>${filtered.length !== total.length ? ` <span class="muted">(${totalFullAuto} in period)</span>` : ''}`;
+    return `${showing} · Win <strong class="${winCls}">${agg.win_pct}%</strong> · P&amp;L <strong class="${pnlCls}">${fmtPnl(agg.net_pnl != null ? agg.net_pnl : agg.pnl)}</strong> · Full auto <strong>${fullAuto}</strong>${filtered.length !== total.length ? ` <span class="muted">(${totalFullAuto} in period)</span>` : ''}`;
   }
 
   function updateAllTradesGridView(panel) {
@@ -1936,7 +1955,7 @@
   function pnlCell(pnl, pct, netPnl, charges) {
     const n = Number(pnl || 0);
     const net = netPnl != null ? Number(netPnl) : n;
-    const cls = net >= 0 ? 'pnl-profit' : 'pnl-loss';
+    const cls = pnlClass(net);
     const pill = net >= 0 ? 'scout-hist-pill--win' : 'scout-hist-pill--loss';
     const chargeHint = charges != null && Number(charges) > 0
       ? `<span class="muted" title="Gross ${fmtPnl(n)} − charges ${fmtPnl(charges)}">net</span> `
@@ -2081,15 +2100,24 @@
   }
 
   function renderSummaryCells(agg, extra) {
-    const netCls = (agg.net_pnl != null ? agg.net_pnl : agg.pnl) >= 0 ? 'pnl-profit' : 'pnl-loss';
     const netVal = agg.net_pnl != null ? agg.net_pnl : agg.pnl;
-    const pf = agg.profit_factor != null ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">PF</span> <strong>${agg.profit_factor}</strong></span>` : '';
-    const avgWin = agg.avg_win ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Avg win</span> <strong class="pnl-profit">${fmtPnl(agg.avg_win)}</strong></span>` : '';
-    const avgLoss = agg.avg_loss ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Avg loss</span> <strong class="pnl-loss">${fmtPnl(agg.avg_loss)}</strong></span>` : '';
-    const charges = agg.total_charges ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Charges</span> <strong>${fmtPnl(agg.total_charges)}</strong></span>` : '';
+    const netCls = pnlClass(netVal);
+    const winCls = winPctClass(agg.win_pct);
+    const pf = agg.profit_factor != null
+      ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">PF</span> <strong class="${pfClass(agg.profit_factor)}">${agg.profit_factor}</strong></span>`
+      : '';
+    const avgWin = agg.avg_win
+      ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Avg win</span> <strong class="pnl-profit">${fmtPnl(agg.avg_win)}</strong></span>`
+      : '';
+    const avgLoss = agg.avg_loss
+      ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Avg loss</span> <strong class="pnl-loss">${fmtPnl(agg.avg_loss)}</strong></span>`
+      : '';
+    const charges = agg.total_charges
+      ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Charges</span> <strong class="pnl-charge">${fmtPnl(agg.total_charges)}</strong></span>`
+      : '';
     return `
       <span class="scout-hist-sum-meta"><span class="muted">Trades</span> <strong>${agg.count}</strong></span>
-      <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Win%</span> <strong>${agg.win_pct}%</strong></span>
+      <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Win%</span> <strong class="${winCls}">${agg.win_pct}%</strong></span>
       <span class="scout-hist-sum-meta"><span class="muted">Net P&amp;L</span> <strong class="${netCls}">${fmtPnl(netVal)}</strong></span>
       ${charges}${pf}${avgWin}${avgLoss}
       ${extra || ''}`;
@@ -2109,7 +2137,7 @@
       profit_factor: stats.profit_factor,
     };
     const grossWr = stats.gross_win_rate_pct != null
-      ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Gross win%</span> <strong>${stats.gross_win_rate_pct}%</strong></span>`
+      ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Gross win%</span> <strong class="${winPctClass(stats.gross_win_rate_pct)}">${stats.gross_win_rate_pct}%</strong></span>`
       : '';
     return `
       <div class="scout-hist-stats-banner">
@@ -2191,7 +2219,7 @@
           <span class="scout-hist-sum-label">By signal type</span>
           <span class="scout-hist-sum-meta"><span class="muted">Types</span> <strong>${typeGroups.length}</strong></span>
           <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Trades</span> <strong>${allAgg.count}</strong></span>
-          <span class="scout-hist-sum-meta"><span class="muted">Total net P&amp;L</span> <strong class="${allAgg.net_pnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${fmtPnl(allAgg.net_pnl)}</strong></span>
+          <span class="scout-hist-sum-meta"><span class="muted">Total net P&amp;L</span> <strong class="${pnlClass(allAgg.net_pnl)}">${fmtPnl(allAgg.net_pnl)}</strong></span>
         </summary>
         <div class="scout-hist-subsections">${typeSubsections}</div>
       </details>`;
