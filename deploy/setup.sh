@@ -53,6 +53,7 @@ for i in $(seq 1 24); do
 done
 
 # Database: create fresh, or keep existing data (see deploy/db-setup.sh).
+# Schema migrations also run automatically on every container start (main.py).
 # shellcheck disable=SC1091
 source "$(dirname "$0")/db-setup.sh"
 run_db_setup "$@"

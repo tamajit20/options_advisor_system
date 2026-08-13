@@ -3,7 +3,10 @@
 #
 # Modes:
 #   fresh    — DROP DATABASE + --init-db (empty database)
-#   existing — --init-db only (keeps data; creates any missing tables)
+#   existing — --init-db only (keeps data; creates any missing tables/migrations)
+#
+# Note: routine upgrades can use ./deploy/update.sh instead — schema still
+# applies automatically when options_advisor / ws_runner containers restart.
 #
 # shellcheck disable=SC1091
 set -euo pipefail

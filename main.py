@@ -458,6 +458,8 @@ def _cmd_ws_runner() -> int:
     signal.signal(signal.SIGINT, _on_sig)
     signal.signal(signal.SIGTERM, _on_sig)
 
+    _ensure_schema_on_startup()
+
     from providers.event_bus import TOPIC_TICK_INDEX, TOPIC_TICK_SCOUT
 
     bus = get_event_bus()
@@ -535,17 +537,18 @@ def _run_scheduler(stop_event: threading.Event) -> None:
 
 
 def _ensure_schema_on_startup() -> None:
-    """Create any missing tables (idempotent). Safe on every container start."""
+    """Ensure database exists and apply idempotent DDL/migrations on every start."""
     try:
         from database.connection import SQLServerConnection
-        from database.schema import create_all_tables
+        from database.schema import create_all_tables, create_database_if_missing
 
+        create_database_if_missing()
         db = SQLServerConnection()
         db.connect()
         try:
             create_all_tables(db)
             db.commit()
-            logger.info("Startup schema ensure completed (options + scout tables).")
+            logger.info("Startup schema ensure completed (options + scout tables + migrations).")
         finally:
             db.close()
     except Exception:
@@ -641,6 +644,8 @@ def main(argv=None) -> int:
         return _cmd_backfill_index_spot(args.backfill_days)
     _install_db_logging()
     if args.dashboard_only:
+        _ensure_schema_on_startup()
+        _seed_events_on_startup()
         _run_dashboard()
         return 0
     if args.scheduler_only:
