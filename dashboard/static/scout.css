@@ -107,7 +107,7 @@
   min-height: 0;
   flex: 1;
 }
-#panel-scout-errors {
+#panel-scout-errors.active {
   display: flex;
   flex-direction: column;
   min-height: calc(100vh - 140px);
