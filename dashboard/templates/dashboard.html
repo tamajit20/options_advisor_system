@@ -569,7 +569,12 @@
               <input type="checkbox" name="auto_close_trades" id="cfg-auto-close">
               <span>Auto-close on target, stop, or square-off (15:10 IST)</span>
             </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Auto-enter retry interval (seconds)</span>
+              <input type="number" name="auto_close_poll_seconds" id="cfg-auto-poll" min="5" max="120" step="1" value="10">
+            </label>
           </div>
+          <p class="muted scout-config-hint">How often Scout retries untaken signals and manages open trades (pending fills, stops, exits). Applies on the next poll after save — no restart needed.</p>
         </section>
         <section class="scout-config-section">
           <h3 class="scout-config-heading">Position sizing</h3>

@@ -27,6 +27,7 @@ from scout.config_loader import (
     invalidate_automation_cache,
     invalidate_settings_cache,
     invalidate_watchlist_cache,
+    reload_scout_settings,
     set_automation,
     set_scout_settings,
     watchlist_set,
@@ -173,7 +174,7 @@ def api_scout_status(db: SQLServerConnection):
         "signals_poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
         "signals_live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
         "signal_valid_minutes": int(settings.get("signal_valid_minutes", 30)),
-        "auto_close_poll_seconds": int(SCOUT_CONFIG.get("auto_close_poll_seconds", 10)),
+        "auto_close_poll_seconds": int(settings.get("auto_close_poll_seconds", 10)),
         "automation": automation,
         "settings": settings,
         "trades_opened_today": trade_repo.count_trades_opened_today(),
@@ -385,7 +386,6 @@ def api_scout_automation_put(db: SQLServerConnection):
         return jsonify({"error": "body must be a JSON object"}), 400
     cleaned = set_automation(db, body)
     db.commit()
-    invalidate_automation_cache()
     return jsonify({"status": "ok", "automation": cleaned})
 
 
@@ -406,11 +406,10 @@ def api_scout_settings_put(db: SQLServerConnection):
     body = request.get_json(silent=True) or {}
     if not isinstance(body, dict):
         return jsonify({"error": "body must be a JSON object"}), 400
-    current = get_scout_settings(db, use_cache=False)
+    current = reload_scout_settings(db)
     merged = {**current, **body}
     cleaned = set_scout_settings(db, merged)
     db.commit()
-    invalidate_settings_cache()
     return jsonify({"status": "ok", "settings": cleaned})
 
 
@@ -509,7 +508,7 @@ def api_scout_trades_open(db: SQLServerConnection):
 def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
     """Record execution — enter fill price/qty from your Zerodha order (like mark-executed)."""
     body = request.get_json(silent=True) or {}
-    settings = get_scout_settings(db, use_cache=False)
+    settings = get_scout_settings(db)
     entry_price = body.get("entry_price")
 
     sig_repo = ScoutSignalRepo(db)

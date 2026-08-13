@@ -234,7 +234,7 @@ def test_get_scout_settings_legacy_automation_fallback(mocker):
     assert settings["auto_trade_quantity"] == 3
 
 
-def test_set_scout_settings_invalidates_cache(mocker):
+def test_set_scout_settings_refreshes_cache(mocker):
     from scout import config_loader
     from scout.config_loader import set_scout_settings
 
@@ -243,8 +243,26 @@ def test_set_scout_settings_invalidates_cache(mocker):
     mocker.patch("database.scout_models.ScoutConfigRepo", return_value=mock_repo)
 
     set_scout_settings(MagicMock(), {"max_trades_per_day": 2})
-    assert config_loader._SETTINGS_CACHE is None
+    assert config_loader._SETTINGS_CACHE["max_trades_per_day"] == 2
     mock_repo.set_settings.assert_called_once()
+
+
+def test_get_scout_settings_uses_cache_without_db(mocker):
+    from scout import config_loader
+    from scout.config_loader import get_scout_settings, invalidate_settings_cache
+
+    invalidate_settings_cache()
+    mock_repo = MagicMock()
+    mock_repo.get_settings.return_value = {"max_trades_per_day": 7}
+    mock_repo.get_automation.return_value = None
+    mocker.patch("database.scout_models.ScoutConfigRepo", return_value=mock_repo)
+
+    db = MagicMock()
+    first = get_scout_settings(db)
+    second = get_scout_settings(db)
+    assert first["max_trades_per_day"] == 7
+    assert second["max_trades_per_day"] == 7
+    assert mock_repo.get_settings.call_count == 1
 
 
 def test_scout_settings_api_put_rejects_non_object_body(client):

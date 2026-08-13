@@ -167,9 +167,12 @@ class ScoutPushEngine:
             try:
                 from database.thread_db import dedicated_connection
                 from scout.auto_trader import run_execution_poll
+                from scout.config_loader import get_scout_settings
 
                 with dedicated_connection() as db:
+                    settings = get_scout_settings(db)
                     run_execution_poll(db, spot_lookup=self._spot_lookup)
+                    poll = max(5, int(settings.get("auto_close_poll_seconds", 10)))
             except Exception:
                 logger.exception("ScoutPushEngine: auto-trader poll failed")
 
@@ -289,7 +292,7 @@ class ScoutPushEngine:
         if not symbols_to_eval:
             return
 
-        settings = get_scout_settings(self._db, use_cache=False)
+        settings = get_scout_settings(self._db)
         cfg = effective_pattern_config(settings)
         dedupe_mins = int(settings.get("push_dedupe_minutes", self._dedupe_minutes))
         dedupe_per_symbol = bool(settings.get("dedupe_per_symbol", False))

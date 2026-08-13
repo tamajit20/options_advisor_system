@@ -1610,6 +1610,7 @@
     };
     setCheck('auto_execute_signals', settings.auto_execute_signals);
     setCheck('auto_close_trades', settings.auto_close_trades);
+    setVal('auto_close_poll_seconds', settings.auto_close_poll_seconds ?? 10);
     setCheck('use_investment_sizing', settings.use_investment_sizing);
     setCheck('one_trade_per_symbol_per_day', settings.one_trade_per_symbol_per_day);
     setCheck('dedupe_per_symbol', settings.dedupe_per_symbol);
@@ -1684,6 +1685,7 @@
     return {
       auto_execute_signals: !!form.querySelector('[name="auto_execute_signals"]')?.checked,
       auto_close_trades: !!form.querySelector('[name="auto_close_trades"]')?.checked,
+      auto_close_poll_seconds: num('auto_close_poll_seconds'),
       use_investment_sizing: !!form.querySelector('[name="use_investment_sizing"]')?.checked,
       one_trade_per_symbol_per_day: !!form.querySelector('[name="one_trade_per_symbol_per_day"]')?.checked,
       dedupe_per_symbol: !!form.querySelector('[name="dedupe_per_symbol"]')?.checked,

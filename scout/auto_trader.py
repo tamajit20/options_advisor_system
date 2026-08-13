@@ -86,7 +86,7 @@ def try_auto_execute_signal(
     spot_lookup: Callable[[str], Optional[float]],
 ) -> Optional[dict]:
     """Auto-enter via 3-step execution engine (paper or Zerodha)."""
-    settings = get_scout_settings(db, use_cache=False)
+    settings = get_scout_settings(db)
     if not settings.get("auto_execute_signals"):
         return None
     if not SCOUT_CONFIG.get("enabled", True):
@@ -201,7 +201,7 @@ def try_auto_close_trades(
     spot_lookup: Callable[[str], Optional[float]],
 ) -> List[dict]:
     """Step 3 — manage open trades (paper LTP or live Zerodha)."""
-    settings = get_scout_settings(db, use_cache=False)
+    settings = get_scout_settings(db)
     if not settings.get("auto_close_trades"):
         return []
     if not SCOUT_CONFIG.get("enabled", True):
@@ -273,7 +273,7 @@ def try_auto_enter_pending_signals(
     spot_lookup: Callable[[str], Optional[float]],
 ) -> List[dict]:
     """Retry auto-enter on recent signals that never got a trade row."""
-    settings = get_scout_settings(db, use_cache=False)
+    settings = get_scout_settings(db)
     if not settings.get("auto_execute_signals"):
         return []
     if not SCOUT_CONFIG.get("enabled", True) or not is_market_open():
@@ -298,7 +298,7 @@ def run_execution_poll(
     spot_lookup: Callable[[str], Optional[float]],
 ) -> dict:
     """Single poll tick: pending entries, auto-enter retry, auto-close."""
-    settings = get_scout_settings(db, use_cache=False)
+    settings = get_scout_settings(db)
     out = {
         "pending_filled": [],
         "protection_retried": [],
@@ -325,7 +325,7 @@ def on_signals_committed(
     """Run auto-enter for freshly committed signal rows."""
     if not signal_ids:
         return
-    settings = get_scout_settings(db, use_cache=False)
+    settings = get_scout_settings(db)
     if not settings.get("auto_execute_signals"):
         return
     for sid in signal_ids:

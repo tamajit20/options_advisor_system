@@ -25,6 +25,12 @@ def test_default_settings_has_investment_sizing():
     assert d["max_trades_per_day"] == 5
     assert d["dedupe_per_symbol"] is True
     assert "HIGH" in d["auto_enter_strengths"]
+    assert d["auto_close_poll_seconds"] == 10
+
+
+def test_validate_clamps_auto_close_poll_seconds():
+    assert validate_scout_settings({"auto_close_poll_seconds": 1})["auto_close_poll_seconds"] == 5
+    assert validate_scout_settings({"auto_close_poll_seconds": 999})["auto_close_poll_seconds"] == 120
 
 
 def test_default_settings_has_wallet_limits():

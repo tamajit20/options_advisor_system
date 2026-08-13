@@ -35,44 +35,50 @@ def nifty50_universe() -> List[str]:
 def get_watchlist(db=None, *, use_cache: bool = True) -> List[str]:
     """Active watchlist for WS push and scanning."""
     global _WATCHLIST_CACHE
+    if use_cache and _WATCHLIST_CACHE is not None:
+        return list(_WATCHLIST_CACHE)
     if db is not None:
         from database.scout_models import ScoutConfigRepo
 
         saved = ScoutConfigRepo(db).get_watchlist()
         if saved:
-            if use_cache:
-                _WATCHLIST_CACHE = list(saved)
+            _WATCHLIST_CACHE = list(saved)
             return list(saved)
-    if use_cache and _WATCHLIST_CACHE is not None:
-        return list(_WATCHLIST_CACHE)
     wl = default_watchlist()
-    if use_cache:
-        _WATCHLIST_CACHE = list(wl)
+    _WATCHLIST_CACHE = list(wl)
     return wl
 
 
-def get_scout_settings(db=None, *, use_cache: bool = True) -> dict:
-    """Full Scout settings (automation, limits, filters, sizing)."""
-    global _SETTINGS_CACHE
-    if db is not None:
-        from database.scout_models import ScoutConfigRepo
+def _load_scout_settings_from_db(db) -> dict:
+    from database.scout_models import ScoutConfigRepo
 
-        repo = ScoutConfigRepo(db)
-        saved = repo.get_settings()
-        if saved is None:
-            legacy = repo.get_automation()
-            if legacy:
-                saved = {**default_scout_settings(), **legacy}
-        merged = merge_scout_settings(saved)
-        if use_cache:
-            _SETTINGS_CACHE = dict(merged)
-        return merged
+    repo = ScoutConfigRepo(db)
+    saved = repo.get_settings()
+    if saved is None:
+        legacy = repo.get_automation()
+        if legacy:
+            saved = {**default_scout_settings(), **legacy}
+    return merge_scout_settings(saved)
+
+
+def get_scout_settings(db=None, *, use_cache: bool = True) -> dict:
+    """Full Scout settings — served from in-process cache unless cache bypassed."""
+    global _SETTINGS_CACHE
     if use_cache and _SETTINGS_CACHE is not None:
         return dict(_SETTINGS_CACHE)
-    base = default_scout_settings()
-    if use_cache:
-        _SETTINGS_CACHE = dict(base)
-    return base
+
+    if db is not None:
+        merged = _load_scout_settings_from_db(db)
+    else:
+        merged = default_scout_settings()
+
+    _SETTINGS_CACHE = dict(merged)
+    return dict(merged)
+
+
+def reload_scout_settings(db) -> dict:
+    """Force reload from DB and refresh the in-process cache."""
+    return get_scout_settings(db, use_cache=False)
 
 
 def get_automation(db=None, *, use_cache: bool = True) -> dict:
@@ -90,13 +96,14 @@ def set_scout_settings(db, settings: dict, *, updated_by: str = "ui") -> dict:
 
     cleaned = validate_scout_settings(settings)
     ScoutConfigRepo(db).set_settings(cleaned, updated_by=updated_by)
-    invalidate_settings_cache()
+    global _SETTINGS_CACHE
+    _SETTINGS_CACHE = dict(cleaned)
     return cleaned
 
 
 def set_automation(db, settings: dict, *, updated_by: str = "ui") -> dict:
     """Merge automation patch into full settings and save."""
-    current = get_scout_settings(db, use_cache=False)
+    current = reload_scout_settings(db)
     patch = {
         "auto_execute_signals": bool(settings.get("auto_execute_signals", current["auto_execute_signals"])),
         "auto_close_trades": bool(settings.get("auto_close_trades", current["auto_close_trades"])),

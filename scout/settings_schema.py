@@ -20,6 +20,7 @@ def default_scout_settings() -> dict:
         # Automation
         "auto_execute_signals": bool(SCOUT_CONFIG.get("auto_execute_signals", False)),
         "auto_close_trades": bool(SCOUT_CONFIG.get("auto_close_trades", False)),
+        "auto_close_poll_seconds": int(SCOUT_CONFIG.get("auto_close_poll_seconds", 10)),
         # Position sizing
         "use_investment_sizing": True,
         "investment_per_trade_inr": 20_000,
@@ -88,6 +89,9 @@ def validate_scout_settings(raw: dict) -> dict:
 
     d["auto_execute_signals"] = bool(src.get("auto_execute_signals", d["auto_execute_signals"]))
     d["auto_close_trades"] = bool(src.get("auto_close_trades", d["auto_close_trades"]))
+    d["auto_close_poll_seconds"] = max(
+        5, min(int(src.get("auto_close_poll_seconds", d["auto_close_poll_seconds"])), 120),
+    )
     d["use_investment_sizing"] = bool(src.get("use_investment_sizing", d["use_investment_sizing"]))
 
     inv = float(src.get("investment_per_trade_inr", d["investment_per_trade_inr"]))
