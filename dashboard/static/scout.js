@@ -4,7 +4,7 @@
 (function () {
   'use strict';
 
-  const SCOUT_TABS = ['scout-signals', 'scout-watchlist', 'scout-trades', 'scout-history', 'scout-errors', 'scout-config'];
+  const SCOUT_TABS = ['scout-signals', 'scout-trades', 'scout-history', 'scout-errors', 'scout-watchlist', 'scout-config'];
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 

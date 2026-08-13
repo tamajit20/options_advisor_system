@@ -90,9 +90,6 @@
         <button class="nav-item" data-tab="scout-signals">
           <span class="nav-icon">🔍</span><span class="nav-label">Signals</span>
         </button>
-        <button class="nav-item" data-tab="scout-watchlist">
-          <span class="nav-icon">📋</span><span class="nav-label">Watchlist</span>
-        </button>
         <button class="nav-item" data-tab="scout-trades">
           <span class="nav-icon">📊</span><span class="nav-label">My Trades</span>
         </button>
@@ -101,6 +98,9 @@
         </button>
         <button class="nav-item" data-tab="scout-errors">
           <span class="nav-icon">⚠️</span><span class="nav-label">Errors</span>
+        </button>
+        <button class="nav-item" data-tab="scout-watchlist">
+          <span class="nav-icon">📋</span><span class="nav-label">Watchlist</span>
         </button>
         <button class="nav-item" data-tab="scout-config">
           <span class="nav-icon">⚙️</span><span class="nav-label">Scout Config</span>
@@ -390,10 +390,10 @@
       <h2 class="panel-title">Intraday Scout — Signals</h2>
       <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
         <button class="scout-subtab active" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
         <button class="scout-subtab" data-stab="scout-trades">Execution</button>
         <button class="scout-subtab" data-stab="scout-history">History</button>
         <button class="scout-subtab" data-stab="scout-errors">Errors</button>
+        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
         <button class="scout-subtab" data-stab="scout-config">Config</button>
       </div>
       <div class="scout-header-compact">
@@ -414,14 +414,75 @@
       <div id="scout-signals-container" class="loading">Loading…</div>
     </article>
 
+    <article class="panel" id="panel-scout-trades" aria-hidden="true">
+      <h2 class="panel-title">Intraday Scout — Execution</h2>
+      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
+        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
+        <button class="scout-subtab active" data-stab="scout-trades">Execution</button>
+        <button class="scout-subtab" data-stab="scout-history">History</button>
+        <button class="scout-subtab" data-stab="scout-errors">Errors</button>
+        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
+        <button class="scout-subtab" data-stab="scout-config">Config</button>
+      </div>
+      <p class="muted scout-intro">Live trade flow — Step 1 enter, Step 2 stop + target orders, Step 3 watch and adjust. Toggle live Zerodha orders in the <strong>Config</strong> tab.</p>
+      <div id="scout-trades-alarm-banner" class="scout-alarm-banner" hidden></div>
+      <div id="scout-trades-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-scout-history" aria-hidden="true">
+      <h2 class="panel-title">Intraday Scout — History</h2>
+      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
+        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
+        <button class="scout-subtab" data-stab="scout-trades">Execution</button>
+        <button class="scout-subtab active" data-stab="scout-history">History</button>
+        <button class="scout-subtab" data-stab="scout-errors">Errors</button>
+        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
+        <button class="scout-subtab" data-stab="scout-config">Config</button>
+      </div>
+      <div class="filter-row hist-filter-bar scout-hist-filters">
+        <label class="hist-filter-label">From <input type="date" id="scout-hist-from" class="hist-date-input"></label>
+        <label class="hist-filter-label">To <input type="date" id="scout-hist-to" class="hist-date-input"></label>
+        <button type="button" class="btn btn-ghost" id="scout-hist-apply">Apply</button>
+      </div>
+      <div id="scout-history-panel" class="scout-history-panel loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-scout-errors" aria-hidden="true">
+      <h2 class="panel-title">Intraday Scout — Errors</h2>
+      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
+        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
+        <button class="scout-subtab" data-stab="scout-trades">Execution</button>
+        <button class="scout-subtab" data-stab="scout-history">History</button>
+        <button class="scout-subtab active" data-stab="scout-errors">Errors</button>
+        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
+        <button class="scout-subtab" data-stab="scout-config">Config</button>
+      </div>
+      <p class="muted scout-intro">Zerodha permission checks run after login and at start-of-day. Failures stay here until resolved — live orders are blocked while checks fail.</p>
+      <div id="scout-err-status" class="scout-err-status" hidden></div>
+      <div class="filter-row hist-filter-bar scout-hist-filters">
+        <label class="hist-filter-label">From <input type="date" id="scout-err-from" class="hist-date-input"></label>
+        <label class="hist-filter-label">To <input type="date" id="scout-err-to" class="hist-date-input"></label>
+        <select id="scout-err-severity" class="hist-date-input" title="Filter severity">
+          <option value="">All severities</option>
+          <option value="ERROR" selected>ERROR</option>
+          <option value="WARNING">WARNING</option>
+          <option value="INFO">INFO</option>
+        </select>
+        <input type="search" id="scout-err-search" placeholder="Search…" class="scout-wl-search" style="max-width:160px">
+        <button type="button" class="btn btn-ghost" id="scout-err-apply">Apply</button>
+        <button type="button" class="btn btn-accent" id="scout-err-recheck">Re-run checks</button>
+      </div>
+      <div id="scout-errors-container" class="loading">Loading…</div>
+    </article>
+
     <article class="panel" id="panel-scout-watchlist" aria-hidden="true">
       <h2 class="panel-title">Intraday Scout — Watchlist</h2>
       <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
         <button class="scout-subtab" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab active" data-stab="scout-watchlist">Watchlist</button>
         <button class="scout-subtab" data-stab="scout-trades">Execution</button>
         <button class="scout-subtab" data-stab="scout-history">History</button>
         <button class="scout-subtab" data-stab="scout-errors">Errors</button>
+        <button class="scout-subtab active" data-stab="scout-watchlist">Watchlist</button>
         <button class="scout-subtab" data-stab="scout-config">Config</button>
       </div>
       <p class="muted scout-intro">All NSE stocks from Zerodha&apos;s instrument master (refreshed daily — new IPOs appear after Zerodha lists them). Search, select, then Save.</p>
@@ -447,74 +508,14 @@
       </div>
     </article>
 
-    <article class="panel" id="panel-scout-trades" aria-hidden="true">
-      <h2 class="panel-title">Intraday Scout — Execution</h2>
-      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
-        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
-        <button class="scout-subtab active" data-stab="scout-trades">My Trades</button>
-        <button class="scout-subtab" data-stab="scout-history">History</button>
-        <button class="scout-subtab" data-stab="scout-errors">Errors</button>
-        <button class="scout-subtab" data-stab="scout-config">Config</button>
-      </div>
-      <p class="muted scout-intro">Live trade flow — Step 1 enter, Step 2 stop + target orders, Step 3 watch and adjust. Toggle live Zerodha orders in the <strong>Config</strong> tab.</p>
-      <div id="scout-trades-alarm-banner" class="scout-alarm-banner" hidden></div>
-      <div id="scout-trades-container" class="loading">Loading…</div>
-    </article>
-
-    <article class="panel" id="panel-scout-history" aria-hidden="true">
-      <h2 class="panel-title">Intraday Scout — History</h2>
-      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
-        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
-        <button class="scout-subtab" data-stab="scout-trades">Execution</button>
-        <button class="scout-subtab active" data-stab="scout-history">History</button>
-        <button class="scout-subtab" data-stab="scout-errors">Errors</button>
-        <button class="scout-subtab" data-stab="scout-config">Config</button>
-      </div>
-      <div class="filter-row hist-filter-bar scout-hist-filters">
-        <label class="hist-filter-label">From <input type="date" id="scout-hist-from" class="hist-date-input"></label>
-        <label class="hist-filter-label">To <input type="date" id="scout-hist-to" class="hist-date-input"></label>
-        <button type="button" class="btn btn-ghost" id="scout-hist-apply">Apply</button>
-      </div>
-      <div id="scout-history-panel" class="scout-history-panel loading">Loading…</div>
-    </article>
-
-    <article class="panel" id="panel-scout-errors" aria-hidden="true">
-      <h2 class="panel-title">Intraday Scout — Errors</h2>
-      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
-        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
-        <button class="scout-subtab" data-stab="scout-trades">Execution</button>
-        <button class="scout-subtab" data-stab="scout-history">History</button>
-        <button class="scout-subtab active" data-stab="scout-errors">Errors</button>
-        <button class="scout-subtab" data-stab="scout-config">Config</button>
-      </div>
-      <p class="muted scout-intro">Zerodha permission checks run after login and at start-of-day. Failures stay here until resolved — live orders are blocked while checks fail.</p>
-      <div id="scout-err-status" class="scout-err-status" hidden></div>
-      <div class="filter-row hist-filter-bar scout-hist-filters">
-        <label class="hist-filter-label">From <input type="date" id="scout-err-from" class="hist-date-input"></label>
-        <label class="hist-filter-label">To <input type="date" id="scout-err-to" class="hist-date-input"></label>
-        <select id="scout-err-severity" class="hist-date-input" title="Filter severity">
-          <option value="">All severities</option>
-          <option value="ERROR" selected>ERROR</option>
-          <option value="WARNING">WARNING</option>
-          <option value="INFO">INFO</option>
-        </select>
-        <input type="search" id="scout-err-search" placeholder="Search…" class="scout-wl-search" style="max-width:160px">
-        <button type="button" class="btn btn-ghost" id="scout-err-apply">Apply</button>
-        <button type="button" class="btn btn-accent" id="scout-err-recheck">Re-run checks</button>
-      </div>
-      <div id="scout-errors-container" class="loading">Loading…</div>
-    </article>
-
     <article class="panel" id="panel-scout-config" aria-hidden="true">
       <h2 class="panel-title">Intraday Scout — Config</h2>
       <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
         <button class="scout-subtab" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
         <button class="scout-subtab" data-stab="scout-trades">Execution</button>
         <button class="scout-subtab" data-stab="scout-history">History</button>
+        <button class="scout-subtab" data-stab="scout-errors">Errors</button>
+        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
         <button class="scout-subtab active" data-stab="scout-config">Config</button>
       </div>
       <p class="muted scout-intro">Tune automation, position sizing, trade limits, and signal filters. Changes apply immediately to new signals and auto-enter.</p>
