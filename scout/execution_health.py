@@ -80,7 +80,7 @@ def ws_health(*, market_open: Optional[bool] = None) -> dict:
 
     if market_open is None:
         try:
-            from scout.market_data import is_market_open
+            from scout.utils import is_market_open
             market_open = is_market_open()
         except Exception:
             market_open = True
@@ -89,6 +89,7 @@ def ws_health(*, market_open: Optional[bool] = None) -> dict:
     tick_ts, snap_ts = _snapshot_timestamps(snap)
     tick_age = _age_seconds(tick_ts)
     snap_age = _age_seconds(snap_ts)
+    tick_rate = float(snap.get("tick_rate_per_sec") or 0)
 
     connected = conn in ("connected", "streaming", "open")
     stale = True
@@ -100,9 +101,13 @@ def ws_health(*, market_open: Optional[bool] = None) -> dict:
         elif snap_age is not None:
             age = snap_age
             stale = snap_age > _WS_STALE_SECONDS
+        elif connected and tick_rate > 0:
+            age = 0.0
+            stale = False
     else:
         age = snap_age if snap_age is not None else tick_age
-        stale = not connected or snap_age is None or snap_age > _WS_STALE_SECONDS
+        monitor_fresh = age is not None and age <= _WS_STALE_SECONDS
+        stale = not connected or (not monitor_fresh and tick_rate <= 0)
 
     ok = connected and not stale
     reason = ""
@@ -119,6 +124,7 @@ def ws_health(*, market_open: Optional[bool] = None) -> dict:
         "connected": connected,
         "stale": stale,
         "age_seconds": round(age, 1) if age is not None else None,
+        "tick_rate_per_sec": round(tick_rate, 2) if tick_rate else 0.0,
         "connection_state": conn or "unknown",
         "reason": reason,
     }

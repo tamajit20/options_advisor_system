@@ -155,8 +155,8 @@ def api_scout_status(db: SQLServerConnection):
     trade_repo = ScoutTradeRepo(db)
     health = build_execution_health(db, settings, fetch_wallet=zerodha_execute_enabled(settings))
     try:
-        from providers.zerodha.permission_check import latest_check_from_db
-        perm = latest_check_from_db(db)
+        from providers.zerodha.permission_check import latest_check_from_db, last_permission_summary, overlay_live_websocket_check
+        perm = overlay_live_websocket_check(latest_check_from_db(db) or last_permission_summary())
     except Exception:
         perm = None
     return jsonify({
@@ -711,9 +711,13 @@ def api_scout_zerodha_log(db: SQLServerConnection):
 @scout_bp.route("/zerodha-check/latest")
 @_with_db
 def api_scout_zerodha_check_latest(db: SQLServerConnection):
-    from providers.zerodha.permission_check import latest_check_from_db, last_permission_summary
+    from providers.zerodha.permission_check import (
+        latest_check_from_db,
+        last_permission_summary,
+        overlay_live_websocket_check,
+    )
 
-    summary = latest_check_from_db(db) or last_permission_summary()
+    summary = overlay_live_websocket_check(latest_check_from_db(db) or last_permission_summary())
     row = ScoutZerodhaLogRepo(db).latest_summary()
     return jsonify({
         "summary": summary,

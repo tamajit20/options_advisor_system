@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from providers.zerodha.permission_check import (
+    overlay_live_websocket_check,
     run_zerodha_permission_check,
     run_and_persist_check,
 )
@@ -57,3 +58,26 @@ def test_persist_check_writes_to_db():
         out = run_and_persist_check(fake_db, trigger="manual", include_ws=False)
     assert out["trigger"] == "manual"
     assert repo.insert.call_count >= 2
+
+
+def test_overlay_live_websocket_check_replaces_stale_row():
+    stale = {
+        "overall_ok": True,
+        "checks": [
+            {"check_id": "session", "label": "Session", "ok": True},
+            {
+                "check_id": "websocket", "label": "WebSocket runner", "ok": False,
+                "error": "ws snapshot stale (0s old)",
+            },
+        ],
+        "failed_count": 1,
+    }
+    live_ws = {
+        "check_id": "websocket", "label": "WebSocket runner", "ok": True,
+        "detail": "connected · snapshot 1.2s old",
+    }
+    with patch("providers.zerodha.permission_check._probe_websocket", return_value=live_ws):
+        out = overlay_live_websocket_check(stale)
+    ws = [c for c in out["checks"] if c["check_id"] == "websocket"][0]
+    assert ws["ok"] is True
+    assert out["failed_count"] == 0

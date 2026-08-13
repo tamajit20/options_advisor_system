@@ -166,9 +166,11 @@ def _probe_websocket() -> dict:
         from scout.execution_health import ws_health
         ws = ws_health()
         if ws.get("ok"):
+            rate = ws.get("tick_rate_per_sec")
+            extra = f" · {rate}/s ticks" if rate else ""
             return _check_row(
                 "websocket", "WebSocket runner", True,
-                detail=f"connected · snapshot {ws.get('age_seconds')}s old",
+                detail=f"connected · snapshot {ws.get('age_seconds')}s old{extra}",
             )
         return _check_row(
             "websocket", "WebSocket runner", False,
@@ -177,6 +179,37 @@ def _probe_websocket() -> dict:
         )
     except Exception as exc:
         return _check_row("websocket", "WebSocket runner", False, error=str(exc))
+
+
+_REQUIRED_CHECK_IDS = {
+    "api_credentials", "api_enabled", "session", "kite_client",
+    "profile", "margins", "order_margins",
+}
+
+
+def overlay_live_websocket_check(summary: Optional[dict]) -> Optional[dict]:
+    """Replace cached websocket row with a live probe (UI stays current)."""
+    if not summary or not isinstance(summary.get("checks"), list):
+        return summary
+    out = dict(summary)
+    checks = [dict(c) for c in summary["checks"]]
+    live = _probe_websocket()
+    replaced = False
+    for i, chk in enumerate(checks):
+        if chk.get("check_id") == "websocket":
+            checks[i] = live
+            replaced = True
+            break
+    if not replaced:
+        checks.append(live)
+    out["checks"] = checks
+    out["failed_count"] = len([c for c in checks if not c.get("ok")])
+    failed_required = [
+        c for c in checks if not c.get("ok") and c.get("check_id") in _REQUIRED_CHECK_IDS
+    ]
+    out["overall_ok"] = len(failed_required) == 0
+    out["websocket_refreshed_live"] = True
+    return out
 
 
 def run_zerodha_permission_check(*, include_ws: bool = True) -> dict:
@@ -197,10 +230,7 @@ def run_zerodha_permission_check(*, include_ws: bool = True) -> dict:
     if include_ws:
         checks.append(_probe_websocket())
 
-    required_ids = {
-        "api_credentials", "api_enabled", "session", "kite_client",
-        "profile", "margins", "order_margins",
-    }
+    required_ids = _REQUIRED_CHECK_IDS
     failed = [c for c in checks if not c["ok"] and c["check_id"] in required_ids]
     overall_ok = len(failed) == 0
 
