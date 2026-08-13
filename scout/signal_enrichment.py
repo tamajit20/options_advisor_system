@@ -411,7 +411,7 @@ def build_exit_plan(
         {
             "id": "target",
             "label": "Target",
-            "value": f"₹{target_price:.2f}" + (f" ({r_mult}R)" if target_price is not None else " —"),
+            "value": (f"₹{target_price:.2f} ({r_mult}R)" if target_price is not None else " —"),
             "dynamic": True,
         },
         {

@@ -11,6 +11,7 @@ from database.connection import SQLServerConnection
 from database.scout_models import ScoutSignalRepo, ScoutTradeOrderRepo, ScoutTradeRepo
 from scout.execution_engine import execution_mode_label, zerodha_execute_enabled
 from scout.live_quotes import latest_equity_ltps
+from scout.settings_schema import format_square_off_time
 from scout.signal_enrichment import build_exit_plan, evaluate_exit_alerts, scout_trade_mtm
 from utils import now_ist
 
