@@ -6,7 +6,7 @@ on:
       branch:
         description: Git branch to deploy
         required: false
-        default: master_zerodha
+        default: master
 
 jobs:
   deploy:

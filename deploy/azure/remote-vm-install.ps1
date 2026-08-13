@@ -79,7 +79,7 @@ if ($EnvFile) {
 }
 
 Write-Host "==> [2/3] Running vm-install-deploy.sh on VM (Docker + app + port 5001 attempt)..."
-$remoteCmd = "cd '$VmProjectDir' 2>/dev/null || true; if [ ! -f deploy/vm-install-deploy.sh ]; then git clone -b master_zerodha https://github.com/tamajit20/options_advisor_system.git '$VmProjectDir' && cd '$VmProjectDir'; fi; chmod +x deploy/vm-install-deploy.sh deploy/azure/open-port-5001.sh 2>/dev/null; ./deploy/vm-install-deploy.sh $installFlagStr"
+$remoteCmd = "cd '$VmProjectDir' 2>/dev/null || true; if [ ! -f deploy/vm-install-deploy.sh ]; then git clone -b master https://github.com/tamajit20/options_advisor_system.git '$VmProjectDir' && cd '$VmProjectDir'; fi; chmod +x deploy/vm-install-deploy.sh deploy/azure/open-port-5001.sh 2>/dev/null; ./deploy/vm-install-deploy.sh $installFlagStr"
 & ssh @sshArgs $sshTarget $remoteCmd
 
 if (-not $SkipPortOpen) {

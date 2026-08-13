@@ -20,7 +20,7 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/tamajit20/options_advisor_system.git}"
-REPO_BRANCH="${REPO_BRANCH:-master_zerodha}"
+REPO_BRANCH="${REPO_BRANCH:-master}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/options_advisor_system}"
 
 # Re-exec under docker group if we were just added (avoids "log out and back in").

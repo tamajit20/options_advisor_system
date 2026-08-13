@@ -53,7 +53,7 @@ ssh -i /path/to/OptionsAdvisor_key.pem azureuser@<VM_PUBLIC_IP>
 Run:
 
 ```bash
-git clone -b master_zerodha https://github.com/tamajit20/options_advisor_system.git
+git clone -b master https://github.com/tamajit20/options_advisor_system.git
 cd options_advisor_system
 
 cp .env.docker.example .env.docker
@@ -236,7 +236,7 @@ Use after a git push when you want **new application code** but **keep the exist
 cd ~/options_advisor_system
 export COMPOSE_PROFILES=bundled
 
-git pull origin master_zerodha
+git pull origin master
 
 docker compose build options_advisor
 docker compose up -d
