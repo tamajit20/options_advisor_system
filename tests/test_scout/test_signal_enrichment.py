@@ -123,6 +123,18 @@ def test_build_exit_plan_buy_or_break():
     assert any(c["id"] == "exit_time" for c in plan["conditions"])
 
 
+def test_build_exit_plan_range_break_uses_box_measured_move():
+    sig = {
+        "action": "BUY",
+        "signal_type": "RANGE_BREAK_UP",
+        "ltp": 105.0,
+        "invalidation": 98.0,
+        "meta": {"box_high": 104.0, "box_low": 100.0},
+    }
+    plan = build_exit_plan(sig, entry_price=105.0, now=datetime(2026, 7, 30, 11, 0, 0))
+    assert plan["structural_target"] == 108.0  # box_high + (box_high - box_low)
+
+
 def test_build_exit_plan_sell_uses_negative_target():
     sig = _sample_signal(
         action="SELL",
@@ -182,5 +194,5 @@ def test_latest_equity_ltps_from_ws_status(tmp_path, monkeypatch):
         return path
 
     monkeypatch.setattr("scout.live_quotes._snapshot_path", _fake_path)
-    quotes = latest_equity_ltps(["RELIANCE"])
+    quotes = latest_equity_ltps(["RELIANCE"], max_age_seconds=None)
     assert quotes["RELIANCE"]["ltp"] == 2500.5

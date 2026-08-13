@@ -427,15 +427,31 @@ def execute_entry(
     entry_px = float(entry_price)
     qty = int(quantity)
 
+    if signal_id in trade_repo.open_signal_ids():
+        existing = trade_repo.get_by_signal_id(signal_id)
+        if existing:
+            return {
+                "trade_id": int(existing["id"]),
+                "signal_id": signal_id,
+                "status": existing.get("status"),
+                "execution_mode": existing.get("execution_mode"),
+                "quantity": existing.get("quantity"),
+                "deduplicated": True,
+            }
+
     if live:
         ok, msg = zerodha_ready()
         if not ok:
             raise RuntimeError(msg)
 
-        from providers.zerodha.permission_check import latest_check_from_db, last_permission_summary
+        from providers.zerodha.permission_check import (
+            latest_check_from_db,
+            last_permission_summary,
+            permissions_ok_for_live,
+        )
 
         latest_check_from_db(db)
-        if not permissions_ok_for_live():
+        if not permissions_ok_for_live(require_websocket=True):
             summ = last_permission_summary()
             hint = summ.get("failed_count") if summ else "unknown"
             raise RuntimeError(
@@ -462,6 +478,7 @@ def execute_entry(
 
         margin_ok, margin_msg = verify_entry_margin(
             symbol=sym, action=action, quantity=qty, limit_price=entry_px,
+            db=db, settings=settings,
         )
         if not margin_ok:
             raise RuntimeError(margin_msg or "margin check failed")
@@ -637,6 +654,42 @@ def process_pending_entries(
     return results
 
 
+_escalated_unprotected: set[int] = set()
+
+
+def _log_unprotected_escalation(
+    db: SQLServerConnection,
+    trade_id: int,
+    trade: dict,
+    attempts: int,
+) -> None:
+    """Persist a critical alarm when Step 2 stop retries are exhausted."""
+    if trade_id in _escalated_unprotected:
+        return
+    _escalated_unprotected.add(trade_id)
+    sym = str(trade.get("symbol") or "")
+    msg = (
+        f"TRD #{trade_id} {sym} UNPROTECTED — stop placement failed after "
+        f"{attempts} attempts; position has no broker stop"
+    )
+    logger.critical(msg)
+    try:
+        import json
+        import uuid
+        from database.scout_models import ScoutZerodhaLogRepo
+        ScoutZerodhaLogRepo(db).insert(
+            run_id=f"unprotected-{trade_id}-{uuid.uuid4().hex[:8]}",
+            trigger_source="execution_engine",
+            severity="critical",
+            code="unprotected_trade",
+            message=msg,
+            detail=json.dumps({"trade_id": trade_id, "symbol": sym, "attempts": attempts}),
+        )
+        db.commit()
+    except Exception as exc:
+        logger.warning("Failed to persist UNPROTECTED escalation: %s", exc)
+
+
 def retry_unprotected_trades(
     db: SQLServerConnection,
     *,
@@ -656,6 +709,7 @@ def retry_unprotected_trades(
         tid = int(trade["id"])
         attempts = order_repo.count_step_attempts(tid, step_num=2, leg="STOP_LOSS")
         if attempts >= _STEP2_MAX_ATTEMPTS:
+            _log_unprotected_escalation(db, tid, trade, attempts)
             continue
         sid = trade.get("signal_id")
         sig = sig_repo.get(int(sid)) if sid else None
@@ -727,6 +781,14 @@ def _manage_unprotected_trade(
     reason = "unprotected_exit"
     if alerts.get("alerts"):
         reason = str(alerts["alerts"][0].get("code") or reason).lower()
+
+    existing_exit = order_repo.get_leg(tid, "EXIT")
+    if existing_exit:
+        exit_st = str(existing_exit.get("status") or "").upper()
+        if exit_st not in ("CANCELLED", "REJECTED", "FAILED"):
+            if exit_st in ("COMPLETE", "FILLED", "SIMULATED"):
+                return _close_trade(db, tid, exit_price=float(live_ltp), reason=reason)
+            return None
 
     if live:
         _cancel_broker_order(order_repo.get_leg(tid, "TARGET"), live=True)

@@ -957,6 +957,7 @@ DASHBOARD_CONFIG = {
     "host":         _env("OPT_DASHBOARD_HOST", "0.0.0.0"),
     "port":         _env_int("OPT_DASHBOARD_PORT", 5001),
     "debug":        _env_bool("OPT_DASHBOARD_DEBUG", False),
+    "api_key":      _env("OPT_DASHBOARD_API_KEY", ""),
     # Optional fixed public URL (e.g. http://52.230.104.81:5001). When unset, derived
     # from each HTTP request Host / X-Forwarded-* headers (works on Azure without this).
     "public_base_url": _env("OPT_PUBLIC_BASE_URL", "").strip().rstrip("/"),

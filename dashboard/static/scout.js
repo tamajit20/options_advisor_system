@@ -1,5 +1,6 @@
 /**
  * Intraday Scout — signals, watchlist, trades (Zerodha fills), history.
+ * History P&L classifiers mirror scout/history_display.py (keep both in sync).
  */
 (function () {
   'use strict';

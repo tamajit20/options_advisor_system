@@ -168,7 +168,7 @@ def try_auto_execute_signal(
 
     profit_block = entry_profit_block_reason(
         signal=sig,
-        entry=float(ltp),
+        entry=float(entry_px),
         qty=qty,
         settings=settings,
     )
@@ -216,6 +216,8 @@ def try_auto_close_trades(
         return []
     if not SCOUT_CONFIG.get("enabled", True):
         return []
+    if not is_market_open():
+        return []
 
     trade_repo = ScoutTradeRepo(db)
     sig_repo = ScoutSignalRepo(db)
@@ -227,10 +229,12 @@ def try_auto_close_trades(
         if status not in ("OPEN", "UNPROTECTED"):
             continue
         sym = str(trade["symbol"]).upper()
-        ltp = spot_lookup(sym)
+        if live:
+            from scout.live_quotes import fresh_equity_ltp
+            ltp = fresh_equity_ltp(sym)
+        else:
+            ltp = spot_lookup(sym)
         if ltp is None or float(ltp) <= 0:
-            ltp = float(trade.get("entry_price") or 0)
-        if ltp <= 0:
             continue
 
         sid = _coerce_int_id(trade.get("signal_id"))

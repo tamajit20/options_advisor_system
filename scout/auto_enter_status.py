@@ -146,7 +146,7 @@ def evaluate_auto_enter_status(
             wallet_ok = False
             wallet_detail = wblock
         else:
-            wsum = wallet_summary(trade_repo.db, settings, fetch=False)
+            wsum = wallet_summary(trade_repo.db, settings, fetch=True)
             free = wsum.get("free_inr")
             cap = wsum.get("max_deployable_inr")
             if free is not None and cap is not None:

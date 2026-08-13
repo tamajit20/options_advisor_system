@@ -646,6 +646,9 @@ def create_app() -> Flask:
     # the HTML template ensures a fresh fetch on every page load anyway.
     app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
+    from dashboard.auth import register_dashboard_auth
+    register_dashboard_auth(app)
+
     # ---------- HTML ----------
     @app.route("/")
     def index():

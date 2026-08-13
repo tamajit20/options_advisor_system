@@ -28,11 +28,19 @@ def last_permission_summary() -> Optional[dict]:
     return dict(_last_check_summary) if _last_check_summary else None
 
 
-def permissions_ok_for_live() -> bool:
+def permissions_ok_for_live(*, require_websocket: bool = True) -> bool:
     """True when the latest persisted check passed all required probes."""
     summary = last_permission_summary()
-    if summary is not None:
-        return bool(summary.get("overall_ok"))
+    if summary is None:
+        return False
+    if not bool(summary.get("overall_ok")):
+        return False
+    if not require_websocket:
+        return True
+    checks = summary.get("checks") or []
+    for row in checks:
+        if row.get("check_id") == "websocket":
+            return bool(row.get("ok"))
     return False
 
 

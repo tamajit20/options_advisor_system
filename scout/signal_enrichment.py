@@ -52,6 +52,14 @@ def _structural_target(signal: dict, meta: dict, action: str) -> Optional[float]
             bh = float(meta["box_high"])
             bl = float(meta["box_low"])
             return round(bl - (bh - bl), 2)
+        if st == "RANGE_BREAK_UP" and action == "BUY":
+            bh = float(meta["box_high"])
+            bl = float(meta["box_low"])
+            return round(bh + (bh - bl), 2)
+        if st == "RANGE_BREAK_DOWN" and action == "SELL":
+            bh = float(meta["box_high"])
+            bl = float(meta["box_low"])
+            return round(bl - (bh - bl), 2)
     except (KeyError, TypeError, ValueError):
         pass
     return None
@@ -79,6 +87,8 @@ def _setup_code(signal_type: Optional[str]) -> str:
         "OR_BREAK_DOWN": "OR ↓",
         "COMPRESSION_BREAK_UP": "BOX ↑",
         "COMPRESSION_BREAK_DOWN": "BOX ↓",
+        "RANGE_BREAK_UP": "BOX ↑",
+        "RANGE_BREAK_DOWN": "BOX ↓",
         "PULLBACK_UP": "PB ↑",
         "PULLBACK_DOWN": "PB ↓",
     }

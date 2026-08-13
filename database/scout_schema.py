@@ -132,6 +132,7 @@ def create_scout_tables(db: SQLServerConnection) -> None:
         cur.close()
     _migrate_scout_trades_net_pnl(db)
     _migrate_scout_trades_execution(db)
+    _migrate_scout_trades_signal_unique(db)
     logger.info("Scout tables ensured (%d DDL statements).", len(SCOUT_TABLE_DDL))
 
 
@@ -179,6 +180,27 @@ def _migrate_scout_trades_execution(db: SQLServerConnection) -> None:
             cur = db.execute(f"ALTER TABLE scout_trades ADD {col} {ddl}")
             cur.close()
             logger.info("scout_trades: added column %s", col)
+
+
+def _migrate_scout_trades_signal_unique(db: SQLServerConnection) -> None:
+    """One active trade row per signal_id (prevents duplicate auto-enter)."""
+    exists = db.fetch_one(
+        "SELECT 1 AS ok FROM sys.tables WHERE name = 'scout_trades'"
+    )
+    if not exists:
+        return
+    idx = db.fetch_one(
+        "SELECT 1 AS ok FROM sys.indexes WHERE name = 'UX_scout_trades_signal_active'"
+    )
+    if idx:
+        return
+    cur = db.execute(
+        "CREATE UNIQUE INDEX UX_scout_trades_signal_active ON scout_trades (signal_id) "
+        "WHERE signal_id IS NOT NULL AND status IN "
+        "('OPEN', 'PENDING_ENTRY', 'UNPROTECTED', 'CLOSING')"
+    )
+    cur.close()
+    logger.info("scout_trades: added filtered unique index on signal_id")
 
 
 def _migrate_paper_trades_to_trades(db: SQLServerConnection) -> None:

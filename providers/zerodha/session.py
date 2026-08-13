@@ -141,6 +141,26 @@ def load_session(path: Optional[Path] = None) -> Optional[ZerodhaSession]:
         return None
 
 
+def _restrict_session_file_permissions(path: Path) -> None:
+    """Best-effort restrict session file to current user (POSIX chmod, Windows ACL)."""
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    if os.name != "nt":
+        return
+    try:
+        import subprocess
+        subprocess.run(
+            ["icacls", str(path), "/inheritance:r", "/grant:r", f"{os.getlogin()}:F"],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
 def save_session(session: ZerodhaSession, path: Optional[Path] = None) -> Path:
     """Atomically write session to disk and chmod 0600 (POSIX). Returns the path."""
     p = path or _session_path()
@@ -155,6 +175,7 @@ def save_session(session: ZerodhaSession, path: Optional[Path] = None) -> Path:
             # Windows / non-POSIX — best-effort only.
             pass
         os.replace(tmp_name, p)
+        _restrict_session_file_permissions(p)
     except Exception:
         try:
             os.unlink(tmp_name)

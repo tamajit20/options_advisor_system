@@ -55,6 +55,7 @@ def test_try_auto_close_stop_hit(mocker):
     }
     mocker.patch("scout.auto_trader.get_scout_settings", return_value=settings)
     mocker.patch("scout.auto_trader.SCOUT_CONFIG", {"enabled": True})
+    mocker.patch("scout.auto_trader.is_market_open", return_value=True)
     trade_repo = MagicMock()
     trade_repo.open_trades.return_value = [{
         "id": 8,

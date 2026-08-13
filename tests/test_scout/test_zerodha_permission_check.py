@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from providers.zerodha.permission_check import (
     overlay_live_websocket_check,
+    permissions_ok_for_live,
     run_zerodha_permission_check,
     run_and_persist_check,
 )
@@ -81,3 +82,16 @@ def test_overlay_live_websocket_check_replaces_stale_row():
     ws = [c for c in out["checks"] if c["check_id"] == "websocket"][0]
     assert ws["ok"] is True
     assert out["failed_count"] == 0
+
+
+def test_permissions_ok_for_live_requires_websocket_when_stale():
+    summary = {
+        "overall_ok": True,
+        "checks": [
+            {"check_id": "session", "ok": True},
+            {"check_id": "websocket", "ok": False, "error": "stale"},
+        ],
+    }
+    with patch("providers.zerodha.permission_check.last_permission_summary", return_value=summary):
+        assert permissions_ok_for_live(require_websocket=True) is False
+        assert permissions_ok_for_live(require_websocket=False) is True

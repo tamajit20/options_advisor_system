@@ -446,6 +446,7 @@ def api_scout_watchlist_put(db: SQLServerConnection):
 def api_scout_trades_open(db: SQLServerConnection):
     trade_repo = ScoutTradeRepo(db)
     sig_repo = ScoutSignalRepo(db)
+    settings = get_scout_settings(db)
     rows = trade_repo.open_trades()
     symbols = {str(r["symbol"]).upper() for r in rows}
     quotes = latest_equity_ltps(symbols)
@@ -477,11 +478,15 @@ def api_scout_trades_open(db: SQLServerConnection):
             executed_at=row.get("executed_at"),
             live_ltp=ltp,
             now=now,
+            settings=settings,
         )
         row["exit_alerts"] = evaluate_exit_alerts(
             action=str(row.get("action") or ""),
             live_ltp=ltp,
             exit_plan=row["exit_plan"],
+            entry_price=float(row.get("entry_price") or 0),
+            peak_price=row.get("peak_price"),
+            settings=settings,
         )
         orders = ScoutTradeOrderRepo(db).for_trade(int(row["id"]))
         row["execution"] = build_trade_execution_flow(
@@ -574,6 +579,8 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
         ),
     )
     trade = dict(trade_repo.get(tid) or {})
+    # Manual mark-taken = operator already filled on Zerodha outside Scout.
+    # DB-only protection/target (live=False) is intentional — not the 3-step auto flow.
     place_protection_and_target(
         db,
         trade=trade,
@@ -674,6 +681,13 @@ def api_scout_history_stats(db: SQLServerConnection):
     stats = ScoutTradeRepo(db).performance_stats(from_date=from_d, to_date=to_d)
     stats["from_date"] = from_d
     stats["to_date"] = to_d
+    from scout.history_display import pf_class, pnl_class, win_pct_class
+    net = stats.get("total_net_pnl") if stats.get("total_net_pnl") is not None else stats.get("total_pnl")
+    stats["display"] = {
+        "net_pnl_class": pnl_class(net),
+        "win_pct_class": win_pct_class(stats.get("win_rate_pct")),
+        "profit_factor_class": pf_class(stats.get("profit_factor")),
+    }
     return jsonify(stats)
 
 

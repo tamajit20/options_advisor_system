@@ -8,9 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
+from utils import now_ist
+
 logger = logging.getLogger(__name__)
 
 _INDEX_SYMBOLS = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "VIX", "MIDCPNIFTY"})
+_DEFAULT_MAX_AGE_SECONDS = 45
 
 
 def _snapshot_path() -> Path:
@@ -22,13 +25,25 @@ def _parse_ts(raw: Optional[str]) -> Optional[datetime]:
     if not raw:
         return None
     try:
-        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).replace(tzinfo=None)
     except (TypeError, ValueError):
         return None
 
 
-def latest_equity_ltps(symbols: Optional[Iterable[str]] = None) -> Dict[str, dict]:
-    """Return {SYMBOL: {ltp, as_of}} from the most recent equity ticks in ws_status."""
+def _quote_age_seconds(as_of: Optional[str], *, now: Optional[datetime] = None) -> Optional[float]:
+    ts = _parse_ts(as_of)
+    if ts is None:
+        return None
+    ref = (now or now_ist()).replace(tzinfo=None)
+    return max(0.0, (ref - ts).total_seconds())
+
+
+def latest_equity_ltps(
+    symbols: Optional[Iterable[str]] = None,
+    *,
+    max_age_seconds: Optional[int] = _DEFAULT_MAX_AGE_SECONDS,
+) -> Dict[str, dict]:
+    """Return {SYMBOL: {ltp, as_of, stale?}} from recent equity ticks in ws_status."""
     want = {str(s).upper() for s in symbols} if symbols else None
     path = _snapshot_path()
     if not path.exists():
@@ -38,6 +53,11 @@ def latest_equity_ltps(symbols: Optional[Iterable[str]] = None) -> Dict[str, dic
             snap = json.load(f)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         logger.debug("scout live quotes: read failed: %s", exc)
+        return {}
+
+    now = now_ist().replace(tzinfo=None)
+    snap_age = _quote_age_seconds(snap.get("generated_at"), now=now)
+    if max_age_seconds is not None and snap_age is not None and snap_age > max_age_seconds:
         return {}
 
     out: Dict[str, dict] = {}
@@ -66,5 +86,22 @@ def latest_equity_ltps(symbols: Optional[Iterable[str]] = None) -> Dict[str, dic
             continue
         if ltp <= 0:
             continue
-        out[sym] = {"ltp": ltp, "as_of": ev.get("ts")}
+        as_of = ev.get("ts")
+        age = _quote_age_seconds(as_of, now=now)
+        if max_age_seconds is not None and age is not None and age > max_age_seconds:
+            continue
+        out[sym] = {
+            "ltp": ltp,
+            "as_of": as_of,
+            "age_seconds": round(age, 1) if age is not None else None,
+        }
     return out
+
+
+def fresh_equity_ltp(symbol: str, *, max_age_seconds: Optional[int] = _DEFAULT_MAX_AGE_SECONDS) -> Optional[float]:
+    """Return a non-stale LTP for one symbol, or None when quote is missing/old."""
+    q = latest_equity_ltps([symbol], max_age_seconds=max_age_seconds).get(str(symbol).upper())
+    if not q:
+        return None
+    ltp = q.get("ltp")
+    return float(ltp) if ltp is not None and float(ltp) > 0 else None

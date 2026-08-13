@@ -1,7 +1,8 @@
 """
 scout/history_display.py — P&L / win-rate display classifiers and trade aggregation.
 
-Mirrors dashboard/static/scout.js so History tab coloring and summary math stay testable.
+Canonical implementation for History tab coloring. Keep in sync with
+dashboard/static/scout.js helpers (pnlClass, winPctClass, pfClass, aggregateTrades).
 """
 
 from __future__ import annotations

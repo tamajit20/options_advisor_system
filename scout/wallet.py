@@ -178,6 +178,8 @@ def verify_entry_margin(
     action: str,
     quantity: int,
     limit_price: float,
+    db: Optional[SQLServerConnection] = None,
+    settings: Optional[dict] = None,
 ) -> Tuple[bool, str]:
     """Pre-check order margin via Kite order_margins."""
     try:
@@ -201,6 +203,16 @@ def verify_entry_margin(
         required = float(row.get("total") or row.get("margin") or 0)
         if required <= 0:
             return True, ""
+        if db is not None and settings is not None:
+            summary = wallet_summary(db, settings)
+            free = summary.get("free_inr")
+            if free is None:
+                free = summary.get("balance_inr")
+            if free is not None and required > float(free) + 0.01:
+                return False, (
+                    f"insufficient margin (need ₹{required:,.0f}, "
+                    f"deployable ₹{float(free):,.0f})"
+                )
         return True, ""
     except Exception as exc:
         msg = str(exc)

@@ -165,15 +165,12 @@ class ScoutPushEngine:
         poll = max(5, int(SCOUT_CONFIG.get("auto_close_poll_seconds", 10)))
         while not self._stop_event.wait(timeout=poll):
             try:
+                from database.thread_db import dedicated_connection
                 from scout.auto_trader import run_execution_poll
 
-                result = run_execution_poll(
-                    self._db, spot_lookup=self._spot_lookup,
-                )
-                if result.get("pending_filled") or result.get("entered") or result.get("closed"):
-                    self._db.commit()
+                with dedicated_connection() as db:
+                    run_execution_poll(db, spot_lookup=self._spot_lookup)
             except Exception:
-                self._db.rollback()
                 logger.exception("ScoutPushEngine: auto-trader poll failed")
 
     def _seed_history(self) -> None:

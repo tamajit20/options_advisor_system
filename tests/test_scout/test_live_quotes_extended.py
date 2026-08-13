@@ -3,20 +3,27 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from scout.live_quotes import latest_equity_ltps
 
 
 def _write_snap(tmp_path, events):
+    now = datetime.now().isoformat()
+    for ev in events:
+        ev.setdefault("ts", now)
     path = tmp_path / "ws_status.json"
-    path.write_text(json.dumps({"recent_events": events}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"generated_at": now, "recent_events": events}),
+        encoding="utf-8",
+    )
     return path
 
 
 def test_prefers_tick_scout_topic(tmp_path, monkeypatch):
     events = [
-        {"ts": "2026-08-12T10:00:00", "topic": "tick", "symbol": "RELIANCE", "last_price": 2400},
-        {"ts": "2026-08-12T10:00:01", "topic": "tick.scout", "symbol": "RELIANCE", "last_price": 2500.5},
+        {"topic": "tick", "symbol": "RELIANCE", "last_price": 2400},
+        {"topic": "tick.scout", "symbol": "RELIANCE", "last_price": 2500.5},
     ]
     path = _write_snap(tmp_path, events)
     monkeypatch.setattr("scout.live_quotes._snapshot_path", lambda: path)
@@ -26,7 +33,7 @@ def test_prefers_tick_scout_topic(tmp_path, monkeypatch):
 
 def test_legacy_tick_topic_still_works(tmp_path, monkeypatch):
     events = [
-        {"ts": "2026-08-12T10:00:00", "topic": "tick", "symbol": "TCS", "last_price": 4000.0},
+        {"topic": "tick", "symbol": "TCS", "last_price": 4000.0},
     ]
     path = _write_snap(tmp_path, events)
     monkeypatch.setattr("scout.live_quotes._snapshot_path", lambda: path)

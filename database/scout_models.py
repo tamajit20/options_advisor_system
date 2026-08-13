@@ -397,6 +397,15 @@ class ScoutTradeRepo:
         )
         return _row(row) if row else None
 
+    def get_by_signal_id(self, signal_id: int) -> Optional[dict]:
+        placeholders = ", ".join("?" for _ in ACTIVE_TRADE_STATUSES)
+        row = self.db.fetch_one(
+            f"SELECT TOP 1 * FROM scout_trades WHERE signal_id = ? "
+            f"AND status IN ({placeholders}) ORDER BY id DESC",
+            [signal_id, *ACTIVE_TRADE_STATUSES],
+        )
+        return _row(row) if row else None
+
     def close(
         self,
         trade_id: int,
@@ -406,7 +415,8 @@ class ScoutTradeRepo:
         exit_reason: Optional[str] = None,
     ) -> Optional[dict]:
         trade = self.get(trade_id)
-        if not trade or trade.get("status") != "OPEN":
+        closable = ("OPEN", "UNPROTECTED")
+        if not trade or str(trade.get("status") or "") not in closable:
             return None
         pnl, pnl_pct = _trade_pnl(
             trade["action"],
@@ -420,11 +430,12 @@ class ScoutTradeRepo:
             float(exit_price),
             int(trade.get("quantity") or 1),
         )
+        placeholders = ", ".join("?" for _ in closable)
         self.db.execute(
             "UPDATE scout_trades SET status='CLOSED', exit_price=?, closed_at=?, "
             "pnl=?, pnl_pct=?, gross_pnl=?, total_charges=?, net_pnl=?, exit_reason=? "
-            "WHERE id=? AND status='OPEN'",
-            [exit_price, closed_at, pnl, pnl_pct, gross, charges, net, exit_reason, trade_id],
+            f"WHERE id=? AND status IN ({placeholders})",
+            [exit_price, closed_at, pnl, pnl_pct, gross, charges, net, exit_reason, trade_id, *closable],
         )
         return self.get(trade_id)
 
