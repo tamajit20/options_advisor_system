@@ -106,3 +106,62 @@ def test_scout_watchlist_refresh(client, mocker):
     rv = client.post("/api/scout/watchlist/refresh-instruments")
     assert rv.status_code == 200
     assert rv.get_json()["instrument_count"] == 1500
+
+
+def test_scout_flow_route(client, mocker):
+    mocker.patch(
+        "scout.routes.get_scout_settings",
+        return_value={"zerodha_execute_orders": False},
+    )
+    mocker.patch(
+        "scout.routes.build_flow_items",
+        return_value=[
+            {"kind": "trade", "trade": {"id": 1, "symbol": "TCS", "status": "OPEN"}},
+        ],
+    )
+    mocker.patch("scout.routes.is_market_open", return_value=False)
+    mocker.patch("scout.routes.execution_mode_label", return_value="paper")
+    mocker.patch("scout.routes.zerodha_execute_enabled", return_value=False)
+
+    rv = client.get("/api/scout/flow")
+    assert rv.status_code == 200
+    data = rv.get_json()
+    assert data["count"] == 1
+    assert data["items"][0]["kind"] == "trade"
+    assert data["market_open"] is False
+    assert "poll_seconds" in data
+
+
+def test_scout_flow_route_empty_off_market(client, mocker):
+    mocker.patch("scout.routes.get_scout_settings", return_value={})
+    mocker.patch("scout.routes.build_flow_items", return_value=[])
+    mocker.patch("scout.routes.is_market_open", return_value=False)
+    mocker.patch("scout.routes.execution_mode_label", return_value="paper")
+    mocker.patch("scout.routes.zerodha_execute_enabled", return_value=False)
+
+    rv = client.get("/api/scout/flow")
+    data = rv.get_json()
+    assert data["count"] == 0
+    assert data["items"] == []
+
+
+def test_scout_zerodha_log_route(client, mocker):
+    mock_repo = MagicMock()
+    mock_repo.fetch.return_value = [
+        {
+            "id": 1,
+            "severity": "error",
+            "message": "Margins denied",
+            "created_at": "2026-08-13 10:00:00",
+        },
+    ]
+    mock_repo.count.return_value = 1
+    mocker.patch("scout.routes.ScoutZerodhaLogRepo", return_value=mock_repo)
+
+    rv = client.get("/api/scout/zerodha-log?days=7")
+    assert rv.status_code == 200
+    data = rv.get_json()
+    assert data["count"] == 1
+    assert data["entries"][0]["severity"] == "error"
+    assert "from_date" in data
+

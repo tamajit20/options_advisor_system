@@ -170,6 +170,11 @@ def build_trade_execution_flow(
     }
 
 
+def signal_eligible_for_execution_flow(*, market_open: bool, validity_status: str) -> bool:
+    """Whether a signal-only row should appear on the Execution tab."""
+    return bool(market_open) and str(validity_status or "") == "ACTIVE"
+
+
 def build_flow_items(db: SQLServerConnection, *, settings: dict) -> List[dict]:
     """Unified signal + trade execution items for the dashboard."""
     sig_repo = ScoutSignalRepo(db)
@@ -216,12 +221,13 @@ def build_flow_items(db: SQLServerConnection, *, settings: dict) -> List[dict]:
             continue
         if sid in trade_by_signal:
             continue
-        if not market_open:
-            continue
         sym = str(sig.get("symbol") or "").upper()
         ltp = (quotes.get(sym) or {}).get("ltp")
         enriched = enrich_signal(sig, live_ltp=ltp, now=now, settings=settings)
-        if enriched.get("validity_status") != "ACTIVE":
+        if not signal_eligible_for_execution_flow(
+            market_open=market_open,
+            validity_status=str(enriched.get("validity_status") or ""),
+        ):
             continue
         items.append({
             "kind": "signal",

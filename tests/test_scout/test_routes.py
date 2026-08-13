@@ -20,3 +20,16 @@ def test_scout_signals_route(client):
     data = rv.get_json()
     assert "signals" in data
     assert isinstance(data["signals"], list)
+    assert "market_open" in data
+
+
+def test_scout_flow_route_smoke(client, mocker):
+    mocker.patch("scout.routes.get_scout_settings", return_value={})
+    mocker.patch("scout.routes.build_flow_items", return_value=[])
+    mocker.patch("scout.routes.is_market_open", return_value=False)
+    mocker.patch("scout.routes.execution_mode_label", return_value="paper")
+    mocker.patch("scout.routes.zerodha_execute_enabled", return_value=False)
+    rv = client.get("/api/scout/flow")
+    assert rv.status_code == 200
+    assert "items" in rv.get_json()
+

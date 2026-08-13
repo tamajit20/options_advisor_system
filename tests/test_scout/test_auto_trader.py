@@ -21,6 +21,12 @@ def db():
     return MagicMock()
 
 
+@pytest.fixture(autouse=True)
+def _trading_window_open(mocker):
+    """Block-reason and auto-enter tests assume a live trading window."""
+    mocker.patch("scout.auto_trader.in_trading_window", return_value=True)
+
+
 def _scout_settings(**overrides):
     base = {
         "auto_execute_signals": True,
