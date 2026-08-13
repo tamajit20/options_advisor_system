@@ -1369,17 +1369,29 @@
     </div>`;
   }
 
-  function renderExecutionFlow(items) {
+  function filterExecutionItems(items, marketOpen) {
+    return (items || []).filter(it => {
+      if (it.kind === 'trade') return true;
+      if (it.kind === 'signal') return marketOpen !== false;
+      return true;
+    });
+  }
+
+  function renderExecutionFlow(items, marketOpen) {
     const c = $('#scout-trades-container');
     if (!c) return;
-    const trades = (items || []).filter(it => it.kind === 'trade');
-    if (!trades.length && !(items || []).length) {
+    const visible = filterExecutionItems(items, marketOpen);
+    const trades = visible.filter(it => it.kind === 'trade');
+    if (!visible.length) {
       c.className = '';
-      c.innerHTML = '<div class="empty">No active executions. Enable auto-enter on the <strong>Signals</strong> tab or mark a signal taken.</div>';
+      const msg = marketOpen === false
+        ? 'Market is closed. Open trades appear here during the session; new entries resume when the market opens.'
+        : 'No active executions. Enable auto-enter on the <strong>Signals</strong> tab or mark a signal taken.';
+      c.innerHTML = `<div class="empty">${msg}</div>`;
       return;
     }
     c.className = 'scout-exec-list';
-    c.innerHTML = (items || []).map(renderExecutionFlowCard).join('');
+    c.innerHTML = visible.map(renderExecutionFlowCard).join('');
     bindExecutionCloseButtons(c);
   }
 
@@ -1436,7 +1448,7 @@
       ]);
       if (health) renderAlarmBanner(health, ['scout-trades-alarm-banner', 'scout-alarm-banner']);
       if (data.poll_seconds) _scoutPollMs = Math.max(5, Number(data.poll_seconds) * 1000);
-      renderExecutionFlow(data.items || []);
+      renderExecutionFlow(data.items || [], data.market_open);
     } catch (e) {
       c.className = '';
       c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;

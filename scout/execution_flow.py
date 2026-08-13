@@ -12,7 +12,13 @@ from database.scout_models import ScoutSignalRepo, ScoutTradeOrderRepo, ScoutTra
 from scout.execution_engine import execution_mode_label, zerodha_execute_enabled
 from scout.live_quotes import latest_equity_ltps
 from scout.settings_schema import format_square_off_time
-from scout.signal_enrichment import build_exit_plan, evaluate_exit_alerts, scout_trade_mtm
+from scout.signal_enrichment import (
+    build_exit_plan,
+    enrich_signal,
+    evaluate_exit_alerts,
+    scout_trade_mtm,
+)
+from scout.utils import is_market_open
 from utils import now_ist
 
 
@@ -202,18 +208,25 @@ def build_flow_items(db: SQLServerConnection, *, settings: dict) -> List[dict]:
         if sid is not None:
             seen_signals.add(int(sid))
 
+    market_open = is_market_open()
+    now = now_ist().replace(tzinfo=None)
     for sig in signals:
         sid = int(sig["id"])
         if sid in seen_signals:
             continue
         if sid in trade_by_signal:
             continue
+        if not market_open:
+            continue
         sym = str(sig.get("symbol") or "").upper()
         ltp = (quotes.get(sym) or {}).get("ltp")
+        enriched = enrich_signal(sig, live_ltp=ltp, now=now, settings=settings)
+        if enriched.get("validity_status") != "ACTIVE":
+            continue
         items.append({
             "kind": "signal",
             "trade": None,
-            "signal": sig,
+            "signal": enriched,
             "execution": None,
             "live_ltp": ltp,
         })
