@@ -19,6 +19,7 @@ from scout.execution_engine import (
     zerodha_execute_enabled,
 )
 from scout.wallet import cap_quantity_for_wallet, entry_wallet_block_reason
+from scout.entry_pricing import entry_limit_price
 from scout.profit_gate import entry_profit_block_reason, signal_type_allowed
 from scout.settings_schema import (
     compute_trade_quantity,
@@ -76,17 +77,6 @@ def _auto_enter_block_reason(
     if not signal_type_allowed(settings, signal_type):
         return f"signal type {signal_type} not in auto-enter list"
     return None
-
-
-def _entry_limit_price(enriched: dict, sig: dict, ltp: float) -> float:
-    """Limit price for Step 1 — top of entry band for BUY, bottom for SELL."""
-    action = str(sig.get("action") or "BUY").upper()
-    try:
-        if action == "BUY":
-            return float(enriched.get("entry_max") or ltp)
-        return float(enriched.get("entry_min") or ltp)
-    except (TypeError, ValueError):
-        return float(ltp)
 
 
 def try_auto_execute_signal(
@@ -147,7 +137,7 @@ def try_auto_execute_signal(
         )
         return None
 
-    entry_px = _entry_limit_price(enriched, sig, float(ltp))
+    entry_px = entry_limit_price(enriched, sig, float(ltp))
     if zerodha_execute_enabled(settings):
         wallet_block = entry_wallet_block_reason(
             db, entry_price=entry_px, quantity=qty, settings=settings,

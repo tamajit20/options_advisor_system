@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import List, Optional
 
 from config import SCOUT_CONFIG
-from scout.profit_gate import entry_profit_block_reason, signal_type_allowed
+from scout.entry_pricing import entry_limit_price
+from scout.profit_gate import effective_min_net_profit, entry_profit_block_reason, signal_type_allowed
 from scout.settings_schema import (
     compute_trade_quantity,
     in_trading_window,
@@ -102,13 +103,14 @@ def evaluate_auto_enter_status(
         f"{settings.get('trade_window_end', '14:30')} IST"
     )
 
-    qty = compute_trade_quantity(settings, live_ltp) if live_ltp > 0 else 0
+    entry_px = entry_limit_price(enriched, signal, live_ltp if live_ltp > 0 else None)
+    qty = compute_trade_quantity(settings, entry_px if entry_px > 0 else live_ltp) if live_ltp > 0 else 0
     profit_detail = ""
     profit_ok = True
-    if live_ltp > 0 and qty > 0:
+    if entry_px > 0 and qty > 0:
         profit_block = entry_profit_block_reason(
             signal=signal,
-            entry=live_ltp,
+            entry=entry_px,
             qty=qty,
             settings=settings,
         )
@@ -118,11 +120,12 @@ def evaluate_auto_enter_status(
         else:
             from scout.signal_enrichment import build_exit_plan
 
-            plan = build_exit_plan(signal, entry_price=live_ltp, settings=settings)
+            plan = build_exit_plan(signal, entry_price=entry_px, settings=settings)
             target = plan.get("target_price")
+            min_net = effective_min_net_profit(settings, notional=entry_px * qty)
             profit_detail = (
-                f"≥ ₹{float(settings.get('min_net_profit_inr', 100)):.0f} net at "
-                f"₹{float(target or 0):.2f} ({plan.get('target_r', 2)}R)"
+                f"≥ ₹{min_net:.0f} net at ₹{float(target or 0):.2f} "
+                f"({plan.get('target_r', 2)}R) · entry ₹{entry_px:.2f}"
             )
     elif live_ltp <= 0:
         profit_ok = False

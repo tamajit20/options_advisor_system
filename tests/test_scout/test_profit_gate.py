@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from scout.profit_gate import entry_profit_block_reason, signal_type_allowed
+from scout.profit_gate import (
+    effective_min_net_profit,
+    entry_profit_analysis,
+    entry_profit_block_reason,
+    signal_type_allowed,
+)
 from scout.signal_enrichment import build_exit_plan, evaluate_exit_alerts
 
 
@@ -24,6 +29,25 @@ def test_signal_type_allowed_respects_settings():
     s = {"auto_enter_signal_types": ["OR_BREAK_UP"]}
     assert signal_type_allowed(s, "OR_BREAK_UP")
     assert not signal_type_allowed(s, "PULLBACK_UP")
+
+
+def test_entry_profit_gate_blocks_tight_stop_pct():
+    sig = _or_signal(invalidation=99.85, ltp=100.0, meta={"or_high": 100.2, "or_low": 99.5})
+    reason, metrics = entry_profit_analysis(
+        signal=sig,
+        entry=100.0,
+        qty=20,
+        settings={"min_risk_pct": 0.35, "min_net_profit_inr": 10.0, "min_target_r": 2.0},
+    )
+    assert reason is not None
+    assert "stop too tight" in reason
+    assert metrics["risk_pct"] < 0.35
+
+
+def test_effective_min_net_profit_scales_with_notional():
+    settings = {"min_net_profit_inr": 100.0, "min_net_profit_pct": 0.005}
+    assert effective_min_net_profit(settings, notional=20_000) == 100.0
+    assert effective_min_net_profit(settings, notional=30_000) == 150.0
 
 
 def test_entry_profit_gate_blocks_tiny_edge():

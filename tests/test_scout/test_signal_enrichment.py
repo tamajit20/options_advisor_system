@@ -115,10 +115,10 @@ def test_build_exit_plan_buy_or_break():
     now = datetime(2026, 7, 30, 11, 0, 0)
     plan = build_exit_plan(sig, entry_price=100.0, live_ltp=101.0, now=now)
     assert plan["stop_price"] == 98.0
-    assert plan["target_price"] == 104.0  # 2R with risk=2 (min_target_r default)
+    assert plan["target_price"] == 105.0  # 2.5R with risk=2 (default min_target_r)
     assert plan["structural_target"] == 103.0  # or_high + span = 101 + 2
     assert plan["square_off_by"] == "15:10 IST"
-    assert plan["dashboard"]["target_dist"]["rs"] == 3.0
+    assert plan["dashboard"]["target_dist"]["rs"] == 4.0
     assert plan["dashboard"]["stop_dist"]["rs"] == 3.0
     assert any(c["id"] == "exit_time" for c in plan["conditions"])
 
@@ -143,14 +143,14 @@ def test_build_exit_plan_sell_uses_negative_target():
         signal_type="OR_BREAK_DOWN",
     )
     plan = build_exit_plan(sig, entry_price=100.0, now=datetime(2026, 7, 30, 11, 0, 0))
-    assert plan["target_price"] == 96.0
+    assert plan["target_price"] == 95.0
     assert plan["stop_side"] == "above"
 
 
 def test_exit_alerts_target_hit_on_short():
     sig = _sample_signal(action="SELL", invalidation=102.0)
-    plan = build_exit_plan(sig, entry_price=100.0, live_ltp=96.0, now=datetime(2026, 7, 30, 11, 0, 0))
-    alerts = evaluate_exit_alerts(action="SELL", live_ltp=96.0, exit_plan=plan)
+    plan = build_exit_plan(sig, entry_price=100.0, live_ltp=94.5, now=datetime(2026, 7, 30, 11, 0, 0))
+    alerts = evaluate_exit_alerts(action="SELL", live_ltp=94.5, exit_plan=plan)
     assert alerts["flags"]["target_hit"] is True
     assert alerts["urgency"] == "now"
     assert alerts["close_now"] is True

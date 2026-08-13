@@ -620,8 +620,6 @@ def process_pending_entries(
         if fill_px <= 0:
             ltp = spot_lookup(sym)
             fill_px = float(ltp) if ltp else float(trade.get("entry_price") or 0)
-        trade_repo.activate_from_fill(tid, entry_price=fill_px, executed_at=now_ist())
-        trade = trade_repo.get(tid) or trade
 
         sid = trade.get("signal_id")
         sig = sig_repo.get(int(sid)) if sid else None
@@ -632,6 +630,52 @@ def process_pending_entries(
                 "signal_type": trade.get("signal_type"),
                 "meta": {},
             }
+
+        qty = int(trade.get("quantity") or 1)
+        from scout.profit_gate import entry_profit_block_reason
+
+        profit_block = entry_profit_block_reason(
+            signal=sig,
+            entry=fill_px,
+            qty=qty,
+            settings=settings,
+        )
+        if profit_block:
+            trade_repo.activate_from_fill(tid, entry_price=fill_px, executed_at=now_ist())
+            action = str(trade.get("action") or "BUY").upper()
+            exit_txn = _exit_txn(action)
+            oid, exit_st = _place_exit_market(
+                symbol=sym, exit_txn=exit_txn, quantity=qty, live=True,
+            )
+            _record_order(
+                order_repo,
+                trade_id=tid,
+                step_num=3,
+                leg="EXIT",
+                quantity=qty,
+                order_type=str(SCOUT_CONFIG.get("zerodha_exit_order_type", "MARKET")),
+                transaction_type=exit_txn,
+                product=str(SCOUT_CONFIG.get("zerodha_product", "MIS")),
+                price=fill_px,
+                status=exit_st,
+                kite_order_id=oid,
+                meta={"reason": "profit_gate_post_fill", "detail": profit_block[:200]},
+            )
+            _close_trade(db, tid, exit_price=fill_px, reason="profit_gate_post_fill")
+            logger.warning(
+                "Scout TRD #%s filled @ %.2f but profit gate failed — flattened: %s",
+                tid, fill_px, profit_block,
+            )
+            results.append({
+                "trade_id": tid,
+                "event": "entry_flattened_profit_gate",
+                "entry_price": fill_px,
+                "reason": profit_block,
+            })
+            continue
+
+        trade_repo.activate_from_fill(tid, entry_price=fill_px, executed_at=now_ist())
+        trade = trade_repo.get(tid) or trade
 
         place_result = place_protection_and_target(
             db, trade=trade, signal=sig, entry_price=fill_px, settings=settings, live=True,

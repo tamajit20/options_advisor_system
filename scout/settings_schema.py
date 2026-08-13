@@ -32,8 +32,12 @@ def default_scout_settings() -> dict:
         # Auto-enter pattern filter (OR breaks recommended for cost coverage)
         "auto_enter_signal_types": ["OR_BREAK_UP", "OR_BREAK_DOWN"],
         # Profitability gates (Zerodha intraday costs)
-        "min_net_profit_inr": 100.0,
-        "min_target_r": 2.0,
+        "min_net_profit_inr": 150.0,
+        "min_net_profit_pct": 0.0,
+        "min_target_r": 2.5,
+        "min_risk_pct": 0.35,
+        "profit_slippage_pct": 0.15,
+        "profit_charge_buffer_inr": 25.0,
         "breakeven_at_r": 1.0,
         "trail_stop_r_fraction": 0.5,
         # Wallet / capital (persisted — survives deploy)
@@ -135,7 +139,11 @@ def validate_scout_settings(raw: dict) -> dict:
     d["auto_enter_signal_types"] = cleaned_types or list(d["auto_enter_signal_types"])
 
     d["min_net_profit_inr"] = max(0.0, min(float(src.get("min_net_profit_inr", d["min_net_profit_inr"])), 50_000.0))
+    d["min_net_profit_pct"] = max(0.0, min(float(src.get("min_net_profit_pct", d["min_net_profit_pct"])), 0.05))
     d["min_target_r"] = max(1.0, min(float(src.get("min_target_r", d["min_target_r"])), 5.0))
+    d["min_risk_pct"] = max(0.0, min(float(src.get("min_risk_pct", d["min_risk_pct"])), 2.0))
+    d["profit_slippage_pct"] = max(0.0, min(float(src.get("profit_slippage_pct", d["profit_slippage_pct"])), 1.0))
+    d["profit_charge_buffer_inr"] = max(0.0, min(float(src.get("profit_charge_buffer_inr", d["profit_charge_buffer_inr"])), 500.0))
     d["breakeven_at_r"] = max(0.5, min(float(src.get("breakeven_at_r", d["breakeven_at_r"])), 3.0))
     d["trail_stop_r_fraction"] = max(0.0, min(float(src.get("trail_stop_r_fraction", d["trail_stop_r_fraction"])), 2.0))
 
