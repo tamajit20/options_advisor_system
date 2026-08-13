@@ -24,6 +24,29 @@ _master_token: Optional[str] = None
 _NIFTY50_SET = frozenset(s.upper() for s in NIFTY_50_SYMBOLS)
 
 
+def _equity_display_name(inst: Instrument) -> str:
+    """Company name for UI — omit blank, numeric, or symbol-dupe Kite values."""
+    name = (inst.name or "").strip()
+    sym = inst.tradingsymbol.upper()
+    if not name:
+        return ""
+    if name.isdigit():
+        return ""
+    if name.upper() == sym:
+        return ""
+    return name
+
+
+def _stock_row(inst: Instrument) -> dict:
+    sym = inst.tradingsymbol.upper()
+    return {
+        "symbol": sym,
+        "name": _equity_display_name(inst),
+        "is_nifty50": sym in _NIFTY50_SET,
+        "index_tags": index_tags(inst.tradingsymbol),
+    }
+
+
 class ScoutInstrumentError(Exception):
     pass
 
@@ -77,15 +100,7 @@ def nse_equity_universe(
     else:
         filtered = rows
     total = len(filtered)
-    stock_rows = [
-        {
-            "symbol": inst.tradingsymbol.upper(),
-            "name": inst.name or "",
-            "is_nifty50": inst.tradingsymbol.upper() in _NIFTY50_SET,
-            "index_tags": index_tags(inst.tradingsymbol),
-        }
-        for inst in filtered
-    ]
+    stock_rows = [_stock_row(inst) for inst in filtered]
     if not search:
         stock_rows = sort_watchlist_rows(stock_rows)
     page = stock_rows[offset: offset + limit]
@@ -102,6 +117,21 @@ def nse_equity_universe(
 
 def nifty50_symbols() -> List[str]:
     return list(NIFTY_50_SYMBOLS)
+
+
+def equity_rows_for_symbols(symbols: List[str]) -> List[dict]:
+    """Lookup NSE EQ rows (with names) for saved/selected symbols."""
+    master = _session_master()
+    rows: List[dict] = []
+    for raw in symbols:
+        sym = str(raw or "").upper().strip()
+        if not sym:
+            continue
+        inst = master.get_by_tradingsymbol("NSE", sym)
+        if inst is None or inst.instrument_type != "EQ":
+            continue
+        rows.append(_stock_row(inst))
+    return sort_watchlist_rows(rows)
 
 
 def valid_nse_symbols(symbols: List[str], *, force_refresh: bool = False) -> List[str]:

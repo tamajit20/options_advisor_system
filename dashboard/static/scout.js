@@ -922,15 +922,72 @@
     }).join('');
   }
 
-  function renderWatchlistItem(s) {
+  function watchlistSortRank(row) {
+    const sym = row.symbol || '';
+    const tags = row.index_tags || [];
+    if (tags.includes('nifty50')) {
+      const i = _wlNifty50.indexOf(sym);
+      return [0, i >= 0 ? i : 9999, sym];
+    }
+    if (tags.includes('nifty_bank')) {
+      const i = _wlNiftyBank.indexOf(sym);
+      return [1, i >= 0 ? i : 9999, sym];
+    }
+    const name = (cleanDisplayName(row) || sym).toUpperCase();
+    return [2, name, sym];
+  }
+
+  function compareWatchlistRows(a, b) {
+    const ka = watchlistSortRank(a);
+    const kb = watchlistSortRank(b);
+    for (let i = 0; i < 3; i++) {
+      if (ka[i] < kb[i]) return -1;
+      if (ka[i] > kb[i]) return 1;
+    }
+    return 0;
+  }
+
+  function cleanDisplayName(s) {
+    const name = (s.name || '').trim();
+    if (!name) return '';
+    if (/^\d+$/.test(name)) return '';
+    if (name.toUpperCase() === String(s.symbol || '').toUpperCase()) return '';
+    return name;
+  }
+
+  function mergeWatchlistStock(existing, incoming) {
+    if (incoming.name && !existing.name) existing.name = incoming.name;
+    if (incoming.index_tags && incoming.index_tags.length) existing.index_tags = incoming.index_tags;
+    if (incoming.is_nifty50 != null) existing.is_nifty50 = incoming.is_nifty50;
+    return existing;
+  }
+
+  function upsertWatchlistStocks(rows) {
+    const bySym = new Map(_wlStocks.map(s => [s.symbol, s]));
+    rows.forEach(s => {
+      if (!s || !s.symbol) return;
+      const prev = bySym.get(s.symbol);
+      if (prev) mergeWatchlistStock(prev, s);
+      else {
+        bySym.set(s.symbol, { ...s });
+      }
+    });
+    _wlStocks = Array.from(bySym.values());
+  }
+
+  function renderWatchlistItem(s, opts = {}) {
     const tags = s.index_tags || [];
     const checked = _wlSelected.has(s.symbol);
+    const name = cleanDisplayName(s);
+    const nameFirst = !!opts.nameFirst && !!name;
+    const primary = nameFirst ? name : s.symbol;
+    const secondary = nameFirst ? s.symbol : name;
     return `
-      <label class="scout-wl-item${checked ? ' scout-wl-item--checked' : ''}">
+      <label class="scout-wl-item${checked ? ' scout-wl-item--checked' : ''}${nameFirst ? ' scout-wl-item--name-first' : ''}">
         <input type="checkbox" class="scout-wl-cb" data-symbol="${escapeHtml(s.symbol)}"${checked ? ' checked' : ''}>
         <span class="scout-wl-item-body">
-          <span class="scout-wl-symbol">${escapeHtml(s.symbol)}</span>
-          ${s.name ? `<span class="scout-wl-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span>` : ''}
+          <span class="scout-wl-symbol" title="${escapeHtml(s.symbol)}">${escapeHtml(primary)}</span>
+          ${secondary ? `<span class="scout-wl-name" title="${escapeHtml(secondary)}">${escapeHtml(secondary)}</span>` : ''}
           ${tags.length ? `<span class="scout-wl-badges">${renderWatchlistBadges(tags)}</span>` : ''}
         </span>
       </label>`;
@@ -996,18 +1053,19 @@
   }
 
   function ensureWatchlistRows(symbols) {
-    const seen = new Set(_wlStocks.map(s => s.symbol));
+    const bySym = new Map(_wlStocks.map(s => [s.symbol, s]));
     symbols.forEach(sym => {
-      if (!sym || seen.has(sym)) return;
-      seen.add(sym);
+      if (!sym || bySym.has(sym)) return;
       const tags = indexTagsForSymbol(sym);
-      _wlStocks.push({
+      const row = {
         symbol: sym,
         name: '',
         is_nifty50: tags.includes('nifty50'),
         index_tags: tags,
-      });
+      };
+      bySym.set(sym, row);
     });
+    _wlStocks = Array.from(bySym.values());
   }
 
   function renderWatchlistMeta(data) {
@@ -1051,7 +1109,7 @@
     let html = '';
     if (_wlSearch) {
       c.className = 'scout-wl-grid';
-      html = _wlStocks.map(renderWatchlistItem).join('');
+      html = _wlStocks.map(s => renderWatchlistItem(s, { nameFirst: true })).join('');
     } else {
       c.className = 'scout-watchlist-wrap';
       const buckets = bucketWatchlistStocks(_wlStocks);
@@ -1075,7 +1133,7 @@
                   data-symbols="${escapeHtml(allSyms.join(','))}">${escapeHtml(toggleLabel)}</button>
               </span>
             </summary>
-            <div class="scout-wl-grid">${list.map(renderWatchlistItem).join('')}</div>
+            <div class="scout-wl-grid">${list.map(s => renderWatchlistItem(s, { nameFirst: sec.tag === '_other' })).join('')}</div>
           </details>`;
       }).join('');
     }
@@ -1119,11 +1177,15 @@
       _wlNotice = data.notice || '';
       _wlSelected = new Set(data.selected || _wlSelected);
       const page = data.stocks || [];
+      const extras = data.selected_stocks || [];
       if (append) {
-        const seen = new Set(_wlStocks.map(s => s.symbol));
-        page.forEach(s => { if (!seen.has(s.symbol)) _wlStocks.push(s); });
+        upsertWatchlistStocks(page.concat(extras));
       } else {
-        _wlStocks = page;
+        _wlStocks = page.slice();
+        upsertWatchlistStocks(extras);
+      }
+      if (!_wlSearch) {
+        _wlStocks.sort(compareWatchlistRows);
       }
       renderWatchlist();
     } catch (e) {

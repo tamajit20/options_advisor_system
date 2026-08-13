@@ -723,7 +723,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 120px;
+  max-width: 100%;
+}
+.scout-wl-item--name-first .scout-wl-symbol {
+  font-size: .78rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.scout-wl-item--name-first .scout-wl-name {
+  font-size: .68rem;
+  font-weight: 500;
+  letter-spacing: .03em;
+  text-transform: uppercase;
 }
 .scout-wl-group-title {
   font-size: .9rem;
@@ -732,7 +743,7 @@
 }
 .scout-wl-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: 6px 10px;
 }
 .scout-wl-item {

@@ -12,6 +12,8 @@ INDEX_GROUPS: Dict[str, dict] = {
 }
 
 _SYMBOL_TAGS: Dict[str, List[str]] = {}
+_NIFTY50_RANK: Dict[str, int] = {s.upper(): i for i, s in enumerate(NIFTY_50_SYMBOLS)}
+_NIFTY_BANK_RANK: Dict[str, int] = {s.upper(): i for i, s in enumerate(NIFTY_BANK_SYMBOLS)}
 
 
 def _build_symbol_tags() -> Dict[str, List[str]]:
@@ -35,14 +37,14 @@ def index_tags(symbol: str) -> List[str]:
 
 
 def watchlist_sort_key(row: dict) -> tuple:
-    tags = row.get("index_tags") or index_tags(row.get("symbol", ""))
+    sym = str(row.get("symbol", "")).upper()
+    tags = row.get("index_tags") or index_tags(sym)
     if "nifty50" in tags:
-        tier = 0
-    elif "nifty_bank" in tags:
-        tier = 1
-    else:
-        tier = 2
-    return (tier, row.get("symbol", ""))
+        return (0, _NIFTY50_RANK.get(sym, 9999), sym)
+    if "nifty_bank" in tags:
+        return (1, _NIFTY_BANK_RANK.get(sym, 9999), sym)
+    name = str(row.get("name") or "").strip().upper()
+    return (2, name or sym, sym)
 
 
 def sort_watchlist_rows(rows: List[dict]) -> List[dict]:

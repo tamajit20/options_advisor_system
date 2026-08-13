@@ -35,6 +35,7 @@ from scout.settings_schema import format_square_off_time, suggested_quantity
 from scout.index_groups import INDEX_GROUPS, index_tags, nifty_bank_symbols
 from scout.instruments import (
     ScoutInstrumentError,
+    equity_rows_for_symbols,
     nse_equity_universe,
     nifty50_symbols,
     refresh_nse_equity_master,
@@ -340,8 +341,19 @@ def api_scout_watchlist_get(db: SQLServerConnection):
             "is_default": sym in default,
         })
 
+    selected_stocks: list = []
+    if zerodha_ok and not search:
+        on_page = {r["symbol"] for r in stocks}
+        missing = sorted(sym for sym in selected if sym not in on_page)
+        if missing:
+            try:
+                selected_stocks = equity_rows_for_symbols(missing)
+            except ScoutInstrumentError:
+                selected_stocks = []
+
     return jsonify({
         "stocks": stocks,
+        "selected_stocks": selected_stocks,
         "selected": sorted(selected),
         "selected_count": len(selected),
         "total_equity_count": total,

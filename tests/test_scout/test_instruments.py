@@ -54,3 +54,12 @@ def test_nse_equity_universe_search(mocker):
     page, total, _ = scout_inst.nse_equity_universe(search="TCS", offset=0, limit=10)
     assert total == 1
     assert page[0]["symbol"] == "TCS"
+
+
+def test_equity_display_name_skips_numeric(mocker):
+    from scout.instruments import _equity_display_name
+
+    inst = _eq("RELIANCE", "738561")
+    assert _equity_display_name(inst) == ""
+    inst2 = _eq("RELIANCE", "Reliance Industries")
+    assert _equity_display_name(inst2) == "Reliance Industries"

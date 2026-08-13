@@ -20,9 +20,29 @@ def test_index_tags_other():
 
 def test_sort_watchlist_rows_nifty50_first():
     rows = [
-        {"symbol": "ZOMATO", "index_tags": []},
-        {"symbol": "RELIANCE", "index_tags": ["nifty50"]},
-        {"symbol": "AUBANK", "index_tags": ["nifty_bank"]},
+        {"symbol": "ZOMATO", "name": "Zomato", "index_tags": []},
+        {"symbol": "RELIANCE", "name": "Reliance", "index_tags": ["nifty50"]},
+        {"symbol": "AUBANK", "name": "AU Bank", "index_tags": ["nifty_bank"]},
     ]
     out = sort_watchlist_rows(rows)
     assert [r["symbol"] for r in out] == ["RELIANCE", "AUBANK", "ZOMATO"]
+
+
+def test_sort_watchlist_rows_nifty50_index_order():
+    rows = [
+        {"symbol": "TCS", "name": "TCS", "index_tags": ["nifty50"]},
+        {"symbol": "RELIANCE", "name": "Reliance", "index_tags": ["nifty50"]},
+        {"symbol": "ADANIENT", "name": "Adani", "index_tags": ["nifty50"]},
+    ]
+    out = sort_watchlist_rows(rows)
+    assert [r["symbol"] for r in out] == ["ADANIENT", "RELIANCE", "TCS"]
+
+
+def test_sort_watchlist_rows_other_by_company_name():
+    rows = [
+        {"symbol": "360ONE", "name": "360 ONE WAM", "index_tags": []},
+        {"symbol": "ABB", "name": "ABB India", "index_tags": []},
+        {"symbol": "3MINDIA", "name": "3M India", "index_tags": []},
+    ]
+    out = sort_watchlist_rows(rows)
+    assert [r["symbol"] for r in out] == ["360ONE", "3MINDIA", "ABB"]
