@@ -719,11 +719,18 @@ def create_app() -> Flask:
             ws_wake = ensure_ws_runner_running()
         except Exception:
             logger.exception("ws_runner wake after exchange failed (non-fatal)")
+        perm = None
+        try:
+            from providers.zerodha.permission_check import last_permission_summary
+            perm = last_permission_summary()
+        except Exception:
+            pass
         return jsonify({
             "ok": True,
             "user_id": session.user_id,
             "generated_at": session.generated_at.isoformat(),
             "ws_runner": ws_wake,
+            "permission_check": perm,
         })
 
     @app.route("/api/zerodha/status")
@@ -2381,6 +2388,19 @@ def create_app() -> Flask:
 
     from scout.routes import register_scout
     register_scout(app)
+
+    import threading as _threading
+
+    def _startup_zerodha_check() -> None:
+        import time as _time
+        _time.sleep(3)
+        try:
+            from providers.zerodha.permission_check import open_db_and_run_check
+            open_db_and_run_check(trigger="startup")
+        except Exception:
+            logger.exception("Startup Zerodha permission check failed")
+
+    _threading.Thread(target=_startup_zerodha_check, daemon=True).start()
 
     return app
 

@@ -1,4 +1,4 @@
-"""Scout automation — auto-enter signals and auto-close open trades at live LTP."""
+"""Scout automation — auto-enter signals and auto-close open trades."""
 
 from __future__ import annotations
 
@@ -9,13 +9,23 @@ from config import SCOUT_CONFIG
 from database.connection import SQLServerConnection
 from database.scout_models import ScoutSignalRepo, ScoutTradeRepo
 from scout.config_loader import get_scout_settings
+from scout.execution_engine import (
+    execute_entry,
+    execution_mode_label,
+    paper_close_if_triggered,
+    process_pending_entries,
+    manage_open_trade_step3,
+    retry_unprotected_trades,
+    zerodha_execute_enabled,
+)
+from scout.wallet import cap_quantity_for_wallet, entry_wallet_block_reason
+from scout.profit_gate import entry_profit_block_reason, signal_type_allowed
 from scout.settings_schema import (
     compute_trade_quantity,
     in_trading_window,
     strength_allowed,
 )
-from scout.signal_enrichment import build_exit_plan, enrich_signal, evaluate_exit_alerts
-from scout.trade_audit import build_entry_audit
+from scout.signal_enrichment import enrich_signal
 from scout.utils import is_market_open
 from utils import now_ist
 
@@ -49,6 +59,7 @@ def _auto_enter_block_reason(
     signal_id: int,
     symbol: str,
     strength: str,
+    signal_type: str,
 ) -> Optional[str]:
     if not in_trading_window(settings):
         return "outside trading window"
@@ -62,7 +73,20 @@ def _auto_enter_block_reason(
         return f"open trade already exists for {sym}"
     if not strength_allowed(settings, strength):
         return f"strength {strength} not in auto-enter list"
+    if not signal_type_allowed(settings, signal_type):
+        return f"signal type {signal_type} not in auto-enter list"
     return None
+
+
+def _entry_limit_price(enriched: dict, sig: dict, ltp: float) -> float:
+    """Limit price for Step 1 — top of entry band for BUY, bottom for SELL."""
+    action = str(sig.get("action") or "BUY").upper()
+    try:
+        if action == "BUY":
+            return float(enriched.get("entry_max") or ltp)
+        return float(enriched.get("entry_min") or ltp)
+    except (TypeError, ValueError):
+        return float(ltp)
 
 
 def try_auto_execute_signal(
@@ -71,7 +95,7 @@ def try_auto_execute_signal(
     signal_id: int,
     spot_lookup: Callable[[str], Optional[float]],
 ) -> Optional[dict]:
-    """Mark a new signal taken at live LTP when auto_execute_signals is enabled."""
+    """Auto-enter via 3-step execution engine (paper or Zerodha)."""
     settings = get_scout_settings(db, use_cache=False)
     if not settings.get("auto_execute_signals"):
         return None
@@ -95,6 +119,7 @@ def try_auto_execute_signal(
         signal_id=signal_id,
         symbol=str(sig["symbol"]),
         strength=str(sig.get("strength") or "WEAK"),
+        signal_type=str(sig.get("signal_type") or ""),
     )
     if block:
         logger.info("Scout auto-enter skip SIG #%s — %s", signal_id, block)
@@ -106,6 +131,8 @@ def try_auto_execute_signal(
         ltp = float(sig.get("ltp") or 0)
     if ltp <= 0:
         return None
+
+    qty = compute_trade_quantity(settings, float(ltp))
 
     enriched = enrich_signal(
         sig,
@@ -120,34 +147,61 @@ def try_auto_execute_signal(
         )
         return None
 
-    qty = compute_trade_quantity(settings, float(ltp))
-    executed_at = now_ist()
-    tid = trade_repo.mark_taken(
-        signal_id=signal_id,
-        symbol=str(sig["symbol"]),
-        action=str(sig["action"]),
-        signal_type=str(sig.get("signal_type") or ""),
-        entry_price=float(ltp),
-        quantity=qty,
-        executed_at=executed_at,
-        notes=build_entry_audit(
-            sig,
-            entry_price=float(ltp),
-            executed_at=executed_at,
-            mode="auto",
-            source="auto_execute",
-        ),
+    entry_px = _entry_limit_price(enriched, sig, float(ltp))
+    if zerodha_execute_enabled(settings):
+        wallet_block = entry_wallet_block_reason(
+            db, entry_price=entry_px, quantity=qty, settings=settings,
+        )
+        if wallet_block:
+            logger.info("Scout auto-enter skip SIG #%s — %s", signal_id, wallet_block)
+            return None
+        from scout.wallet import wallet_summary
+        summary = wallet_summary(db, settings)
+        free = summary.get("free_inr")
+        if free is not None:
+            qty = cap_quantity_for_wallet(
+                entry_price=entry_px, quantity=qty, free_inr=float(free),
+            )
+            if qty <= 0:
+                logger.info("Scout auto-enter skip SIG #%s — no deployable capital", signal_id)
+                return None
+
+    profit_block = entry_profit_block_reason(
+        signal=sig,
+        entry=float(ltp),
+        qty=qty,
+        settings=settings,
     )
+    if profit_block:
+        logger.info("Scout auto-enter skip SIG #%s — %s", signal_id, profit_block)
+        return None
+
+    mode = execution_mode_label(settings)
+    try:
+        out = execute_entry(
+            db,
+            signal_id=signal_id,
+            sig=sig,
+            entry_price=entry_px,
+            quantity=qty,
+            settings=settings,
+            mode=mode,
+        )
+    except Exception as exc:
+        logger.exception("Scout auto-enter failed SIG #%s: %s", signal_id, exc)
+        return None
+
     logger.info(
-        "Scout auto-enter: SIG #%s → TRD #%s %s %s @ %.2f × %d",
-        signal_id, tid, sig["symbol"], sig["action"], float(ltp), qty,
+        "Scout auto-enter: SIG #%s → TRD #%s %s %s @ %.2f × %d (%s)",
+        signal_id, out["trade_id"], sig["symbol"], sig["action"], entry_px, qty, mode,
     )
     return {
-        "trade_id": tid,
+        "trade_id": out["trade_id"],
         "signal_id": signal_id,
         "symbol": sig["symbol"],
-        "entry_price": float(ltp),
+        "entry_price": entry_px,
         "quantity": qty,
+        "execution_mode": mode,
     }
 
 
@@ -156,7 +210,7 @@ def try_auto_close_trades(
     *,
     spot_lookup: Callable[[str], Optional[float]],
 ) -> List[dict]:
-    """Close open trades when target/stop/square-off triggers and auto_close is enabled."""
+    """Step 3 — manage open trades (paper LTP or live Zerodha)."""
     settings = get_scout_settings(db, use_cache=False)
     if not settings.get("auto_close_trades"):
         return []
@@ -166,9 +220,12 @@ def try_auto_close_trades(
     trade_repo = ScoutTradeRepo(db)
     sig_repo = ScoutSignalRepo(db)
     closed: List[dict] = []
-    now = now_ist().replace(tzinfo=None)
+    live = zerodha_execute_enabled(settings)
 
     for trade in trade_repo.open_trades():
+        status = str(trade.get("status") or "")
+        if status not in ("OPEN", "UNPROTECTED"):
+            continue
         sym = str(trade["symbol"]).upper()
         ltp = spot_lookup(sym)
         if ltp is None or float(ltp) <= 0:
@@ -176,10 +233,8 @@ def try_auto_close_trades(
         if ltp <= 0:
             continue
 
-        sig = None
         sid = _coerce_int_id(trade.get("signal_id"))
-        if sid is not None:
-            sig = sig_repo.get(sid)
+        sig = sig_repo.get(sid) if sid else None
         if not sig:
             sig = {
                 "action": trade.get("action"),
@@ -188,47 +243,84 @@ def try_auto_close_trades(
                 "meta": {},
             }
 
-        exit_plan = build_exit_plan(
-            sig,
-            entry_price=float(trade.get("entry_price") or 0),
-            executed_at=trade.get("executed_at"),
-            live_ltp=float(ltp),
-            now=now,
-        )
-        alerts = evaluate_exit_alerts(
-            action=str(trade.get("action") or ""),
-            live_ltp=float(ltp),
-            exit_plan=exit_plan,
-        )
-        if not alerts.get("close_now"):
-            continue
-
-        reason = "auto_close"
-        if alerts.get("alerts"):
-            reason = str(alerts["alerts"][0].get("code") or reason).lower()
-
-        tid = int(trade["id"])
-        result = trade_repo.close(
-            tid,
-            exit_price=float(ltp),
-            closed_at=now_ist(),
-            exit_reason=reason,
-        )
-        if result:
-            logger.info(
-                "Scout auto-close: TRD #%s %s @ %.2f (%s)",
-                tid, sym, float(ltp), reason,
+        if live:
+            result = manage_open_trade_step3(
+                db,
+                trade=trade,
+                signal=sig,
+                live_ltp=float(ltp),
+                settings=settings,
+                live=True,
             )
+        else:
+            result = paper_close_if_triggered(
+                db,
+                trade=trade,
+                signal=sig,
+                live_ltp=float(ltp),
+                settings=settings,
+            )
+
+        if result:
             closed.append({
-                "trade_id": tid,
+                "trade_id": int(trade["id"]),
                 "symbol": sym,
-                "exit_price": float(ltp),
-                "exit_reason": reason,
-                "exit_alert": (alerts.get("alerts") or [{}])[0],
+                "exit_price": float(result.get("exit_price") or ltp),
+                "exit_reason": result.get("exit_reason"),
                 "pnl": result.get("pnl"),
             })
 
     return closed
+
+
+def try_auto_enter_pending_signals(
+    db: SQLServerConnection,
+    *,
+    spot_lookup: Callable[[str], Optional[float]],
+) -> List[dict]:
+    """Retry auto-enter on recent signals that never got a trade row."""
+    settings = get_scout_settings(db, use_cache=False)
+    if not settings.get("auto_execute_signals"):
+        return []
+    if not SCOUT_CONFIG.get("enabled", True) or not is_market_open():
+        return []
+
+    valid_mins = int(settings.get("signal_valid_minutes", 30))
+    sig_repo = ScoutSignalRepo(db)
+    entered: List[dict] = []
+    for sid in sig_repo.signal_ids_without_trade(since_minutes=valid_mins + 30):
+        try:
+            out = try_auto_execute_signal(db, signal_id=int(sid), spot_lookup=spot_lookup)
+            if out:
+                entered.append(out)
+        except Exception:
+            logger.exception("Scout auto-enter poll failed for signal %s", sid)
+    return entered
+
+
+def run_execution_poll(
+    db: SQLServerConnection,
+    *,
+    spot_lookup: Callable[[str], Optional[float]],
+) -> dict:
+    """Single poll tick: pending entries, auto-enter retry, auto-close."""
+    settings = get_scout_settings(db, use_cache=False)
+    out = {
+        "pending_filled": [],
+        "protection_retried": [],
+        "entered": [],
+        "closed": [],
+    }
+    if zerodha_execute_enabled(settings):
+        out["pending_filled"] = process_pending_entries(
+            db, spot_lookup=spot_lookup, settings=settings,
+        )
+        out["protection_retried"] = retry_unprotected_trades(
+            db, spot_lookup=spot_lookup, settings=settings,
+        )
+    out["entered"] = try_auto_enter_pending_signals(db, spot_lookup=spot_lookup)
+    out["closed"] = try_auto_close_trades(db, spot_lookup=spot_lookup)
+    return out
 
 
 def on_signals_committed(

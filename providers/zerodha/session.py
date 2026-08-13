@@ -228,5 +228,10 @@ def exchange_request_token(request_token: str) -> ZerodhaSession:
         notify_session_updated()
     except Exception:
         logger.exception("ws_runner wake after login failed (non-fatal)")
+    try:
+        from providers.zerodha.permission_check import open_db_and_run_check
+        open_db_and_run_check(trigger="login")
+    except Exception:
+        logger.exception("Zerodha permission check after login failed (non-fatal)")
     return session
 

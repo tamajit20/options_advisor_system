@@ -4,7 +4,7 @@
 (function () {
   'use strict';
 
-  const SCOUT_TABS = ['scout-signals', 'scout-watchlist', 'scout-trades', 'scout-history', 'scout-config'];
+  const SCOUT_TABS = ['scout-signals', 'scout-watchlist', 'scout-trades', 'scout-history', 'scout-errors', 'scout-config'];
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
@@ -92,12 +92,53 @@
   }
 
   // ---------- Signals ----------
+  function renderAlarmBanner(health, targetIds) {
+    const ids = targetIds || ['scout-alarm-banner', 'scout-trades-alarm-banner'];
+    const alarms = (health && health.alarms) || [];
+    const critical = alarms.filter(a => a.level === 'critical');
+    const warnings = alarms.filter(a => a.level === 'warning');
+    const show = critical.length ? critical : warnings;
+    const cls = critical.length ? 'scout-alarm-banner--critical' : 'scout-alarm-banner--warning';
+    const html = show.length
+      ? `<strong>${critical.length ? 'Critical' : 'Warning'}:</strong> `
+        + show.map(a => escapeHtml(a.message)).join(' · ')
+      : '';
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (!html) {
+        el.hidden = true;
+        el.innerHTML = '';
+        return;
+      }
+      el.hidden = false;
+      el.className = 'scout-alarm-banner ' + cls;
+      el.innerHTML = html;
+    });
+  }
+
   function renderStatus(st) {
     const bar = $('#scout-status-bar');
     if (!bar || !st) return;
+    renderAlarmBanner(st.health);
     const parts = [];
     parts.push(st.market_open ? '🟢 Market open' : '⚫ Market closed');
     parts.push(st.zerodha_ok ? '🔑 Zerodha OK' : '🔑 ' + (st.zerodha_message || 'Not logged in'));
+    const execMode = st.zerodha_execute_orders
+      ? '💰 Zerodha LIVE orders'
+      : '📝 Paper (DB only)';
+    parts.push(execMode);
+    if (st.wallet && st.zerodha_execute_orders && st.wallet.balance_inr != null) {
+      const w = st.wallet;
+      parts.push(
+        `💳 Bal ₹${fmtNum(w.balance_inr, 0)} · `
+        + `deployed ₹${fmtNum(w.deployed_inr, 0)} · `
+        + `free ₹${fmtNum(w.free_inr, 0)}`
+      );
+    } else if (st.wallet && st.wallet.error && st.wallet.error !== 'paper_mode') {
+      parts.push('💳 Wallet unavailable');
+    }
+    if (st.square_off_time) parts.push('⏱ Exit by ' + st.square_off_time);
     parts.push('📡 WebSocket push');
     if (st.last_signal && st.last_signal.triggered_at) {
       parts.push(
@@ -220,7 +261,7 @@
     BAND: 'Price band — enter the trade only while live price stays inside this range.',
     STOP: 'Invalidation stop — signal is removed if price crosses below (BUY) or above (SELL) this level.',
     TARGET: 'Profit target at 1.5× risk (entry to stop). Book full or partial here.',
-    'EXIT BY': 'Intraday square-off — close the position before this time (default 15:15 IST).',
+    'EXIT BY': 'Intraday square-off — close the position before this time (default 15:10 IST).',
     ENTRY: 'Your Zerodha fill price when you marked the trade taken.',
     '→ Target': 'Distance from live price to the profit target.',
     STRUCT: 'Measured-move target from the pattern (OR/box height projected from breakout).',
@@ -237,6 +278,18 @@
     band: 'Live price is inside the entry band (green = OK to enter).',
     time: 'Signal is still within its validity window.',
     stop: 'Price has not hit the invalidation stop yet.',
+    automation: 'Auto-enter is enabled in Scout Config.',
+    scout_on: 'Scout module is enabled on the server.',
+    market: 'NSE regular session is open.',
+    validity: 'Signal status is ACTIVE (not expired, out of range, or invalidated).',
+    trade_window: 'Current time is inside the Config trading window (not the same as signal validity).',
+    strength: 'Signal strength is allowed for auto-enter.',
+    pattern: 'Signal pattern type is allowed for auto-enter.',
+    profit: 'Expected net profit at 2R target meets the minimum after Zerodha charges.',
+    daily_cap: 'Daily auto-trade limit not reached.',
+    symbol_day: 'This symbol has not been traded yet today (when one-per-symbol is on).',
+    symbol_open: 'No other open trade on this symbol.',
+    not_taken: 'This signal has not been marked taken yet.',
   };
 
   const SCOUT_SETUP_HINTS = {
@@ -275,6 +328,61 @@
       const titleAttr = hint ? ` title="${escapeHtml(hint)}"` : '';
       return `<span class="scout-gate ${cls}" data-gate-id="${it.id}"${titleAttr} tabindex="0">${sym} ${escapeHtml(it.label)}</span>`;
     }).join('')}</div>`;
+  }
+
+  function renderAutoEnterPanel(ae) {
+    if (!ae) return '';
+    const checks = ae.checks || [];
+    if (!checks.length) return renderStatusPills(null);
+
+    const readyCls = ae.ready ? 'scout-auto-enter--ready' : (ae.enabled ? 'scout-auto-enter--pending' : 'scout-auto-enter--off');
+    const headline = ae.ready
+      ? 'Auto-enter ready'
+      : (ae.enabled ? 'Auto-enter blocked' : 'Auto-enter off');
+    const block = ae.block_reason && !ae.ready
+      ? `<p class="scout-auto-enter-block muted">${escapeHtml(ae.block_reason)}</p>`
+      : '';
+
+    const rows = checks.map(c => {
+      const cls = c.ok ? 'scout-auto-check--ok' : 'scout-auto-check--bad';
+      const sym = c.ok ? '✓' : '✗';
+      const hint = scoutHint(c.id);
+      const titleAttr = hint ? ` title="${escapeHtml(hint)}"` : '';
+      const detail = c.detail ? `<span class="scout-auto-check-detail">${escapeHtml(c.detail)}</span>` : '';
+      return `<li class="scout-auto-check ${cls}" data-auto-check-id="${escapeHtml(c.id)}"${titleAttr} tabindex="0">
+        <span class="scout-auto-check-mark">${sym}</span>
+        <span class="scout-auto-check-label">${escapeHtml(c.label)}</span>
+        ${detail}
+      </li>`;
+    }).join('');
+
+    return `<div class="scout-auto-enter ${readyCls}">
+      <div class="scout-auto-enter-head">
+        <strong>${escapeHtml(headline)}</strong>
+        ${ae.quantity ? `<span class="muted scout-auto-enter-qty">qty ${ae.quantity}</span>` : ''}
+      </div>
+      ${block}
+      <ul class="scout-auto-checks">${rows}</ul>
+    </div>`;
+  }
+
+  function syncAutoEnterCheck(card, checkId, ok, detail) {
+    if (ok == null) return;
+    const li = card.querySelector(`[data-auto-check-id="${checkId}"]`);
+    if (!li) return;
+    li.classList.remove('scout-auto-check--ok', 'scout-auto-check--bad');
+    li.classList.add(ok ? 'scout-auto-check--ok' : 'scout-auto-check--bad');
+    const mark = li.querySelector('.scout-auto-check-mark');
+    if (mark) mark.textContent = ok ? '✓' : '✗';
+    if (detail != null) {
+      let det = li.querySelector('.scout-auto-check-detail');
+      if (!det) {
+        det = document.createElement('span');
+        det.className = 'scout-auto-check-detail';
+        li.appendChild(det);
+      }
+      det.textContent = detail;
+    }
   }
 
   function renderSignalDashboard(s) {
@@ -319,7 +427,7 @@
           ${stopDistHtml}
           ${levelsHtml}
         </div>
-        ${renderStatusPills(d.gates)}
+        ${renderAutoEnterPanel(s.auto_enter)}
       </div>`;
   }
 
@@ -403,7 +511,8 @@
         data-can-mark="${canMarkSignalTaken(s) ? '1' : '0'}"
         data-trade-id="${s.trade_id != null ? s.trade_id : ''}"
         data-blocking-trade-id="${s.blocking_trade_id != null ? s.blocking_trade_id : ''}"
-        data-blocking-signal-id="${s.blocking_signal_id != null ? s.blocking_signal_id : ''}">
+        data-blocking-signal-id="${s.blocking_signal_id != null ? s.blocking_signal_id : ''}"
+        data-auto-ready="${s.auto_enter && s.auto_enter.ready ? '1' : '0'}">
         <div class="scout-card-head">
           <strong class="scout-symbol">${escapeHtml(s.symbol)}</strong>
           <span class="scout-action tag tag-${action === 'BUY' ? 'ok' : action === 'SELL' ? 'err' : 'muted'}" title="Suggested direction for this intraday setup">${escapeHtml(action)}</span>
@@ -435,6 +544,8 @@
     if ((card.dataset.tradeId || '') !== tid) return true;
     const blockTid = s.blocking_trade_id != null ? String(s.blocking_trade_id) : '';
     if ((card.dataset.blockingTradeId || '') !== blockTid) return true;
+    const ready = s.auto_enter && s.auto_enter.ready ? '1' : '0';
+    if ((card.dataset.autoReady || '') !== ready) return true;
     return false;
   }
 
@@ -469,9 +580,9 @@
             body: JSON.stringify({ entry_price: entry, quantity: qty }),
           });
           toast(`Trade marked — TRD #${resp.trade_id}`, 'ok');
-          await loadScoutTrades();
+          await loadScoutFlow();
           await loadScoutSignals();
-          startScoutTradesAutoRefresh();
+          startScoutFlowAutoRefresh();
         } catch (e) {
           toast(e.message, 'err');
           btn.disabled = false;
@@ -553,6 +664,10 @@
 
     if (s.dashboard) {
       s.dashboard.gates = { band_ok: bandOk, time_ok: untilOk, stop_ok: stopOk };
+      const validityOk = evaluateClientValidity(s, liveLtp) === 'ACTIVE';
+      syncAutoEnterCheck(card, 'band', bandOk, null);
+      syncAutoEnterCheck(card, 'validity', validityOk, evaluateClientValidity(s, liveLtp));
+      syncAutoEnterCheck(card, 'stop', stopOk, null);
       if (inv != null && liveLtp > 0) {
         const dist = action === 'BUY' ? liveLtp - inv : inv - liveLtp;
         s.dashboard.stop_dist = {
@@ -1068,25 +1183,7 @@
     });
   }
 
-  // ---------- My Trades ----------
-  function renderTradeMtm(t) {
-    if (t.mtm == null) {
-      return '<div class="scout-mtm muted">Live P&L: waiting for WS ticks…</div>';
-    }
-    const qty = Math.max(1, parseInt(t.quantity, 10) || 1);
-    const pnl = Number(t.mtm);
-    const pct = t.mtm_pct != null ? Number(t.mtm_pct) : 0;
-    const cls = pnl >= 0 ? 'scout-mtm--profit' : 'scout-mtm--loss';
-    const sign = pnl >= 0 ? '+' : '';
-    const posVal = t.position_value != null
-      ? Number(t.position_value)
-      : (t.live_ltp != null ? Number(t.live_ltp) * qty : null);
-    const valuePart = posVal != null
-      ? ` · Value ${fmtPx(posVal)} <span class="muted">(${qty} × ${fmtPx(t.live_ltp)})</span>`
-      : '';
-    return `<div class="scout-mtm ${cls}">Live P&L: <strong>${fmtPnl(pnl)}</strong> total (${sign}${pct.toFixed(2)}%)${valuePart}</div>`;
-  }
-
+  // ---------- Execution flow ----------
   function tradePositionMeta(action) {
     const a = (action || '').toUpperCase();
     if (a === 'SELL') {
@@ -1109,128 +1206,138 @@
     };
   }
 
-  function renderTradeExitPlan(t) {
-    const plan = t.exit_plan;
-    if (!plan || !plan.dashboard) return '';
-    const d = plan.dashboard;
-    const p = d.prices || {};
-    const flags = (t.exit_alerts && t.exit_alerts.flags) || {};
-    const targetDist = d.target_dist;
-    const stopDist = d.stop_dist;
-    const struct = plan.structural_target;
-    const structHtml = struct != null && struct !== p.target
-      ? renderMetricTile('STRUCT', fmtPx(struct), 'scout-metric--wide', 'STRUCT')
-      : '';
-    const targetDistHtml = targetDist
-      ? renderMetricTile('→ Target', `${fmtPx(targetDist.rs)} · ${fmtPct(targetDist.pct)}`, '', '→ Target')
-      : '';
-    const stopDistHtml = stopDist
-      ? renderMetricTile('→ Stop', `${fmtPx(stopDist.rs)} · ${fmtPct(stopDist.pct)}`, '', '→ Stop')
-      : '';
-    const rLabel = d.target_r != null ? ` (${d.target_r}R)` : '';
-    const targetCls = flags.target_hit ? 'scout-metric--hit-target' : 'scout-metric--pos';
-    const stopCls = flags.stop_hit ? 'scout-metric--hit-stop' : 'scout-metric--neg';
-    const exitCls = (flags.square_off_due ? 'scout-metric--hit-exit' : '')
-      + (flags.square_off_soon && !flags.square_off_due ? ' scout-metric--warn-exit' : '')
-      + ' scout-metric--timer';
-    return `
-      <div class="scout-dash scout-dash--exit">
-        <div class="muted scout-exit-heading">Exit plan</div>
-        <div class="scout-dash-prices">
-          ${renderMetricTile('ENTRY', fmtPx(p.entry), '', 'ENTRY')}
-          ${p.target != null ? renderMetricTile('TARGET', fmtPx(p.target) + escapeHtml(rLabel), targetCls, 'TARGET') : ''}
-          ${p.stop != null ? renderMetricTile('STOP', fmtPx(p.stop), stopCls, 'STOP') : ''}
-          ${renderMetricTile('EXIT BY', `<span class="scout-timer" data-timer-secs="${d.timer_secs || 0}">${fmtTimer(d.timer_secs)}</span> → ${escapeHtml(d.timer_until || '')}`, exitCls.trim(), 'EXIT BY')}
-        </div>
-        <div class="scout-dash-stats">
-          ${structHtml}
-          ${targetDistHtml}
-          ${stopDistHtml}
-        </div>
-      </div>`;
+  function renderExecutionStep(step) {
+    const stCls = 'scout-exec-step--' + (step.status || 'pending');
+    const ordersHtml = (step.orders || []).map(o => {
+      const px = o.trigger_price != null
+        ? `trigger ₹${fmtPx(o.trigger_price)} · limit ₹${fmtPx(o.price)}`
+        : (o.price != null ? `₹${fmtPx(o.price)}` : '—');
+      const oid = o.kite_order_id ? ` · #${escapeHtml(String(o.kite_order_id))}` : '';
+      return `<li class="scout-exec-order scout-exec-order--${escapeHtml(o.status_class || 'pending')}">
+        <span class="scout-exec-order-leg">${escapeHtml(o.leg_label || o.leg || '')}</span>
+        <span class="scout-exec-order-detail">${escapeHtml(o.transaction_type || '')} ${escapeHtml(o.order_type || '')}
+          × ${o.quantity || '—'} @ ${px}${oid}</span>
+        <span class="scout-exec-order-status">${escapeHtml(o.status || '')}</span>
+      </li>`;
+    }).join('');
+    return `<div class="scout-exec-step ${stCls}">
+      <div class="scout-exec-step-head">
+        <span class="scout-exec-step-num">${step.step}</span>
+        <strong>${escapeHtml(step.label || '')}</strong>
+        <span class="scout-exec-step-badge">${escapeHtml(step.status || '')}</span>
+      </div>
+      ${ordersHtml ? `<ul class="scout-exec-orders">${ordersHtml}</ul>` : '<p class="muted scout-exec-empty">No orders yet</p>'}
+    </div>`;
   }
 
-  function renderOpenTrades(trades) {
+  function renderExecutionFlowCard(item) {
+    if (item.kind === 'signal' && !item.trade) {
+      const s = item.signal || {};
+      return `<div class="scout-card scout-exec-card scout-exec-card--signal">
+        <div class="scout-card-head">
+          <strong>${escapeHtml(s.symbol || '')}</strong>
+          <span class="muted">Awaiting entry · Step 1</span>
+          ${renderScoutRefIds(s.id, null)}
+        </div>
+        <p class="muted">Signal active — auto-enter or mark taken to start execution flow.</p>
+      </div>`;
+    }
+    const ex = item.execution || {};
+    const t = item.trade || {};
+    const tradeStatus = String(t.status || ex.trade_status || '').toUpperCase();
+    const unprot = tradeStatus === 'UNPROTECTED';
+    const cardCls = unprot ? ' scout-exec-card--unprotected' : '';
+    const stepsHtml = (ex.steps || []).map(renderExecutionStep).join('');
+    const modeLabel = ex.zerodha_live ? 'Zerodha LIVE' : (ex.execution_mode === 'manual' ? 'Manual' : 'Paper');
+    const modeCls = ex.zerodha_live ? 'scout-exec-mode--live' : 'scout-exec-mode--paper';
+    const mtm = ex.mtm || {};
+    const plan = ex.exit_plan || {};
+    const prices = (plan.dashboard && plan.dashboard.prices) || {};
+    return `<div class="scout-card scout-exec-card${cardCls}" data-trade-id="${t.id || ''}">
+      <div class="scout-card-head">
+        <strong>${escapeHtml(t.symbol || ex.symbol || '')}</strong>
+        <span class="scout-exec-mode ${modeCls}">${escapeHtml(modeLabel)}</span>
+        <span class="tag tag-muted">${escapeHtml(t.status || ex.trade_status || '')}</span>
+        ${unprot ? '<span class="tag tag-danger">NO STOP ON ZERODHA</span>' : ''}
+        ${renderScoutRefIds(ex.signal_id, ex.trade_id)}
+      </div>
+      ${renderExitAlertBanner(ex.exit_alerts)}
+      <div class="scout-exec-summary">
+        <span>Entry ${fmtPx(prices.entry)}</span>
+        <span>Stop ${fmtPx(prices.stop)}</span>
+        <span>Target ${fmtPx(prices.target)}</span>
+        <span>Exit by ${escapeHtml(ex.square_off_time || '')}</span>
+        ${mtm.mtm != null ? `<span class="scout-exec-mtm">MTM ${fmtPnl(mtm.mtm)}</span>` : ''}
+      </div>
+      <div class="scout-exec-flow">${stepsHtml}</div>
+      ${t.status === 'OPEN' || unprot ? renderTradeCloseRow(t, ex.exit_alerts) : ''}
+    </div>`;
+  }
+
+  function renderTradeCloseRow(t, exitAlerts) {
+    const urg = (exitAlerts && exitAlerts.urgency) || 'none';
+    const closeBtnCls = urg === 'now' ? ' scout-close-btn--pulse' : '';
+    const exitCode = (exitAlerts && exitAlerts.close_now && exitAlerts.alerts && exitAlerts.alerts[0])
+      ? String(exitAlerts.alerts[0].code || 'manual').toLowerCase()
+      : 'manual';
+    const pos = tradePositionMeta(String(t.action || 'BUY').toUpperCase());
+    return `<div class="scout-close-row" data-exit-reason="${escapeHtml(exitCode)}">
+      <label class="muted">${escapeHtml(pos.exitLabel)}</label>
+      <input type="number" step="0.05" class="scout-exit-input" placeholder="Exit price" data-trade-id="${t.id}">
+      <button type="button" class="btn btn-sm btn-accent scout-close-btn${closeBtnCls}" data-trade-id="${t.id}">Close trade</button>
+      <button type="button" class="btn btn-sm btn-ghost scout-void-btn" data-trade-id="${t.id}">Void</button>
+    </div>`;
+  }
+
+  function renderExecutionFlow(items) {
     const c = $('#scout-trades-container');
     if (!c) return;
-    if (!trades || !trades.length) {
+    const trades = (items || []).filter(it => it.kind === 'trade');
+    if (!trades.length && !(items || []).length) {
       c.className = '';
-      c.innerHTML = '<div class="empty">No open trades. Take a signal from the <strong>Signals</strong> tab after placing the order in Zerodha.</div>';
+      c.innerHTML = '<div class="empty">No active executions. Enable auto-enter on the <strong>Signals</strong> tab or mark a signal taken.</div>';
       return;
     }
-    c.className = 'scout-trade-list';
-    c.innerHTML = trades.map(t => {
-      const action = (t.action || '').toUpperCase();
-      const pos = tradePositionMeta(action);
-      const sig = t.signal || {};
-      const urg = (t.exit_alerts && t.exit_alerts.urgency) || 'none';
-      const urgCls = urg === 'now' ? ' scout-trade-card--close-now' : (urg === 'warn' ? ' scout-trade-card--close-soon' : '');
-      const closeBtnCls = urg === 'now' ? ' scout-close-btn--pulse' : '';
-      const exitCode = (t.exit_alerts && t.exit_alerts.close_now && t.exit_alerts.alerts && t.exit_alerts.alerts[0])
-        ? String(t.exit_alerts.alerts[0].code || 'manual').toLowerCase()
-        : 'manual';
-      return `
-        <div class="scout-card scout-trade-card${urgCls}" data-trade-id="${t.id}" data-signal-id="${t.signal_id || ''}" data-exit-reason="${escapeHtml(exitCode)}">
-          <div class="scout-card-head">
-            <strong>${escapeHtml(t.symbol)}</strong>
-            <span class="tag tag-${pos.sideCls}" title="Open position side">${escapeHtml(pos.side)}</span>
-            <span class="scout-trade-exit-action">Close with <strong class="tag tag-${pos.sideCls === 'err' ? 'ok' : 'err'}">${escapeHtml(pos.exitAction)}</strong></span>
-            <span class="muted">${escapeHtml(t.signal_type || '')}</span>
-            ${renderScoutRefIds(t.signal_id, t.id)}
-          </div>
-          <div class="scout-card-body">
-            ${renderExitAlertBanner(t.exit_alerts)}
-            <div>${escapeHtml(pos.entryVerb)} @ ${fmtPx(t.entry_price)} × ${t.quantity || 1} · ${escapeHtml(ageLabel(t.executed_at))}</div>
-            ${renderTradeExitPlan(t)}
-            ${renderTradeMtm(t)}
-            ${sig.reason ? `<div class="muted scout-reason">${escapeHtml(sig.reason)}</div>` : ''}
-            <div class="scout-close-row">
-              <label class="muted" title="${escapeHtml(pos.exitHint)}">${escapeHtml(pos.exitLabel)}</label>
-              <input type="number" step="0.05" class="scout-exit-input" placeholder="Exit price"
-                data-trade-id="${t.id}" aria-label="Exit fill price"
-                ${t.live_ltp != null && urg === 'now' ? ` value="${Number(t.live_ltp)}"` : ''}>
-              <button type="button" class="btn btn-sm btn-accent scout-close-btn${closeBtnCls}" data-trade-id="${t.id}">Close trade</button>
-              <button type="button" class="btn btn-sm btn-ghost scout-void-btn" data-trade-id="${t.id}">Void</button>
-            </div>
-          </div>
-        </div>`;
-    }).join('');
+    c.className = 'scout-exec-list';
+    c.innerHTML = (items || []).map(renderExecutionFlowCard).join('');
+    bindExecutionCloseButtons(c);
+  }
 
-    c.querySelectorAll('.scout-close-btn').forEach(btn => {
+  function bindExecutionCloseButtons(root) {
+    (root || document).querySelectorAll('.scout-close-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const tid = btn.getAttribute('data-trade-id');
-        const inp = c.querySelector(`.scout-exit-input[data-trade-id="${tid}"]`);
+        const row = btn.closest('.scout-close-row');
+        const inp = row && row.querySelector(`.scout-exit-input[data-trade-id="${tid}"]`);
         const px = parseFloat(inp && inp.value);
         if (!px || px <= 0) {
-          toast('Enter your Zerodha exit fill price', 'err');
+          toast('Enter exit fill price', 'err');
           return;
         }
         btn.disabled = true;
         try {
-          const card = btn.closest('.scout-trade-card');
-          const exitReason = (card && card.dataset.exitReason) || 'manual';
+          const exitReason = (row && row.dataset.exitReason) || 'manual';
           await scoutApi('/trades/' + tid + '/close', {
             method: 'POST',
             body: JSON.stringify({ exit_price: px, exit_reason: exitReason }),
           });
           toast('Trade closed', 'ok');
-          await loadScoutTrades();
-          if (typeof window.loadScoutHistory === 'function') window.loadScoutHistory();
+          await loadScoutFlow();
+          await loadScoutSignals();
         } catch (e) {
           toast(e.message, 'err');
           btn.disabled = false;
         }
       });
     });
-
-    c.querySelectorAll('.scout-void-btn').forEach(btn => {
+    (root || document).querySelectorAll('.scout-void-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const tid = btn.getAttribute('data-trade-id');
         if (!confirm('Remove this open trade record?')) return;
         try {
           await scoutApi('/trades/' + tid, { method: 'DELETE' });
           toast('Trade voided', 'info');
-          await loadScoutTrades();
+          await loadScoutFlow();
           await loadScoutSignals();
         } catch (e) {
           toast(e.message, 'err');
@@ -1239,13 +1346,17 @@
     });
   }
 
-  async function loadScoutTrades() {
+  async function loadScoutFlow() {
     const c = $('#scout-trades-container');
     if (!c) return;
     try {
-      const data = await scoutApi('/trades/open');
+      const [data, health] = await Promise.all([
+        scoutApi('/flow'),
+        scoutApi('/health').catch(() => null),
+      ]);
+      if (health) renderAlarmBanner(health, ['scout-trades-alarm-banner', 'scout-alarm-banner']);
       if (data.poll_seconds) _scoutPollMs = Math.max(5, Number(data.poll_seconds) * 1000);
-      renderOpenTrades(data.trades || []);
+      renderExecutionFlow(data.items || []);
     } catch (e) {
       c.className = '';
       c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
@@ -1254,6 +1365,113 @@
 
   // ---------- Config ----------
   let _scoutSettings = null;
+
+  function defaultErrDates() {
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - 30);
+    const fmt = d => d.toISOString().slice(0, 10);
+    const f = $('#scout-err-from');
+    const t = $('#scout-err-to');
+    if (f && !f.value) f.value = fmt(from);
+    if (t && !t.value) t.value = fmt(to);
+  }
+
+  function renderZerodhaCheckStatus(summary) {
+    const el = $('#scout-err-status');
+    if (!el) return;
+    if (!summary) {
+      el.hidden = true;
+      el.innerHTML = '';
+      return;
+    }
+    const ok = !!summary.overall_ok;
+    el.hidden = false;
+    el.className = 'scout-err-status ' + (ok ? 'scout-err-status--ok' : 'scout-err-status--fail');
+    const checks = (summary.checks || []).map(c => {
+      const icon = c.ok ? '✓' : '✗';
+      const cls = c.ok ? 'scout-err-check--ok' : 'scout-err-check--fail';
+      const detail = c.error || c.detail || '';
+      return `<li class="scout-err-check ${cls}"><span>${icon} ${escapeHtml(c.label || c.check_id)}</span>`
+        + (detail ? `<span class="muted">${escapeHtml(detail)}</span>` : '')
+        + '</li>';
+    }).join('');
+    el.innerHTML = `
+      <div class="scout-err-status-head">
+        <strong>${ok ? 'All checks passed' : 'Checks failing — live orders blocked'}</strong>
+        <span class="muted">${escapeHtml(summary.checked_at || '')} · ${escapeHtml(summary.trigger || '')}</span>
+      </div>
+      <ul class="scout-err-checklist">${checks}</ul>`;
+  }
+
+  async function loadScoutErrors() {
+    defaultErrDates();
+    const c = $('#scout-errors-container');
+    if (!c) return;
+    c.className = 'loading';
+    c.textContent = 'Loading…';
+    const params = new URLSearchParams();
+    const from = $('#scout-err-from')?.value;
+    const to = $('#scout-err-to')?.value;
+    const sev = $('#scout-err-severity')?.value;
+    const q = $('#scout-err-search')?.value;
+    if (from) params.set('from_date', from);
+    if (to) params.set('to_date', to);
+    if (sev) params.set('severity', sev);
+    if (q) params.set('search', q);
+    try {
+      const [logData, latest] = await Promise.all([
+        scoutApi('/zerodha-log?' + params),
+        scoutApi('/zerodha-check/latest'),
+      ]);
+      renderZerodhaCheckStatus(latest.summary);
+      const rows = logData.entries || [];
+      if (!rows.length) {
+        c.className = '';
+        c.innerHTML = '<div class="empty">No log entries for this filter.</div>';
+        return;
+      }
+      c.className = '';
+      c.innerHTML = `<table class="dt scout-err-table"><thead><tr>
+        <th>Time</th><th>Severity</th><th>Code</th><th>Trigger</th><th>Message</th></tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td>${escapeHtml(r.logged_at || '')}</td>
+          <td><span class="tag tag-${errLevelClass(r.severity)}">${escapeHtml(r.severity || '')}</span></td>
+          <td><code>${escapeHtml(r.code || '')}</code></td>
+          <td>${escapeHtml(r.trigger_source || '')}</td>
+          <td>${escapeHtml(r.message || '')}</td>
+        </tr>`).join('')}
+        </tbody></table>
+        <p class="muted scout-err-count">${rows.length} shown · ${logData.total != null ? logData.total : rows.length} total in range</p>`;
+    } catch (e) {
+      c.className = '';
+      c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function errLevelClass(sev) {
+    const s = String(sev || '').toUpperCase();
+    if (s === 'ERROR' || s === 'CRITICAL') return 'err';
+    if (s === 'WARNING') return 'warn';
+    return 'info';
+  }
+
+  async function rerunZerodhaChecks() {
+    const btn = $('#scout-err-recheck');
+    if (btn) btn.disabled = true;
+    try {
+      const data = await scoutApi('/zerodha-check', { method: 'POST', body: '{}' });
+      renderZerodhaCheckStatus(data.summary);
+      toast(data.summary?.overall_ok ? 'All checks passed' : 'Some checks failed — see list', data.summary?.overall_ok ? 'ok' : 'err');
+      await loadScoutErrors();
+    } catch (e) {
+      toast(e.message, 'err');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // ---------- Config (settings form) ----------
 
   function setConfigNotice(msg, ok) {
     const el = $('#scout-config-notice');
@@ -1302,6 +1520,27 @@
     form.querySelectorAll('input[name="auto_enter_strengths"]').forEach(cb => {
       cb.checked = allowed.has(cb.value);
     });
+    const types = new Set((settings.auto_enter_signal_types || []).map(s => String(s).toUpperCase()));
+    form.querySelectorAll('input[name="auto_enter_signal_types"]').forEach(cb => {
+      cb.checked = types.has(cb.value);
+    });
+    setVal('min_net_profit_inr', settings.min_net_profit_inr);
+    setVal('min_target_r', settings.min_target_r);
+    setVal('breakeven_at_r', settings.breakeven_at_r);
+    setVal('trail_stop_r_fraction', settings.trail_stop_r_fraction);
+    setCheck('zerodha_execute_orders', settings.zerodha_execute_orders);
+    setVal('square_off_time', settings.square_off_time || '15:10');
+    setVal('square_off_warn_minutes', settings.square_off_warn_minutes);
+    setVal('wallet_utilization_pct', settings.wallet_utilization_pct ?? 90);
+    setVal('wallet_reserve_inr', settings.wallet_reserve_inr ?? 2000);
+    const execHint = $('#cfg-zerodha-exec');
+    if (execHint) {
+      const mode = settings.zerodha_execute_orders
+        ? 'Live mode — real Kite MIS orders will be placed when auto-enter runs.'
+        : 'Paper mode — database updates only, no Kite order calls.';
+      const sq = settings.square_off_time || '15:10';
+      execHint.textContent = `${mode} Square-off: ${sq} IST.`;
+    }
     const hint = $('#cfg-trades-today');
     if (hint) {
       const max = settings.max_trades_per_day || 0;
@@ -1321,6 +1560,10 @@
     const strengths = [];
     form.querySelectorAll('input[name="auto_enter_strengths"]:checked').forEach(cb => {
       strengths.push(cb.value);
+    });
+    const signalTypes = [];
+    form.querySelectorAll('input[name="auto_enter_signal_types"]:checked').forEach(cb => {
+      signalTypes.push(cb.value);
     });
     const num = (name) => {
       const el = form.querySelector(`[name="${name}"]`);
@@ -1348,6 +1591,16 @@
       entry_slippage_pct: num('entry_slippage_pct'),
       min_candles: num('min_candles'),
       auto_enter_strengths: strengths,
+      auto_enter_signal_types: signalTypes,
+      min_net_profit_inr: num('min_net_profit_inr'),
+      min_target_r: num('min_target_r'),
+      breakeven_at_r: num('breakeven_at_r'),
+      trail_stop_r_fraction: num('trail_stop_r_fraction'),
+      zerodha_execute_orders: !!form.querySelector('[name="zerodha_execute_orders"]')?.checked,
+      square_off_time: form.querySelector('[name="square_off_time"]')?.value,
+      square_off_warn_minutes: num('square_off_warn_minutes'),
+      wallet_utilization_pct: num('wallet_utilization_pct'),
+      wallet_reserve_inr: num('wallet_reserve_inr'),
     };
   }
 
@@ -1602,11 +1855,15 @@
     });
   }
 
-  function pnlCell(pnl, pct) {
+  function pnlCell(pnl, pct, netPnl, charges) {
     const n = Number(pnl || 0);
-    const cls = n >= 0 ? 'pnl-profit' : 'pnl-loss';
-    const pill = n >= 0 ? 'scout-hist-pill--win' : 'scout-hist-pill--loss';
-    return `<span class="${cls}"><strong>${fmtPnl(n)}</strong></span> <span class="scout-hist-pill ${pill}">${Number(pct || 0).toFixed(2)}%</span>`;
+    const net = netPnl != null ? Number(netPnl) : n;
+    const cls = net >= 0 ? 'pnl-profit' : 'pnl-loss';
+    const pill = net >= 0 ? 'scout-hist-pill--win' : 'scout-hist-pill--loss';
+    const chargeHint = charges != null && Number(charges) > 0
+      ? `<span class="muted" title="Gross ${fmtPnl(n)} − charges ${fmtPnl(charges)}">net</span> `
+      : '';
+    return `${chargeHint}<span class="${cls}"><strong>${fmtPnl(net)}</strong></span> <span class="scout-hist-pill ${pill}">${Number(pct || 0).toFixed(2)}%</span>`;
   }
 
   function conditionsShort(entry, exit) {
@@ -1631,20 +1888,45 @@
       </div>`;
   }
 
+  function tradeNetPnl(t) {
+    if (t.net_pnl != null && t.net_pnl !== '') return Number(t.net_pnl);
+    return Number(t.pnl || 0);
+  }
+
   function aggregateTrades(trades) {
     let wins = 0;
-    let pnl = 0;
+    let grossPnl = 0;
+    let netPnl = 0;
+    let charges = 0;
+    const winAmounts = [];
+    const lossAmounts = [];
     (trades || []).forEach(t => {
-      const p = Number(t.pnl || 0);
-      pnl += p;
-      if (p > 0) wins += 1;
+      const gross = Number(t.gross_pnl != null ? t.gross_pnl : (t.pnl || 0));
+      const net = tradeNetPnl(t);
+      const ch = Number(t.total_charges || Math.max(0, gross - net));
+      grossPnl += gross;
+      netPnl += net;
+      charges += ch;
+      if (net > 0) {
+        wins += 1;
+        winAmounts.push(net);
+      } else if (net < 0) {
+        lossAmounts.push(net);
+      }
     });
     const n = (trades || []).length;
+    const winSum = winAmounts.reduce((a, b) => a + b, 0);
+    const lossSum = Math.abs(lossAmounts.reduce((a, b) => a + b, 0));
     return {
       count: n,
       wins,
       win_pct: n ? Math.round(wins / n * 100) : 0,
-      pnl: Math.round(pnl * 100) / 100,
+      pnl: Math.round(grossPnl * 100) / 100,
+      net_pnl: Math.round(netPnl * 100) / 100,
+      total_charges: Math.round(charges * 100) / 100,
+      avg_win: winAmounts.length ? Math.round(winSum / winAmounts.length * 100) / 100 : 0,
+      avg_loss: lossAmounts.length ? Math.round(lossAmounts.reduce((a, b) => a + b, 0) / lossAmounts.length * 100) / 100 : 0,
+      profit_factor: lossSum > 0 ? Math.round(winSum / lossSum * 100) / 100 : null,
     };
   }
 
@@ -1653,7 +1935,9 @@
       return '<div class="empty" style="padding:12px">No trades in this group.</div>';
     }
     const rows = trades.map(t => {
-      const pnl = Number(t.pnl || 0);
+      const pnl = Number(t.gross_pnl != null ? t.gross_pnl : (t.pnl || 0));
+      const net = tradeNetPnl(t);
+      const charges = t.total_charges != null ? Number(t.total_charges) : null;
       const pos = tradePositionMeta(t.action);
       const exec = t.execution || {};
       const entry = exec.entry || {};
@@ -1672,7 +1956,7 @@
           <td class="num">${fmtPx(t.entry_price)}</td>
           <td class="num">${fmtPx(t.exit_price)}</td>
           <td>${fmtDateTimeShort(t.closed_at || t.exited_at)}</td>
-          <td class="num">${pnlCell(t.pnl, t.pnl_pct)}</td>
+          <td class="num">${pnlCell(pnl, t.pnl_pct, net, charges)}</td>
           <td>${flowCell(modes.entry, modes.exit)}</td>
           <td>${modePill(entry.mode, entry.mode === 'auto' ? 'Auto-enter' : 'Manual')}</td>
           <td>${modePill(exit.mode, exit.mode === 'auto' ? 'Auto-close' : 'Manual')}</td>
@@ -1705,7 +1989,7 @@
               <th>Entry ₹</th>
               <th>Exit ₹</th>
               <th>Closed</th>
-              <th>P&amp;L</th>
+              <th>P&amp;L (net)</th>
               <th>Flow</th>
               <th>Entry mode</th>
               <th>Exit mode</th>
@@ -1719,12 +2003,40 @@
   }
 
   function renderSummaryCells(agg, extra) {
-    const pnlCls = agg.pnl >= 0 ? 'pnl-profit' : 'pnl-loss';
+    const netCls = (agg.net_pnl != null ? agg.net_pnl : agg.pnl) >= 0 ? 'pnl-profit' : 'pnl-loss';
+    const netVal = agg.net_pnl != null ? agg.net_pnl : agg.pnl;
+    const pf = agg.profit_factor != null ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">PF</span> <strong>${agg.profit_factor}</strong></span>` : '';
+    const avgWin = agg.avg_win ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Avg win</span> <strong class="pnl-profit">${fmtPnl(agg.avg_win)}</strong></span>` : '';
+    const avgLoss = agg.avg_loss ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Avg loss</span> <strong class="pnl-loss">${fmtPnl(agg.avg_loss)}</strong></span>` : '';
+    const charges = agg.total_charges ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Charges</span> <strong>${fmtPnl(agg.total_charges)}</strong></span>` : '';
     return `
       <span class="scout-hist-sum-meta"><span class="muted">Trades</span> <strong>${agg.count}</strong></span>
       <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Win%</span> <strong>${agg.win_pct}%</strong></span>
-      <span class="scout-hist-sum-meta"><span class="muted">P&amp;L</span> <strong class="${pnlCls}">${fmtPnl(agg.pnl)}</strong></span>
+      <span class="scout-hist-sum-meta"><span class="muted">Net P&amp;L</span> <strong class="${netCls}">${fmtPnl(netVal)}</strong></span>
+      ${charges}${pf}${avgWin}${avgLoss}
       ${extra || ''}`;
+  }
+
+  function renderHistoryStatsBanner(stats) {
+    if (!stats) return '';
+    const agg = {
+      count: stats.total_trades || 0,
+      wins: stats.wins || 0,
+      win_pct: stats.win_rate_pct || 0,
+      pnl: stats.total_pnl || 0,
+      net_pnl: stats.total_net_pnl != null ? stats.total_net_pnl : stats.total_pnl,
+      total_charges: stats.total_charges || 0,
+      avg_win: stats.avg_win || 0,
+      avg_loss: stats.avg_loss || 0,
+      profit_factor: stats.profit_factor,
+    };
+    const grossWr = stats.gross_win_rate_pct != null
+      ? `<span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Gross win%</span> <strong>${stats.gross_win_rate_pct}%</strong></span>`
+      : '';
+    return `
+      <div class="scout-hist-stats-banner">
+        ${renderSummaryCells(agg, grossWr)}
+      </div>`;
   }
 
   function groupTradesByType(trades) {
@@ -1786,6 +2098,7 @@
 
     panel.className = 'scout-history-panel';
     panel.innerHTML = `
+      ${renderHistoryStatsBanner(stats)}
       <details class="scout-hist-section" open>
         <summary>
           <span class="scout-hist-sum-label">All closed trades</span>
@@ -1800,7 +2113,7 @@
           <span class="scout-hist-sum-label">By signal type</span>
           <span class="scout-hist-sum-meta"><span class="muted">Types</span> <strong>${typeGroups.length}</strong></span>
           <span class="scout-hist-sum-meta scout-hist-sum-hide-sm"><span class="muted">Trades</span> <strong>${allAgg.count}</strong></span>
-          <span class="scout-hist-sum-meta"><span class="muted">Total P&amp;L</span> <strong class="${allAgg.pnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${fmtPnl(allAgg.pnl)}</strong></span>
+          <span class="scout-hist-sum-meta"><span class="muted">Total net P&amp;L</span> <strong class="${allAgg.net_pnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${fmtPnl(allAgg.net_pnl)}</strong></span>
         </summary>
         <div class="scout-hist-subsections">${typeSubsections}</div>
       </details>`;
@@ -1833,7 +2146,7 @@
 
   // ---------- Tab lifecycle ----------
   let _scoutTimer = null;
-  let _scoutTradesTimer = null;
+  let _scoutFlowTimer = null;
 
   function stopScoutLiveRefresh() {
     if (_scoutLiveTimer) {
@@ -1863,10 +2176,10 @@
     }
   }
 
-  function stopScoutTradesAutoRefresh() {
-    if (_scoutTradesTimer) {
-      clearInterval(_scoutTradesTimer);
-      _scoutTradesTimer = null;
+  function stopScoutFlowAutoRefresh() {
+    if (_scoutFlowTimer) {
+      clearInterval(_scoutFlowTimer);
+      _scoutFlowTimer = null;
     }
   }
 
@@ -1875,9 +2188,9 @@
     _scoutTimer = setInterval(loadScoutSignals, _scoutPollMs);
   }
 
-  function startScoutTradesAutoRefresh() {
-    stopScoutTradesAutoRefresh();
-    _scoutTradesTimer = setInterval(loadScoutTrades, _scoutPollMs);
+  function startScoutFlowAutoRefresh() {
+    stopScoutFlowAutoRefresh();
+    _scoutFlowTimer = setInterval(loadScoutFlow, _scoutPollMs);
   }
 
   function onScoutTabEnter(tab) {
@@ -1887,8 +2200,7 @@
         startScoutAutoRefresh();
         startScoutLiveRefresh();
       });
-      // Keep open trades fresh if user marked taken from Signals without switching tab.
-      loadScoutTrades().then(() => startScoutTradesAutoRefresh());
+      loadScoutFlow().then(() => startScoutFlowAutoRefresh());
     } else {
       stopScoutAutoRefresh();
       stopScoutLiveRefresh();
@@ -1897,18 +2209,19 @@
         loadScoutWatchlist({ reset: true });
       }
       if (tab === 'scout-trades') {
-        loadScoutTrades().then(() => startScoutTradesAutoRefresh());
+        loadScoutFlow().then(() => startScoutFlowAutoRefresh());
       } else if (tab !== 'scout-signals') {
-        stopScoutTradesAutoRefresh();
+        stopScoutFlowAutoRefresh();
       }
       if (tab === 'scout-history') loadScoutHistory();
+      if (tab === 'scout-errors') loadScoutErrors();
       if (tab === 'scout-config') loadScoutConfig();
     }
   }
 
   function onScoutTabLeave() {
     stopScoutAutoRefresh();
-    stopScoutTradesAutoRefresh();
+    stopScoutFlowAutoRefresh();
     stopScoutLiveRefresh();
   }
 
@@ -1918,8 +2231,9 @@
     }
   });
 
+  window.loadScoutFlow = loadScoutFlow;
   window.loadScoutSignals = loadScoutSignals;
-  window.loadScoutTrades = loadScoutTrades;
+  window.loadScoutErrors = loadScoutErrors;
   window.loadScoutHistory = loadScoutHistory;
   window.loadScoutConfig = loadScoutConfig;
 
@@ -1929,6 +2243,9 @@
     bindWatchlistToolbar();
     bindAutomationControls();
     bindConfigForm();
+    $('#scout-err-apply')?.addEventListener('click', () => loadScoutErrors());
+    $('#scout-err-recheck')?.addEventListener('click', () => rerunZerodhaChecks());
+    $('#scout-err-search')?.addEventListener('keydown', e => { if (e.key === 'Enter') loadScoutErrors(); });
     $('#scout-refresh')?.addEventListener('click', () => loadScoutSignals());
     $('#scout-hist-apply')?.addEventListener('click', () => loadScoutHistory());
   });

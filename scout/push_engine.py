@@ -131,8 +131,8 @@ class ScoutPushEngine:
         )
         self._thread.start()
         self._auto_thread = threading.Thread(
-            target=self._auto_close_loop,
-            name="scout-auto-close",
+            target=self._auto_trader_loop,
+            name="scout-auto-trader",
             daemon=True,
         )
         self._auto_thread.start()
@@ -161,17 +161,20 @@ class ScoutPushEngine:
         self._auto_thread = None
         logger.info("ScoutPushEngine: stopped")
 
-    def _auto_close_loop(self) -> None:
+    def _auto_trader_loop(self) -> None:
         poll = max(5, int(SCOUT_CONFIG.get("auto_close_poll_seconds", 10)))
         while not self._stop_event.wait(timeout=poll):
             try:
-                from scout.auto_trader import try_auto_close_trades
-                closed = try_auto_close_trades(self._db, spot_lookup=self._spot_lookup)
-                if closed:
+                from scout.auto_trader import run_execution_poll
+
+                result = run_execution_poll(
+                    self._db, spot_lookup=self._spot_lookup,
+                )
+                if result.get("pending_filled") or result.get("entered") or result.get("closed"):
                     self._db.commit()
             except Exception:
                 self._db.rollback()
-                logger.exception("ScoutPushEngine: auto-close poll failed")
+                logger.exception("ScoutPushEngine: auto-trader poll failed")
 
     def _seed_history(self) -> None:
         if self._seeded or not self._watchlist:

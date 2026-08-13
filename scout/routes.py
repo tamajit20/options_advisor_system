@@ -15,7 +15,9 @@ from config import SCOUT_CONFIG
 from database.connection import SQLServerConnection
 from database.scout_models import (
     ScoutSignalRepo,
+    ScoutTradeOrderRepo,
     ScoutTradeRepo,
+    ScoutZerodhaLogRepo,
 )
 from scout.config_loader import (
     default_watchlist,
@@ -29,7 +31,7 @@ from scout.config_loader import (
     set_scout_settings,
     watchlist_set,
 )
-from scout.settings_schema import suggested_quantity
+from scout.settings_schema import format_square_off_time, suggested_quantity
 from scout.index_groups import INDEX_GROUPS, index_tags, nifty_bank_symbols
 from scout.instruments import (
     ScoutInstrumentError,
@@ -45,6 +47,14 @@ from scout.signal_enrichment import (
     evaluate_exit_alerts,
     scout_trade_mtm,
 )
+from scout.execution_engine import (
+    execution_mode_label,
+    place_protection_and_target,
+    retry_unprotected_trades,
+    zerodha_execute_enabled,
+)
+from scout.execution_health import build_execution_health
+from scout.execution_flow import build_flow_items, build_trade_execution_flow
 from scout.trade_audit import build_entry_audit, enrich_history_trade
 from scout.utils import is_market_open
 from utils import now_ist, today_ist
@@ -112,6 +122,27 @@ def _parse_date_window(from_str: str, to_str: str, *, days_default: int = 30):
     return start.isoformat(), today.isoformat()
 
 
+def _format_square_off_time(settings: dict) -> str:
+    return format_square_off_time(settings)
+
+
+@scout_bp.route("/flow")
+@_with_db
+def api_scout_flow(db: SQLServerConnection):
+    """Unified execution view — signals awaiting entry + active trades with order flow."""
+    settings = get_scout_settings(db)
+    items = build_flow_items(db, settings=settings)
+    return jsonify({
+        "items": items,
+        "count": len(items),
+        "zerodha_execute_orders": zerodha_execute_enabled(settings),
+        "execution_mode": execution_mode_label(settings),
+        "square_off_time": _format_square_off_time(settings),
+        "poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
+        "market_open": is_market_open(),
+    })
+
+
 @scout_bp.route("/status")
 @_with_db
 def api_scout_status(db: SQLServerConnection):
@@ -121,12 +152,21 @@ def api_scout_status(db: SQLServerConnection):
     settings = get_scout_settings(db)
     automation = get_automation(db)
     trade_repo = ScoutTradeRepo(db)
+    health = build_execution_health(db, settings, fetch_wallet=zerodha_execute_enabled(settings))
+    try:
+        from providers.zerodha.permission_check import latest_check_from_db
+        perm = latest_check_from_db(db)
+    except Exception:
+        perm = None
     return jsonify({
         "enabled": bool(SCOUT_CONFIG.get("enabled", True)),
         "mode": "websocket",
         "market_open": is_market_open(),
         "zerodha_ok": ok,
         "zerodha_message": msg,
+        "zerodha_execute_orders": zerodha_execute_enabled(settings),
+        "execution_mode": execution_mode_label(settings),
+        "square_off_time": _format_square_off_time(settings),
         "watchlist_count": len(selected),
         "push_enabled": bool(SCOUT_CONFIG.get("push_enabled", True)),
         "signals_poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
@@ -137,7 +177,18 @@ def api_scout_status(db: SQLServerConnection):
         "settings": settings,
         "trades_opened_today": trade_repo.count_trades_opened_today(),
         "last_signal": last_sig,
+        "health": health,
+        "wallet": health.get("wallet"),
+        "zerodha_permissions": perm,
     })
+
+
+@scout_bp.route("/health")
+@_with_db
+def api_scout_health(db: SQLServerConnection):
+    settings = get_scout_settings(db)
+    health = build_execution_health(db, settings, fetch_wallet=True)
+    return jsonify(health)
 
 
 @scout_bp.route("/signals")
@@ -201,6 +252,17 @@ def api_scout_signals(db: SQLServerConnection):
         else:
             e["blocking_trade_id"] = None
             e["blocking_signal_id"] = None
+        from scout.auto_enter_status import evaluate_auto_enter_status
+
+        e["auto_enter"] = evaluate_auto_enter_status(
+            signal=row,
+            enriched=e,
+            settings=settings,
+            trade_repo=trade_repo,
+            market_open=is_market_open(),
+            has_open_trade=has_open_trade,
+            symbol_trade_blocked=symbol_blocked,
+        )
         if e.get("validity_status") == "ACTIVE" or has_open_trade:
             enriched.append(e)
 
@@ -409,6 +471,14 @@ def api_scout_trades_open(db: SQLServerConnection):
             live_ltp=ltp,
             exit_plan=row["exit_plan"],
         )
+        orders = ScoutTradeOrderRepo(db).for_trade(int(row["id"]))
+        row["execution"] = build_trade_execution_flow(
+            trade=row,
+            signal=row.get("signal"),
+            orders=orders,
+            live_ltp=ltp,
+            settings=get_scout_settings(db),
+        )
         out.append(row)
     return jsonify({
         "trades": out,
@@ -473,6 +543,7 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
     if quantity < 1:
         return jsonify({"error": "quantity must be >= 1"}), 400
 
+    mode = execution_mode_label()
     tid = trade_repo.mark_taken(
         signal_id=signal_id,
         symbol=str(sig["symbol"]),
@@ -481,6 +552,7 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
         entry_price=fill,
         quantity=quantity,
         executed_at=now_ist(),
+        execution_mode="manual",
         notes=build_entry_audit(
             sig,
             entry_price=fill,
@@ -489,6 +561,30 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
             source="manual",
         ),
     )
+    trade = dict(trade_repo.get(tid) or {})
+    place_protection_and_target(
+        db,
+        trade=trade,
+        signal=sig,
+        entry_price=fill,
+        settings=settings,
+        live=False,
+    )
+    # Manual entry: record simulated Step 1 entry order for UI flow
+    order_repo = ScoutTradeOrderRepo(db)
+    if not order_repo.get_leg(tid, "ENTRY"):
+        order_repo.insert(
+            trade_id=tid,
+            step_num=1,
+            leg="ENTRY",
+            quantity=quantity,
+            order_type="MANUAL",
+            transaction_type=str(sig.get("action") or "BUY").upper(),
+            product=str(SCOUT_CONFIG.get("zerodha_product", "MIS")),
+            price=fill,
+            status="SIMULATED",
+            status_message="Manual fill recorded in Scout",
+        )
     db.commit()
     trade = dict(trade_repo.get(tid) or {})
     trade["exit_plan"] = build_exit_plan(
@@ -567,6 +663,60 @@ def api_scout_history_stats(db: SQLServerConnection):
     stats["from_date"] = from_d
     stats["to_date"] = to_d
     return jsonify(stats)
+
+
+@scout_bp.route("/zerodha-log")
+@_with_db
+def api_scout_zerodha_log(db: SQLServerConnection):
+    """Persistent Zerodha permission / connectivity errors (date filter)."""
+    from_d, to_d = _parse_date_window(
+        request.args.get("from_date", ""),
+        request.args.get("to_date", ""),
+        days_default=int(request.args.get("days", 30)),
+    )
+    severity = (request.args.get("severity") or "").strip() or None
+    search = (request.args.get("search") or "").strip() or None
+    limit = min(int(request.args.get("limit", 100)), 500)
+    offset = max(0, int(request.args.get("offset", 0)))
+    repo = ScoutZerodhaLogRepo(db)
+    rows = repo.fetch(
+        from_date=from_d,
+        to_date=to_d,
+        severity=severity,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+    return jsonify({
+        "entries": rows,
+        "count": len(rows),
+        "total": repo.count(from_date=from_d, to_date=to_d, severity=severity),
+        "from_date": from_d,
+        "to_date": to_d,
+    })
+
+
+@scout_bp.route("/zerodha-check/latest")
+@_with_db
+def api_scout_zerodha_check_latest(db: SQLServerConnection):
+    from providers.zerodha.permission_check import latest_check_from_db, last_permission_summary
+
+    summary = latest_check_from_db(db) or last_permission_summary()
+    row = ScoutZerodhaLogRepo(db).latest_summary()
+    return jsonify({
+        "summary": summary,
+        "last_logged": row,
+    })
+
+
+@scout_bp.route("/zerodha-check", methods=["POST"])
+@_with_db
+def api_scout_zerodha_check_run(db: SQLServerConnection):
+    from providers.zerodha.permission_check import run_and_persist_check
+
+    summary = run_and_persist_check(db, trigger="manual", include_ws=True)
+    db.commit()
+    return jsonify({"summary": summary})
 
 
 def register_scout(app) -> None:

@@ -10,6 +10,10 @@ from config import SCOUT_CONFIG
 VALID_STRENGTHS = frozenset({"WEAK", "MEDIUM", "HIGH"})
 
 
+def _default_square_off_hhmm() -> str:
+    return "15:10"
+
+
 def default_scout_settings() -> dict:
     """Persisted Scout settings (merged over SCOUT_CONFIG at runtime)."""
     return {
@@ -24,7 +28,21 @@ def default_scout_settings() -> dict:
         "max_trades_per_day": 5,
         "one_trade_per_symbol_per_day": True,
         # Auto-enter strength filter (checkboxes in UI)
-        "auto_enter_strengths": ["MEDIUM", "HIGH"],
+        "auto_enter_strengths": ["HIGH"],
+        # Auto-enter pattern filter (OR breaks recommended for cost coverage)
+        "auto_enter_signal_types": ["OR_BREAK_UP", "OR_BREAK_DOWN"],
+        # Profitability gates (Zerodha intraday costs)
+        "min_net_profit_inr": 100.0,
+        "min_target_r": 2.0,
+        "breakeven_at_r": 1.0,
+        "trail_stop_r_fraction": 0.5,
+        # Wallet / capital (persisted — survives deploy)
+        "wallet_utilization_pct": 90.0,
+        "wallet_reserve_inr": 2000.0,
+        # Zerodha live execution (persisted in scout_config — survives deploy)
+        "zerodha_execute_orders": False,
+        "square_off_time": _default_square_off_hhmm(),
+        "square_off_warn_minutes": 5,
         # Trading window (IST, HH:MM)
         "trade_window_start": "09:45",
         "trade_window_end": "14:30",
@@ -103,11 +121,56 @@ def validate_scout_settings(raw: dict) -> dict:
     d["entry_slippage_pct"] = max(0.05, min(float(src.get("entry_slippage_pct", d["entry_slippage_pct"])), 1.0))
     d["min_candles"] = max(5, min(int(src.get("min_candles", d["min_candles"])), 60))
 
+    types = src.get("auto_enter_signal_types", d["auto_enter_signal_types"])
+    if isinstance(types, str):
+        types = [t.strip() for t in types.split(",") if t.strip()]
+    if not isinstance(types, list):
+        types = list(d["auto_enter_signal_types"])
+    from scout.profit_gate import VALID_AUTO_SIGNAL_TYPES
+    cleaned_types: List[str] = []
+    for t in types:
+        u = str(t).upper()
+        if u in VALID_AUTO_SIGNAL_TYPES and u not in cleaned_types:
+            cleaned_types.append(u)
+    d["auto_enter_signal_types"] = cleaned_types or list(d["auto_enter_signal_types"])
+
+    d["min_net_profit_inr"] = max(0.0, min(float(src.get("min_net_profit_inr", d["min_net_profit_inr"])), 50_000.0))
+    d["min_target_r"] = max(1.0, min(float(src.get("min_target_r", d["min_target_r"])), 5.0))
+    d["breakeven_at_r"] = max(0.5, min(float(src.get("breakeven_at_r", d["breakeven_at_r"])), 3.0))
+    d["trail_stop_r_fraction"] = max(0.0, min(float(src.get("trail_stop_r_fraction", d["trail_stop_r_fraction"])), 2.0))
+
+    d["zerodha_execute_orders"] = bool(
+        src.get("zerodha_execute_orders", d["zerodha_execute_orders"])
+    )
+    d["square_off_time"] = str(src.get("square_off_time", d["square_off_time"]))[:5]
+    d["square_off_warn_minutes"] = max(
+        1, min(int(src.get("square_off_warn_minutes", d["square_off_warn_minutes"])), 30),
+    )
+    d["wallet_utilization_pct"] = max(
+        50.0, min(float(src.get("wallet_utilization_pct", d["wallet_utilization_pct"])), 100.0),
+    )
+    d["wallet_reserve_inr"] = max(
+        0.0, min(float(src.get("wallet_reserve_inr", d["wallet_reserve_inr"])), 1_000_000.0),
+    )
+
     # Ensure window start <= end (same-day intraday)
     if _parse_hhmm(d["trade_window_start"]) > _parse_hhmm(d["trade_window_end"]):
         d["trade_window_start"], d["trade_window_end"] = "09:45", "14:30"
 
     return d
+
+
+def format_square_off_time(settings: Optional[dict] = None) -> str:
+    s = settings or default_scout_settings()
+    raw = str(s.get("square_off_time") or "15:10")[:5]
+    return f"{raw} IST"
+
+
+def square_off_datetime(day: datetime, settings: Optional[dict] = None) -> datetime:
+    """IST square-off moment on `day` from persisted settings."""
+    s = settings or default_scout_settings()
+    t = _parse_hhmm(str(s.get("square_off_time") or "15:10"))
+    return day.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
 
 
 def effective_pattern_config(settings: Optional[dict] = None) -> dict:

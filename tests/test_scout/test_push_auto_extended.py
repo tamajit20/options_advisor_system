@@ -63,9 +63,9 @@ def test_try_auto_close_stop_hit(mocker):
         "signal_id": 3,
         "entry_price": 4000.0,
         "quantity": 1,
+        "status": "OPEN",
         "executed_at": datetime(2026, 8, 12, 10, 0, 0),
     }]
-    trade_repo.close.return_value = {"id": 8, "pnl": -30.0}
     sig_repo = MagicMock()
     sig_repo.get.return_value = {
         "action": "BUY",
@@ -75,13 +75,10 @@ def test_try_auto_close_stop_hit(mocker):
     }
     mocker.patch("scout.auto_trader.ScoutTradeRepo", return_value=trade_repo)
     mocker.patch("scout.auto_trader.ScoutSignalRepo", return_value=sig_repo)
+    mocker.patch("scout.auto_trader.zerodha_execute_enabled", return_value=False)
     mocker.patch(
-        "scout.auto_trader.build_exit_plan",
-        return_value={"dashboard": {"prices": {"target": 4100.0, "stop": 3950.0}, "timer_secs": 3600}},
-    )
-    mocker.patch(
-        "scout.auto_trader.evaluate_exit_alerts",
-        return_value={"close_now": True, "alerts": [{"code": "STOP_HIT"}]},
+        "scout.auto_trader.paper_close_if_triggered",
+        return_value={"id": 8, "pnl": -30.0, "exit_price": 3940.0, "exit_reason": "stop_hit"},
     )
     closed = try_auto_close_trades(MagicMock(), spot_lookup=lambda s: 3940.0)
     assert len(closed) == 1

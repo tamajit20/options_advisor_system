@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from config import SCOUT_CONFIG
-from scout.settings_schema import effective_pattern_config
+from scout.settings_schema import default_scout_settings, effective_pattern_config
 from utils import now_ist
 
 
@@ -26,10 +26,9 @@ def _market_close_dt(day: datetime) -> datetime:
     return day.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
 
 
-def _square_off_dt(day: datetime) -> datetime:
-    close = _market_close_dt(day)
-    mins = int(SCOUT_CONFIG.get("square_off_minutes_before_close", 15))
-    return close - timedelta(minutes=max(0, mins))
+def _square_off_dt(day: datetime, settings: Optional[dict] = None) -> datetime:
+    from scout.settings_schema import default_scout_settings, square_off_datetime
+    return square_off_datetime(day, settings or default_scout_settings())
 
 
 def _structural_target(signal: dict, meta: dict, action: str) -> Optional[float]:
@@ -358,6 +357,7 @@ def build_exit_plan(
     executed_at: Any = None,
     live_ltp: Optional[float] = None,
     now: Optional[datetime] = None,
+    settings: Optional[dict] = None,
 ) -> dict:
     """Intraday exit guidance from fill: stop (invalidation), R-multiple target, square-off time."""
     now = (now or now_ist()).replace(tzinfo=None)
@@ -365,9 +365,11 @@ def build_exit_plan(
     entry = float(entry_price or 0)
     inv = signal.get("invalidation")
     meta = dict(signal.get("meta") or {})
-    square_off = _square_off_dt(now)
-    r_mult = float(SCOUT_CONFIG.get("target_r_multiple", 1.5))
+    square_off = _square_off_dt(now, settings)
+    cfg = settings or default_scout_settings()
+    r_mult = float(cfg.get("min_target_r") or SCOUT_CONFIG.get("target_r_multiple", 2.0))
     max_r = float(SCOUT_CONFIG.get("target_max_r_multiple", 2.5))
+    breakeven_at_r = float(cfg.get("breakeven_at_r", 1.0))
 
     stop_price = float(inv) if inv is not None else None
     stop_side = "below" if action == "BUY" else "above"
@@ -379,17 +381,19 @@ def build_exit_plan(
         if action == "BUY":
             r_target = round(entry + risk * r_mult, 2)
             cap = round(entry + risk * max_r, 2)
-            if structural is not None and entry < structural <= cap:
+            target_price = r_target
+            if structural is not None and structural >= r_target and structural <= cap:
                 target_price = structural
-            else:
-                target_price = r_target
+            elif structural is not None and structural > cap:
+                target_price = cap
         else:
             r_target = round(entry - risk * r_mult, 2)
             cap = round(entry - risk * max_r, 2)
-            if structural is not None and entry > structural >= cap:
+            target_price = r_target
+            if structural is not None and structural <= r_target and structural >= cap:
                 target_price = structural
-            else:
-                target_price = r_target
+            elif structural is not None and structural < cap:
+                target_price = cap
 
     reward = abs(target_price - entry) if target_price is not None and entry > 0 else None
     ref_px = live_ltp if live_ltp is not None and live_ltp > 0 else entry
@@ -407,7 +411,7 @@ def build_exit_plan(
         {
             "id": "target",
             "label": "Target",
-            "value": f"₹{target_price:.2f}" + (f" ({r_mult}R)" if target_price else ""),
+            "value": f"₹{target_price:.2f}" + (f" ({r_mult}R)" if target_price is not None else " —"),
             "dynamic": True,
         },
         {
@@ -436,6 +440,7 @@ def build_exit_plan(
         "stop_side": stop_side,
         "target_price": target_price,
         "target_r": r_mult,
+        "breakeven_at_r": breakeven_at_r,
         "risk_per_share": round(risk, 2) if risk else None,
         "reward_per_share": round(reward, 2) if reward else None,
         "structural_target": structural,
@@ -454,8 +459,47 @@ def build_exit_plan(
             "timer_secs": secs_left,
             "timer_until": square_off.strftime("%H:%M"),
             "target_r": r_mult,
+            "breakeven_at_r": breakeven_at_r,
         },
     }
+
+
+def _effective_stop(
+    *,
+    action: str,
+    entry: float,
+    original_stop: float,
+    live_ltp: float,
+    risk: float,
+    peak_price: Optional[float],
+    settings: Optional[dict],
+) -> tuple[float, bool]:
+    """Return (effective_stop, breakeven_armed)."""
+    cfg = settings or default_scout_settings()
+    be_r = float(cfg.get("breakeven_at_r", 1.0))
+    trail_frac = float(cfg.get("trail_stop_r_fraction", 0.5))
+    action_u = str(action or "").upper()
+    armed = False
+    if risk <= 0:
+        return original_stop, armed
+    ref_peak = float(peak_price) if peak_price is not None else live_ltp
+    if action_u == "BUY":
+        effective = original_stop
+        if ref_peak >= entry + be_r * risk:
+            armed = True
+            effective = max(effective, entry)
+        if peak_price is not None and trail_frac > 0 and ref_peak >= entry + be_r * risk:
+            trail = float(peak_price) - trail_frac * risk
+            effective = max(effective, trail)
+        return effective, armed
+    effective = original_stop
+    if ref_peak <= entry - be_r * risk:
+        armed = True
+        effective = min(effective, entry)
+    if peak_price is not None and trail_frac > 0 and ref_peak <= entry - be_r * risk:
+        trail = float(peak_price) + trail_frac * risk
+        effective = min(effective, trail)
+    return effective, armed
 
 
 def evaluate_exit_alerts(
@@ -463,6 +507,9 @@ def evaluate_exit_alerts(
     action: str,
     live_ltp: Optional[float],
     exit_plan: dict,
+    entry_price: Optional[float] = None,
+    peak_price: Optional[float] = None,
+    settings: Optional[dict] = None,
 ) -> dict:
     """Flag when target, stop, or square-off time requires closing the open trade."""
     action = str(action or "").upper()
@@ -470,8 +517,11 @@ def evaluate_exit_alerts(
     prices = dict(dash.get("prices") or {})
     target = prices.get("target")
     stop = prices.get("stop")
+    entry = float(entry_price if entry_price is not None else (prices.get("entry") or 0))
+    risk = exit_plan.get("risk_per_share")
+    risk_f = float(risk) if risk is not None else None
     timer_secs = int(dash.get("timer_secs") or 0)
-    warn_mins = int(SCOUT_CONFIG.get("square_off_warn_minutes", 5))
+    warn_mins = int((settings or default_scout_settings()).get("square_off_warn_minutes", 5))
     warn_secs = max(0, warn_mins * 60)
 
     flags = {
@@ -479,6 +529,7 @@ def evaluate_exit_alerts(
         "stop_hit": False,
         "square_off_due": False,
         "square_off_soon": False,
+        "breakeven_armed": False,
     }
     alerts: List[dict] = []
 
@@ -500,7 +551,31 @@ def evaluate_exit_alerts(
                     "level": "now",
                     "label": f"Target hit (LTP ₹{ltp:.2f} ≤ ₹{tgt:.2f})",
                 })
-        if stop is not None:
+        if stop is not None and entry > 0 and risk_f and risk_f > 0:
+            orig = float(stop)
+            stp, armed = _effective_stop(
+                action=action,
+                entry=entry,
+                original_stop=orig,
+                live_ltp=ltp,
+                risk=risk_f,
+                peak_price=peak_price,
+                settings=settings,
+            )
+            flags["breakeven_armed"] = armed
+            if action == "BUY" and ltp <= stp:
+                flags["stop_hit"] = True
+                label = f"Stop hit (LTP ₹{ltp:.2f} ≤ ₹{stp:.2f})"
+                if flags["breakeven_armed"]:
+                    label = f"Trail/breakeven stop (LTP ₹{ltp:.2f} ≤ ₹{stp:.2f})"
+                alerts.append({"code": "STOP_HIT", "level": "now", "label": label})
+            elif action == "SELL" and ltp >= stp:
+                flags["stop_hit"] = True
+                label = f"Stop hit (LTP ₹{ltp:.2f} ≥ ₹{stp:.2f})"
+                if flags["breakeven_armed"]:
+                    label = f"Trail/breakeven stop (LTP ₹{ltp:.2f} ≥ ₹{stp:.2f})"
+                alerts.append({"code": "STOP_HIT", "level": "now", "label": label})
+        elif stop is not None:
             stp = float(stop)
             if action == "BUY" and ltp <= stp:
                 flags["stop_hit"] = True
@@ -566,10 +641,20 @@ def scout_trade_mtm(trade: dict, live_ltp: Optional[float]) -> Optional[dict]:
     pnl = pnl_per_share * qty
     notional = entry * qty
     pct = (pnl / notional) * 100.0 if notional else 0.0
+
+    from engine.equity_charges import estimate_equity_intraday_charges
+
+    charges = estimate_equity_intraday_charges(
+        entry=entry, exit_px=ltp, qty=qty,
+    ).total
+    net = round(pnl - charges, 2)
+
     return {
         "live_ltp": ltp,
         "quantity": qty,
         "mtm": round(pnl, 2),
+        "mtm_net": net,
+        "total_charges": round(charges, 2),
         "mtm_pct": round(pct, 2),
         "mtm_per_share": round(pnl_per_share, 2),
         "position_value": round(ltp * qty, 2),

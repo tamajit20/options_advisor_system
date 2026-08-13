@@ -229,12 +229,14 @@ SCOUT_CONFIG: dict = {
     # Live LTP refresh on Signals tab (seconds) — updates price without full card rebuild.
     "signals_live_poll_seconds": 3,
     # Exit plan for open trades: target = entry ± (risk × R-multiple); risk = |entry − stop|.
-    "target_r_multiple": 1.5,
+    "target_r_multiple": 2.0,
     "target_max_r_multiple": 2.5,
-    # Square off all intraday Scout trades this many minutes before market_close.
-    "square_off_minutes_before_close": 15,
-    # Warn on open trades this many minutes before square-off time.
-    "square_off_warn_minutes": 5,
+    # Kite order defaults (code-level; execution on/off is in persisted scout settings).
+    "zerodha_exchange": "NSE",
+    "zerodha_product": "MIS",
+    "zerodha_entry_order_type": "LIMIT",
+    "zerodha_stop_order_type": "SL-M",
+    "zerodha_exit_order_type": "MARKET",
     # Automation (persisted in scout_config; defaults here).
     "auto_execute_signals": False,
     "auto_close_trades": False,
@@ -922,6 +924,17 @@ ZERODHA_CONFIG = {
     "sebi_charges_pct":         0.000001,       # 0.0001% × turnover
     "stamp_duty_buy_pct":       0.00003,        # 0.003% × buy-side premium
     "gst_pct":                  0.18,           # 18% on (brokerage + exchange + SEBI)
+}
+
+# NSE equity intraday (Scout) — verify against Zerodha charge sheet periodically.
+ZERODHA_EQUITY_INTRADAY_CONFIG = {
+    "brokerage_pct":        0.0003,    # 0.03% per order, cap below
+    "brokerage_cap_inr":    20.0,
+    "stt_sell_pct":         0.00025,   # 0.025% on sell-side turnover
+    "exchange_txn_pct":     0.0000345, # NSE equity txn charge (approx)
+    "sebi_charges_pct":     0.000001,
+    "stamp_duty_buy_pct":   0.00003,
+    "gst_pct":              0.18,
 }
 
 

@@ -8,8 +8,10 @@ from unittest.mock import patch
 from scout.settings_schema import (
     compute_trade_quantity,
     default_scout_settings,
+    format_square_off_time,
     in_trading_window,
     merge_scout_settings,
+    square_off_datetime,
     strength_allowed,
     suggested_quantity,
     validate_scout_settings,
@@ -22,7 +24,19 @@ def test_default_settings_has_investment_sizing():
     assert d["investment_per_trade_inr"] == 20_000
     assert d["max_trades_per_day"] == 5
     assert d["dedupe_per_symbol"] is True
-    assert "MEDIUM" in d["auto_enter_strengths"]
+    assert "HIGH" in d["auto_enter_strengths"]
+
+
+def test_default_settings_has_wallet_limits():
+    d = default_scout_settings()
+    assert d["wallet_utilization_pct"] == 90.0
+    assert d["wallet_reserve_inr"] == 2000.0
+
+
+def test_validate_clamps_wallet():
+    out = validate_scout_settings({"wallet_utilization_pct": 120, "wallet_reserve_inr": -100})
+    assert out["wallet_utilization_pct"] == 100.0
+    assert out["wallet_reserve_inr"] == 0.0
 
 
 def test_validate_clamps_investment():
@@ -95,3 +109,34 @@ def test_effective_pattern_config_merges_settings():
     assert cfg["min_candles"] == 20
     assert cfg["entry_slippage_pct"] == 0.5
     assert "or_minutes" in cfg
+
+
+def test_default_settings_has_zerodha_execution_fields():
+    d = default_scout_settings()
+    assert d["zerodha_execute_orders"] is False
+    assert d["square_off_time"] == "15:10"
+    assert d["square_off_warn_minutes"] == 5
+
+
+def test_validate_persists_zerodha_execution_settings():
+    out = validate_scout_settings({
+        "zerodha_execute_orders": True,
+        "square_off_time": "15:08",
+        "square_off_warn_minutes": 3,
+    })
+    assert out["zerodha_execute_orders"] is True
+    assert out["square_off_time"] == "15:08"
+    assert out["square_off_warn_minutes"] == 3
+
+
+def test_square_off_datetime_from_settings():
+    day = datetime(2026, 8, 12, 11, 0, 0)
+    dt = square_off_datetime(day, {"square_off_time": "15:10"})
+    assert dt.hour == 15 and dt.minute == 10
+    assert format_square_off_time({"square_off_time": "15:10"}) == "15:10 IST"
+
+
+def test_merge_scout_settings_keeps_zerodha_flag():
+    merged = merge_scout_settings({"zerodha_execute_orders": True})
+    assert merged["zerodha_execute_orders"] is True
+    assert merged["square_off_time"] == "15:10"

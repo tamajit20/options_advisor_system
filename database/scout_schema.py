@@ -70,6 +70,29 @@ SCOUT_TABLE_DDL: List[str] = [
     "CREATE INDEX IF NOT EXISTS IX_scout_trades_status ON scout_trades (status, executed_at DESC)",
     "CREATE INDEX IF NOT EXISTS IX_scout_trades_symbol ON scout_trades (symbol, executed_at DESC)",
     """
+    IF OBJECT_ID('scout_trade_orders', 'U') IS NULL
+    CREATE TABLE scout_trade_orders (
+        id                  BIGINT IDENTITY(1,1) PRIMARY KEY,
+        trade_id            BIGINT         NOT NULL,
+        step_num            TINYINT        NOT NULL,
+        leg                 NVARCHAR(16)   NOT NULL,
+        kite_order_id       NVARCHAR(32)   NULL,
+        exchange_order_id   NVARCHAR(64)   NULL,
+        order_type          NVARCHAR(16)   NULL,
+        transaction_type    NVARCHAR(8)    NULL,
+        product             NVARCHAR(8)    NULL,
+        quantity            INT            NOT NULL,
+        price               DECIMAL(18,4)  NULL,
+        trigger_price       DECIMAL(18,4)  NULL,
+        status              NVARCHAR(24)   NOT NULL DEFAULT 'PENDING',
+        status_message      NVARCHAR(512)  NULL,
+        placed_at           DATETIME2      NULL,
+        updated_at          DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
+        meta_json           NVARCHAR(MAX)  NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_scout_trade_orders_trade ON scout_trade_orders (trade_id, step_num, leg)",
+    """
     IF OBJECT_ID('scout_scan_log', 'U') IS NULL
     CREATE TABLE scout_scan_log (
         id              BIGINT IDENTITY(1,1) PRIMARY KEY,
@@ -82,6 +105,22 @@ SCOUT_TABLE_DDL: List[str] = [
         error_message   NVARCHAR(500)  NULL
     )
     """,
+    """
+    IF OBJECT_ID('scout_zerodha_log', 'U') IS NULL
+    CREATE TABLE scout_zerodha_log (
+        id              BIGINT IDENTITY(1,1) PRIMARY KEY,
+        logged_at       DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
+        run_id          NVARCHAR(36)   NOT NULL,
+        trigger_source  NVARCHAR(32)   NOT NULL,
+        severity        NVARCHAR(16)   NOT NULL,
+        code            NVARCHAR(64)   NOT NULL,
+        message         NVARCHAR(1024) NOT NULL,
+        detail          NVARCHAR(MAX)  NULL,
+        user_id         NVARCHAR(32)   NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_scout_zerodha_log_at ON scout_zerodha_log (logged_at DESC)",
+    "CREATE INDEX IF NOT EXISTS IX_scout_zerodha_log_sev ON scout_zerodha_log (severity, logged_at DESC)",
 ]
 
 
@@ -91,7 +130,55 @@ def create_scout_tables(db: SQLServerConnection) -> None:
     for raw in SCOUT_TABLE_DDL:
         cur = db.execute(_normalize_ddl(raw))
         cur.close()
+    _migrate_scout_trades_net_pnl(db)
+    _migrate_scout_trades_execution(db)
     logger.info("Scout tables ensured (%d DDL statements).", len(SCOUT_TABLE_DDL))
+
+
+def _migrate_scout_trades_net_pnl(db: SQLServerConnection) -> None:
+    """Add net-P&L and trailing columns to scout_trades when missing."""
+    exists = db.fetch_one(
+        "SELECT 1 AS ok FROM sys.tables WHERE name = 'scout_trades'"
+    )
+    if not exists:
+        return
+    for col, ddl in (
+        ("gross_pnl", "DECIMAL(18,4) NULL"),
+        ("total_charges", "DECIMAL(18,4) NULL"),
+        ("net_pnl", "DECIMAL(18,4) NULL"),
+        ("peak_price", "DECIMAL(18,4) NULL"),
+    ):
+        row = db.fetch_one(
+            "SELECT 1 AS ok FROM sys.columns "
+            "WHERE object_id = OBJECT_ID('scout_trades') AND name = ?",
+            [col],
+        )
+        if not row:
+            cur = db.execute(f"ALTER TABLE scout_trades ADD {col} {ddl}")
+            cur.close()
+            logger.info("scout_trades: added column %s", col)
+
+
+def _migrate_scout_trades_execution(db: SQLServerConnection) -> None:
+    """Add execution-mode columns to scout_trades when missing."""
+    exists = db.fetch_one(
+        "SELECT 1 AS ok FROM sys.tables WHERE name = 'scout_trades'"
+    )
+    if not exists:
+        return
+    for col, ddl in (
+        ("execution_mode", "NVARCHAR(16) NULL"),
+        ("effective_stop_price", "DECIMAL(18,4) NULL"),
+    ):
+        row = db.fetch_one(
+            "SELECT 1 AS ok FROM sys.columns "
+            "WHERE object_id = OBJECT_ID('scout_trades') AND name = ?",
+            [col],
+        )
+        if not row:
+            cur = db.execute(f"ALTER TABLE scout_trades ADD {col} {ddl}")
+            cur.close()
+            logger.info("scout_trades: added column %s", col)
 
 
 def _migrate_paper_trades_to_trades(db: SQLServerConnection) -> None:
@@ -121,4 +208,7 @@ def _migrate_paper_trades_to_trades(db: SQLServerConnection) -> None:
 
 
 def scout_table_names() -> List[str]:
-    return ["scout_signals", "scout_scan_log", "scout_config", "scout_trades"]
+    return [
+        "scout_signals", "scout_scan_log", "scout_config",
+        "scout_trades", "scout_trade_orders", "scout_zerodha_log",
+    ]

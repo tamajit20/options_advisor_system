@@ -30,6 +30,12 @@ def _scout_settings(**overrides):
         "max_trades_per_day": 10,
         "one_trade_per_symbol_per_day": False,
         "auto_enter_strengths": ["WEAK", "MEDIUM", "HIGH"],
+        "auto_enter_signal_types": [
+            "OR_BREAK_UP", "OR_BREAK_DOWN", "RANGE_BREAK_UP", "RANGE_BREAK_DOWN",
+            "PULLBACK_UP", "PULLBACK_DOWN",
+        ],
+        "min_net_profit_inr": 0,
+        "min_target_r": 2.0,
         "trade_window_start": "09:15",
         "trade_window_end": "15:30",
     }
@@ -54,36 +60,38 @@ def test_try_auto_execute_marks_taken(db, mocker):
     mocker.patch("scout.auto_trader.SCOUT_CONFIG", {"enabled": True})
     mocker.patch(
         "scout.auto_trader.enrich_signal",
-        return_value={"validity_status": "ACTIVE"},
+        return_value={"validity_status": "ACTIVE", "entry_max": 2510.0, "entry_min": 2495.0},
     )
     sig_repo = MagicMock()
     sig_repo.get.return_value = {
         "id": 5,
         "symbol": "RELIANCE",
         "action": "BUY",
-        "signal_type": "OR_BREAK",
+        "signal_type": "OR_BREAK_UP",
         "ltp": 2500.0,
+        "invalidation": 2480.0,
         "strength": "MEDIUM",
+        "meta": {"or_high": 2505.0, "or_low": 2480.0},
     }
     trade_repo = MagicMock()
     trade_repo.open_signal_ids.return_value = []
     trade_repo.open_trades.return_value = []
     trade_repo.count_trades_opened_today.return_value = 0
     trade_repo.symbol_has_trade_today.return_value = False
-    trade_repo.mark_taken.return_value = 99
+    mock_enter = mocker.patch(
+        "scout.auto_trader.execute_entry",
+        return_value={"trade_id": 99, "signal_id": 5, "execution_mode": "paper"},
+    )
     mocker.patch("scout.auto_trader.ScoutSignalRepo", return_value=sig_repo)
     mocker.patch("scout.auto_trader.ScoutTradeRepo", return_value=trade_repo)
 
     out = try_auto_execute_signal(db, signal_id=5, spot_lookup=lambda s: 2510.0)
     assert out["trade_id"] == 99
-    trade_repo.mark_taken.assert_called_once()
-    kwargs = trade_repo.mark_taken.call_args.kwargs
+    mock_enter.assert_called_once()
+    kwargs = mock_enter.call_args.kwargs
     assert kwargs["signal_id"] == 5
     assert kwargs["entry_price"] == 2510.0
     assert kwargs["quantity"] == 2
-    notes = kwargs["notes"]
-    assert "auto_execute" in notes
-    assert json.loads(notes)["mode"] == "auto"
 
 
 def test_try_auto_execute_skipped_outside_window(db, mocker):
@@ -99,7 +107,11 @@ def test_try_auto_execute_skipped_outside_window(db, mocker):
     mocker.patch("scout.auto_trader.SCOUT_CONFIG", {"enabled": True})
     mocker.patch("scout.auto_trader.in_trading_window", return_value=False)
     sig_repo = MagicMock()
-    sig_repo.get.return_value = {"id": 1, "symbol": "TCS", "action": "BUY", "strength": "HIGH", "ltp": 100}
+    sig_repo.get.return_value = {
+        "id": 1, "symbol": "TCS", "action": "BUY", "strength": "HIGH", "ltp": 100,
+        "signal_type": "OR_BREAK_UP", "invalidation": 98.0,
+        "meta": {"or_high": 101.0, "or_low": 98.0},
+    }
     trade_repo = MagicMock()
     trade_repo.open_signal_ids.return_value = []
     mocker.patch("scout.auto_trader.ScoutSignalRepo", return_value=sig_repo)
@@ -120,28 +132,30 @@ def test_try_auto_execute_investment_sizing(db, mocker):
     mocker.patch("scout.auto_trader.SCOUT_CONFIG", {"enabled": True})
     mocker.patch(
         "scout.auto_trader.enrich_signal",
-        return_value={"validity_status": "ACTIVE"},
+        return_value={"validity_status": "ACTIVE", "entry_max": 2510.0, "entry_min": 2495.0},
     )
     sig_repo = MagicMock()
     sig_repo.get.return_value = {
         "id": 5,
         "symbol": "RELIANCE",
         "action": "BUY",
-        "signal_type": "OR_BREAK",
+        "signal_type": "OR_BREAK_UP",
         "ltp": 2500.0,
+        "invalidation": 2480.0,
         "strength": "HIGH",
+        "meta": {"or_high": 2505.0, "or_low": 2480.0},
     }
     trade_repo = MagicMock()
     trade_repo.open_signal_ids.return_value = []
     trade_repo.open_trades.return_value = []
     trade_repo.count_trades_opened_today.return_value = 0
     trade_repo.symbol_has_trade_today.return_value = False
-    trade_repo.mark_taken.return_value = 100
+    mock_enter = mocker.patch("scout.auto_trader.execute_entry")
     mocker.patch("scout.auto_trader.ScoutSignalRepo", return_value=sig_repo)
     mocker.patch("scout.auto_trader.ScoutTradeRepo", return_value=trade_repo)
 
     try_auto_execute_signal(db, signal_id=5, spot_lookup=lambda s: 2510.0)
-    qty = trade_repo.mark_taken.call_args.kwargs["quantity"]
+    qty = mock_enter.call_args.kwargs["quantity"]
     assert qty == 7  # floor(20000 / 2510)
 
 
@@ -167,9 +181,9 @@ def test_try_auto_close_on_target_hit(db, mocker):
         "signal_id": 3,
         "entry_price": 4000.0,
         "quantity": 1,
+        "status": "OPEN",
         "executed_at": datetime(2026, 8, 12, 10, 0, 0),
     }]
-    trade_repo.close.return_value = {"id": 7, "pnl": 50.0}
     sig_repo = MagicMock()
     sig_repo.get.return_value = {
         "action": "BUY",
@@ -179,19 +193,15 @@ def test_try_auto_close_on_target_hit(db, mocker):
     }
     mocker.patch("scout.auto_trader.ScoutTradeRepo", return_value=trade_repo)
     mocker.patch("scout.auto_trader.ScoutSignalRepo", return_value=sig_repo)
+    mocker.patch("scout.auto_trader.zerodha_execute_enabled", return_value=False)
     mocker.patch(
-        "scout.auto_trader.build_exit_plan",
-        return_value={"dashboard": {"prices": {"target": 4100.0, "stop": 3950.0}, "timer_secs": 3600}},
-    )
-    mocker.patch(
-        "scout.auto_trader.evaluate_exit_alerts",
-        return_value={"close_now": True, "alerts": [{"code": "TARGET_HIT"}]},
+        "scout.auto_trader.paper_close_if_triggered",
+        return_value={"id": 7, "pnl": 50.0, "exit_price": 4110.0, "exit_reason": "target_hit"},
     )
 
     closed = try_auto_close_trades(db, spot_lookup=lambda s: 4110.0)
     assert len(closed) == 1
     assert closed[0]["trade_id"] == 7
-    trade_repo.close.assert_called_once()
 
 
 def test_on_signals_committed_respects_toggle(db, mocker):
@@ -251,9 +261,11 @@ def _setup_signal_mocks(mocker, *, strength="HIGH", symbol="TCS", ltp=100.0):
         "id": 1,
         "symbol": symbol,
         "action": "BUY",
-        "signal_type": "OR_BREAK",
+        "signal_type": "OR_BREAK_UP",
         "ltp": ltp,
+        "invalidation": ltp - 2.0,
         "strength": strength,
+        "meta": {"or_high": ltp + 1.0, "or_low": ltp - 2.0},
     }
     trade_repo = MagicMock()
     trade_repo.open_signal_ids.return_value = []
@@ -274,6 +286,7 @@ def test_auto_enter_block_reason_daily_cap():
         signal_id=1,
         symbol="TCS",
         strength="HIGH",
+        signal_type="OR_BREAK_UP",
     )
     assert reason == "daily trade cap (5) reached"
 
@@ -288,6 +301,7 @@ def test_auto_enter_block_reason_symbol_already_traded_today():
         signal_id=2,
         symbol="RELIANCE",
         strength="HIGH",
+        signal_type="OR_BREAK_UP",
     )
     assert "symbol already traded today" in reason
 
@@ -302,6 +316,7 @@ def test_auto_enter_block_reason_strength_not_allowed():
         signal_id=3,
         symbol="TCS",
         strength="WEAK",
+        signal_type="OR_BREAK_UP",
     )
     assert "strength WEAK not in auto-enter list" in reason
 
@@ -319,6 +334,7 @@ def test_auto_enter_block_reason_open_trade_same_symbol():
         signal_id=11,
         symbol="TCS",
         strength="HIGH",
+        signal_type="OR_BREAK_UP",
     )
     assert "open trade already exists for TCS" in reason
 

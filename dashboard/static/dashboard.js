@@ -5899,10 +5899,20 @@ async function _submitZerodhaRequestToken(rt) {
     });
     const d = await r.json();
     if (d.ok) {
-      if (msg) { msg.textContent = `✓ Logged in as ${d.user_id} at ${d.generated_at}`; msg.style.color = '#0a0'; }
+      let statusMsg = `✓ Logged in as ${d.user_id} at ${d.generated_at}`;
+      if (d.permission_check && !d.permission_check.overall_ok) {
+        statusMsg += ' — permission checks FAILED (see Scout → Errors)';
+      } else if (d.permission_check?.overall_ok) {
+        statusMsg += ' — all permission checks passed';
+      }
+      if (msg) { msg.textContent = statusMsg; msg.style.color = d.permission_check && !d.permission_check.overall_ok ? '#b45309' : '#0a0'; }
       if (inp) inp.value = '';
       loadZerodhaStatus();
-      toast('Zerodha session saved — live feed should connect shortly.', 'ok');
+      toast(d.permission_check && !d.permission_check.overall_ok
+        ? 'Logged in but permission checks failed — see Scout Errors tab'
+        : 'Zerodha session saved — live feed should connect shortly.',
+        d.permission_check && !d.permission_check.overall_ok ? 'err' : 'ok');
+      if (typeof window.loadScoutErrors === 'function') window.loadScoutErrors();
       return true;
     }
     if (msg) { msg.textContent = '✗ ' + (d.error || 'exchange failed'); msg.style.color = '#c00'; }
