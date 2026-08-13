@@ -44,7 +44,30 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def ws_health() -> dict:
+def _age_seconds(ts: Optional[datetime]) -> Optional[float]:
+    if not ts:
+        return None
+    now = now_ist().replace(tzinfo=None)
+    ref = ts.replace(tzinfo=None) if ts.tzinfo else ts
+    return max(0.0, (now - ref).total_seconds())
+
+
+def _snapshot_timestamps(snap: dict) -> tuple[Optional[datetime], Optional[datetime]]:
+    """Return (last_tick_at, snapshot_generated_at) from ws_status.json."""
+    tick = None
+    for key in ("last_tick_at", "runner_last_tick_at"):
+        tick = _parse_ts(snap.get(key))
+        if tick:
+            break
+    generated = None
+    for key in ("generated_at", "updated_at", "snapshot_at"):
+        generated = _parse_ts(snap.get(key))
+        if generated:
+            break
+    return tick, generated
+
+
+def ws_health(*, market_open: Optional[bool] = None) -> dict:
     snap = _read_ws_snapshot()
     if not snap:
         return {
@@ -55,23 +78,41 @@ def ws_health() -> dict:
             "reason": "ws_status.json missing — WS runner may be down",
         }
 
+    if market_open is None:
+        try:
+            from scout.market_data import is_market_open
+            market_open = is_market_open()
+        except Exception:
+            market_open = True
+
     conn = str(snap.get("connection_state") or "").lower()
-    updated = _parse_ts(snap.get("updated_at") or snap.get("snapshot_at"))
-    age: Optional[float] = None
-    stale = True
-    if updated:
-        now = now_ist()
-        upd = updated.replace(tzinfo=None) if updated.tzinfo else updated
-        age = max(0.0, (now.replace(tzinfo=None) - upd).total_seconds())
-        stale = age > _WS_STALE_SECONDS
+    tick_ts, snap_ts = _snapshot_timestamps(snap)
+    tick_age = _age_seconds(tick_ts)
+    snap_age = _age_seconds(snap_ts)
 
     connected = conn in ("connected", "streaming", "open")
+    stale = True
+    age: Optional[float] = None
+    if market_open:
+        if tick_age is not None:
+            age = tick_age
+            stale = tick_age > _WS_STALE_SECONDS
+        elif snap_age is not None:
+            age = snap_age
+            stale = snap_age > _WS_STALE_SECONDS
+    else:
+        age = snap_age if snap_age is not None else tick_age
+        stale = not connected or snap_age is None or snap_age > _WS_STALE_SECONDS
+
     ok = connected and not stale
     reason = ""
     if not connected:
         reason = f"websocket {conn or 'disconnected'}"
     elif stale:
-        reason = f"ws snapshot stale ({int(age or 0)}s old)"
+        if age is None:
+            reason = "ws snapshot missing timestamps"
+        else:
+            reason = f"ws snapshot stale ({int(age)}s old)"
 
     return {
         "ok": ok,

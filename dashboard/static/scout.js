@@ -1379,36 +1379,68 @@
 
   function renderZerodhaCheckStatus(summary) {
     const el = $('#scout-err-status');
+    const panel = $('#scout-err-checks-panel');
+    const head = $('#scout-err-checks-head');
     if (!el) return;
     if (!summary) {
       el.hidden = true;
       el.innerHTML = '';
+      if (head) head.textContent = 'Permission checks — not run yet';
+      if (panel) panel.open = false;
       return;
     }
-    const ok = !!summary.overall_ok;
+    const checks = summary.checks || [];
+    const failed = checks.filter(c => !c.ok);
+    const passed = checks.length - failed.length;
+    const allOk = failed.length === 0;
     el.hidden = false;
-    el.className = 'scout-err-status ' + (ok ? 'scout-err-status--ok' : 'scout-err-status--fail');
-    const checks = (summary.checks || []).map(c => {
+    el.className = 'scout-err-status ' + (allOk ? 'scout-err-status--ok' : 'scout-err-status--fail');
+    if (head) {
+      head.textContent = allOk
+        ? `Permission checks — all ${checks.length} passed · ${summary.checked_at || ''}`
+        : `Permission checks — ${passed}/${checks.length} passed · ${summary.checked_at || ''}`;
+    }
+    if (panel) panel.open = !allOk;
+    const chips = checks.map(c => {
       const icon = c.ok ? '✓' : '✗';
-      const cls = c.ok ? 'scout-err-check--ok' : 'scout-err-check--fail';
+      const cls = c.ok ? 'scout-err-chip--ok' : 'scout-err-chip--fail';
       const detail = c.error || c.detail || '';
-      return `<li class="scout-err-check ${cls}"><span>${icon} ${escapeHtml(c.label || c.check_id)}</span>`
-        + (detail ? `<span class="muted">${escapeHtml(detail)}</span>` : '')
-        + '</li>';
+      const title = detail ? ` title="${escapeHtml(detail).replace(/"/g, '&quot;')}"` : '';
+      return `<span class="scout-err-chip ${cls}"${title}>${icon} ${escapeHtml(c.label || c.check_id)}</span>`;
     }).join('');
-    el.innerHTML = `
-      <div class="scout-err-status-head">
-        <strong>${ok ? 'All checks passed' : 'Checks failing — live orders blocked'}</strong>
-        <span class="muted">${escapeHtml(summary.checked_at || '')} · ${escapeHtml(summary.trigger || '')}</span>
-      </div>
-      <ul class="scout-err-checklist">${checks}</ul>`;
+    el.innerHTML = `<div class="scout-err-chips">${chips}</div>`;
+  }
+
+  function renderScoutErrorLog(c, logData) {
+    const rows = logData.entries || [];
+    const countEl = $('#scout-err-count');
+    const total = logData.total != null ? logData.total : rows.length;
+    if (countEl) {
+      countEl.hidden = false;
+      countEl.textContent = `${rows.length} shown · ${total} total in range`;
+    }
+    c.className = 'scout-err-log-scroll';
+    if (!rows.length) {
+      c.innerHTML = '<div class="empty">No log entries for this filter. Try “All severities” or widen the date range.</div>';
+      return;
+    }
+    c.innerHTML = `<table class="dt scout-err-table"><thead><tr>
+      <th>Time</th><th>Severity</th><th>Code</th><th>Trigger</th><th>Message</th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+        <td>${escapeHtml(r.logged_at || '')}</td>
+        <td><span class="tag tag-${errLevelClass(r.severity)}">${escapeHtml(r.severity || '')}</span></td>
+        <td><code>${escapeHtml(r.code || '')}</code></td>
+        <td>${escapeHtml(r.trigger_source || '')}</td>
+        <td>${escapeHtml(r.message || '')}${r.detail ? `<div class="muted scout-err-detail">${escapeHtml(String(r.detail).slice(0, 200))}</div>` : ''}</td>
+      </tr>`).join('')}
+      </tbody></table>`;
   }
 
   async function loadScoutErrors() {
     defaultErrDates();
     const c = $('#scout-errors-container');
     if (!c) return;
-    c.className = 'loading';
+    c.className = 'scout-err-log-scroll loading';
     c.textContent = 'Loading…';
     const params = new URLSearchParams();
     const from = $('#scout-err-from')?.value;
@@ -1419,32 +1451,16 @@
     if (to) params.set('to_date', to);
     if (sev) params.set('severity', sev);
     if (q) params.set('search', q);
+    params.set('limit', '500');
     try {
       const [logData, latest] = await Promise.all([
         scoutApi('/zerodha-log?' + params),
         scoutApi('/zerodha-check/latest'),
       ]);
       renderZerodhaCheckStatus(latest.summary);
-      const rows = logData.entries || [];
-      if (!rows.length) {
-        c.className = '';
-        c.innerHTML = '<div class="empty">No log entries for this filter.</div>';
-        return;
-      }
-      c.className = '';
-      c.innerHTML = `<table class="dt scout-err-table"><thead><tr>
-        <th>Time</th><th>Severity</th><th>Code</th><th>Trigger</th><th>Message</th></tr></thead>
-        <tbody>${rows.map(r => `<tr>
-          <td>${escapeHtml(r.logged_at || '')}</td>
-          <td><span class="tag tag-${errLevelClass(r.severity)}">${escapeHtml(r.severity || '')}</span></td>
-          <td><code>${escapeHtml(r.code || '')}</code></td>
-          <td>${escapeHtml(r.trigger_source || '')}</td>
-          <td>${escapeHtml(r.message || '')}</td>
-        </tr>`).join('')}
-        </tbody></table>
-        <p class="muted scout-err-count">${rows.length} shown · ${logData.total != null ? logData.total : rows.length} total in range</p>`;
+      renderScoutErrorLog(c, logData);
     } catch (e) {
-      c.className = '';
+      c.className = 'scout-err-log-scroll';
       c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
     }
   }
@@ -2244,7 +2260,7 @@
     bindAutomationControls();
     bindConfigForm();
     $('#scout-err-apply')?.addEventListener('click', () => loadScoutErrors());
-    $('#scout-err-recheck')?.addEventListener('click', () => rerunZerodhaChecks());
+    $('#scout-err-recheck')?.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); rerunZerodhaChecks(); });
     $('#scout-err-search')?.addEventListener('keydown', e => { if (e.key === 'Enter') loadScoutErrors(); });
     $('#scout-refresh')?.addEventListener('click', () => loadScoutSignals());
     $('#scout-hist-apply')?.addEventListener('click', () => loadScoutHistory());

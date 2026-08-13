@@ -457,22 +457,31 @@
         <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
         <button class="scout-subtab" data-stab="scout-config">Config</button>
       </div>
-      <p class="muted scout-intro">Zerodha permission checks run after login and at start-of-day. Failures stay here until resolved — live orders are blocked while checks fail.</p>
-      <div id="scout-err-status" class="scout-err-status" hidden></div>
-      <div class="filter-row hist-filter-bar scout-hist-filters">
-        <label class="hist-filter-label">From <input type="date" id="scout-err-from" class="hist-date-input"></label>
-        <label class="hist-filter-label">To <input type="date" id="scout-err-to" class="hist-date-input"></label>
-        <select id="scout-err-severity" class="hist-date-input" title="Filter severity">
-          <option value="">All severities</option>
-          <option value="ERROR" selected>ERROR</option>
-          <option value="WARNING">WARNING</option>
-          <option value="INFO">INFO</option>
-        </select>
-        <input type="search" id="scout-err-search" placeholder="Search…" class="scout-wl-search" style="max-width:160px">
-        <button type="button" class="btn btn-ghost" id="scout-err-apply">Apply</button>
-        <button type="button" class="btn btn-accent" id="scout-err-recheck">Re-run checks</button>
+      <div class="scout-err-layout">
+        <details id="scout-err-checks-panel" class="scout-err-checks-panel">
+          <summary class="scout-err-checks-summary">
+            <span id="scout-err-checks-head">Permission checks</span>
+            <button type="button" class="btn btn-accent btn-sm scout-err-recheck-inline" id="scout-err-recheck">Re-run</button>
+          </summary>
+          <div id="scout-err-status" class="scout-err-status" hidden></div>
+        </details>
+        <div class="scout-err-log-section">
+          <div class="filter-row hist-filter-bar scout-hist-filters scout-err-filters">
+            <label class="hist-filter-label">From <input type="date" id="scout-err-from" class="hist-date-input"></label>
+            <label class="hist-filter-label">To <input type="date" id="scout-err-to" class="hist-date-input"></label>
+            <select id="scout-err-severity" class="hist-date-input" title="Filter severity">
+              <option value="" selected>All severities</option>
+              <option value="ERROR">ERROR</option>
+              <option value="WARNING">WARNING</option>
+              <option value="INFO">INFO</option>
+            </select>
+            <input type="search" id="scout-err-search" placeholder="Search…" class="scout-wl-search scout-err-search">
+            <button type="button" class="btn btn-ghost" id="scout-err-apply">Apply</button>
+          </div>
+          <div id="scout-errors-container" class="scout-err-log-scroll loading">Loading…</div>
+          <p id="scout-err-count" class="muted scout-err-count" hidden></p>
+        </div>
       </div>
-      <div id="scout-errors-container" class="loading">Loading…</div>
     </article>
 
     <article class="panel" id="panel-scout-watchlist" aria-hidden="true">
