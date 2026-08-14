@@ -178,6 +178,19 @@ def signal_eligible_for_execution_flow(*, market_open: bool, validity_status: st
     return bool(market_open) and str(validity_status or "") == "ACTIVE"
 
 
+def _flow_item_sort_key(item: dict) -> tuple:
+    """Executed entries first (OPEN/…), then PENDING_ENTRY trades, then signals."""
+    if item.get("kind") == "signal":
+        sid = int((item.get("signal") or {}).get("id") or 0)
+        return (1, 1, -sid)
+    trade = item.get("trade") or {}
+    status = str(trade.get("status") or "").upper()
+    tid = int(trade.get("id") or 0)
+    if status == "PENDING_ENTRY":
+        return (1, 0, -tid)
+    return (0, 0, -tid)
+
+
 def build_flow_items(db: SQLServerConnection, *, settings: dict) -> List[dict]:
     """Unified signal + trade execution items for the dashboard."""
     sig_repo = ScoutSignalRepo(db)
@@ -244,4 +257,5 @@ def build_flow_items(db: SQLServerConnection, *, settings: dict) -> List[dict]:
             "live_stale": bool(q.get("stale")),
         })
 
+    items.sort(key=_flow_item_sort_key)
     return items

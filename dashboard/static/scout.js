@@ -1546,6 +1546,26 @@
     });
   }
 
+  function sortExecutionItems(items) {
+    return (items || []).slice().sort((a, b) => {
+      function sortKey(it) {
+        if (it.kind === 'signal') {
+          return [1, 1, -Number((it.signal && it.signal.id) || 0)];
+        }
+        const st = String((it.trade && it.trade.status) || '').toUpperCase();
+        const tid = Number((it.trade && it.trade.id) || 0);
+        if (st === 'PENDING_ENTRY') return [1, 0, -tid];
+        return [0, 0, -tid];
+      }
+      const ka = sortKey(a);
+      const kb = sortKey(b);
+      for (let i = 0; i < 3; i++) {
+        if (ka[i] !== kb[i]) return ka[i] - kb[i];
+      }
+      return 0;
+    });
+  }
+
   let _scoutFlowCache = new Map();
   let _scoutExecLiveCache = new Map();
   let _scoutWsHealth = null;
@@ -1607,7 +1627,7 @@
     const c = $('#scout-trades-container');
     if (!c) return;
     _scoutWsHealth = wsHealth || _scoutWsHealth;
-    const visible = filterExecutionItems(items, marketOpen).map(it => mergeFlowItemLive(it, wsHealth));
+    const visible = sortExecutionItems(filterExecutionItems(items, marketOpen)).map(it => mergeFlowItemLive(it, wsHealth));
     if (!visible.length) {
       _scoutFlowCache.clear();
       _scoutExecLiveCache.clear();

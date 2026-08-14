@@ -237,6 +237,57 @@ def test_build_flow_items_does_not_duplicate_signal_with_open_trade(mocker):
     assert items[0]["kind"] == "trade"
 
 
+def test_build_flow_items_executed_trades_before_waiting(mocker):
+    open_trade = {
+        "id": 10,
+        "signal_id": 100,
+        "symbol": "RELIANCE",
+        "status": "OPEN",
+        "action": "BUY",
+        "entry_price": 2500.0,
+    }
+    pending_trade = {
+        "id": 5,
+        "signal_id": 50,
+        "symbol": "TCS",
+        "status": "PENDING_ENTRY",
+        "action": "BUY",
+        "entry_price": 3500.0,
+    }
+    sig = {"id": 200, "symbol": "INFY", "action": "BUY", "ltp": 1800.0}
+    sig_repo = MagicMock()
+    sig_repo.recent.return_value = [sig]
+    sig_repo.get.side_effect = lambda sid: {
+        100: {"id": 100, "symbol": "RELIANCE"},
+        50: {"id": 50, "symbol": "TCS"},
+    }.get(int(sid))
+    trade_repo = MagicMock()
+    trade_repo.open_trades.return_value = [pending_trade, open_trade]
+    order_repo = MagicMock()
+    order_repo.for_trade.return_value = []
+    _patch_flow_repos(mocker, sig_repo=sig_repo, trade_repo=trade_repo, order_repo=order_repo)
+    mocker.patch("scout.execution_flow.is_market_open", return_value=True)
+    mocker.patch("scout.execution_flow.latest_equity_ltps", return_value={})
+    mocker.patch("scout.execution_flow.now_ist", return_value=datetime(2026, 8, 13, 11, 0, 0))
+    mocker.patch(
+        "scout.execution_flow.enrich_signal",
+        return_value={**sig, "validity_status": "ACTIVE"},
+    )
+    mocker.patch(
+        "scout.execution_flow.build_trade_execution_flow",
+        side_effect=lambda **kw: {"trade_status": kw["trade"]["status"], "steps": []},
+    )
+
+    items = build_flow_items(MagicMock(), settings={})
+
+    assert [it.get("kind") for it in items] == ["trade", "trade", "signal"]
+    assert items[0]["trade"]["id"] == 10
+    assert items[0]["trade"]["status"] == "OPEN"
+    assert items[1]["trade"]["id"] == 5
+    assert items[1]["trade"]["status"] == "PENDING_ENTRY"
+    assert items[2]["signal"]["id"] == 200
+
+
 def test_build_trade_execution_flow_open_trade(mocker):
     trade = {
         "id": 1,
