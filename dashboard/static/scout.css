@@ -1040,7 +1040,7 @@
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 12px;
 }
-.scout-exec-card { border-left: 3px solid var(--primary); }
+.scout-exec-card { border-left: 3px solid var(--primary); contain: layout style; }
 .scout-exec-card--signal { border-left-color: var(--text-dim); opacity: .92; }
 .scout-exec-mode {
   font-size: .72rem;
@@ -1051,23 +1051,70 @@
 .scout-exec-mode--live { background: rgba(255, 120, 80, .2); color: #ffb088; }
 .scout-exec-mode--paper { background: rgba(100, 180, 255, .15); color: #9ecbff; }
 .scout-exec-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
   font-size: .78rem;
   margin: 8px 0 10px;
   color: var(--text-dim);
 }
-.scout-exec-mtm { font-weight: 700; }
-.scout-exec-mtm-net { font-weight: 500; font-size: .72rem; }
+@media (min-width: 520px) {
+  .scout-exec-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+.scout-exec-summary-item {
+  min-height: 1.2em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scout-exec-mtm { font-weight: 700; white-space: normal; }
+.scout-exec-mtm--na { font-weight: 500; color: var(--text-dim); }
+.scout-exec-mtm-net,
+.scout-exec-mtm-pct { font-weight: 500; }
+.scout-exec-live strong,
+.scout-exec-live-val {
+  font-variant-numeric: tabular-nums;
+}
 .scout-exec-live {
   font-weight: 600;
   color: var(--text);
 }
-.scout-exec-live strong {
+.scout-exec-live strong,
+.scout-exec-live-val {
   color: var(--accent, #6ecfff);
 }
-.scout-exec-live--missing { font-weight: 500; }
+.scout-exec-live--missing .scout-exec-live-val { color: inherit; }
+.scout-exec-live--stale .scout-exec-live-val { opacity: .92; }
+.scout-exec-live-flag {
+  display: inline-block;
+  margin-left: .35rem;
+  padding: .05rem .35rem;
+  border-radius: .25rem;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.scout-exec-live-flag--stale {
+  background: rgba(250, 204, 21, .18);
+  color: #fde68a;
+}
+.scout-exec-live-flag--down {
+  background: rgba(248, 113, 113, .18);
+  color: #fecaca;
+}
+.scout-exec-ws-banner {
+  grid-column: 1 / -1;
+  margin-bottom: .5rem;
+  padding: .45rem .65rem;
+  border-radius: .35rem;
+  background: rgba(250, 204, 21, .1);
+  border: 1px solid rgba(250, 204, 21, .25);
+  color: #fde68a;
+  font-size: .78rem;
+}
 .scout-exec-flow {
   display: flex;
   flex-direction: column;
@@ -1080,6 +1127,7 @@
   padding: 8px 10px;
   background: rgba(0, 0, 0, .15);
   transition: border-color .15s ease, background .15s ease;
+  flex-shrink: 0;
 }
 .scout-exec-step--pending {
   border-color: rgba(255, 255, 255, .08);

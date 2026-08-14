@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 AUTO_ENTRY_SOURCES = frozenset({"auto_execute", "auto_enter"})
 AUTO_EXIT_CODES = frozenset({
     "target_hit", "stop_hit", "square_off_due", "auto_close",
+    "failed_breakout", "unprotected_exit",
     "TARGET_HIT", "STOP_HIT", "SQUARE_OFF_DUE", "AUTO_CLOSE",
+    "FAILED_BREAKOUT", "UNPROTECTED_EXIT",
 })
 
 EXIT_LABELS = {
@@ -22,11 +24,15 @@ EXIT_LABELS = {
     "stop_hit": "Stop hit",
     "square_off_due": "Square-off (EOD)",
     "auto_close": "Auto-close rule",
+    "failed_breakout": "Failed breakout",
+    "unprotected_exit": "Unprotected exit",
     "manual": "Manual close",
     "TARGET_HIT": "Target hit",
     "STOP_HIT": "Stop hit",
     "SQUARE_OFF_DUE": "Square-off (EOD)",
     "AUTO_CLOSE": "Auto-close rule",
+    "FAILED_BREAKOUT": "Failed breakout",
+    "UNPROTECTED_EXIT": "Unprotected exit",
 }
 
 
@@ -254,6 +260,12 @@ def build_exit_execution(trade: dict, signal: Optional[dict] = None) -> dict:
             "label": "Square-off",
             "value": f"Closed at {plan.get('square_off_by') or 'EOD'} — target not met",
             "ok": None,
+        })
+    elif code == "failed_breakout":
+        conditions.append({
+            "label": "Failed breakout",
+            "value": "Price reclaimed invalidation — auto-closed by Scout",
+            "ok": False,
         })
     elif code == "manual":
         conditions.append({"label": "Close type", "value": "Closed manually in dashboard"})

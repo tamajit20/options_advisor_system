@@ -27,3 +27,11 @@ def app(mocker):
 @pytest.fixture
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def _clear_scout_sticky_quotes():
+    from scout import live_quotes
+    live_quotes._STICKY_QUOTES.clear()
+    yield
+    live_quotes._STICKY_QUOTES.clear()

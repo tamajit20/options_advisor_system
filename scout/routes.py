@@ -55,7 +55,7 @@ from scout.execution_engine import (
     retry_unprotected_trades,
     zerodha_execute_enabled,
 )
-from scout.execution_health import build_execution_health
+from scout.execution_health import build_execution_health, ws_health
 from scout.execution_flow import build_flow_items, build_trade_execution_flow
 from scout.trade_audit import build_entry_audit, enrich_history_trade
 from scout.utils import is_market_open
@@ -143,6 +143,7 @@ def api_scout_flow(db: SQLServerConnection):
         "poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
         "live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
         "market_open": is_market_open(),
+        "websocket": ws_health(market_open=is_market_open()),
     })
 
 

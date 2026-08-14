@@ -67,6 +67,24 @@ def test_build_exit_execution_target_hit():
     assert any(c["label"] == "Target" for c in exit_exec["conditions"])
 
 
+def test_build_exit_execution_failed_breakout_auto():
+    trade = {
+        "action": "SELL",
+        "entry_price": 181.33,
+        "exit_price": 182.7,
+        "exit_reason": "failed_breakout",
+        "closed_at": "2026-08-14 12:08:00",
+        "executed_at": "2026-08-14 11:30:00",
+        "signal_type": "OR_BREAK_DOWN",
+        "invalidation": 182.0,
+    }
+    exit_exec = build_exit_execution(trade)
+    assert exit_exec["mode"] == "auto"
+    assert exit_exec["mode_label"] == "Auto-close"
+    assert exit_exec["trigger_label"] == "Failed breakout"
+    assert any(c["label"] == "Failed breakout" for c in exit_exec["conditions"])
+
+
 def test_enrich_history_trade_includes_execution():
     trade = {
         "id": 9,

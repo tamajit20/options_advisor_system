@@ -413,9 +413,7 @@
 
   function renderTradeStatusBadge(s) {
     if (isSignalTradeOpen(s)) {
-      return `<div class="scout-trade-badge-row scout-trade-badge-row--open">
-        <span class="scout-trade-badge">Trade open${s.trade_id ? ` · TRD #${s.trade_id}` : ''}</span>
-      </div>`;
+      return '';
     }
     if (!canMarkSignalTaken(s)) {
       const parts = ['Open trade exists'];
@@ -1249,33 +1247,63 @@
     };
   }
 
-  function renderExecutionMtmSummary(mtm) {
-    if (mtm.mtm == null || isNaN(mtm.mtm)) return '';
-    const gross = Number(mtm.mtm);
+  function renderExecutionMtmSummary(mtm, opts) {
+    opts = opts || {};
+    const gross = mtm.mtm != null && !isNaN(mtm.mtm) ? Number(mtm.mtm) : null;
     const net = mtm.mtm_net != null ? Number(mtm.mtm_net) : null;
     const pct = mtm.mtm_pct != null ? Number(mtm.mtm_pct).toFixed(2) : null;
     const perShare = mtm.mtm_per_share != null ? fmtPx(mtm.mtm_per_share) : null;
     const tip = [
       'Unrealized P&L (MTM): profit or loss if you closed now at the live price.',
-      `Gross: ${fmtPnl(gross)} (entry vs live × qty).`,
+      gross != null ? `Gross: ${fmtPnl(gross)} (entry vs live × qty).` : '',
       net != null && !isNaN(net) ? `Est. net after intraday charges: ${fmtPnl(net)}.` : '',
       perShare ? `Per share: ${perShare}.` : '',
+      opts.stale ? 'Quote is delayed — values use the last known tick.' : '',
     ].filter(Boolean).join(' ');
-    const netHint = net != null && !isNaN(net)
-      ? ` <span class="scout-exec-mtm-net muted">net ${fmtPnl(net)}</span>`
-      : '';
-    const pctHint = pct != null ? ` <span class="muted">(${pct}%)</span>` : '';
-    return `<span class="scout-exec-mtm ${pnlClass(gross)}" title="${escapeHtml(tip).replace(/"/g, '&quot;')}">MTM ${fmtPnl(gross)}${pctHint}${netHint}</span>`;
+    const cls = gross != null ? pnlClass(gross) : 'scout-exec-mtm--na';
+    return `<span class="scout-exec-summary-item scout-exec-mtm ${cls}" title="${escapeHtml(tip).replace(/"/g, '&quot;')}">`
+      + `MTM <span class="scout-exec-mtm-gross">${gross != null ? fmtPnl(gross) : '—'}</span>`
+      + `<span class="scout-exec-mtm-pct muted">${pct != null ? ` (${pct}%)` : ''}</span>`
+      + `<span class="scout-exec-mtm-net muted">${net != null && !isNaN(net) ? ` net ${fmtPnl(net)}` : ''}</span>`
+      + `</span>`;
   }
 
-  function renderExecutionLivePrice(liveLtp, marketOpen) {
-    if (liveLtp != null && !isNaN(liveLtp)) {
-      return `<span class="scout-exec-live" title="Latest live quote (WebSocket / tick cache)">Live <strong>${fmtPx(liveLtp)}</strong></span>`;
+  function renderExecutionLivePrice(liveLtp, marketOpen, opts) {
+    opts = opts || {};
+    const hasLive = liveLtp != null && !isNaN(liveLtp);
+    const stale = Boolean(opts.stale);
+    const wsDown = Boolean(opts.wsDown);
+    const tip = hasLive
+      ? (stale || wsDown
+        ? 'Last known live quote — WebSocket tick may be delayed or disconnected'
+        : 'Latest live quote (WebSocket / tick cache)')
+      : (marketOpen === false
+        ? 'Market closed — no live price'
+        : 'No live quote yet — check Zerodha login / WS runner');
+    let flag = '';
+    if (hasLive && (wsDown || stale)) {
+      const flagTip = wsDown ? 'WebSocket disconnected — showing last sync price' : 'Last sync price — tick delayed';
+      const flagCls = wsDown ? 'scout-exec-live-flag--down' : 'scout-exec-live-flag--stale';
+      const flagLabel = wsDown ? 'WS off' : 'stale';
+      flag = `<span class="scout-exec-live-flag ${flagCls}" title="${escapeHtml(flagTip)}">${flagLabel}</span>`;
     }
-    const tip = marketOpen === false
-      ? 'Market closed — no live price'
-      : 'No live quote yet — check Zerodha login / WS runner';
-    return `<span class="scout-exec-live scout-exec-live--missing muted" title="${escapeHtml(tip)}">Live —</span>`;
+    const cls = hasLive
+      ? ('scout-exec-live' + (stale || wsDown ? ' scout-exec-live--stale' : ''))
+      : 'scout-exec-live scout-exec-live--missing muted';
+    return `<span class="scout-exec-summary-item ${cls}" title="${escapeHtml(tip)}">`
+      + `Live <strong class="scout-exec-live-val">${hasLive ? fmtPx(liveLtp) : '—'}</strong>${flag}</span>`;
+  }
+
+  function renderExecutionWsBanner(wsHealth, marketOpen) {
+    if (marketOpen === false || !wsHealth || wsHealth.ok) return '';
+    const msg = wsHealth.reason || (wsHealth.connected ? 'Live quotes stale' : 'WebSocket disconnected');
+    return `<div class="scout-exec-ws-banner" role="status">`
+      + `⚠ ${escapeHtml(msg)} — showing last known prices until ticks resume`
+      + `</div>`;
+  }
+
+  function renderExecutionSummaryItem(label, value) {
+    return `<span class="scout-exec-summary-item">${escapeHtml(label)} ${value}</span>`;
   }
 
   function renderExecutionStepIndicator(step) {
@@ -1336,18 +1364,119 @@
     </div>`;
   }
 
-  function renderExecutionFlowCard(item, marketOpen) {
+  function flowItemKey(item) {
+    if (item.kind === 'signal') {
+      const sid = item.signal && item.signal.id;
+      return sid != null ? `signal:${sid}` : '';
+    }
+    const tid = item.trade && item.trade.id;
+    return tid != null ? `trade:${tid}` : '';
+  }
+
+  function flowItemHash(item) {
+    if (item.kind === 'signal') {
+      const s = item.signal || {};
+      return String(s.id || '') + '|' + String(s.validity_status || '');
+    }
+    const t = item.trade || {};
+    const ex = item.execution || {};
+    const steps = (ex.steps || []).map(st => (
+      `${st.step}:${st.status}:${(st.orders || []).length}`
+    )).join(';');
+    const urg = (ex.exit_alerts && ex.exit_alerts.urgency) || '';
+    const closeNow = ex.exit_alerts && ex.exit_alerts.close_now ? '1' : '0';
+    return [
+      t.id,
+      t.status,
+      ex.trade_status,
+      ex.execution_mode,
+      ex.zerodha_live ? '1' : '0',
+      steps,
+      urg,
+      closeNow,
+    ].join('|');
+  }
+
+  function updateExecutionCardLive(card, item, wsHealth) {
+    const key = card.dataset.flowKey;
+    const cached = key ? _scoutExecLiveCache.get(key) : null;
+    const opts = executionLiveOpts(item, wsHealth);
+    const ex = item.execution || {};
+    const mtm = ex.mtm || cached?.mtm || {};
+    let liveLtp = ex.live_ltp != null ? Number(ex.live_ltp)
+      : (mtm.live_ltp != null ? Number(mtm.live_ltp) : null);
+    if ((liveLtp == null || isNaN(liveLtp)) && cached && cached.liveLtp != null) {
+      liveLtp = cached.liveLtp;
+      opts.stale = true;
+    }
+
+    const liveEl = card.querySelector('.scout-exec-live-val');
+    const liveWrap = card.querySelector('.scout-exec-live');
+    if (liveEl && liveLtp != null && !isNaN(liveLtp)) {
+      const next = fmtPx(liveLtp);
+      if (liveEl.textContent !== next) liveEl.textContent = next;
+      if (liveWrap) {
+        liveWrap.classList.remove('scout-exec-live--missing', 'muted');
+        liveWrap.classList.toggle('scout-exec-live--stale', Boolean(opts.stale || opts.wsDown));
+      }
+      let flagEl = liveWrap && liveWrap.querySelector('.scout-exec-live-flag');
+      if (liveWrap && (opts.stale || opts.wsDown)) {
+        const flagCls = opts.wsDown ? 'scout-exec-live-flag--down' : 'scout-exec-live-flag--stale';
+        const flagLabel = opts.wsDown ? 'WS off' : 'stale';
+        if (!flagEl) {
+          flagEl = document.createElement('span');
+          flagEl.className = `scout-exec-live-flag ${flagCls}`;
+          liveWrap.appendChild(flagEl);
+        }
+        flagEl.className = `scout-exec-live-flag ${flagCls}`;
+        flagEl.textContent = flagLabel;
+        flagEl.title = opts.wsDown
+          ? 'WebSocket disconnected — showing last sync price'
+          : 'Last sync price — tick delayed';
+      } else if (flagEl) {
+        flagEl.remove();
+      }
+    }
+
+    const mtmWrap = card.querySelector('.scout-exec-mtm');
+    if (!mtmWrap) return;
+    const gross = mtm.mtm != null && !isNaN(mtm.mtm) ? Number(mtm.mtm)
+      : (cached && cached.mtm && cached.mtm.mtm != null ? Number(cached.mtm.mtm) : null);
+    const net = mtm.mtm_net != null ? Number(mtm.mtm_net)
+      : (cached && cached.mtm && cached.mtm.mtm_net != null ? Number(cached.mtm.mtm_net) : null);
+    const pct = mtm.mtm_pct != null ? Number(mtm.mtm_pct).toFixed(2)
+      : (cached && cached.mtm && cached.mtm.mtm_pct != null ? Number(cached.mtm.mtm_pct).toFixed(2) : null);
+    const grossEl = mtmWrap.querySelector('.scout-exec-mtm-gross');
+    const pctEl = mtmWrap.querySelector('.scout-exec-mtm-pct');
+    const netEl = mtmWrap.querySelector('.scout-exec-mtm-net');
+    if (grossEl && gross != null) grossEl.textContent = fmtPnl(gross);
+    if (pctEl && pct != null) pctEl.textContent = ` (${pct}%)`;
+    if (netEl && net != null && !isNaN(net)) netEl.textContent = ` net ${fmtPnl(net)}`;
+    if (gross != null) {
+      mtmWrap.classList.remove('scout-exec-mtm--na');
+      mtmWrap.classList.remove('scout-pnl-pos', 'scout-pnl-neg');
+      mtmWrap.classList.add(pnlClass(gross));
+    }
+    if (liveLtp != null && !isNaN(liveLtp)) {
+      _scoutExecLiveCache.set(key, { liveLtp, mtm: { ...mtm, mtm: gross, mtm_net: net, mtm_pct: pct != null ? Number(pct) : mtm.mtm_pct }, liveStale: opts.stale });
+    }
+  }
+
+  function renderExecutionFlowCard(item, marketOpen, wsHealth) {
+    const flowKey = flowItemKey(item);
+    const liveOpts = executionLiveOpts(item, wsHealth);
     if (item.kind === 'signal' && !item.trade) {
       const s = item.signal || {};
       const liveLtp = item.live_ltp != null ? Number(item.live_ltp) : (s.live_ltp != null ? Number(s.live_ltp) : null);
-      return `<div class="scout-card scout-exec-card scout-exec-card--signal">
+      const sym = String(s.symbol || '').toUpperCase();
+      return `<div class="scout-card scout-exec-card scout-exec-card--signal" data-flow-key="${escapeHtml(flowKey)}" data-symbol="${escapeHtml(sym)}">
         <div class="scout-card-head">
           <strong>${escapeHtml(s.symbol || '')}</strong>
           <span class="muted">Awaiting entry · Step 1</span>
           ${renderScoutRefIds(s.id, null)}
         </div>
         <div class="scout-exec-summary">
-          ${renderExecutionLivePrice(liveLtp, marketOpen)}
+          ${renderExecutionLivePrice(liveLtp, marketOpen, liveOpts)}
           <span class="muted">Signal ₹${s.ltp != null ? Number(s.ltp).toFixed(2) : '—'}</span>
         </div>
         <p class="muted">Signal active — auto-enter or mark taken to start execution flow.</p>
@@ -1355,6 +1484,7 @@
     }
     const ex = item.execution || {};
     const t = item.trade || {};
+    const sym = String(t.symbol || ex.symbol || '').toUpperCase();
     const tradeStatus = String(t.status || ex.trade_status || '').toUpperCase();
     const unprot = tradeStatus === 'UNPROTECTED';
     const cardCls = unprot ? ' scout-exec-card--unprotected' : '';
@@ -1365,7 +1495,7 @@
     const plan = ex.exit_plan || {};
     const prices = (plan.dashboard && plan.dashboard.prices) || {};
     const liveLtp = ex.live_ltp != null ? Number(ex.live_ltp) : (mtm.live_ltp != null ? Number(mtm.live_ltp) : null);
-    return `<div class="scout-card scout-exec-card${cardCls}" data-trade-id="${t.id || ''}">
+    return `<div class="scout-card scout-exec-card${cardCls}" data-trade-id="${t.id || ''}" data-flow-key="${escapeHtml(flowKey)}" data-symbol="${escapeHtml(sym)}">
       <div class="scout-card-head">
         <strong>${escapeHtml(t.symbol || ex.symbol || '')}</strong>
         <span class="scout-exec-mode ${modeCls}">${escapeHtml(modeLabel)}</span>
@@ -1375,12 +1505,12 @@
       </div>
       ${renderExitAlertBanner(ex.exit_alerts)}
       <div class="scout-exec-summary">
-        ${renderExecutionLivePrice(liveLtp, marketOpen)}
-        <span>Entry ${fmtPx(prices.entry)}</span>
-        <span>Stop ${fmtPx(prices.stop)}</span>
-        <span>Target ${fmtPx(prices.target)}</span>
-        <span>Exit by ${escapeHtml(ex.square_off_time || '')}</span>
-        ${renderExecutionMtmSummary(mtm)}
+        ${renderExecutionLivePrice(liveLtp, marketOpen, liveOpts)}
+        ${renderExecutionSummaryItem('Entry', fmtPx(prices.entry))}
+        ${renderExecutionSummaryItem('Stop', fmtPx(prices.stop))}
+        ${renderExecutionSummaryItem('Target', fmtPx(prices.target))}
+        ${renderExecutionSummaryItem('Exit by', escapeHtml(ex.square_off_time || '—') + ' IST')}
+        ${renderExecutionMtmSummary(mtm, liveOpts)}
       </div>
       <div class="scout-exec-flow">${stepsHtml}</div>
       ${t.status === 'OPEN' || unprot ? renderTradeCloseRow(t, ex.exit_alerts) : ''}
@@ -1410,12 +1540,71 @@
     });
   }
 
-  function renderExecutionFlow(items, marketOpen) {
+  let _scoutFlowCache = new Map();
+  let _scoutExecLiveCache = new Map();
+  let _scoutWsHealth = null;
+
+  function wsHealthBad(wsHealth) {
+    return Boolean(wsHealth && (!wsHealth.connected || wsHealth.stale || wsHealth.ok === false));
+  }
+
+  function mergeFlowItemLive(item, wsHealth) {
+    const key = flowItemKey(item);
+    if (!key) return item;
+    const cached = _scoutExecLiveCache.get(key);
+    const wsDown = wsHealthBad(wsHealth);
+
+    if (item.kind === 'signal') {
+      let liveLtp = item.live_ltp != null ? Number(item.live_ltp) : null;
+      let liveStale = Boolean(item.live_stale);
+      if (liveLtp != null && !isNaN(liveLtp)) {
+        _scoutExecLiveCache.set(key, { liveLtp, liveStale, mtm: null });
+      } else if (cached && cached.liveLtp != null) {
+        liveLtp = cached.liveLtp;
+        liveStale = true;
+      }
+      return { ...item, live_ltp: liveLtp, live_stale: liveStale || wsDown };
+    }
+
+    const ex = item.execution || {};
+    let liveLtp = ex.live_ltp != null ? Number(ex.live_ltp)
+      : (ex.mtm && ex.mtm.live_ltp != null ? Number(ex.mtm.live_ltp) : null);
+    let mtm = ex.mtm ? { ...ex.mtm } : null;
+    let liveStale = Boolean(ex.live_stale);
+
+    if (liveLtp != null && !isNaN(liveLtp) && mtm) {
+      _scoutExecLiveCache.set(key, { liveLtp, mtm, liveStale });
+    } else if (cached) {
+      if (liveLtp == null || isNaN(liveLtp)) liveLtp = cached.liveLtp;
+      if (!mtm && cached.mtm) mtm = { ...cached.mtm };
+      liveStale = true;
+    }
+
+    return {
+      ...item,
+      execution: {
+        ...ex,
+        live_ltp: liveLtp,
+        live_stale: liveStale || wsDown,
+        mtm: mtm || ex.mtm,
+      },
+    };
+  }
+
+  function executionLiveOpts(item, wsHealth) {
+    const ex = item.execution || {};
+    const stale = Boolean(ex.live_stale || item.live_stale);
+    return { stale, wsDown: wsHealthBad(wsHealth) };
+  }
+
+  function syncExecutionFlow(items, marketOpen, wsHealth) {
     const c = $('#scout-trades-container');
     if (!c) return;
-    const visible = filterExecutionItems(items, marketOpen);
-    const trades = visible.filter(it => it.kind === 'trade');
+    _scoutWsHealth = wsHealth || _scoutWsHealth;
+    const visible = filterExecutionItems(items, marketOpen).map(it => mergeFlowItemLive(it, wsHealth));
     if (!visible.length) {
+      _scoutFlowCache.clear();
+      _scoutExecLiveCache.clear();
       c.className = '';
       const msg = marketOpen === false
         ? 'Market is closed. Open trades appear here during the session; new entries resume when the market opens.'
@@ -1424,8 +1613,55 @@
       return;
     }
     c.className = 'scout-exec-list';
-    c.innerHTML = visible.map(it => renderExecutionFlowCard(it, marketOpen)).join('');
-    bindExecutionCloseButtons(c);
+    const wsBanner = renderExecutionWsBanner(wsHealth, marketOpen);
+    if (c.querySelector('.empty')) c.innerHTML = wsBanner;
+    else {
+      let bannerEl = c.querySelector('.scout-exec-ws-banner');
+      if (wsBanner) {
+        if (!bannerEl) {
+          bannerEl = document.createElement('div');
+          c.insertBefore(bannerEl, c.firstChild);
+        }
+        bannerEl.outerHTML = wsBanner;
+      } else if (bannerEl) {
+        bannerEl.remove();
+      }
+    }
+
+    const newKeys = new Set();
+    visible.forEach(item => {
+      const key = flowItemKey(item);
+      if (!key) return;
+      newKeys.add(key);
+      const hash = flowItemHash(item);
+      let card = c.querySelector(`[data-flow-key="${key}"]`);
+      const cached = _scoutFlowCache.get(key);
+      if (!card || !cached || cached.hash !== hash) {
+        if (card) card.remove();
+        const wrap = document.createElement('div');
+        wrap.innerHTML = renderExecutionFlowCard(item, marketOpen, wsHealth);
+        card = wrap.firstElementChild;
+        if (card) {
+          c.appendChild(card);
+          bindExecutionCloseButtons(card);
+        }
+      } else {
+        updateExecutionCardLive(card, item, wsHealth);
+      }
+      _scoutFlowCache.set(key, { hash, item });
+    });
+
+    c.querySelectorAll('[data-flow-key]').forEach(card => {
+      if (!newKeys.has(card.dataset.flowKey)) {
+        _scoutFlowCache.delete(card.dataset.flowKey);
+        _scoutExecLiveCache.delete(card.dataset.flowKey);
+        card.remove();
+      }
+    });
+  }
+
+  function renderExecutionFlow(items, marketOpen, wsHealth) {
+    syncExecutionFlow(items, marketOpen, wsHealth);
   }
 
   function bindExecutionCloseButtons(root) {
@@ -1482,7 +1718,7 @@
       if (health) renderAlarmBanner(health, ['scout-trades-alarm-banner', 'scout-alarm-banner']);
       if (data.poll_seconds) _scoutPollMs = Math.max(5, Number(data.poll_seconds) * 1000);
       if (data.live_poll_seconds) _scoutLivePollMs = Math.max(2, Number(data.live_poll_seconds) * 1000);
-      renderExecutionFlow(data.items || [], data.market_open);
+      renderExecutionFlow(data.items || [], data.market_open, data.websocket || (health && health.websocket));
     } catch (e) {
       c.className = '';
       c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;

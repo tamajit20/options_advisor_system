@@ -104,6 +104,7 @@ def build_trade_execution_flow(
     orders: List[dict],
     live_ltp: Optional[float],
     settings: dict,
+    live_stale: bool = False,
 ) -> dict:
     ts = str(trade.get("status") or "OPEN").upper()
     mode = str(trade.get("execution_mode") or execution_mode_label())
@@ -166,6 +167,7 @@ def build_trade_execution_flow(
         "exit_alerts": exit_alerts,
         "mtm": mtm,
         "live_ltp": live_ltp,
+        "live_stale": live_stale,
         "effective_stop_price": trade.get("effective_stop_price"),
         "square_off_time": square_off,
     }
@@ -200,10 +202,12 @@ def build_flow_items(db: SQLServerConnection, *, settings: dict) -> List[dict]:
         sid = trade.get("signal_id")
         sig = sig_repo.get(int(sid)) if sid else None
         sym = str(trade.get("symbol") or "").upper()
-        ltp = (quotes.get(sym) or {}).get("ltp")
+        q = quotes.get(sym) or {}
+        ltp = q.get("ltp")
         orders = order_repo.for_trade(int(trade["id"]))
         flow = build_trade_execution_flow(
             trade=trade, signal=sig, orders=orders, live_ltp=ltp, settings=settings,
+            live_stale=bool(q.get("stale")),
         )
         items.append({
             "kind": "trade",
@@ -223,7 +227,8 @@ def build_flow_items(db: SQLServerConnection, *, settings: dict) -> List[dict]:
         if sid in trade_by_signal:
             continue
         sym = str(sig.get("symbol") or "").upper()
-        ltp = (quotes.get(sym) or {}).get("ltp")
+        q = quotes.get(sym) or {}
+        ltp = q.get("ltp")
         enriched = enrich_signal(sig, live_ltp=ltp, now=now, settings=settings)
         if not signal_eligible_for_execution_flow(
             market_open=market_open,
@@ -236,6 +241,7 @@ def build_flow_items(db: SQLServerConnection, *, settings: dict) -> List[dict]:
             "signal": enriched,
             "execution": None,
             "live_ltp": ltp,
+            "live_stale": bool(q.get("stale")),
         })
 
     return items

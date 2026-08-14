@@ -59,6 +59,7 @@ _DEFAULT_EVENT_RETENTION_SECONDS = 300.0      # 5 min
 _DEFAULT_RATE_WINDOW_SECONDS = 60.0           # rolling tick rate
 _DEFAULT_SNAPSHOT_INTERVAL_SECONDS = 0.5
 _DEFAULT_PROVIDER = "zerodha"
+_INDEX_SYMBOLS = frozenset({"NIFTY", "BANKNIFTY", "FINNIFTY", "VIX", "MIDCPNIFTY"})
 
 
 def _now_ist() -> datetime:
@@ -132,6 +133,7 @@ class WSMonitor:
         self._last_error: Optional[str] = None
         self._token_expired: bool = False
         self._recent: Deque[Dict[str, Any]] = deque(maxlen=self._max_events)
+        self._last_equity: Dict[str, Dict[str, Any]] = {}
 
         self._unsubs: List[Callable[[], None]] = []
         self._writer_thread: Optional[threading.Thread] = None
@@ -205,6 +207,18 @@ class WSMonitor:
                     "strike":      float(strike) if strike is not None else None,
                     "last_price":  float(last_price) if last_price is not None else None,
                 })
+                if opt is None and last_price is not None:
+                    sym_u = symbol.upper()
+                    if sym_u not in _INDEX_SYMBOLS:
+                        try:
+                            ltp = float(last_price)
+                        except (TypeError, ValueError):
+                            ltp = 0.0
+                        if ltp > 0:
+                            self._last_equity[sym_u] = {
+                                "ltp": ltp,
+                                "as_of": now.isoformat(),
+                            }
         except Exception:
             logger.exception("WSMonitor._on_tick swallowed exception")
 
@@ -291,6 +305,7 @@ class WSMonitor:
                     {"symbol": s, "ticks": n} for s, n in top_symbols
                 ],
                 "recent_events":          list(self._recent),
+                "last_equity_ltps":       dict(self._last_equity),
                 "max_recent_events":      self._max_events,
                 "event_retention_seconds": self._retention,
                 **status_extra,
