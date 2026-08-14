@@ -1613,6 +1613,7 @@
       return;
     }
     c.className = 'scout-exec-list';
+    clearContainerPlaceholder(c);
     const wsBanner = renderExecutionWsBanner(wsHealth, marketOpen);
     if (c.querySelector('.empty')) c.innerHTML = wsBanner;
     else {

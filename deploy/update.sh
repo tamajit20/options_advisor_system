@@ -23,6 +23,11 @@ if [[ ! -f .env.docker ]]; then
   exit 1
 fi
 
+set -a
+# shellcheck disable=SC1091
+source .env.docker
+set +a
+
 echo "==> Pulling latest code (${BRANCH})..."
 git fetch origin "${BRANCH}"
 git checkout "${BRANCH}"
