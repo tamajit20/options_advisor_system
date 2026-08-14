@@ -1923,6 +1923,8 @@
     setVal('compression_range_pct', settings.compression_range_pct);
     setVal('entry_slippage_pct', settings.entry_slippage_pct);
     setVal('min_candles', settings.min_candles);
+    setVal('index_trend_min_pct', settings.index_trend_min_pct);
+    setVal('index_trend_max_pct', settings.index_trend_max_pct);
     const allowed = new Set((settings.auto_enter_strengths || []).map(s => String(s).toUpperCase()));
     form.querySelectorAll('input[name="auto_enter_strengths"]').forEach(cb => {
       cb.checked = allowed.has(cb.value);
@@ -1995,6 +1997,8 @@
       compression_range_pct: num('compression_range_pct'),
       entry_slippage_pct: num('entry_slippage_pct'),
       min_candles: num('min_candles'),
+      index_trend_min_pct: num('index_trend_min_pct'),
+      index_trend_max_pct: num('index_trend_max_pct'),
       auto_enter_strengths: strengths,
       auto_enter_signal_types: signalTypes,
       min_net_profit_inr: num('min_net_profit_inr'),

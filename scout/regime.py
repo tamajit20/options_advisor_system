@@ -18,7 +18,7 @@ def index_trend_allows(side: str, bench_pct: float, cfg: Optional[dict] = None) 
         return True, ""
     side_u = str(side or "").upper()
     min_pct = float(c.get("index_trend_min_pct", -0.20))
-    max_pct = float(c.get("index_trend_max_pct", 0.20))
+    max_pct = float(c.get("index_trend_max_pct", 0.05))
     if side_u == "BUY" and float(bench_pct) < min_pct:
         return False, (
             f"Nifty weak ({bench_pct:.2f}% from open < {min_pct:.2f}% — skip long)"

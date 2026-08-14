@@ -659,7 +659,7 @@
             </label>
             <label class="scout-config-field">
               <span class="scout-config-label">End</span>
-              <input type="time" name="trade_window_end" id="cfg-window-end" value="14:30">
+              <input type="time" name="trade_window_end" id="cfg-window-end" value="14:00">
             </label>
           </div>
         </section>
@@ -702,6 +702,14 @@
             <label class="scout-config-field">
               <span class="scout-config-label">Min candles before signals</span>
               <input type="number" name="min_candles" min="5" max="60" step="1" value="12">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Index trend min (% from open)</span>
+              <input type="number" name="index_trend_min_pct" min="-5" max="0" step="0.05" value="-0.20">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Index trend max (% from open)</span>
+              <input type="number" name="index_trend_max_pct" min="0" max="5" step="0.05" value="0.05">
             </label>
           </div>
         </section>

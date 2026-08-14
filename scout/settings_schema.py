@@ -52,7 +52,7 @@ def default_scout_settings() -> dict:
         "square_off_warn_minutes": 5,
         # Trading window (IST, HH:MM)
         "trade_window_start": "09:45",
-        "trade_window_end": "14:30",
+        "trade_window_end": "14:00",
         # Signal generation
         "push_dedupe_minutes": int(SCOUT_CONFIG.get("push_dedupe_minutes", 60)),
         "dedupe_per_symbol": True,
@@ -67,7 +67,7 @@ def default_scout_settings() -> dict:
         # Regime filters
         "index_trend_filter_enabled": True,
         "index_trend_min_pct": -0.20,
-        "index_trend_max_pct": 0.20,
+        "index_trend_max_pct": 0.05,
         "pdh_pdl_filter_enabled": True,
         "pdh_pdl_buffer_pct": 0.15,
         # Liquidity
@@ -200,7 +200,7 @@ def validate_scout_settings(raw: dict) -> dict:
 
     # Ensure window start <= end (same-day intraday)
     if _parse_hhmm(d["trade_window_start"]) > _parse_hhmm(d["trade_window_end"]):
-        d["trade_window_start"], d["trade_window_end"] = "09:45", "14:30"
+        d["trade_window_start"], d["trade_window_end"] = "09:45", "14:00"
 
     return d
 
@@ -262,7 +262,7 @@ def in_trading_window(settings: dict, now: Optional[datetime] = None) -> bool:
 
     cur = (now or now_ist()).time()
     start = _parse_hhmm(settings.get("trade_window_start", "09:45"))
-    end = _parse_hhmm(settings.get("trade_window_end", "14:30"))
+    end = _parse_hhmm(settings.get("trade_window_end", "14:00"))
     return start <= cur <= end
 
 

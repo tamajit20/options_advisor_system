@@ -55,6 +55,8 @@ def test_validate_regime_and_liquidity_settings():
 def test_default_settings_has_regime_filters():
     d = default_scout_settings()
     assert d["index_trend_filter_enabled"] is True
+    assert d["index_trend_max_pct"] == 0.05
+    assert d["trade_window_end"] == "14:00"
     assert d["liquidity_filter_enabled"] is True
     assert d["entry_pending_max_minutes"] == 15
 
@@ -137,7 +139,7 @@ def test_validate_swaps_inverted_window():
         "trade_window_end": "09:00",
     })
     assert out["trade_window_start"] == "09:45"
-    assert out["trade_window_end"] == "14:30"
+    assert out["trade_window_end"] == "14:00"
 
 
 def test_validate_filters_invalid_strengths():

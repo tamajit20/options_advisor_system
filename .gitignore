@@ -30,3 +30,7 @@ data/ws_status.json
 tests/coverage_html/
 .coverage
 coverage.xml
+
+# Ad-hoc diagnostics in data/
+data/_*.py
+data/*-diag.*
