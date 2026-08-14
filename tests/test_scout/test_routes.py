@@ -33,3 +33,39 @@ def test_scout_flow_route_smoke(client, mocker):
     assert rv.status_code == 200
     assert "items" in rv.get_json()
 
+
+def test_scout_live_quotes_stream(client):
+    rv = client.get("/api/scout/live-quotes/stream")
+    assert rv.status_code == 200
+    assert rv.mimetype == "text/event-stream"
+    chunk = next(rv.response)
+    assert b": connected" in chunk
+    rv.close()
+
+
+def test_scout_signals_stream(client, mocker):
+    mocker.patch(
+        "scout.routes._build_scout_signals_payload",
+        return_value={"signals": [], "count": 0, "market_open": False},
+    )
+    rv = client.get("/api/scout/signals/stream")
+    assert rv.status_code == 200
+    assert rv.mimetype == "text/event-stream"
+    next(rv.response)
+    chunk = next(rv.response)
+    assert b"signals" in chunk
+    rv.close()
+
+
+def test_scout_flow_stream(client, mocker):
+    mocker.patch(
+        "scout.routes._build_scout_flow_payload",
+        return_value={"items": [], "count": 0, "market_open": False},
+    )
+    mocker.patch("providers.ws_monitor.default_snapshot_path")
+    rv = client.get("/api/scout/flow/stream")
+    assert rv.status_code == 200
+    assert rv.mimetype == "text/event-stream"
+    next(rv.response)
+    rv.close()
+

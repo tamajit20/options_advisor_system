@@ -56,3 +56,20 @@ def test_arb_live_route(client):
     assert rv.status_code == 200
     data = rv.get_json()
     assert "gaps" in data
+
+
+def test_arb_live_snapshot_route(client):
+    rv = client.get("/api/arb/live/snapshot")
+    assert rv.status_code == 200
+    data = rv.get_json()
+    assert "gaps" in data
+    assert "source" in data
+
+
+def test_arb_live_stream_route(client):
+    rv = client.get("/api/arb/live/stream")
+    assert rv.status_code == 200
+    assert rv.mimetype == "text/event-stream"
+    # First chunk should include SSE connected comment.
+    chunk = next(rv.response)
+    assert b": connected" in chunk

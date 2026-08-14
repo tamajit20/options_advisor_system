@@ -711,3 +711,61 @@ class TestLiveMTMStream:
         chunk = next(resp.response)
         assert b"T-001" in chunk and b"1234" in chunk
         resp.close()
+
+
+class TestIndicesSpotStream:
+    def test_endpoint_returns_event_stream_mime(self, client):
+        resp = client.get("/api/indices/spot/stream", buffered=False)
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/event-stream"
+        first = next(resp.response)
+        assert b"connected" in first
+        resp.close()
+
+
+class TestWsMonitorStream:
+    def test_endpoint_returns_event_stream_mime(self, client):
+        resp = client.get("/api/ws/monitor/stream", buffered=False)
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/event-stream"
+        first = next(resp.response)
+        assert b"connected" in first
+        resp.close()
+
+
+class TestAlertsStream:
+    def test_endpoint_returns_event_stream_mime(self, client, mocker):
+        mocker.patch(
+            "dashboard.server._build_alerts_stream_payload",
+            return_value={
+                "system_status": {"circuit_breaker_active": False},
+                "stats": {"total_unread": 0, "by_severity": {}, "by_category": {}},
+                "notifications": [],
+            },
+        )
+        mocker.patch("time.sleep", return_value=None)
+        resp = client.get("/api/alerts/stream", buffered=False)
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/event-stream"
+        first = next(resp.response)
+        assert b"connected" in first
+        chunk = next(resp.response)
+        assert b"system_status" in chunk
+        resp.close()
+
+
+class TestJobsStream:
+    def test_endpoint_returns_event_stream_mime(self, client, mocker):
+        mocker.patch(
+            "dashboard.server._build_jobs_list_payload",
+            return_value={"jobs": [], "scheduler_running": False, "generated_at": None},
+        )
+        mocker.patch("time.sleep", return_value=None)
+        resp = client.get("/api/jobs/stream", buffered=False)
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/event-stream"
+        first = next(resp.response)
+        assert b"connected" in first
+        chunk = next(resp.response)
+        assert b"jobs" in chunk
+        resp.close()

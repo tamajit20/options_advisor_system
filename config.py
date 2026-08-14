@@ -220,6 +220,10 @@ ARB_CONFIG: dict = {
     "leg_stale_close_sec": 5,
     # Background DB writer flush interval (seconds).
     "db_flush_interval_sec": 1,
+    # Shared snapshot for dashboard SSE (written by ws_runner gap engine).
+    "live_state_path": "data/arb_live_state.json",
+    # Server-side watch interval for /api/arb/live/stream (seconds).
+    "live_stream_poll_sec": 0.5,
 }
 
 SCOUT_CONFIG: dict = {
@@ -266,6 +270,10 @@ SCOUT_CONFIG: dict = {
     # Live WS push (ws_runner): evaluate patterns on each 1m bar close from ticks.
     "push_enabled": True,
     "push_dedupe_minutes": 30,
+    # Server-side watch intervals for scout SSE streams (seconds).
+    "live_stream_poll_sec": 0.5,
+    "signals_stream_poll_sec": 10,
+    "flow_stream_poll_sec": 10,
 }
 
 
@@ -990,6 +998,11 @@ DASHBOARD_CONFIG = {
     "history_page_size": 50,
     # Note dismissal — a contextual note is hidden after this many displays
     "note_hide_after_views": 5,
+    # Server-side watch intervals for dashboard SSE streams (seconds).
+    "indices_spot_stream_poll_sec": 0.5,
+    "ws_monitor_stream_poll_sec": 0.5,
+    "jobs_stream_poll_sec": 5.0,
+    "alerts_stream_poll_sec": 10.0,
     # Color scheme tokens (also exposed to CSS via /api/theme)
     "theme": {
         "primary":     "#0F766E",  # dark teal/emerald

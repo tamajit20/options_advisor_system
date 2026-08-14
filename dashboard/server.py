@@ -405,6 +405,179 @@ def _ws_tick_age_seconds(snap: dict, now: datetime) -> Optional[float]:
     return (now - last_dt).total_seconds()
 
 
+def _apply_ws_monitor_stale_override(snap: dict) -> None:
+    """Mutate *snap* in place — downgrade connected→stale when ticks stop."""
+    try:
+        from datetime import datetime as _dt
+        from datetime import time as _time
+        from datetime import timezone as _tz
+
+        raw_state = snap.get("connection_state")
+        if raw_state != "connected":
+            return
+        ist_now = now_ist()
+        in_market = (
+            ist_now.weekday() < 5
+            and _time(9, 15) <= ist_now.time() <= _time(15, 30)
+        )
+        threshold = 90.0 if in_market else 1800.0
+        stale_reason: str | None = None
+
+        subs = snap.get("subscribed_tokens")
+        if in_market and subs is not None and int(subs) == 0:
+            stale_reason = "0 subscribed tokens during market hours"
+
+        if stale_reason is None:
+            last_tick = snap.get("last_tick_at")
+            if last_tick:
+                last_dt = datetime.fromisoformat(str(last_tick))
+                if last_dt.tzinfo is not None:
+                    from zoneinfo import ZoneInfo as _Z
+                    last_dt = last_dt.astimezone(_Z("Asia/Kolkata")).replace(tzinfo=None)
+                age_s = (ist_now - last_dt).total_seconds()
+                if age_s > threshold:
+                    stale_reason = (
+                        f"no ticks for {int(age_s)}s "
+                        f"(threshold {int(threshold)}s)"
+                    )
+            else:
+                started = snap.get("started_at")
+                if in_market and started:
+                    started_dt = _dt.fromisoformat(
+                        str(started).replace("Z", "+00:00")
+                    )
+                    if started_dt.tzinfo is None:
+                        started_dt = started_dt.replace(tzinfo=_tz.utc)
+                    uptime_s = (_dt.now(_tz.utc) - started_dt).total_seconds()
+                    if uptime_s > threshold:
+                        stale_reason = (
+                            f"no ticks since runner start "
+                            f"({int(uptime_s)}s ago)"
+                        )
+
+        if stale_reason:
+            snap["raw_connection_state"] = raw_state
+            snap["connection_state"] = "stale"
+            snap["stale_reason"] = stale_reason
+    except Exception:
+        pass
+
+
+def _filter_ws_monitor_events(
+    events: list,
+    *,
+    topic_f: str = "",
+    symbol_f: str = "",
+    limit: int = 200,
+) -> list:
+    if topic_f:
+        events = [e for e in events if str(e.get("topic", "")).lower() == topic_f]
+    if symbol_f:
+        def _sym_match(e: dict) -> bool:
+            sym = str(e.get("symbol", "")).upper()
+            strike = str(e.get("strike", "") or "").upper()
+            ot = str(e.get("option_type", "") or "").upper()
+            full = f"{sym} {strike} {ot}".strip()
+            return (symbol_f in full) or (symbol_f == sym)
+        events = [e for e in events if _sym_match(e)]
+    return list(reversed(events))[:max(0, limit)]
+
+
+def _build_ws_monitor_payload(
+    snap: dict,
+    *,
+    topic_f: str = "",
+    symbol_f: str = "",
+    limit: int = 200,
+) -> dict:
+    out = dict(snap)
+    events = out.get("recent_events") or []
+    out["recent_events"] = _filter_ws_monitor_events(
+        events, topic_f=topic_f, symbol_f=symbol_f, limit=limit,
+    )
+    out["available"] = True
+    _apply_ws_monitor_stale_override(out)
+    return out
+
+
+def _load_ws_monitor_snap_or_unavailable() -> dict:
+    from providers.ws_monitor import default_snapshot_path
+
+    path = default_snapshot_path()
+    if not path.exists():
+        return {
+            "available": False,
+            "reason": "ws_status.json not found \u2014 the WS runner is not "
+                      "writing telemetry yet (start the stock_ws_runner "
+                      "container or run `python main.py --ws-runner`).",
+        }
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as exc:
+        return {
+            "available": False,
+            "reason": f"failed to read ws_status.json: {exc}",
+        }
+
+
+def _indices_spot_live_payload(snap: dict) -> dict:
+    """Live-only index strip update from ws_status (no DB)."""
+    from utils import market_state_at
+
+    now = now_ist()
+    ms = market_state_at(now)
+    session_open = ms in ("OPEN_VOLATILE", "OPEN_STABLE", "CLOSE_AUCTION")
+    symbols = _index_ticker_symbols()
+    want = set(symbols)
+    live_quotes = _latest_live_index_quotes(snap, want)
+    tick_age = _ws_tick_age_seconds(snap, now)
+    ws_connected = bool(
+        snap.get("connection_state") == "connected"
+        and not snap.get("token_expired")
+    )
+    live_fresh = (
+        ws_connected
+        and tick_age is not None
+        and tick_age <= (120.0 if session_open else 1800.0)
+    )
+    if not live_fresh:
+        return {"feed": "eod", "indices": [], "as_of": _ist_iso(now)}
+
+    indices: list[dict[str, Any]] = []
+    for sym in symbols:
+        live = live_quotes.get(sym)
+        if not live or live.get("price") is None:
+            continue
+        raw_ts = live.get("as_of")
+        live_as_of = None
+        if raw_ts:
+            try:
+                dt = datetime.fromisoformat(str(raw_ts))
+                if dt.tzinfo is not None:
+                    from zoneinfo import ZoneInfo
+                    dt = dt.astimezone(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+                live_as_of = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                live_as_of = str(raw_ts)
+        indices.append({
+            "symbol": sym,
+            "label": _INDEX_LABELS.get(sym, sym),
+            "price": round(float(live["price"]), 2),
+            "source": "live",
+            "as_of": live_as_of,
+            "trade_date": None,
+        })
+    return {
+        "feed": "live" if indices else "eod",
+        "indices": indices,
+        "as_of": _ist_iso(now),
+        "session": ms,
+        "session_open": session_open,
+        "ws_connected": ws_connected,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Job metadata (display only) — order matches the daily pipeline
 # ---------------------------------------------------------------------------
@@ -629,6 +802,183 @@ def _next_run_for_job(sch, job_name: str):
             if aps_job.next_run_time:
                 candidates.append(aps_job.next_run_time)
     return min(candidates) if candidates else None
+
+
+def _notif_row_simple(r: Dict[str, Any]) -> Dict[str, Any]:
+    out = _row(r)
+    out["is_read"] = r.get("read_at") is not None
+    out.pop("_rn", None)
+    return out
+
+
+def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
+    """Runtime flags + scheduler summary for global banners."""
+    from database.runtime_flags import (
+        FLAG_CIRCUIT_BREAKER_ACTIVE,
+        FLAG_KILL_SWITCH,
+        FLAG_TRADE_EXECUTION_ENABLED,
+        RuntimeFlagsRepo,
+    )
+    cb_active = False
+    kill_switch = False
+    trade_exec_enabled = True
+    try:
+        repo = RuntimeFlagsRepo(db, cache_ttl_seconds=0)
+        cb_active = repo.get_bool(FLAG_CIRCUIT_BREAKER_ACTIVE, default=False)
+        kill_switch = repo.get_bool(FLAG_KILL_SWITCH, default=False)
+        trade_exec_enabled = repo.get_bool(
+            FLAG_TRADE_EXECUTION_ENABLED, default=True,
+        )
+    except Exception:
+        logger.debug("system-status: runtime_flags read failed", exc_info=True)
+    sch_running = False
+    try:
+        from scheduler.scheduler import get_scheduler
+        sch = get_scheduler()
+        sch_running = bool(sch and sch.running)
+    except Exception:
+        logger.debug("system-status: scheduler probe failed", exc_info=True)
+    return {
+        "circuit_breaker_active": cb_active,
+        "kill_switch":             kill_switch,
+        "trade_execution_enabled": trade_exec_enabled,
+        "scheduler_running":       sch_running,
+    }
+
+
+def _build_alerts_stream_payload(db: SQLServerConnection) -> Dict[str, Any]:
+    """Combined system-status + notification stats + unread rows for SSE."""
+    repo = NotificationRepo(db)
+    unread_rows = repo.unread(limit=100)
+    return {
+        "system_status": _build_system_status_payload(db),
+        "stats": repo.stats(),
+        "notifications": [_notif_row_simple(r) for r in unread_rows],
+    }
+
+
+def _build_jobs_list_payload(db: SQLServerConnection) -> Dict[str, Any]:
+    """Job monitor grid — shared by /api/jobs/list and /api/jobs/stream."""
+    from scheduler.scheduler import (
+        JOB_FUNCS as _JOB_FUNCS,
+        _EOD_PIPELINE_STEPS,
+        _LAST_STATUS as _LAST,
+        _eod_pipeline_enabled,
+        _morning_eod_catchup_enabled,
+        get_scheduler,
+    )
+
+    sch = get_scheduler()
+    sch_running = bool(sch and sch.running)
+
+    repo = JobLogRepo(db)
+    latest_rows = {r["job_name"]: r for r in repo.latest_status_per_job()}
+
+    cfg_jobs = SCHEDULER_CONFIG.get("jobs", {})
+    evening_on = _eod_pipeline_enabled()
+    morning_on = _morning_eod_catchup_enabled()
+    evening_cfg = cfg_jobs.get("eod_nightly_pipeline", {}) or {}
+    morning_cfg = cfg_jobs.get("morning_eod_catchup", {}) or {}
+    if evening_on:
+        pipeline_parent = "eod_nightly_pipeline"
+        pipeline_cfg = evening_cfg
+        pipeline_label = "EOD Nightly Pipeline"
+    elif morning_on:
+        pipeline_parent = "morning_eod_catchup"
+        pipeline_cfg = morning_cfg
+        pipeline_label = "Morning EOD Catchup"
+    else:
+        pipeline_parent = None
+        pipeline_cfg = {}
+        pipeline_label = ""
+    pipeline_schedule = _summarize_cron(pipeline_cfg)
+    pipeline_next = (
+        _next_run_for_job(sch, pipeline_parent)
+        if sch_running and pipeline_parent
+        else None
+    )
+
+    out = []
+    for name in _JOB_FUNCS.keys():
+        cfg = cfg_jobs.get(name, {}) or {}
+        meta = _JOB_META.get(name, {})
+        cron_enabled = bool(cfg.get("enabled", True))
+        via_pipeline = bool(
+            pipeline_parent and name in _EOD_PIPELINE_STEPS
+        )
+
+        next_run = None
+        if sch_running:
+            if via_pipeline:
+                next_run = pipeline_next
+            else:
+                next_run = _next_run_for_job(sch, name)
+
+        if via_pipeline:
+            schedule = (
+                f"{pipeline_schedule} • step in {pipeline_label}"
+                if pipeline_schedule
+                else f"Step in {pipeline_label}"
+            )
+        else:
+            schedule = _summarize_cron(cfg)
+
+        row = latest_rows.get(name) or {}
+        db_status = row.get("status") or ""
+        mem_status = _LAST.get(name) or ""
+        if db_status == "RUNNING":
+            disp = "RUNNING"
+        elif db_status in ("SUCCESS", "FAILED", "SKIPPED", "NO_DATA"):
+            disp = db_status
+        elif mem_status:
+            disp = mem_status
+        else:
+            disp = "NEVER"
+
+        raw_err = row.get("error_message") or ""
+        err_msg = _enrich_job_error_message(
+            db, name, raw_err, started_at=row.get("started_at"),
+        )
+
+        out.append({
+            "job_name":      name,
+            "display_name":  meta.get("name", name.replace("_", " ").title()),
+            "icon":          meta.get("icon", "⚙️"),
+            "description":   meta.get("description", ""),
+            "schedule":      schedule,
+            "enabled":       cron_enabled or via_pipeline,
+            "cron_enabled":  cron_enabled,
+            "via_pipeline":  via_pipeline,
+            "pipeline_parent": pipeline_parent if via_pipeline else None,
+            "manual_enabled": True,
+            "status":        disp,
+            "started_at":    _ist_iso(row.get("started_at")),
+            "finished_at":   _ist_iso(row.get("finished_at")),
+            "error_message": err_msg,
+            "rows_processed": row.get("rows_processed"),
+            "next_run":      _ist_iso(next_run),
+            "_sort":         _job_display_sort_key(
+                name, cfg,
+                via_pipeline=via_pipeline,
+                pipeline_cfg=pipeline_cfg,
+                pipeline_parent=pipeline_parent if via_pipeline else None,
+                cron_enabled=cron_enabled,
+            ),
+        })
+
+    out.sort(key=lambda j: j["_sort"])
+    for job in out:
+        sk = job.pop("_sort")
+        job["display_group"] = _job_display_group_label(sk)
+        job["sort_time"] = _sort_time_label(sk[1])
+        if job["via_pipeline"]:
+            job["pipeline_step"] = sk[2]
+
+    return {
+        "jobs": out,
+        "scheduler_running": sch_running,
+        "generated_at": _ist_iso(now_ist()),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1657,12 +2007,6 @@ def create_app() -> Flask:
 
         repo = NotificationRepo(db)
 
-        def _notif_row_simple(r):
-            out = _row(r)
-            out["is_read"] = r.get("read_at") is not None
-            out.pop("_rn", None)
-            return out
-
         # Legacy ?unread=1 path (used by global banner refresh)
         if unread_only and not any([severity, category, notif_type, trade_id, from_dt, to_dt]):
             rows = repo.unread(limit=limit)
@@ -1701,6 +2045,32 @@ def create_app() -> Flask:
         """Return unread counts by severity and category for badge chips."""
         return jsonify(NotificationRepo(db).stats())
 
+    @app.route("/api/alerts/stream")
+    def api_alerts_stream():
+        """SSE: push banners + notification badge counts when DB/flags change."""
+        from flask import Response, stream_with_context
+        from dashboard.sse_helpers import iter_sse_on_change
+
+        poll_sec = float(DASHBOARD_CONFIG.get("alerts_stream_poll_sec", 10.0))
+
+        def _poll():
+            db = SQLServerConnection()
+            db.connect()
+            try:
+                return _build_alerts_stream_payload(db)
+            finally:
+                db.close()
+
+        @stream_with_context
+        def _gen():
+            yield from iter_sse_on_change(_poll, poll_sec)
+
+        return Response(
+            _gen(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.route("/api/notifications/<int:nid>/read", methods=["POST"])
     @_with_db
     def api_notifications_read(db: SQLServerConnection, nid: int):
@@ -1719,132 +2089,33 @@ def create_app() -> Flask:
     @app.route("/api/jobs/list")
     @_with_db
     def api_jobs_list(db: SQLServerConnection):
-        from scheduler.scheduler import (
-            JOB_FUNCS as _JOB_FUNCS,
-            _EOD_PIPELINE_STEPS,
-            _LAST_STATUS as _LAST,
-            _eod_pipeline_enabled,
-            _morning_eod_catchup_enabled,
-            get_scheduler,
+        return jsonify(_build_jobs_list_payload(db))
+
+    @app.route("/api/jobs/stream")
+    def api_jobs_stream():
+        """SSE: push job monitor grid when DB/scheduler state changes."""
+        from flask import Response, stream_with_context
+        from dashboard.sse_helpers import iter_sse_on_change
+
+        poll_sec = float(DASHBOARD_CONFIG.get("jobs_stream_poll_sec", 5.0))
+
+        def _poll():
+            db = SQLServerConnection()
+            db.connect()
+            try:
+                return _build_jobs_list_payload(db)
+            finally:
+                db.close()
+
+        @stream_with_context
+        def _gen():
+            yield from iter_sse_on_change(_poll, poll_sec)
+
+        return Response(
+            _gen(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
-
-        sch = get_scheduler()
-        sch_running = bool(sch and sch.running)
-
-        # Latest DB row per job_name (status, started, finished, error)
-        repo = JobLogRepo(db)
-        latest_rows = {r["job_name"]: r for r in repo.latest_status_per_job()}
-
-        # Schedule config (cron triggers)
-        cfg_jobs = SCHEDULER_CONFIG.get("jobs", {})
-        evening_on = _eod_pipeline_enabled()
-        morning_on = _morning_eod_catchup_enabled()
-        evening_cfg = cfg_jobs.get("eod_nightly_pipeline", {}) or {}
-        morning_cfg = cfg_jobs.get("morning_eod_catchup", {}) or {}
-        if evening_on:
-            pipeline_parent = "eod_nightly_pipeline"
-            pipeline_cfg = evening_cfg
-            pipeline_label = "EOD Nightly Pipeline"
-        elif morning_on:
-            pipeline_parent = "morning_eod_catchup"
-            pipeline_cfg = morning_cfg
-            pipeline_label = "Morning EOD Catchup"
-        else:
-            pipeline_parent = None
-            pipeline_cfg = {}
-            pipeline_label = ""
-        pipeline_schedule = _summarize_cron(pipeline_cfg)
-        pipeline_next = (
-            _next_run_for_job(sch, pipeline_parent)
-            if sch_running and pipeline_parent
-            else None
-        )
-
-        out = []
-        for name in _JOB_FUNCS.keys():
-            cfg = cfg_jobs.get(name, {}) or {}
-            meta = _JOB_META.get(name, {})
-            cron_enabled = bool(cfg.get("enabled", True))
-            via_pipeline = bool(
-                pipeline_parent and name in _EOD_PIPELINE_STEPS
-            )
-
-            # Next scheduled run from APScheduler (earliest of multi-trigger jobs)
-            next_run = None
-            if sch_running:
-                if via_pipeline:
-                    next_run = pipeline_next
-                else:
-                    next_run = _next_run_for_job(sch, name)
-
-            if via_pipeline:
-                schedule = (
-                    f"{pipeline_schedule} • step in {pipeline_label}"
-                    if pipeline_schedule
-                    else f"Step in {pipeline_label}"
-                )
-            else:
-                schedule = _summarize_cron(cfg)
-
-            # Determine display status
-            row = latest_rows.get(name) or {}
-            db_status = row.get("status") or ""
-            mem_status = _LAST.get(name) or ""
-            # Mem reflects most recent in-process state; DB row may be a stale
-            # "RUNNING" if the worker died. Trust DB for finished states.
-            if db_status == "RUNNING":
-                disp = "RUNNING"
-            elif db_status in ("SUCCESS", "FAILED", "SKIPPED", "NO_DATA"):
-                disp = db_status
-            elif mem_status:
-                disp = mem_status
-            else:
-                disp = "NEVER"
-
-            raw_err = row.get("error_message") or ""
-            err_msg = _enrich_job_error_message(
-                db, name, raw_err, started_at=row.get("started_at"),
-            )
-
-            out.append({
-                "job_name":      name,
-                "display_name":  meta.get("name", name.replace("_", " ").title()),
-                "icon":          meta.get("icon", "⚙️"),
-                "description":   meta.get("description", ""),
-                "schedule":      schedule,
-                "enabled":       cron_enabled or via_pipeline,
-                "cron_enabled":  cron_enabled,
-                "via_pipeline":  via_pipeline,
-                "pipeline_parent": pipeline_parent if via_pipeline else None,
-                "manual_enabled": True,
-                "status":        disp,
-                "started_at":    _ist_iso(row.get("started_at")),
-                "finished_at":   _ist_iso(row.get("finished_at")),
-                "error_message": err_msg,
-                "rows_processed": row.get("rows_processed"),
-                "next_run":      _ist_iso(next_run),
-                "_sort":         _job_display_sort_key(
-                    name, cfg,
-                    via_pipeline=via_pipeline,
-                    pipeline_cfg=pipeline_cfg,
-                    pipeline_parent=pipeline_parent if via_pipeline else None,
-                    cron_enabled=cron_enabled,
-                ),
-            })
-
-        out.sort(key=lambda j: j["_sort"])
-        for job in out:
-            sk = job.pop("_sort")
-            job["display_group"] = _job_display_group_label(sk)
-            job["sort_time"] = _sort_time_label(sk[1])
-            if job["via_pipeline"]:
-                job["pipeline_step"] = sk[2]
-
-        return jsonify({
-            "jobs": out,
-            "scheduler_running": sch_running,
-            "generated_at": _ist_iso(now_ist()),
-        })
 
     @app.route("/api/jobs/<job_name>/trigger", methods=["POST"])
     @_with_db
@@ -2038,6 +2309,30 @@ def create_app() -> Flask:
             "indices": indices,
         })
 
+    @app.route("/api/indices/spot/stream")
+    def api_indices_spot_stream():
+        """SSE: push live index strip updates when ws_status.json changes."""
+        from flask import Response, stream_with_context
+        from dashboard.sse_helpers import iter_sse_on_change
+
+        poll_sec = float(DASHBOARD_CONFIG.get("indices_spot_stream_poll_sec", 0.5))
+
+        def _poll():
+            snap = _load_ws_status_snapshot()
+            if not snap:
+                return {"feed": "eod", "indices": [], "as_of": _ist_iso(now_ist())}
+            return _indices_spot_live_payload(snap)
+
+        @stream_with_context
+        def _gen():
+            yield from iter_sse_on_change(_poll, poll_sec)
+
+        return Response(
+            _gen(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.route("/api/ws/monitor")
     def api_ws_monitor():
         """Read-only telemetry from the WS runner.
@@ -2050,110 +2345,51 @@ def create_app() -> Flask:
             ?symbol=NIFTY                                filter recent_events
             ?limit=50                                    cap recent_events
         """
-        from providers.ws_monitor import default_snapshot_path
-        path = default_snapshot_path()
-        if not path.exists():
-            return jsonify({
-                "available": False,
-                "reason":    "ws_status.json not found \u2014 the WS runner is not "
-                             "writing telemetry yet (start the stock_ws_runner "
-                             "container or run `python main.py --ws-runner`).",
-            })
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                snap = json.load(f)
-        except (OSError, ValueError) as exc:
-            return jsonify({
-                "available": False,
-                "reason":    f"failed to read ws_status.json: {exc}",
-            })
+        snap = _load_ws_monitor_snap_or_unavailable()
+        if snap.get("available") is False:
+            return jsonify(snap)
 
-        topic_f  = (request.args.get("topic")  or "").strip().lower()
+        topic_f = (request.args.get("topic") or "").strip().lower()
         symbol_f = (request.args.get("symbol") or "").strip().upper()
         try:
             limit = int(request.args.get("limit", "200"))
         except ValueError:
             limit = 200
-        events = snap.get("recent_events") or []
-        if topic_f:
-            events = [e for e in events if str(e.get("topic", "")).lower() == topic_f]
-        if symbol_f:
-            # Match against symbol alone OR the full "SYMBOL STRIKE OT" string
-            # e.g. "NIFTY 23400 PE" or "23400" or "PE" all match option leg ticks.
-            def _sym_match(e: dict) -> bool:
-                sym    = str(e.get("symbol", "")).upper()
-                strike = str(e.get("strike", "") or "").upper()
-                ot     = str(e.get("option_type", "") or "").upper()
-                full   = f"{sym} {strike} {ot}".strip()
-                return (symbol_f in full) or (symbol_f == sym)
-            events = [e for e in events if _sym_match(e)]
-        # Most-recent first, capped.
-        events = list(reversed(events))[:max(0, limit)]
-        snap["recent_events"] = events
-        snap["available"] = True
+        return jsonify(_build_ws_monitor_payload(
+            snap, topic_f=topic_f, symbol_f=symbol_f, limit=limit,
+        ))
 
-        # Derive a stale-state override: the WS runner can keep reporting
-        # `connection_state=connected` even after the broker silently drops
-        # the session (no ticks flowing, or zero subscribed tokens). The
-        # raw value is preserved as `raw_connection_state` for diagnostics.
+    @app.route("/api/ws/monitor/stream")
+    def api_ws_monitor_stream():
+        """SSE: push WS telemetry when ws_status.json changes."""
+        from flask import Response, stream_with_context
+        from dashboard.sse_helpers import iter_sse_on_change
+
+        topic_f = (request.args.get("topic") or "").strip().lower()
+        symbol_f = (request.args.get("symbol") or "").strip().upper()
         try:
-            from datetime import time as _time
-            raw_state = snap.get("connection_state")
-            if raw_state == "connected":
-                ist_now = now_ist()
-                in_market = (
-                    ist_now.weekday() < 5
-                    and _time(9, 15) <= ist_now.time() <= _time(15, 30)
-                )
-                threshold = 90.0 if in_market else 1800.0
-                stale_reason: str | None = None
+            limit = int(request.args.get("limit", "200"))
+        except ValueError:
+            limit = 200
+        poll_sec = float(DASHBOARD_CONFIG.get("ws_monitor_stream_poll_sec", 0.5))
 
-                # (a) zero subscribed tokens during market hours = dead feed
-                subs = snap.get("subscribed_tokens")
-                if in_market and subs is not None and int(subs) == 0:
-                    stale_reason = "0 subscribed tokens during market hours"
+        def _poll():
+            snap = _load_ws_monitor_snap_or_unavailable()
+            if snap.get("available") is False:
+                return snap
+            return _build_ws_monitor_payload(
+                snap, topic_f=topic_f, symbol_f=symbol_f, limit=limit,
+            )
 
-                # (b) last_tick is too old
-                if stale_reason is None:
-                    last_tick = snap.get("last_tick_at")
-                    if last_tick:
-                        last_dt = datetime.fromisoformat(str(last_tick))
-                        # Normalise: strip tzinfo if present (convert UTC→IST naive)
-                        if last_dt.tzinfo is not None:
-                            from zoneinfo import ZoneInfo as _Z
-                            last_dt = last_dt.astimezone(_Z("Asia/Kolkata")).replace(tzinfo=None)
-                        age_s = (ist_now - last_dt).total_seconds()
-                        if age_s > threshold:
-                            stale_reason = (
-                                f"no ticks for {int(age_s)}s "
-                                f"(threshold {int(threshold)}s)"
-                            )
-                    else:
-                        # No ticks ever received — only flag once the
-                        # runner has been up long enough that we'd
-                        # expect ticks during market hours.
-                        started = snap.get("started_at")
-                        if in_market and started:
-                            started_dt = _dt.fromisoformat(
-                                str(started).replace("Z", "+00:00")
-                            )
-                            if started_dt.tzinfo is None:
-                                started_dt = started_dt.replace(tzinfo=_tz.utc)
-                            uptime_s = (_dt.now(_tz.utc) - started_dt).total_seconds()
-                            if uptime_s > threshold:
-                                stale_reason = (
-                                    f"no ticks since runner start "
-                                    f"({int(uptime_s)}s ago)"
-                                )
+        @stream_with_context
+        def _gen():
+            yield from iter_sse_on_change(_poll, poll_sec)
 
-                if stale_reason:
-                    snap["raw_connection_state"] = raw_state
-                    snap["connection_state"] = "stale"
-                    snap["stale_reason"] = stale_reason
-        except Exception:
-            pass
-
-        return jsonify(snap)
+        return Response(
+            _gen(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # ---------- Health ----------
     @app.route("/health")
@@ -2172,37 +2408,7 @@ def create_app() -> Flask:
         chips so the page doesn't have to call /api/runtime-flags +
         scheduler endpoints separately. All values are best-effort.
         """
-        from database.runtime_flags import (
-            FLAG_CIRCUIT_BREAKER_ACTIVE,
-            FLAG_KILL_SWITCH,
-            FLAG_TRADE_EXECUTION_ENABLED,
-            RuntimeFlagsRepo,
-        )
-        cb_active = False
-        kill_switch = False
-        trade_exec_enabled = True
-        try:
-            repo = RuntimeFlagsRepo(db, cache_ttl_seconds=0)
-            cb_active = repo.get_bool(FLAG_CIRCUIT_BREAKER_ACTIVE, default=False)
-            kill_switch = repo.get_bool(FLAG_KILL_SWITCH, default=False)
-            trade_exec_enabled = repo.get_bool(
-                FLAG_TRADE_EXECUTION_ENABLED, default=True,
-            )
-        except Exception:
-            logger.debug("system-status: runtime_flags read failed", exc_info=True)
-        sch_running = False
-        try:
-            from scheduler.scheduler import get_scheduler
-            sch = get_scheduler()
-            sch_running = bool(sch and sch.running)
-        except Exception:
-            logger.debug("system-status: scheduler probe failed", exc_info=True)
-        return jsonify({
-            "circuit_breaker_active": cb_active,
-            "kill_switch":             kill_switch,
-            "trade_execution_enabled": trade_exec_enabled,
-            "scheduler_running":       sch_running,
-        })
+        return jsonify(_build_system_status_payload(db))
 
     # ---------- Phase 3 — #9 Comprehensive system status JSON -----------
     # One-stop health snapshot for external monitors / on-call dashboards.

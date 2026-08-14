@@ -161,7 +161,7 @@
       parts.push('💳 Wallet unavailable');
     }
     if (st.square_off_time) parts.push('⏱ Exit by ' + st.square_off_time);
-    parts.push('📡 WebSocket push');
+    parts.push('📡 Live push (SSE)');
     if (st.last_signal && st.last_signal.triggered_at) {
       parts.push(
         'Last signal: ' + st.last_signal.symbol + ' ' + st.last_signal.action
@@ -571,9 +571,10 @@
   }
 
   let _scoutSignals = new Map();
-  let _scoutPollMs = 10000;
-  let _scoutLivePollMs = 3000;
-  let _scoutLiveTimer = null;
+  let _scoutLiveSource = null;
+  let _scoutLiveStreamUrl = null;
+  let _scoutSignalsSource = null;
+  let _scoutFlowSource = null;
   let _scoutExpiryTimer = null;
 
   function parseValidUntilMs(iso) {
@@ -708,26 +709,108 @@
     });
   }
 
-  async function pollScoutLiveQuotes() {
+  function _scoutQuoteSymbols() {
+    const syms = new Set();
+    _scoutSignals.forEach(s => {
+      if (s.symbol) syms.add(String(s.symbol).toUpperCase());
+    });
+    _scoutFlowCache.forEach(entry => {
+      const item = entry && entry.item;
+      if (!item) return;
+      const sym = (item.trade && item.trade.symbol)
+        || (item.signal && item.signal.symbol)
+        || (item.execution && item.execution.symbol);
+      if (sym) syms.add(String(sym).toUpperCase());
+    });
+    return [...syms].join(',');
+  }
+
+  function applyScoutLiveQuotes(data) {
     const c = $('#scout-signals-container');
     if (!c || !_scoutSignals.size) return;
-    const symbols = [...new Set([..._scoutSignals.values()].map(s => s.symbol))].join(',');
+    const quotes = data.quotes || {};
+    _scoutSignals.forEach((s, id) => {
+      if (isSignalTradeOpen(s)) return;
+      const card = c.querySelector(`.scout-card[data-signal-id="${id}"]`);
+      if (!card) return;
+      const sym = String(s.symbol).toUpperCase();
+      const q = quotes[sym];
+      const liveLtp = q && q.ltp != null ? Number(q.ltp) : null;
+      if (liveLtp == null) return;
+      updateSignalCardLive(card, s, liveLtp, q.as_of);
+      const status = evaluateClientValidity(s, liveLtp);
+      if (status !== 'ACTIVE') dropInvalidSignal(id, card, status);
+    });
+
+    const tradesC = $('#scout-trades-container');
+    if (tradesC && _scoutFlowCache.size) {
+      _scoutFlowCache.forEach((entry, key) => {
+        const item = entry.item;
+        if (!item) return;
+        const sym = String(
+          (item.trade && item.trade.symbol)
+          || (item.signal && item.signal.symbol)
+          || (item.execution && item.execution.symbol)
+          || ''
+        ).toUpperCase();
+        const q = quotes[sym];
+        if (!q || q.ltp == null) return;
+        const liveLtp = Number(q.ltp);
+        const card = tradesC.querySelector(`[data-flow-key="${key}"]`);
+        if (!card) return;
+        const merged = mergeFlowItemLive({
+          ...item,
+          live_ltp: item.kind === 'signal' ? liveLtp : undefined,
+          execution: item.execution ? {
+            ...item.execution,
+            live_ltp: liveLtp,
+            live_stale: Boolean(q.stale),
+          } : item.execution,
+        }, _scoutWsHealth);
+        updateExecutionCardLive(card, merged, _scoutWsHealth);
+        _scoutFlowCache.set(key, { ...entry, item: merged });
+      });
+    }
+  }
+
+  function stopScoutLiveQuotesStream() {
+    if (_scoutLiveSource) {
+      _scoutLiveSource.close();
+      _scoutLiveSource = null;
+    }
+    _scoutLiveStreamUrl = null;
+  }
+
+  function ensureScoutLiveQuotesStream() {
+    const symbols = _scoutQuoteSymbols();
+    if (!symbols) {
+      stopScoutLiveQuotesStream();
+      return;
+    }
+    const url = '/api/scout/live-quotes/stream?symbols=' + encodeURIComponent(symbols);
+    if (_scoutLiveSource && _scoutLiveStreamUrl === url) return;
+    stopScoutLiveQuotesStream();
+    try {
+      _scoutLiveStreamUrl = url;
+      _scoutLiveSource = new EventSource(url);
+      _scoutLiveSource.onmessage = (ev) => {
+        try { applyScoutLiveQuotes(JSON.parse(ev.data)); } catch (_) { /* ignore */ }
+      };
+      _scoutLiveSource.onerror = () => {
+        if (_scoutLiveSource && _scoutLiveSource.readyState === 2) {
+          _scoutLiveSource = null;
+          _scoutLiveStreamUrl = null;
+        }
+      };
+    } catch (_) { /* SSE unsupported */ }
+  }
+
+  async function pollScoutLiveQuotes() {
+    const symbols = _scoutQuoteSymbols();
+    if (!symbols) return;
     try {
       const data = await scoutApi('/live-quotes?symbols=' + encodeURIComponent(symbols));
-      if (data.live_poll_seconds) _scoutLivePollMs = Math.max(2, Number(data.live_poll_seconds) * 1000);
-      const quotes = data.quotes || {};
-      _scoutSignals.forEach((s, id) => {
-        if (isSignalTradeOpen(s)) return;
-        const card = c.querySelector(`.scout-card[data-signal-id="${id}"]`);
-        if (!card) return;
-        const sym = String(s.symbol).toUpperCase();
-        const q = quotes[sym];
-        const liveLtp = q && q.ltp != null ? Number(q.ltp) : null;
-        if (liveLtp == null) return;
-        updateSignalCardLive(card, s, liveLtp, q.as_of);
-        const status = evaluateClientValidity(s, liveLtp);
-        if (status !== 'ACTIVE') dropInvalidSignal(id, card, status);
-      });
+      applyScoutLiveQuotes(data);
     } catch (_) { /* keep last price */ }
   }
 
@@ -794,6 +877,7 @@
 
   function renderSignals(signals) {
     syncSignalCards(signals);
+    ensureScoutLiveQuotesStream();
   }
 
   async function loadScoutSignals() {
@@ -803,8 +887,6 @@
         scoutApi('/status'),
         scoutApi('/signals?limit=40'),
       ]);
-      if (sig.poll_seconds) _scoutPollMs = Math.max(5, Number(sig.poll_seconds) * 1000);
-      if (sig.live_poll_seconds) _scoutLivePollMs = Math.max(2, Number(sig.live_poll_seconds) * 1000);
       renderStatus(st);
       renderSignals(sig.signals || []);
     } catch (e) {
@@ -1743,8 +1825,6 @@
         scoutApi('/health').catch(() => null),
       ]);
       if (health) renderAlarmBanner(health, ['scout-trades-alarm-banner', 'scout-alarm-banner']);
-      if (data.poll_seconds) _scoutPollMs = Math.max(5, Number(data.poll_seconds) * 1000);
-      if (data.live_poll_seconds) _scoutLivePollMs = Math.max(2, Number(data.live_poll_seconds) * 1000);
       renderExecutionFlow(data.items || [], data.market_open, data.websocket || (health && health.websocket));
     } catch (e) {
       c.className = '';
@@ -2564,14 +2644,58 @@
   }
 
   // ---------- Tab lifecycle ----------
-  let _scoutTimer = null;
-  let _scoutFlowTimer = null;
+
+  function stopScoutSignalsStream() {
+    if (_scoutSignalsSource) {
+      _scoutSignalsSource.close();
+      _scoutSignalsSource = null;
+    }
+  }
+
+  function stopScoutFlowStream() {
+    if (_scoutFlowSource) {
+      _scoutFlowSource.close();
+      _scoutFlowSource = null;
+    }
+  }
+
+  function ensureScoutSignalsStream() {
+    if (_scoutSignalsSource && _scoutSignalsSource.readyState !== 2) return;
+    stopScoutSignalsStream();
+    try {
+      _scoutSignalsSource = new EventSource('/api/scout/signals/stream?limit=40');
+      _scoutSignalsSource.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          renderSignals(data.signals || []);
+        } catch (_) { /* ignore */ }
+      };
+      _scoutSignalsSource.onerror = () => {
+        if (_scoutSignalsSource && _scoutSignalsSource.readyState === 2) _scoutSignalsSource = null;
+      };
+    } catch (_) { /* SSE unsupported */ }
+  }
+
+  function ensureScoutFlowStream() {
+    if (_scoutFlowSource && _scoutFlowSource.readyState !== 2) return;
+    stopScoutFlowStream();
+    try {
+      _scoutFlowSource = new EventSource('/api/scout/flow/stream');
+      _scoutFlowSource.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          renderExecutionFlow(data.items || [], data.market_open, data.websocket);
+          ensureScoutLiveQuotesStream();
+        } catch (_) { /* ignore */ }
+      };
+      _scoutFlowSource.onerror = () => {
+        if (_scoutFlowSource && _scoutFlowSource.readyState === 2) _scoutFlowSource = null;
+      };
+    } catch (_) { /* SSE unsupported */ }
+  }
 
   function stopScoutLiveRefresh() {
-    if (_scoutLiveTimer) {
-      clearInterval(_scoutLiveTimer);
-      _scoutLiveTimer = null;
-    }
+    stopScoutLiveQuotesStream();
     if (_scoutExpiryTimer) {
       clearInterval(_scoutExpiryTimer);
       _scoutExpiryTimer = null;
@@ -2581,7 +2705,7 @@
   function startScoutLiveRefresh() {
     stopScoutLiveRefresh();
     pollScoutLiveQuotes();
-    _scoutLiveTimer = setInterval(pollScoutLiveQuotes, _scoutLivePollMs);
+    ensureScoutLiveQuotesStream();
     _scoutExpiryTimer = setInterval(() => {
       checkScoutSignalExpiry();
       tickScoutTimers();
@@ -2589,28 +2713,21 @@
   }
 
   function stopScoutAutoRefresh() {
-    if (_scoutTimer) {
-      clearInterval(_scoutTimer);
-      _scoutTimer = null;
-    }
+    stopScoutSignalsStream();
   }
 
   function stopScoutFlowAutoRefresh() {
-    if (_scoutFlowTimer) {
-      clearInterval(_scoutFlowTimer);
-      _scoutFlowTimer = null;
-    }
+    stopScoutFlowStream();
   }
 
   function startScoutAutoRefresh() {
     stopScoutAutoRefresh();
-    _scoutTimer = setInterval(loadScoutSignals, _scoutPollMs);
+    ensureScoutSignalsStream();
   }
 
-  function startScoutFlowAutoRefresh(fast) {
+  function startScoutFlowAutoRefresh(_fast) {
     stopScoutFlowAutoRefresh();
-    const ms = fast ? _scoutLivePollMs : _scoutPollMs;
-    _scoutFlowTimer = setInterval(loadScoutFlow, ms);
+    ensureScoutFlowStream();
   }
 
   function onScoutTabEnter(tab) {

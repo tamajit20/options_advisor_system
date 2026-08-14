@@ -103,5 +103,5 @@ def test_try_auto_execute_skipped_when_scout_disabled(mocker):
         return_value={"auto_execute_signals": True},
     )
     mocker.patch("scout.auto_trader.is_market_open", return_value=True)
-    mocker.patch("scout.auto_trader.SCOUT_CONFIG", {"enabled": False})
+    mocker.patch("scout.settings_schema.SCOUT_CONFIG", {"enabled": False})
     assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.0) is None

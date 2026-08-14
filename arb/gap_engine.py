@@ -7,7 +7,9 @@ via a background writer thread (minimal per-tick DB work).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import queue
 import threading
 import time
@@ -141,6 +143,7 @@ class ArbGapEngine:
         self._pair_staleness = float(ARB_CONFIG.get("tick_staleness_sec", 3))
         self._close_staleness = float(ARB_CONFIG.get("leg_stale_close_sec", 5))
         self._flush_interval = float(ARB_CONFIG.get("db_flush_interval_sec", 1))
+        self._live_state_path = str(ARB_CONFIG.get("live_state_path") or "data/arb_live_state.json")
 
         self._lock = threading.RLock()
         self._nse: Dict[str, _LegSnapshot] = {}
@@ -186,6 +189,32 @@ class ArbGapEngine:
         with self._lock:
             return list(self._live.values())
 
+    def live_snapshot(self) -> dict:
+        with self._lock:
+            gaps = list(self._live.values())
+        return {"gaps": gaps, "count": len(gaps), "source": "engine"}
+
+    def _publish_live_state(self, now: Optional[datetime] = None) -> None:
+        """Write open gaps to a shared file for the dashboard SSE stream."""
+        ts = now or self._clock()
+        with self._lock:
+            gaps = list(self._live.values())
+        snap = {
+            "gaps": gaps,
+            "count": len(gaps),
+            "source": "engine",
+            "as_of": ts.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        try:
+            path = self._live_state_path
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(snap, f)
+            os.replace(tmp, path)
+        except Exception:
+            logger.debug("arb live state write failed", exc_info=True)
+
     def _on_tick(self, quote: LiveQuote) -> None:
         if quote is None or quote.option_type is not None:
             return
@@ -221,7 +250,9 @@ class ArbGapEngine:
         if gap_abs == 0:
             if ep is not None:
                 self._close_episode(symbol, ep, now, nse, bse, gap_abs, gap_pct, direction)  # type: ignore[arg-type]
-            self._live.pop(symbol, None)
+            elif symbol in self._live:
+                self._live.pop(symbol, None)
+                self._publish_live_state(now)
             return
 
         if ep is None:
@@ -252,6 +283,7 @@ class ArbGapEngine:
         ep.last_payload = payload
         ep.dirty = True
         self._live[symbol] = {**payload, "started_at": payload["started_at"].isoformat(sep=" ", timespec="seconds")}
+        self._publish_live_state(now)
 
     def _start_episode(
         self,
@@ -291,6 +323,7 @@ class ArbGapEngine:
         self._open[symbol] = ep
         self._live[symbol] = {**payload, "started_at": now.isoformat(sep=" ", timespec="seconds")}
         self._q.put((_DbOp.INSERT, symbol, payload))
+        self._publish_live_state(now)
 
     def _close_episode(
         self,
@@ -320,6 +353,7 @@ class ArbGapEngine:
         )
         self._open.pop(symbol, None)
         self._live.pop(symbol, None)
+        self._publish_live_state(now)
         close_item = (now, duration, payload)
         if ep.db_id is not None:
             self._q.put((_DbOp.CLOSE, ep.db_id, now, duration, payload))

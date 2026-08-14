@@ -4,12 +4,13 @@ scout/routes.py — Flask blueprint for Intraday Scout (/api/scout/*).
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Callable, Optional
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from config import SCOUT_CONFIG
 from database.connection import SQLServerConnection
@@ -59,6 +60,7 @@ from scout.execution_health import build_execution_health, ws_health
 from scout.execution_flow import build_flow_items, build_trade_execution_flow
 from scout.trade_audit import build_entry_audit, enrich_history_trade
 from scout.utils import is_market_open
+from dashboard.sse_helpers import iter_sse_on_change
 from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
@@ -128,13 +130,10 @@ def _format_square_off_time(settings: dict) -> str:
     return format_square_off_time(settings)
 
 
-@scout_bp.route("/flow")
-@_with_db
-def api_scout_flow(db: SQLServerConnection):
-    """Unified execution view — signals awaiting entry + active trades with order flow."""
+def _build_scout_flow_payload(db: SQLServerConnection) -> dict:
     settings = get_scout_settings(db)
     items = build_flow_items(db, settings=settings)
-    return jsonify({
+    return {
         "items": items,
         "count": len(items),
         "zerodha_execute_orders": zerodha_execute_enabled(settings),
@@ -144,7 +143,98 @@ def api_scout_flow(db: SQLServerConnection):
         "live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
         "market_open": is_market_open(),
         "websocket": ws_health(market_open=is_market_open()),
-    })
+    }
+
+
+def _build_scout_signals_payload(
+    db: SQLServerConnection,
+    *,
+    limit: int = 50,
+    since_minutes: Optional[int] = None,
+) -> dict:
+    default_since = int(SCOUT_CONFIG.get("signal_display_minutes", 120))
+    since = min(int(since_minutes if since_minutes is not None else default_since), 24 * 60)
+    rows = ScoutSignalRepo(db).recent(limit=limit, since_minutes=since)
+    trade_repo = ScoutTradeRepo(db)
+    settings = get_scout_settings(db)
+    open_trades = trade_repo.open_trades()
+    trade_by_signal = {
+        sid: int(t["id"])
+        for t in open_trades
+        if (sid := _coerce_int_id(t.get("signal_id"))) is not None
+    }
+    open_ids = set(trade_by_signal.keys())
+    open_trade_by_symbol: dict[str, dict] = {}
+    for t in open_trades:
+        sym_key = str(t.get("symbol") or "").upper()
+        if not sym_key or sym_key in open_trade_by_symbol:
+            continue
+        open_trade_by_symbol[sym_key] = {
+            "trade_id": int(t["id"]),
+            "signal_id": _coerce_int_id(t.get("signal_id")),
+        }
+
+    symbols = {str(r["symbol"]).upper() for r in rows}
+    quotes = latest_equity_ltps(symbols)
+    now = now_ist().replace(tzinfo=None)
+
+    enriched = []
+    for row in rows:
+        sid_int = _coerce_int_id(row.get("id"))
+        has_open_trade = sid_int is not None and sid_int in open_ids
+        sym = str(row["symbol"]).upper()
+        q = quotes.get(sym, {})
+        live_ltp = q.get("ltp")
+        e = enrich_signal(
+            row,
+            live_ltp=live_ltp,
+            live_as_of=q.get("as_of"),
+            now=now,
+            settings=settings,
+        )
+        ref_px = live_ltp if live_ltp is not None and live_ltp > 0 else float(row.get("ltp") or 0)
+        e["suggested_quantity"] = suggested_quantity(settings, ref_px)
+        e["trade_open"] = has_open_trade
+        e["trade_id"] = trade_by_signal.get(sid_int) if has_open_trade else None
+        sym_open = open_trade_by_symbol.get(sym)
+        symbol_blocked = sym_open is not None and not has_open_trade
+        e["symbol_trade_blocked"] = symbol_blocked
+        e["can_mark_taken"] = not has_open_trade and not symbol_blocked
+        if symbol_blocked:
+            e["blocking_trade_id"] = sym_open.get("trade_id")
+            e["blocking_signal_id"] = sym_open.get("signal_id")
+        else:
+            e["blocking_trade_id"] = None
+            e["blocking_signal_id"] = None
+        from scout.auto_enter_status import evaluate_auto_enter_status
+
+        e["auto_enter"] = evaluate_auto_enter_status(
+            signal=row,
+            enriched=e,
+            settings=settings,
+            trade_repo=trade_repo,
+            market_open=is_market_open(),
+            has_open_trade=has_open_trade,
+            symbol_trade_blocked=symbol_blocked,
+        )
+        if e.get("validity_status") == "ACTIVE" or has_open_trade:
+            enriched.append(e)
+
+    enriched = _sort_signals_for_display(enriched)
+    return {
+        "signals": enriched,
+        "count": len(enriched),
+        "poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
+        "live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
+        "market_open": is_market_open(),
+    }
+
+
+@scout_bp.route("/flow")
+@_with_db
+def api_scout_flow(db: SQLServerConnection):
+    """Unified execution view — signals awaiting entry + active trades with order flow."""
+    return jsonify(_build_scout_flow_payload(db))
 
 
 @scout_bp.route("/status")
@@ -202,84 +292,95 @@ def api_scout_signals(db: SQLServerConnection):
     limit = min(int(request.args.get("limit", 50)), 200)
     default_since = int(SCOUT_CONFIG.get("signal_display_minutes", 120))
     since = min(int(request.args.get("since_minutes", default_since)), 24 * 60)
-    rows = ScoutSignalRepo(db).recent(limit=limit, since_minutes=since)
-    trade_repo = ScoutTradeRepo(db)
-    settings = get_scout_settings(db)
-    open_trades = trade_repo.open_trades()
-    trade_by_signal = {
-        sid: int(t["id"])
-        for t in open_trades
-        if (sid := _coerce_int_id(t.get("signal_id"))) is not None
-    }
-    open_ids = set(trade_by_signal.keys())
-    open_trade_by_symbol: dict[str, dict] = {}
-    for t in open_trades:
-        sym_key = str(t.get("symbol") or "").upper()
-        if not sym_key or sym_key in open_trade_by_symbol:
-            continue
-        open_trade_by_symbol[sym_key] = {
-            "trade_id": int(t["id"]),
-            "signal_id": _coerce_int_id(t.get("signal_id")),
-        }
+    return jsonify(_build_scout_signals_payload(db, limit=limit, since_minutes=since))
 
-    symbols = {str(r["symbol"]).upper() for r in rows}
-    quotes = latest_equity_ltps(symbols)
-    now = now_ist().replace(tzinfo=None)
 
-    enriched = []
-    for row in rows:
-        sid_int = _coerce_int_id(row.get("id"))
-        has_open_trade = sid_int is not None and sid_int in open_ids
-        sym = str(row["symbol"]).upper()
-        q = quotes.get(sym, {})
-        live_ltp = q.get("ltp")
-        e = enrich_signal(
-            row,
-            live_ltp=live_ltp,
-            live_as_of=q.get("as_of"),
-            now=now,
-            settings=settings,
-        )
-        ref_px = live_ltp if live_ltp is not None and live_ltp > 0 else float(row.get("ltp") or 0)
-        e["suggested_quantity"] = suggested_quantity(settings, ref_px)
-        e["trade_open"] = has_open_trade
-        e["trade_id"] = trade_by_signal.get(sid_int) if has_open_trade else None
-        sym_open = open_trade_by_symbol.get(sym)
-        symbol_blocked = (
-            sym_open is not None
-            and not has_open_trade
-        )
-        e["symbol_trade_blocked"] = symbol_blocked
-        e["can_mark_taken"] = not has_open_trade and not symbol_blocked
-        if symbol_blocked:
-            e["blocking_trade_id"] = sym_open.get("trade_id")
-            e["blocking_signal_id"] = sym_open.get("signal_id")
-        else:
-            e["blocking_trade_id"] = None
-            e["blocking_signal_id"] = None
-        from scout.auto_enter_status import evaluate_auto_enter_status
+@scout_bp.route("/signals/stream")
+def api_scout_signals_stream():
+    """SSE: push signal list when DB state changes (server polls at signals_poll_seconds)."""
+    limit = min(int(request.args.get("limit", 50)), 200)
+    default_since = int(SCOUT_CONFIG.get("signal_display_minutes", 120))
+    since = min(int(request.args.get("since_minutes", default_since)), 24 * 60)
+    poll_sec = float(SCOUT_CONFIG.get("signals_stream_poll_sec", SCOUT_CONFIG.get("signals_poll_seconds", 10)))
 
-        e["auto_enter"] = evaluate_auto_enter_status(
-            signal=row,
-            enriched=e,
-            settings=settings,
-            trade_repo=trade_repo,
-            market_open=is_market_open(),
-            has_open_trade=has_open_trade,
-            symbol_trade_blocked=symbol_blocked,
-        )
-        if e.get("validity_status") == "ACTIVE" or has_open_trade:
-            enriched.append(e)
+    def _poll():
+        db = SQLServerConnection()
+        db.connect()
+        try:
+            return _build_scout_signals_payload(db, limit=limit, since_minutes=since)
+        finally:
+            db.close()
 
-    enriched = _sort_signals_for_display(enriched)
+    @stream_with_context
+    def _gen():
+        yield from iter_sse_on_change(_poll, poll_sec)
 
-    return jsonify({
-        "signals": enriched,
-        "count": len(enriched),
-        "poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
-        "live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
-        "market_open": is_market_open(),
-    })
+    return Response(
+        _gen(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@scout_bp.route("/flow/stream")
+def api_scout_flow_stream():
+    """SSE: push execution flow when ws_status or DB state changes."""
+    import time as _time
+    from dashboard.sse_helpers import json_signature
+    from providers.ws_monitor import default_snapshot_path
+
+    ws_poll = float(SCOUT_CONFIG.get("live_stream_poll_sec", 0.5))
+    db_poll = float(SCOUT_CONFIG.get("flow_stream_poll_sec", SCOUT_CONFIG.get("signals_poll_seconds", 10)))
+
+    @stream_with_context
+    def _gen():
+        last_sig: Optional[str] = None
+        last_ws_sig: Optional[str] = None
+        last_db_at = 0.0
+        heartbeat_at = _time.monotonic()
+        yield ": connected\n\n"
+        while True:
+            _time.sleep(ws_poll)
+            try:
+                path = default_snapshot_path()
+                ws_sig = ""
+                if path.exists():
+                    with path.open("r", encoding="utf-8") as fh:
+                        ws_sig = fh.read()
+                ws_changed = ws_sig != last_ws_sig
+                now = _time.monotonic()
+                db_due = (now - last_db_at) >= db_poll
+                if not ws_changed and not db_due:
+                    if _time.monotonic() - heartbeat_at >= 15:
+                        heartbeat_at = _time.monotonic()
+                        yield ": ping\n\n"
+                    continue
+
+                db = SQLServerConnection()
+                db.connect()
+                try:
+                    payload = _build_scout_flow_payload(db)
+                finally:
+                    db.close()
+
+                sig = json_signature(payload)
+                if sig != last_sig:
+                    last_sig = sig
+                    yield f"data: {json.dumps(payload, default=str)}\n\n"
+                last_ws_sig = ws_sig
+                if db_due or ws_changed:
+                    last_db_at = now
+            except Exception:
+                pass
+            if _time.monotonic() - heartbeat_at >= 15:
+                heartbeat_at = _time.monotonic()
+                yield ": ping\n\n"
+
+    return Response(
+        _gen(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @scout_bp.route("/live-quotes")
@@ -292,6 +393,31 @@ def api_scout_live_quotes():
         "quotes": quotes,
         "live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
     })
+
+
+@scout_bp.route("/live-quotes/stream")
+def api_scout_live_quotes_stream():
+    """SSE: push equity LTPs when ws_status.json changes."""
+    raw = (request.args.get("symbols") or "").strip()
+    symbols = [s.strip().upper() for s in raw.split(",") if s.strip()] or None
+    poll_sec = float(SCOUT_CONFIG.get("live_stream_poll_sec", 0.5))
+
+    def _poll():
+        quotes = latest_equity_ltps(symbols)
+        return {
+            "quotes": quotes,
+            "live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
+        }
+
+    @stream_with_context
+    def _gen():
+        yield from iter_sse_on_change(_poll, poll_sec)
+
+    return Response(
+        _gen(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @scout_bp.route("/watchlist")

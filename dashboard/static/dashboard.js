@@ -693,7 +693,7 @@ $$('.nav-item, .bnav-item').forEach(b =>
 );
 // Restore last active tab on page load (URL hash takes precedence over localStorage).
 // MUST defer until after the whole script parses, otherwise switchTab() touches
-// `let` bindings (_histActiveSubtab, _jobsTimer, _wsmonTimer) declared further
+// `let` bindings (_histActiveSubtab, _jobsSource) declared further
 // down → TDZ ReferenceError that breaks Jobs/Logs/Wsmon tabs.
 function _restoreActiveTab() {
   let initial = null;
@@ -753,28 +753,73 @@ async function refreshIndexSpotStrip() {
   if (!host) return;
   try {
     const data = await API('/api/indices/spot');
-    const items = data.indices || [];
-    if (!items.length) {
-      host.innerHTML = '';
-      return;
-    }
-    host.innerHTML = items.map(item => {
-      const src = (item.source || '').toLowerCase();
-      const cls = src === 'live' ? 'idx-chip-live'
-        : src === 'eod' ? 'idx-chip-eod'
-        : 'idx-chip-unavailable';
-      const srcLabel = src === 'live' ? 'Live'
-        : src === 'eod' ? 'EOD'
-        : '—';
-      const tip = _indexSpotTitle(item);
-      return `<div class="idx-chip ${cls}" title="${escapeHtml(tip)}">`
-        + `<span class="idx-chip-label">${escapeHtml(item.label || item.symbol || '')}</span>`
-        + `<span class="idx-chip-price">${escapeHtml(_fmtIndexPrice(item.symbol, item.price))}</span>`
-        + `<span class="idx-chip-src">${srcLabel}</span>`
-        + `</div>`;
-    }).join('');
+    _renderIndexSpotStrip(host, data);
   } catch {
     /* keep last rendered values on transient errors */
+  }
+}
+
+function _renderIndexSpotStrip(host, data) {
+  const items = data.indices || [];
+  if (!items.length) {
+    host.innerHTML = '';
+    return;
+  }
+  host.innerHTML = items.map(item => {
+    const src = (item.source || '').toLowerCase();
+    const cls = src === 'live' ? 'idx-chip-live'
+      : src === 'eod' ? 'idx-chip-eod'
+      : 'idx-chip-unavailable';
+    const srcLabel = src === 'live' ? 'Live'
+      : src === 'eod' ? 'EOD'
+      : '—';
+    const tip = _indexSpotTitle(item);
+    return `<div class="idx-chip ${cls}" data-symbol="${escapeHtml(item.symbol || '')}" title="${escapeHtml(tip)}">`
+      + `<span class="idx-chip-label">${escapeHtml(item.label || item.symbol || '')}</span>`
+      + `<span class="idx-chip-price">${escapeHtml(_fmtIndexPrice(item.symbol, item.price))}</span>`
+      + `<span class="idx-chip-src">${srcLabel}</span>`
+      + `</div>`;
+  }).join('');
+}
+
+function _applyIndexSpotLiveUpdate(data) {
+  const host = document.getElementById('index-spot-strip');
+  if (!host || !data || data.feed !== 'live') return;
+  const items = data.indices || [];
+  if (!items.length) return;
+  items.forEach(item => {
+    const sym = item.symbol || '';
+    const chip = host.querySelector(`.idx-chip[data-symbol="${sym}"]`);
+    if (!chip) return;
+    chip.classList.remove('idx-chip-eod', 'idx-chip-unavailable');
+    chip.classList.add('idx-chip-live');
+    chip.title = _indexSpotTitle(item);
+    const priceEl = chip.querySelector('.idx-chip-price');
+    const srcEl = chip.querySelector('.idx-chip-src');
+    if (priceEl) priceEl.textContent = _fmtIndexPrice(item.symbol, item.price);
+    if (srcEl) srcEl.textContent = 'Live';
+  });
+}
+
+let _indexSpotSource = null;
+
+function ensureIndexSpotStream() {
+  if (_indexSpotSource && _indexSpotSource.readyState !== 2) return;
+  try {
+    _indexSpotSource = new EventSource('/api/indices/spot/stream');
+    _indexSpotSource.onmessage = (ev) => {
+      try { _applyIndexSpotLiveUpdate(JSON.parse(ev.data)); } catch (_) { /* ignore */ }
+    };
+    _indexSpotSource.onerror = () => {
+      if (_indexSpotSource && _indexSpotSource.readyState === 2) _indexSpotSource = null;
+    };
+  } catch (_) { /* SSE unsupported */ }
+}
+
+function stopIndexSpotStream() {
+  if (_indexSpotSource) {
+    _indexSpotSource.close();
+    _indexSpotSource = null;
   }
 }
 
@@ -782,18 +827,14 @@ async function refreshIndexSpotStrip() {
 // System flags (kill switch / circuit breaker / trade execution) and unread
 // CRITICAL/WARNING notification summaries live in a single #global-banners
 // container immediately under the page header so they are visible on EVERY
-// tab — not just the Suggestion tab. Called on page load and after any
-// action that could change banner state (notification mark-as-read, flag
-// toggle, etc.).
-async function refreshGlobalBanners() {
+// tab — not just the Suggestion tab. Updated via /api/alerts/stream SSE and
+// after any action that could change banner state (notification mark-as-read,
+// flag toggle, etc.).
+function _renderGlobalBanners(st, unread) {
   const host = document.getElementById('global-banners');
   if (!host) return;
   const banners = [];
-  // Compact pill format: each banner is a single line with a short label
-  // + actionable button. The `title` attribute carries the full explanation
-  // so hover/tap-and-hold still surfaces the long form.
   try {
-    const st = await API('/api/system-status');
     if (st.circuit_breaker_active) {
       banners.push(`<div class="sys-banner sys-banner-err" title="Daily P&L circuit breaker is ACTIVE — new executions are blocked until reset. This flag re-triggers tonight at 20:50 IST if aggregate open-trade losses still breach the limit.">\ud83d\udea8 P&amp;L breaker <strong>ACTIVE</strong> <button type="button" class="btn btn-ghost btn-flag-reset" data-flag-key="circuit_breaker_active" data-flag-value="false">Reset</button></div>`);
     }
@@ -805,10 +846,8 @@ async function refreshGlobalBanners() {
     }
   } catch {}
   try {
-    const nd = await API('/api/notifications?unread=1');
-    const unread = nd.notifications || [];
-    const crit = unread.filter(n => (n.severity || '').toUpperCase() === 'CRITICAL');
-    const warn = unread.filter(n => (n.severity || '').toUpperCase() === 'WARNING');
+    const crit = (unread || []).filter(n => (n.severity || '').toUpperCase() === 'CRITICAL');
+    const warn = (unread || []).filter(n => (n.severity || '').toUpperCase() === 'WARNING');
     if (crit.length) {
       const titles = crit.slice(0, 3).map(n => (n.title || '')).join(' • ');
       const more = crit.length > 3 ? ` (+${crit.length - 3} more)` : '';
@@ -823,9 +862,78 @@ async function refreshGlobalBanners() {
   } catch {}
   host.innerHTML = banners.join('');
   bindFlagResetButtons();
-  // Wire the "Open" button in critical/warning banners to switch to the Alerts tab.
   const openBtn = document.getElementById('open-notif-from-banner');
   if (openBtn) openBtn.addEventListener('click', () => switchTab('notifications'));
+}
+
+async function refreshGlobalBanners() {
+  const host = document.getElementById('global-banners');
+  if (!host) return;
+  try {
+    const st = await API('/api/system-status');
+    let unread = [];
+    try {
+      const nd = await API('/api/notifications?unread=1');
+      unread = nd.notifications || [];
+    } catch {}
+    _renderGlobalBanners(st, unread);
+  } catch {}
+}
+
+let _alertsSource = null;
+
+function _applyNotifStats(st) {
+  try {
+    const total = st.total_unread || 0;
+    const badge = document.getElementById('notif-tab-badge');
+    if (badge) { badge.textContent = total; badge.hidden = total === 0; }
+
+    const sevMap = st.by_severity || {};
+    const catMap = st.by_category || {};
+    const update = (id, val) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (val > 0) { el.textContent = val; el.classList.add('visible'); }
+      else         { el.textContent = ''; el.classList.remove('visible'); }
+    };
+    update('nf-cnt-sev-critical',  sevMap['CRITICAL']  || 0);
+    update('nf-cnt-sev-warning',   sevMap['WARNING']   || 0);
+    update('nf-cnt-sev-info',      sevMap['INFO']      || 0);
+    update('nf-cnt-cat-sl',         catMap['sl']         || 0);
+    update('nf-cnt-cat-profit',     catMap['profit']     || 0);
+    update('nf-cnt-cat-exit',       catMap['exit']       || 0);
+    update('nf-cnt-cat-event',      catMap['event']      || 0);
+    update('nf-cnt-cat-system',     catMap['system']     || 0);
+    update('nf-cnt-cat-suggestion', catMap['suggestion'] || 0);
+  } catch (_) { /* non-fatal */ }
+}
+
+function _applyAlertsStream(data) {
+  if (!data) return;
+  if (data.system_status) {
+    _renderGlobalBanners(data.system_status, data.notifications || []);
+  }
+  if (data.stats) _applyNotifStats(data.stats);
+}
+
+function ensureAlertsStream() {
+  if (_alertsSource && _alertsSource.readyState !== 2) return;
+  try {
+    _alertsSource = new EventSource('/api/alerts/stream');
+    _alertsSource.onmessage = (ev) => {
+      try { _applyAlertsStream(JSON.parse(ev.data)); } catch (_) { /* ignore */ }
+    };
+    _alertsSource.onerror = () => {
+      if (_alertsSource && _alertsSource.readyState === 2) _alertsSource = null;
+    };
+  } catch (_) { /* SSE unsupported — manual refresh only */ }
+}
+
+function stopAlertsStream() {
+  if (_alertsSource) {
+    _alertsSource.close();
+    _alertsSource = null;
+  }
 }
 
 // ---------------- Tab 1: Suggestion ----------------
@@ -5108,6 +5216,7 @@ function _applyMtmEvent(m) {
     _applyLegLtpsToClosePanel(m.trade_id, m.leg_ltps);
     _updateFeedTag(m.trade_id, { forCloseForm: true, hasLivePrices: true });
   }
+  _refreshAllFeedTags();
 }
 
 function ensureLiveMTMStream() {
@@ -5134,18 +5243,48 @@ const JOB_STATUS_META = {
   NEVER:   { label: 'Never run', cls: 'js-never'    },
 };
 
-let _jobsTimer = null;
+let _jobsSource = null;
 
 function stopJobsAutoRefresh() {
-  if (_jobsTimer) { clearInterval(_jobsTimer); _jobsTimer = null; }
+  if (_jobsSource) {
+    _jobsSource.close();
+    _jobsSource = null;
+  }
 }
+
+function _renderJobsData(data, silent = false) {
+  const c = $('#jobs-container');
+  if (!c) return;
+  const updated = $('#jobs-updated');
+  if (updated) {
+    updated.textContent = `Updated: ${fmtDt(data.generated_at)}` + (data.scheduler_running ? '' : '  •  scheduler not running');
+  }
+  if (!data.jobs.length) {
+    c.className = '';
+    c.innerHTML = '<div class="empty">No jobs configured.</div>';
+    return;
+  }
+  c.className = '';
+  c.innerHTML = `<div class="jobs-grid">${renderJobsGrid(data.jobs)}</div>`;
+}
+
+function ensureJobsStream() {
+  if (_jobsSource && _jobsSource.readyState !== 2) return;
+  try {
+    _jobsSource = new EventSource('/api/jobs/stream');
+    _jobsSource.onmessage = (ev) => {
+      if (!document.getElementById('panel-jobs')?.classList.contains('active')) return;
+      try { _renderJobsData(JSON.parse(ev.data), true); } catch (_) { /* ignore */ }
+    };
+    _jobsSource.onerror = () => {
+      if (_jobsSource && _jobsSource.readyState === 2) _jobsSource = null;
+    };
+  } catch (_) { /* SSE unsupported — manual refresh only */ }
+}
+
 function startJobsAutoRefresh() {
   stopJobsAutoRefresh();
-  _jobsTimer = setInterval(() => {
-    if (document.getElementById('panel-jobs')?.classList.contains('active')) {
-      loadJobs(true);
-    }
-  }, 5000);
+  ensureJobsStream();
 }
 
 function _jobRelTime(iso) {
@@ -5190,15 +5329,7 @@ async function loadJobs(silent = false) {
   if (!silent) { c.className = 'loading'; c.textContent = 'Loading…'; }
   try {
     const data = await API('/api/jobs/list');
-    const updated = $('#jobs-updated');
-    if (updated) updated.textContent = `Updated: ${fmtDt(data.generated_at)}` + (data.scheduler_running ? '' : '  •  scheduler not running');
-
-    if (!data.jobs.length) {
-      c.className = ''; c.innerHTML = '<div class="empty">No jobs configured.</div>';
-      return;
-    }
-    c.className = '';
-    c.innerHTML = `<div class="jobs-grid">${renderJobsGrid(data.jobs)}</div>`;
+    _renderJobsData(data, silent);
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -5297,22 +5428,50 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ---------------- WS Monitor ----------------
-let _wsmonTimer = null;
-const WSMON_INTERVAL_MS = 1000;
+let _wsmonSource = null;
+let _wsmonStreamUrl = null;
 
 function stopWsMonitorAutoRefresh() {
-  if (_wsmonTimer) {
-    clearInterval(_wsmonTimer);
-    _wsmonTimer = null;
+  if (_wsmonSource) {
+    _wsmonSource.close();
+    _wsmonSource = null;
   }
+  _wsmonStreamUrl = null;
 }
+
+function _wsMonitorStreamUrl() {
+  const topic  = $('#wsmon-topic')?.value || '';
+  const symbol = ($('#wsmon-symbol')?.value || '').trim();
+  const qs = new URLSearchParams();
+  if (topic)  qs.set('topic', topic);
+  if (symbol) qs.set('symbol', symbol);
+  qs.set('limit', '200');
+  return '/api/ws/monitor/stream?' + qs.toString();
+}
+
+function ensureWsMonitorStream() {
+  const panel = document.getElementById('panel-wsmon');
+  if (!panel || !panel.classList.contains('active')) return;
+  const url = _wsMonitorStreamUrl();
+  if (_wsmonSource && _wsmonStreamUrl === url) return;
+  stopWsMonitorAutoRefresh();
+  _wsmonStreamUrl = url;
+  try {
+    _wsmonSource = new EventSource(url);
+    _wsmonSource.onmessage = (ev) => {
+      try {
+        renderWsMonitorSnap(JSON.parse(ev.data), { silent: true });
+      } catch (_) { /* ignore */ }
+    };
+    _wsmonSource.onerror = () => {
+      if (_wsmonSource && _wsmonSource.readyState === 2) _wsmonSource = null;
+    };
+  } catch (_) { /* SSE unsupported — fall back to one-shot fetch */ }
+}
+
 function startWsMonitorAutoRefresh() {
   stopWsMonitorAutoRefresh();
-  _wsmonTimer = setInterval(() => {
-    if (document.getElementById('panel-wsmon')?.classList.contains('active')) {
-      loadWsMonitor({ silent: true });
-    }
-  }, WSMON_INTERVAL_MS);
+  ensureWsMonitorStream();
 }
 
 function _fmtAge(iso) {
@@ -5355,29 +5514,9 @@ function _wsmonStateClass(state) {
   return 'wsmon-state-warn';
 }
 
-async function loadWsMonitor({ silent = false } = {}) {
-  if (!silent) loadZerodhaStatus();
+function renderWsMonitorSnap(snap, { silent = false } = {}) {
   const summary = $('#wsmon-summary');
   const eventsEl = $('#wsmon-events');
-  if (!silent && summary) summary.classList.add('loading');
-
-  const topic  = $('#wsmon-topic')?.value || '';
-  const symbol = ($('#wsmon-symbol')?.value || '').trim();
-  const qs = new URLSearchParams();
-  if (topic)  qs.set('topic', topic);
-  if (symbol) qs.set('symbol', symbol);
-  qs.set('limit', '200');
-
-  let snap;
-  try {
-    snap = await API('/api/ws/monitor?' + qs.toString());
-  } catch (err) {
-    if (summary) {
-      summary.classList.remove('loading');
-      summary.innerHTML = `<div class="empty">Failed to load WS telemetry: ${escapeHtml(String(err))}</div>`;
-    }
-    return;
-  }
 
   if (!snap || snap.available === false) {
     if (summary) {
@@ -5391,11 +5530,8 @@ async function loadWsMonitor({ silent = false } = {}) {
   if (summary) {
     summary.classList.remove('loading');
     const stateClass = _wsmonStateClass(snap.connection_state);
-    // Outside NSE market hours (09:15–15:30 IST Mon–Fri) show "off-market"
-    // instead of "connected" — the WS stays up but no ticks flow, so showing
-    // "connected" alongside "stale" is confusing.
     const _nowIst = new Date(new Date().toLocaleString('en-US', {timeZone:'Asia/Kolkata'}));
-    const _dow = _nowIst.getDay(); // 0=Sun,6=Sat
+    const _dow = _nowIst.getDay();
     const _hhmm = _nowIst.getHours() * 100 + _nowIst.getMinutes();
     const _inMarket = _dow >= 1 && _dow <= 5 && _hhmm >= 915 && _hhmm <= 1530;
     const _rawRunner = snap.runner_state || snap.connection_state || 'unknown';
@@ -5485,12 +5621,44 @@ async function loadWsMonitor({ silent = false } = {}) {
   }
 }
 
+async function loadWsMonitor({ silent = false } = {}) {
+  if (!silent) loadZerodhaStatus();
+  const summary = $('#wsmon-summary');
+  if (!silent && summary) summary.classList.add('loading');
+
+  const topic  = $('#wsmon-topic')?.value || '';
+  const symbol = ($('#wsmon-symbol')?.value || '').trim();
+  const qs = new URLSearchParams();
+  if (topic)  qs.set('topic', topic);
+  if (symbol) qs.set('symbol', symbol);
+  qs.set('limit', '200');
+
+  try {
+    const snap = await API('/api/ws/monitor?' + qs.toString());
+    renderWsMonitorSnap(snap, { silent });
+    if (document.getElementById('panel-wsmon')?.classList.contains('active')) {
+      ensureWsMonitorStream();
+    }
+  } catch (err) {
+    if (summary) {
+      summary.classList.remove('loading');
+      summary.innerHTML = `<div class="empty">Failed to load WS telemetry: ${escapeHtml(String(err))}</div>`;
+    }
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const panel = document.getElementById('panel-wsmon');
   if (!panel) return;
   $('#wsmon-refresh')?.addEventListener('click', () => loadWsMonitor());
-  $('#wsmon-topic')?.addEventListener('change', () => loadWsMonitor());
-  $('#wsmon-symbol')?.addEventListener('input', _debounce(() => loadWsMonitor(), 300));
+  $('#wsmon-topic')?.addEventListener('change', () => {
+    stopWsMonitorAutoRefresh();
+    loadWsMonitor();
+  });
+  $('#wsmon-symbol')?.addEventListener('input', _debounce(() => {
+    stopWsMonitorAutoRefresh();
+    loadWsMonitor();
+  }, 300));
   const auto = $('#wsmon-auto');
   if (auto) {
     auto.addEventListener('change', () => {
@@ -5512,8 +5680,7 @@ function _debounce(fn, ms) {
 // ---------------- Boot ----------------
 loadSuggestion();
 refreshGlobalBanners();
-// Keep global banner strip live — new CRITICAL alerts appear within a minute.
-setInterval(refreshGlobalBanners, 60000);
+ensureAlertsStream();
 
 // ---------------- Zerodha session card ----------------
 async function loadZerodhaStatus() {
@@ -5736,29 +5903,7 @@ function _nfRenderCard(n) {
 async function _nfRefreshStats() {
   try {
     const st = await API('/api/notifications/stats');
-    const total = st.total_unread || 0;
-    // Update sidebar badge
-    const badge = document.getElementById('notif-tab-badge');
-    if (badge) { badge.textContent = total; badge.hidden = total === 0; }
-
-    // Update chip counts (show only non-zero)
-    const sevMap = st.by_severity || {};
-    const catMap = st.by_category || {};
-    const update = (id, val) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      if (val > 0) { el.textContent = val; el.classList.add('visible'); }
-      else         { el.textContent = ''; el.classList.remove('visible'); }
-    };
-    update('nf-cnt-sev-critical',  sevMap['CRITICAL']  || 0);
-    update('nf-cnt-sev-warning',   sevMap['WARNING']   || 0);
-    update('nf-cnt-sev-info',      sevMap['INFO']      || 0);
-    update('nf-cnt-cat-sl',         catMap['sl']         || 0);
-    update('nf-cnt-cat-profit',     catMap['profit']     || 0);
-    update('nf-cnt-cat-exit',       catMap['exit']       || 0);
-    update('nf-cnt-cat-event',      catMap['event']      || 0);
-    update('nf-cnt-cat-system',     catMap['system']     || 0);
-    update('nf-cnt-cat-suggestion', catMap['suggestion'] || 0);
+    _applyNotifStats(st);
   } catch(e) { /* non-fatal */ }
 }
 
@@ -5884,16 +6029,14 @@ document.getElementById('nf-mark-all')?.addEventListener('click', async () => {
   toast('All notifications marked as read', 'ok');
 });
 
-// Refresh stats (header pill + sidebar badge) on boot and every 60s.
+// Notification badge chips refresh on boot; live updates via /api/alerts/stream SSE.
 _nfRefreshStats();
-setInterval(_nfRefreshStats, 60000);
 
 refreshIndexSpotStrip();
-setInterval(refreshIndexSpotStrip, 10000);
+ensureIndexSpotStream();
 
 loadZerodhaStatus();
 setInterval(loadZerodhaStatus, 60000);
-setInterval(_refreshAllFeedTags, 30000);
 
 // Return from /zerodha/callback server-side exchange (?tab=wsmon&zerodha=ok).
 (function _handleZerodhaOAuthReturn() {

@@ -4,12 +4,15 @@ arb/routes.py — Flask blueprint for Arb Monitor (/api/arb/*).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import time
 from datetime import datetime
 from functools import wraps
 from typing import Callable, Optional
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from config import ARB_CONFIG
 from database.arb_models import ArbConfigRepo, ArbGapRepo, ArbPairRepo
@@ -20,11 +23,48 @@ logger = logging.getLogger(__name__)
 arb_bp = Blueprint("arb", __name__, url_prefix="/api/arb")
 
 _live_engine = None
+_LIVE_STATE_PATH = str(ARB_CONFIG.get("live_state_path") or "data/arb_live_state.json")
 
 
 def set_live_engine(engine) -> None:
     global _live_engine
     _live_engine = engine
+
+
+def _read_live_state_file() -> Optional[dict]:
+    if not os.path.exists(_LIVE_STATE_PATH):
+        return None
+    try:
+        with open(_LIVE_STATE_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and "gaps" in data:
+            return data
+    except Exception:
+        logger.debug("arb live state read failed", exc_info=True)
+    return None
+
+
+def _live_payload() -> dict:
+    if _live_engine is not None:
+        try:
+            snap = _live_engine.live_snapshot()
+            snap.setdefault("source", "engine")
+            return snap
+        except AttributeError:
+            gaps = _live_engine.live_gaps()
+            return {"gaps": gaps, "count": len(gaps), "source": "engine"}
+    snap = _read_live_state_file()
+    if snap is not None:
+        snap.setdefault("source", "file")
+        snap.setdefault("count", len(snap.get("gaps") or []))
+        return snap
+    db = SQLServerConnection()
+    db.connect()
+    try:
+        rows = ArbGapRepo(db).open_gaps()
+        return {"gaps": rows, "count": len(rows), "source": "db"}
+    finally:
+        db.close()
 
 
 def _parse_dt(raw: Optional[str]) -> Optional[datetime]:
@@ -125,16 +165,44 @@ def list_gaps(db):
 
 @arb_bp.get("/live")
 def live_gaps():
-    if _live_engine is not None:
-        gaps = _live_engine.live_gaps()
-        return jsonify({"gaps": gaps, "count": len(gaps), "source": "engine"})
-    db = SQLServerConnection()
-    db.connect()
-    try:
-        rows = ArbGapRepo(db).open_gaps()
-        return jsonify({"gaps": rows, "count": len(rows), "source": "db"})
-    finally:
-        db.close()
+    return jsonify(_live_payload())
+
+
+@arb_bp.get("/live/snapshot")
+def live_gaps_snapshot():
+    """Current open gaps — same payload as GET /live (bootstrap for SSE clients)."""
+    return jsonify(_live_payload())
+
+
+@arb_bp.get("/live/stream")
+def live_gaps_stream():
+    """SSE stream of open gap snapshots; pushes when shared state file changes."""
+    poll_interval = float(ARB_CONFIG.get("live_stream_poll_sec", 0.5))
+
+    @stream_with_context
+    def _gen():
+        last_sig: Optional[str] = None
+        heartbeat_at = time.monotonic()
+        yield ": connected\n\n"
+        while True:
+            time.sleep(poll_interval)
+            try:
+                snap = _live_payload()
+                sig = json.dumps(snap, sort_keys=True, default=str)
+                if sig != last_sig:
+                    last_sig = sig
+                    yield f"data: {json.dumps(snap, default=str)}\n\n"
+            except Exception:
+                pass
+            if time.monotonic() - heartbeat_at >= 15:
+                heartbeat_at = time.monotonic()
+                yield ": ping\n\n"
+
+    return Response(
+        _gen(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def register_arb(app) -> None:

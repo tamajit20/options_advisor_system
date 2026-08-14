@@ -7,7 +7,7 @@
   const ARB_TABS = ['arb-live', 'arb-history', 'arb-pairs'];
   const $ = (sel, root = document) => root.querySelector(sel);
 
-  let _liveTimer = null;
+  let _liveSource = null;
 
   async function arbApi(path, opts = {}) {
     const res = await fetch('/api/arb' + path, {
@@ -78,17 +78,47 @@
     return `<div class="arb-table-wrap"><table class="arb-table">${head}<tbody>${body}</tbody></table></div>`;
   }
 
-  async function loadArbLive() {
+  function renderArbLive(data) {
     const el = $('#arb-live-container');
     const st = $('#arb-live-status');
     if (!el) return;
+    el.innerHTML = gapsTable(data.gaps || [], true);
+    if (st) {
+      const src = data.source || 'db';
+      const asOf = data.as_of ? ` · ${data.as_of}` : '';
+      st.textContent = `${data.count || 0} open · source: ${src}${asOf}`;
+    }
+    el.classList.remove('loading');
+  }
+
+  async function loadArbLive() {
+    const el = $('#arb-live-container');
+    if (!el) return;
     try {
-      const data = await arbApi('/live');
-      el.innerHTML = gapsTable(data.gaps || [], true);
-      if (st) st.textContent = `${data.count || 0} open · source: ${data.source || 'db'}`;
-      el.classList.remove('loading');
+      const data = await arbApi('/live/snapshot');
+      renderArbLive(data);
     } catch (e) {
       el.innerHTML = `<div class="arb-empty">Failed: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function ensureArbLiveStream() {
+    if (_liveSource && _liveSource.readyState !== 2 /* CLOSED */) return;
+    try {
+      _liveSource = new EventSource('/api/arb/live/stream');
+      _liveSource.onmessage = (ev) => {
+        try { renderArbLive(JSON.parse(ev.data)); } catch (_) { /* ignore */ }
+      };
+      _liveSource.onerror = () => {
+        if (_liveSource && _liveSource.readyState === 2) _liveSource = null;
+      };
+    } catch (_) { /* SSE unsupported — manual refresh only */ }
+  }
+
+  function stopArbLiveStream() {
+    if (_liveSource) {
+      _liveSource.close();
+      _liveSource = null;
     }
   }
 
@@ -161,14 +191,11 @@
 
   function startLivePoll() {
     stopLivePoll();
-    _liveTimer = setInterval(loadArbLive, 3000);
+    loadArbLive().then(() => ensureArbLiveStream());
   }
 
   function stopLivePoll() {
-    if (_liveTimer) {
-      clearInterval(_liveTimer);
-      _liveTimer = null;
-    }
+    stopArbLiveStream();
   }
 
   function onArbTabEnter(tab) {

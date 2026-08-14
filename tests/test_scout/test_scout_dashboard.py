@@ -56,7 +56,7 @@ def test_scout_history_pnl_css_rules():
 def test_scout_js_exports_flow_loader():
     js = (ROOT / "dashboard" / "static" / "scout.js").read_text(encoding="utf-8")
     assert "function filterExecutionItems" in js
-    assert "function renderExecutionFlow(items, marketOpen)" in js
+    assert "function renderExecutionFlow(items, marketOpen, wsHealth)" in js
     assert "Market is closed" in js
     assert "function pnlClass" in js
     assert "function winPctClass" in js
