@@ -1150,6 +1150,12 @@
       if (data.index_groups) _wlIndexGroups = data.index_groups;
       _wlNifty50 = data.nifty50 || [];
       _wlNiftyBank = data.nifty_bank || [];
+      const legend50 = document.getElementById('scout-wl-legend-nifty50');
+      if (legend50) {
+        const badge = (_wlIndexGroups.nifty50 && _wlIndexGroups.nifty50.badge)
+          || String(data.nifty50_count || _wlNifty50.length || 50);
+        legend50.textContent = badge;
+      }
       _wlTotal = data.total_equity_count || 0;
       _wlRefreshedAt = data.instrument_refreshed_at || '';
       _wlZerodhaOk = data.zerodha_ok !== false;

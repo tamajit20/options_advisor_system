@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Set
+from typing import List, Optional
 
-from config import NIFTY_50_SYMBOLS, SCOUT_CONFIG
+from config import SCOUT_CONFIG
 from scout.settings_schema import default_scout_settings, merge_scout_settings, validate_scout_settings
 
 logger = logging.getLogger(__name__)
@@ -147,7 +147,6 @@ def watchlist_set(db, symbols: List[str]) -> List[str]:
 
 
 def is_nifty50(symbol: str) -> bool:
-    return str(symbol).upper() in _NIFTY50_SET
+    from scout.index_constituents import get_nifty50_symbols
 
-
-_NIFTY50_SET: Set[str] = set(NIFTY_50_SYMBOLS)
+    return str(symbol).upper() in {s.upper() for s in get_nifty50_symbols()}

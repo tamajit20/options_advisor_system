@@ -8,10 +8,11 @@ import time
 from datetime import timedelta
 from typing import List, Optional, Tuple
 
-from config import NIFTY_50_SYMBOLS, NIFTY_BANK_SYMBOLS, ZERODHA_API_CONFIG
+from config import NIFTY_BANK_SYMBOLS, ZERODHA_API_CONFIG
 from providers.zerodha.facade import KiteFacade
-from providers.zerodha.instruments import InstrumentMaster
+from providers.zerodha.instruments import Instrument, InstrumentMaster
 from providers.zerodha.session import is_token_valid, load_session
+from scout.index_constituents import get_nifty50_symbols
 from scout.index_groups import index_tags, sort_watchlist_rows
 from utils import now_ist
 
@@ -21,7 +22,9 @@ _lock = threading.Lock()
 _master: Optional[InstrumentMaster] = None
 _master_token: Optional[str] = None
 
-_NIFTY50_SET = frozenset(s.upper() for s in NIFTY_50_SYMBOLS)
+
+def _nifty50_set() -> frozenset:
+    return frozenset(s.upper() for s in get_nifty50_symbols())
 
 
 def _equity_display_name(inst: Instrument) -> str:
@@ -42,7 +45,7 @@ def _stock_row(inst: Instrument) -> dict:
     return {
         "symbol": sym,
         "name": _equity_display_name(inst),
-        "is_nifty50": sym in _NIFTY50_SET,
+        "is_nifty50": sym in _nifty50_set(),
         "index_tags": index_tags(inst.tradingsymbol),
     }
 
@@ -115,8 +118,8 @@ def nse_equity_universe(
     return stocks, total, refreshed
 
 
-def nifty50_symbols() -> List[str]:
-    return list(NIFTY_50_SYMBOLS)
+def nifty50_symbols(*, force_refresh: bool = False) -> List[str]:
+    return get_nifty50_symbols(force_refresh=force_refresh)
 
 
 def equity_rows_for_symbols(symbols: List[str]) -> List[dict]:

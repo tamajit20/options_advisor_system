@@ -33,7 +33,7 @@ from scout.config_loader import (
     watchlist_set,
 )
 from scout.settings_schema import format_square_off_time, scout_trading_enabled, suggested_quantity
-from scout.index_groups import INDEX_GROUPS, index_tags, nifty_bank_symbols
+from scout.index_groups import index_groups_meta, index_tags, nifty_bank_symbols
 from scout.instruments import (
     ScoutInstrumentError,
     equity_rows_for_symbols,
@@ -304,7 +304,7 @@ def api_scout_watchlist_get(db: SQLServerConnection):
 
     selected = set(get_watchlist(db))
     default = set(default_watchlist())
-    nifty50 = nifty50_symbols()
+    nifty50 = nifty50_symbols(force_refresh=force)
     nifty_bank = nifty_bank_symbols()
 
     zerodha_ok = True
@@ -365,7 +365,7 @@ def api_scout_watchlist_get(db: SQLServerConnection):
         "nifty50_count": len(nifty50),
         "nifty_bank": nifty_bank,
         "nifty_bank_count": len(nifty_bank),
-        "index_groups": INDEX_GROUPS,
+        "index_groups": index_groups_meta(),
         "search": search,
         "offset": offset,
         "limit": limit,
