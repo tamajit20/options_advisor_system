@@ -42,12 +42,30 @@ from utils import now_ist, today_ist
 logger = logging.getLogger(__name__)
 
 
+def _fills_from_suggested(legs: Sequence[dict]) -> list[TradeLegFill]:
+    """Build executed fills from each leg's suggested_price (midpoint)."""
+    out: list[TradeLegFill] = []
+    for leg in legs:
+        price = leg.get("suggested_price")
+        if price is None:
+            continue
+        out.append(TradeLegFill(
+            leg_order=int(leg["leg_order"]),
+            executed=True,
+            fill_price=float(price),
+            fill_time=now_ist(),
+        ))
+    return out
+
+
 def mark_executed(
     db: SQLServerConnection,
     suggestion_id: str,
     fills: Sequence[TradeLegFill],
     spot_at_execution: Optional[float] = None,
     actual_stop_loss_level: Optional[float] = None,
+    *,
+    execute_at_suggested: bool = False,
 ) -> Optional[str]:
     sug = SuggestionRepo(db)
     trd = TradeRepo(db)
@@ -64,7 +82,7 @@ def mark_executed(
     )
 
     # User clicked Ignore (no fills) — dismiss without execution gates.
-    if not has_executed_fills:
+    if not has_executed_fills and not execute_at_suggested:
         status = (suggestion.get("status") or "").upper()
         if status != "PENDING":
             raise ValueError(f"Cannot ignore suggestion with status {status}")
@@ -73,27 +91,62 @@ def mark_executed(
         logger.info("Suggestion %s marked IGNORED by user", suggestion_id)
         return None
 
-    # Read circuit-breaker flag (best-effort — fail-open if the table is
-    # not migrated yet so existing tests / fresh installs still work).
-    cb_active = False
-    try:
-        cb_active = RuntimeFlagsRepo(db).get_bool(
-            FLAG_CIRCUIT_BREAKER_ACTIVE, default=False,
-        )
-    except Exception:
-        logger.debug("trade_executor: circuit_breaker flag read failed",
-                     exc_info=True)
+    status = (suggestion.get("status") or "").upper()
+    if status != "PENDING":
+        raise ValueError(f"Cannot execute suggestion with status {status}")
 
-    # Centralized pre-execution gate. ValueError lets the dashboard
-    # route surface a 400 with the exact veto reasons.
-    gate = validate_execution(
-        suggestion, legs, circuit_breaker_active=cb_active,
-    )
-    if not gate.ok:
-        logger.warning(
-            "Execution blocked for %s: %s", suggestion_id, gate.reason()
+    if execute_at_suggested:
+        cb_active = False
+        try:
+            cb_active = RuntimeFlagsRepo(db).get_bool(
+                FLAG_CIRCUIT_BREAKER_ACTIVE, default=False,
+            )
+        except Exception:
+            logger.debug("trade_executor: circuit_breaker flag read failed",
+                         exc_info=True)
+        if cb_active:
+            raise ValueError(
+                "Execution blocked: daily P&L circuit breaker is active"
+            )
+        fills = _fills_from_suggested(legs)
+        if not fills:
+            raise ValueError("No suggested prices on legs — cannot record at suggested values")
+        if len(fills) != len(legs):
+            raise ValueError("Every leg must have a suggested_price to record at suggested values")
+        if spot_at_execution is None and suggestion.get("spot_at_generation") is not None:
+            spot_at_execution = float(suggestion["spot_at_generation"])
+        if actual_stop_loss_level is None:
+            actual_stop_loss_level = suggestion.get("stop_loss_level")
+        gate_passed = False
+    else:
+        if not has_executed_fills:
+            sug.update_status(suggestion_id, "IGNORED")
+            db.commit()
+            logger.info("Suggestion %s marked IGNORED — no fills", suggestion_id)
+            return None
+
+        # Read circuit-breaker flag (best-effort — fail-open if the table is
+        # not migrated yet so existing tests / fresh installs still work).
+        cb_active = False
+        try:
+            cb_active = RuntimeFlagsRepo(db).get_bool(
+                FLAG_CIRCUIT_BREAKER_ACTIVE, default=False,
+            )
+        except Exception:
+            logger.debug("trade_executor: circuit_breaker flag read failed",
+                         exc_info=True)
+
+        # Centralized pre-execution gate. ValueError lets the dashboard
+        # route surface a 400 with the exact veto reasons.
+        gate = validate_execution(
+            suggestion, legs, circuit_breaker_active=cb_active,
         )
-        raise ValueError(f"Execution blocked: {gate.reason()}")
+        if not gate.ok:
+            logger.warning(
+                "Execution blocked for %s: %s", suggestion_id, gate.reason()
+            )
+            raise ValueError(f"Execution blocked: {gate.reason()}")
+        gate_passed = True
 
     fills_by_order = {f.leg_order: f for f in fills}
 
@@ -200,7 +253,7 @@ def mark_executed(
             trade_id,
             execution_data_source=suggestion.get("data_source"),
             execution_provider=suggestion.get("provider"),
-            gate_passed=True,
+            gate_passed=gate_passed,
             time_from_suggestion_sec=time_from,
         )
     except Exception:

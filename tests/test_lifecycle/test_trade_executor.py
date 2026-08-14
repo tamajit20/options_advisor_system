@@ -246,6 +246,57 @@ class TestCircuitBreakerBlocks:
                  for i in (1, 2, 3, 4)]
         with pytest.raises(ValueError, match="Execution blocked"):
             te.mark_executed(mock_db, "SUG-X", fills)
+        with pytest.raises(ValueError, match="Execution blocked"):
+            te.mark_executed(
+                mock_db, "SUG-X", [], execute_at_suggested=True,
+            )
+
+    def test_execute_at_suggested_skips_stale_gate(
+        self, mock_db, mocker, fake_legs,
+    ):
+        stale_sug = {
+            "trade_name": "N-IC-1",
+            "max_profit": 6000.0, "max_loss": 14000.0,
+            "upper_breakeven": 23300.0, "lower_breakeven": 22700.0,
+            "stop_loss_level": 23250.0,
+            "status": "PENDING",
+            "spot_at_generation": 23000.0,
+            "validator_status": None,
+            "data_as_of": datetime(2026, 5, 4, 8, 0),
+            "entry_date": None,
+            "data_source": "LIVE",
+            "trigger_type": "LIVE_RUN",
+            "generated_on": datetime(2026, 5, 4, 8, 0),
+        }
+        legs = [
+            {**leg, "suggested_price": 50.0 + i}
+            for i, leg in enumerate(fake_legs, start=0)
+        ]
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=stale_sug)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=legs)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.update_status")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.next_trade_id",
+                     return_value="TRD-STALE")
+        ins = mocker.patch("lifecycle.trade_executor.TradeRepo.insert")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.insert_legs")
+        mocker.patch(
+            "lifecycle.trade_executor.RuntimeFlagsRepo.get_bool",
+            return_value=False,
+        )
+        prov = mocker.patch(
+            "lifecycle.trade_executor.TradeRepo.write_execution_provenance",
+        )
+        tid = te.mark_executed(
+            mock_db, "SUG-X", [], execute_at_suggested=True,
+        )
+        assert tid == "TRD-STALE"
+        call_arg = ins.call_args[0][0]
+        assert call_arg["position_type"] == "FULL_VALID"
+        assert call_arg["spot_at_execution"] == 23000.0
+        prov.assert_called_once()
+        assert prov.call_args.kwargs.get("gate_passed") is False
 
 
 class TestActualNetCreditComputation:

@@ -980,7 +980,7 @@ async function loadSuggestion() {
       parts.push(renderSuggestionList(actionable));
     }
     if (blocked.length) {
-      parts.push(`<div class="suggestion-blocked-intro muted">These suggestions were generated but cannot be executed yet — see the banner on each card.</div>`);
+      parts.push(`<div class="suggestion-blocked-intro muted">These suggestions failed live execution checks (stale data, strike distance, etc.) — use <strong>Mark Executed at suggested prices</strong> on each card to record the trade as originally suggested.</div>`);
       parts.push(renderSuggestionList(blocked));
     }
     if (sitOut.length) {
@@ -2861,11 +2861,27 @@ function legRoleNote(strategy, leg) {
 
 // Build the per-card suggestion render output.
 // readOnly=true: static view used inside trade cards (no inputs, no action buttons)
+function suggestionGateOk(s) {
+  return !s.execution_gate || !!s.execution_gate.ok;
+}
+
+function suggestionCircuitBlocked(s) {
+  const vetoes = s.execution_gate?.vetoes || [];
+  return vetoes.some(v => String(v).toLowerCase().includes('circuit breaker'));
+}
+
 function suggestionCanExecute(s) {
   const status = (s.status || '').toUpperCase();
   if (status !== 'PENDING') return false;
-  if (s.execution_gate) return !!s.execution_gate.ok;
-  return !s.is_stale;
+  if (suggestionCircuitBlocked(s)) return false;
+  return suggestionGateOk(s);
+}
+
+function suggestionCanExecuteAtSuggested(s) {
+  const status = (s.status || '').toUpperCase();
+  if (status !== 'PENDING') return false;
+  if (suggestionCircuitBlocked(s)) return false;
+  return !suggestionGateOk(s);
 }
 
 function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
@@ -2889,19 +2905,13 @@ function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
   if (!gate || gate.ok) return '';
   const label = gate.label || 'Cannot execute';
   const detail = (gate.reason && gate.reason !== 'OK') ? gate.reason : '';
-  const actions = showBlockedActions ? `
-    <div class="suggestion-gate-actions btn-row">
-      <button type="button" class="btn btn-sm btn-accent btn-mark-exec" disabled title="Execution blocked — see notice above">Mark Executed</button>
-      <button type="button" class="btn btn-sm btn-ghost btn-ignore">Ignore / dismiss</button>
-    </div>` : '';
   return `<div class="suggestion-gate-banner suggestion-gate-blocked" role="alert">
     <div class="suggestion-gate-head">
       <span class="tag tag-warn">${escapeHtml(label.toUpperCase())}</span>
-      <strong>Execution blocked</strong>
+      <strong>Live checks failed</strong>
     </div>
     ${detail ? `<p class="suggestion-gate-detail">${escapeHtml(detail)}</p>` : ''}
-    <p class="suggestion-gate-hint muted">Run <strong>Live Suggestion Engine</strong> from the Jobs tab for a fresh PENDING suggestion, or dismiss this card.</p>
-    ${actions}
+    <p class="suggestion-gate-hint muted">You can still <strong>Mark Executed at suggested prices</strong> below to record the trade exactly as suggested, or dismiss this card.</p>
   </div>`;
 }
 
@@ -2996,20 +3006,22 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     </div>`;
   }).join('');
   const canExecute = !readOnly && suggestionCanExecute(s);
+  const canExecuteAtSuggested = !readOnly && suggestionCanExecuteAtSuggested(s);
+  const showExecActions = canExecute || canExecuteAtSuggested;
   const gateLabel = s.execution_gate?.label
     || (s.is_stale ? 'Stale' : null)
     || (sugStatus === 'IGNORED' ? 'Retired' : null);
   const gateBanner = (readOnly && sugStatus !== 'IGNORED')
     ? ''
     : renderExecutionGateBanner(s, {
-      showBlockedActions: !readOnly && sugStatus === 'PENDING' && !canExecute,
+      showBlockedActions: !readOnly && canExecuteAtSuggested,
     });
   const summaryHtml = `
     <div class="card-head collapsible-card-head">
       <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
-        ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn" title="Cannot mark executed">${escapeHtml(gateLabel)}</span>` : ''}
+        ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn" title="Live checks failed — use Mark Executed at suggested prices">${escapeHtml(gateLabel)}</span>` : ''}
         ${sugStatus === 'IGNORED' ? '<span class="tag tag-warn">Retired</span>' : ''}
         ${s.is_stale && sugStatus === 'PENDING' && !gateLabel ? '<span class="tag tag-warn">Stale</span>' : ''}
         ${_qualityBadge(s.entry_quality_score, '', {
@@ -3084,7 +3096,8 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     ${execOrderBanner(s.legs, s.strategy, 'entry')}
     <div class="legs-grid">${legsHtml}</div>
     ${creditBreakdownHtml(s.legs, 'suggest')}
-    ${readOnly ? '' : (canExecute ? `
+    ${readOnly ? '' : (showExecActions ? `
+    ${canExecute ? `
     <div class="exec-spot-bar">
       <div class="sl-monitor-label" style="margin-bottom:6px">Nifty spot at execution</div>
       <div class="exec-spot-row">
@@ -3105,9 +3118,13 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           <span class="muted exec-adj-note" style="font-size:.72rem">${escapeHtml(slExitPlanText(s.strategy, econ.ml))}</span>
         </div>`}
       </div>
-    </div>
+    </div>` : `
+    <p class="muted exec-suggested-note" style="margin-top:10px;font-size:.85rem">
+      Records each leg at the <strong>suggested price</strong> shown above (live freshness / strike checks skipped).
+      Spot at generation: <strong>₹${fmt(s.spot_at_generation)}</strong>.
+    </p>`}
     <div class="btn-row" style="margin-top:12px">
-      <button class="btn btn-accent btn-mark-exec">Mark Executed</button>
+      <button class="btn btn-accent btn-mark-exec"${canExecuteAtSuggested ? ' data-at-suggested="1"' : ''}>${canExecuteAtSuggested ? 'Mark Executed at suggested prices' : 'Mark Executed'}</button>
       <button class="btn btn-ghost btn-ignore">Ignore</button>
     </div>` : '')}`;
 
@@ -3141,7 +3158,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     data-short-put-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='PE')||{}).strike||''}"`;
   return wrapCollapsibleCard(summaryHtml, bodyHtml, {
     open: expanded && !isRetired,
-    className: [canExecute ? '' : 'suggestion-not-executable', isRetired ? 'suggestion-retired' : ''].filter(Boolean).join(' '),
+    className: [showExecActions ? '' : 'suggestion-not-executable', isRetired ? 'suggestion-retired' : ''].filter(Boolean).join(' '),
     attrs: cardAttrs.trim(),
   });
 }
@@ -3319,7 +3336,9 @@ function bindSuggestionActions() {
     if (btn.disabled) return;
     const card = btn.closest('.card');
     const sid  = card.dataset.sugId;
+    const atSuggested = btn.dataset.atSuggested === '1';
 
+    if (!atSuggested) {
     // ── Lot-count parity validation ──────────────────────────────────────────
     const execLots = $$('.leg-row', card)
       .filter(row => row.querySelector('.leg-exec')?.checked)
@@ -3393,6 +3412,45 @@ function bindSuggestionActions() {
         }),
       });
       toast(r.trade_id ? `Trade created: ${r.trade_id}` : 'Suggestion ignored', 'info');
+      loadSuggestion(); loadTrades();
+    } catch (err) { toast(err.message, 'err'); }
+    return;
+    }
+
+    // ── At-suggested path (stale / strike checks failed) ─────────────────────
+    if (!btn.dataset.confirmed) {
+      btn.dataset.confirmed = '1';
+      btn.textContent = 'Confirm at suggested prices?';
+      btn.classList.add('btn-confirm-pending');
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn btn-ghost btn-confirm-cancel';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.addEventListener('click', () => {
+        btn.dataset.confirmed = '';
+        btn.textContent = 'Mark Executed at suggested prices';
+        btn.classList.remove('btn-confirm-pending');
+        cancelBtn.remove();
+      });
+      btn.insertAdjacentElement('afterend', cancelBtn);
+      return;
+    }
+    btn.dataset.confirmed = '';
+    btn.textContent = 'Mark Executed at suggested prices';
+    btn.classList.remove('btn-confirm-pending');
+    btn.nextElementSibling?.classList.contains('btn-confirm-cancel') && btn.nextElementSibling.remove();
+
+    const sugSpot = parseFloat(card.dataset.spotAtGen) || null;
+    try {
+      const r = await API(`/api/suggestion/${sid}/mark-executed`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          execute_at_suggested: true,
+          fills: [],
+          spot_at_execution: sugSpot,
+        }),
+      });
+      toast(r.trade_id ? `Trade created at suggested prices: ${r.trade_id}` : 'Suggestion ignored', 'info');
       loadSuggestion(); loadTrades();
     } catch (err) { toast(err.message, 'err'); }
   }));

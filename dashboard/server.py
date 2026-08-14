@@ -865,11 +865,13 @@ def create_app() -> Flask:
             ))
         spot_at_exec = payload.get("spot_at_execution")
         adj_sl = payload.get("actual_stop_loss_level")
+        execute_at_suggested = bool(payload.get("execute_at_suggested"))
         try:
             trade_id = mark_executed(
                 db, sid, fills,
                 spot_at_execution=float(spot_at_exec) if spot_at_exec is not None else None,
                 actual_stop_loss_level=float(adj_sl) if adj_sl is not None else None,
+                execute_at_suggested=execute_at_suggested,
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400

@@ -582,6 +582,17 @@ class TestApiMarkExecuted:
         assert resp.status_code == 200
         assert resp.get_json()["trade_id"] == "TRD-001"
 
+    def test_execute_at_suggested_flag_forwarded(self, client, mocker):
+        mark = mocker.patch("dashboard.server.mark_executed", return_value="TRD-002")
+        resp = client.post(
+            "/api/suggestion/SUG-2/mark-executed",
+            data=json.dumps({"execute_at_suggested": True, "fills": []}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        mark.assert_called_once()
+        assert mark.call_args.kwargs.get("execute_at_suggested") is True
+
 
 class TestApiSystemStatus:
     def test_returns_status_keys(self, client, mocker):
