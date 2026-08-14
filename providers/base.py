@@ -71,6 +71,9 @@ class LiveQuote:
     last_price: float
     bid: Optional[float] = None
     ask: Optional[float] = None
+    bid_qty: Optional[int] = None
+    ask_qty: Optional[int] = None
+    exchange: Optional[str] = None
     volume: Optional[int] = None
     open_interest: Optional[int] = None
     timestamp: Optional[datetime] = None  # exchange-provided tick time

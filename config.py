@@ -207,6 +207,21 @@ NIFTY_BANK_SYMBOLS: tuple[str, ...] = (
     "PNB", "SBIN",
 )
 
+# ---------------------------------------------------------------------------
+# Arb Monitor (separate module — arb_* tables, /api/arb/*)
+# ---------------------------------------------------------------------------
+ARB_CONFIG: dict = {
+    "enabled": True,
+    # Universe for pair building: nifty50_dual | all_matched
+    "universe": "nifty50_dual",
+    # Max age (seconds) for pairing NSE+BSE legs on the same tick cycle.
+    "tick_staleness_sec": 3,
+    # Close open episode when either leg is older than this (seconds).
+    "leg_stale_close_sec": 5,
+    # Background DB writer flush interval (seconds).
+    "db_flush_interval_sec": 1,
+}
+
 SCOUT_CONFIG: dict = {
     "enabled": True,
     # Default watchlist until user saves via UI (subset of NIFTY_50_SYMBOLS)

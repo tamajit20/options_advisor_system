@@ -230,6 +230,11 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
     from providers.ws_watchdog import WSWatchdog
     from scout.push_engine import ScoutPushEngine
     from scout.subscription import make_scout_equity_loader
+    from arb.gap_engine import ArbGapEngine
+    from arb.subscription import make_arb_pair_loader
+    from arb.instruments import refresh_pairs_to_db
+    from config import ARB_CONFIG
+    from database.arb_models import ArbPairRepo
 
     cache = TTLCache(default_ttl_seconds=PROVIDERS_CONFIG.get("live_cache_ttl_seconds", 5))
 
@@ -247,6 +252,22 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
     db.connect()
 
     flags_repo = RuntimeFlagsRepo(db)
+
+    if ARB_CONFIG.get("enabled", True) and ArbPairRepo(db).count_active() == 0:
+        try:
+            refresh_pairs_to_db(
+                db, master,
+                universe=ARB_CONFIG.get("universe", "nifty50_dual"),
+            )
+            db.commit()
+            logger.info("Arb pairs auto-refreshed on WS startup")
+        except Exception:
+            logger.exception("Arb pair auto-refresh failed (non-fatal)")
+
+    isin_by_symbol = {
+        str(r["symbol"]).upper(): r.get("isin")
+        for r in ArbPairRepo(db).list_active()
+    }
 
     sub_manager = SubscriptionManager(
         runner=runner,
@@ -268,6 +289,7 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
         ),
         kill_switch_fn=lambda: flags_repo.get_bool(FLAG_KILL_SWITCH, default=False),
         equity_loader=make_scout_equity_loader(db),
+        arb_pair_loader=make_arb_pair_loader(db),
     )
 
     def _expiries_for(sym: str):
@@ -285,6 +307,12 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
         db=db,
         spot_lookup=lambda s: index_spots.get(s) or scout_spots.get(s),
         event_bus=bus,
+    )
+
+    arb_gap = ArbGapEngine(
+        db=db,
+        event_bus=bus,
+        isin_lookup=lambda s: isin_by_symbol.get(str(s).upper()),
     )
 
     def _prime_legs(keys):
@@ -386,6 +414,7 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
     chain_aggregator.start()
     live_risk_monitor.start()
     scout_push.start()
+    arb_gap.start()
 
     import threading as _threading
     _threading.Thread(target=_watch_session, name="zerodha-session-watch", daemon=True).start()
@@ -400,6 +429,7 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
         exit_reason["reason"] = "process_restart"
     finally:
         live_risk_monitor.stop()
+        arb_gap.stop()
         scout_push.stop()
         chain_aggregator.stop()
         ws_watchdog.stop()

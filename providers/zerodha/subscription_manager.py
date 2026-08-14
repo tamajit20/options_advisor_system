@@ -87,6 +87,11 @@ class IndexSpec:
 IndexLoader = Callable[[], Iterable[IndexSpec]]
 EquityLoader = Callable[[], Iterable[str]]
 
+try:
+    from arb.subscription import ArbPairLoader
+except ImportError:  # pragma: no cover
+    ArbPairLoader = Callable[[], Iterable[object]]  # type: ignore[misc,assignment]
+
 
 # Default indexes streamed for opportunity regeneration. Tied to
 # `STRATEGY_CONFIG["underlyings"]` plus INDIA VIX.
@@ -132,6 +137,9 @@ class SubscriptionManager:
     equity_loader:
         Zero-arg callable returning NSE equity tradingsymbols (e.g. scout
         watchlist). Resolved to EQ tokens and merged into the WS set.
+    arb_pair_loader:
+        Zero-arg callable returning ``ArbSubscriptionPair`` rows (NSE+BSE
+        tokens for dual-listed symbols). Tagged ``arb_nse`` / ``arb_bse``.
     interval_seconds:
         Poll cadence (default 60s).
     """
@@ -143,6 +151,7 @@ class SubscriptionManager:
         leg_loader: LegLoader,
         index_loader: Optional[IndexLoader] = None,
         equity_loader: Optional[EquityLoader] = None,
+        arb_pair_loader: Optional[ArbPairLoader] = None,
         *,
         interval_seconds: float = 60.0,
         kill_switch_fn: Optional[Callable[[], bool]] = None,
@@ -156,6 +165,7 @@ class SubscriptionManager:
             index_loader if index_loader is not None else (lambda: DEFAULT_INDEX_SPECS)
         )
         self._equity_loader: EquityLoader = equity_loader or (lambda: [])
+        self._arb_pair_loader: ArbPairLoader = arb_pair_loader or (lambda: [])
         self._interval = float(interval_seconds)
         # `kill_switch_fn()` returns True when live data is globally disabled.
         # When True, we apply an empty token set every cycle. The runner stays
@@ -223,6 +233,7 @@ class SubscriptionManager:
         legs = list(self._leg_loader())
         indexes = list(self._index_loader())
         equities = list(self._equity_loader())
+        arb_pairs = list(self._arb_pair_loader())
 
         tokens = set()
         unresolved = 0
@@ -287,7 +298,24 @@ class SubscriptionManager:
             tokens.add(inst.instrument_token)
             self._runner.set_token_meta(
                 inst.instrument_token,
-                TokenMeta(symbol=sym, is_index=False, product="scout_equity"),
+                TokenMeta(symbol=sym, is_index=False, product="scout_equity", exchange="NSE"),
+            )
+
+        for pair in arb_pairs:
+            sym = str(getattr(pair, "symbol", "") or "").upper()
+            nse_tok = int(getattr(pair, "nse_token", 0) or 0)
+            bse_tok = int(getattr(pair, "bse_token", 0) or 0)
+            if not sym or not nse_tok or not bse_tok:
+                continue
+            tokens.add(nse_tok)
+            tokens.add(bse_tok)
+            self._runner.set_token_meta(
+                nse_tok,
+                TokenMeta(symbol=sym, is_index=False, product="arb_nse", exchange="NSE"),
+            )
+            self._runner.set_token_meta(
+                bse_tok,
+                TokenMeta(symbol=sym, is_index=False, product="arb_bse", exchange="BSE"),
             )
 
         current = self._runner.desired_tokens()

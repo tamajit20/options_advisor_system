@@ -55,6 +55,7 @@ class Instrument:
     instrument_type: str   # "EQ", "CE", "PE", "FUT", ...
     segment: str           # "NSE", "NFO", "INDICES", ...
     exchange: str          # "NSE", "NFO", "BSE", ...
+    isin: Optional[str] = None
 
     @classmethod
     def from_row(cls, row: dict) -> "Instrument":
@@ -66,6 +67,8 @@ class Instrument:
                 exp = None
         elif not isinstance(exp, date):
             exp = None
+        isin_raw = row.get("isin")
+        isin = str(isin_raw).strip().upper() if isin_raw else None
         return cls(
             instrument_token=int(row["instrument_token"]),
             exchange_token=int(row.get("exchange_token", 0)),
@@ -78,6 +81,7 @@ class Instrument:
             instrument_type=str(row.get("instrument_type", "")),
             segment=str(row.get("segment", "")),
             exchange=str(row.get("exchange", "")),
+            isin=isin or None,
         )
 
 
@@ -167,10 +171,17 @@ class InstrumentMaster:
 
     def list_nse_equity(self) -> List[Instrument]:
         """All NSE cash equities (EQ) — refreshed from Kite instrument master."""
+        return self._list_equity("NSE")
+
+    def list_bse_equity(self) -> List[Instrument]:
+        """All BSE cash equities (EQ)."""
+        return self._list_equity("BSE")
+
+    def _list_equity(self, exchange: str) -> List[Instrument]:
         with self._lock:
             out = [
                 inst for inst in self._by_symbol.values()
-                if inst.exchange == "NSE" and inst.instrument_type == "EQ"
+                if inst.exchange == exchange and inst.instrument_type == "EQ"
             ]
         out.sort(key=lambda i: i.tradingsymbol)
         return out

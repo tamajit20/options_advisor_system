@@ -37,9 +37,11 @@ class TestCreateAllTables:
         cur = MagicMock()
         db.execute = MagicMock(return_value=cur)
         scout_create = mocker.patch("database.scout_schema.create_scout_tables")
+        arb_create = mocker.patch("database.arb_schema.create_arb_tables")
         sc.create_all_tables(db)
         assert db.execute.call_count == len(sc._TABLE_DDL)
         scout_create.assert_called_once_with(db)
+        arb_create.assert_called_once_with(db)
 
 
 class TestCreateDatabaseIfMissing:

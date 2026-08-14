@@ -7,6 +7,7 @@
 <title>Trading Dashboard</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ cache_bust }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='scout.css') }}?v={{ cache_bust }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='arb.css') }}?v={{ cache_bust }}">
 <link rel="icon" href="data:,">
 <style>
   /* Inject theme tokens from server */
@@ -104,6 +105,20 @@
         </button>
         <button class="nav-item" data-tab="scout-config">
           <span class="nav-icon">⚙️</span><span class="nav-label">Scout Config</span>
+        </button>
+      </div>
+    </details>
+    <details class="nav-section nav-section--arb" id="nav-section-arb" open>
+      <summary class="nav-section-summary">Arb Monitor</summary>
+      <div class="nav-section-items">
+        <button class="nav-item" data-tab="arb-live">
+          <span class="nav-icon">⚡</span><span class="nav-label">Live Gaps</span>
+        </button>
+        <button class="nav-item" data-tab="arb-history">
+          <span class="nav-icon">📈</span><span class="nav-label">Gap History</span>
+        </button>
+        <button class="nav-item" data-tab="arb-pairs">
+          <span class="nav-icon">🔗</span><span class="nav-label">Pairs</span>
         </button>
       </div>
     </details>
@@ -720,6 +735,39 @@
       </form>
     </article>
 
+    <article class="panel" id="panel-arb-live" aria-hidden="true">
+      <h2 class="panel-title">Arb Monitor — Live Gaps</h2>
+      <p class="muted arb-intro">Open NSE↔BSE gap episodes updating on each paired tick. Filter history on the Gap History tab.</p>
+      <div class="arb-toolbar">
+        <button type="button" class="btn btn-ghost" id="arb-live-refresh">Refresh</button>
+        <span id="arb-live-status" class="muted"></span>
+      </div>
+      <div id="arb-live-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-arb-history" aria-hidden="true">
+      <h2 class="panel-title">Arb Monitor — Gap History</h2>
+      <div class="arb-filters">
+        <label>From <input type="date" id="arb-hist-from"></label>
+        <label>To <input type="date" id="arb-hist-to"></label>
+        <label>Symbol <input type="text" id="arb-hist-symbol" placeholder="RELIANCE"></label>
+        <label>Min gap % <input type="number" id="arb-hist-min-gap" step="0.01" min="0" placeholder="0"></label>
+        <label>Min duration (s) <input type="number" id="arb-hist-min-dur" step="1" min="0" placeholder="0"></label>
+        <button type="button" class="btn btn-accent" id="arb-hist-apply">Apply</button>
+      </div>
+      <div id="arb-history-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-arb-pairs" aria-hidden="true">
+      <h2 class="panel-title">Arb Monitor — NSE↔BSE Pairs</h2>
+      <p class="muted arb-intro">Dual-listed mapping built from Kite instrument master (ISIN match, else tradingsymbol).</p>
+      <div class="arb-toolbar">
+        <button type="button" class="btn btn-accent" id="arb-pairs-refresh">Rebuild from master</button>
+        <span id="arb-pairs-status" class="muted"></span>
+      </div>
+      <div id="arb-pairs-container" class="loading">Loading…</div>
+    </article>
+
     <article class="panel" id="panel-config" aria-hidden="true">
       <h2 class="panel-title">Configuration</h2>
       <p class="muted">Runtime overrides — these take precedence over <code>config.py</code> defaults. Zerodha / WS connection is on the <strong>WS Monitor</strong> tab.</p>
@@ -749,5 +797,6 @@
 
 <script src="{{ url_for('static', filename='dashboard.js') }}?v={{ cache_bust }}"></script>
 <script src="{{ url_for('static', filename='scout.js') }}?v={{ cache_bust }}"></script>
+<script src="{{ url_for('static', filename='arb.js') }}?v={{ cache_bust }}"></script>
 </body>
 </html>

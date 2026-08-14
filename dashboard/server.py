@@ -2392,7 +2392,9 @@ def create_app() -> Flask:
                                  "X-Accel-Buffering": "no"})
 
     from scout.routes import register_scout
+    from arb.routes import register_arb
     register_scout(app)
+    register_arb(app)
 
     import threading as _threading
 

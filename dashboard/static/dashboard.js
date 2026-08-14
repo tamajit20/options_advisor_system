@@ -653,7 +653,8 @@ function switchTab(name) {
     const tab = b.dataset.tab;
     const isBottomNav = b.classList.contains('bnav-item');
     const active = tab === name
-      || (isBottomNav && tab === 'scout-signals' && name.startsWith('scout-'));
+      || (isBottomNav && tab === 'scout-signals' && name.startsWith('scout-'))
+      || (isBottomNav && tab === 'arb-live' && name.startsWith('arb-'));
     b.classList.toggle('active', active);
   });
   if (name === 'suggestion')    loadSuggestion();
@@ -667,6 +668,9 @@ function switchTab(name) {
   if (TAB_LOADERS[name])        TAB_LOADERS[name]();
   if (name.startsWith('scout-')) {
     const sec = document.getElementById('nav-section-scout');
+    if (sec) sec.open = true;
+  } else if (name.startsWith('arb-')) {
+    const sec = document.getElementById('nav-section-arb');
     if (sec) sec.open = true;
   } else if (TABS.includes(name)) {
     const sec = document.getElementById('nav-section-options');

@@ -1,0 +1,205 @@
+/**
+ * Arb Monitor — live gaps, history, pair mapping.
+ */
+(function () {
+  'use strict';
+
+  const ARB_TABS = ['arb-live', 'arb-history', 'arb-pairs'];
+  const $ = (sel, root = document) => root.querySelector(sel);
+
+  let _liveTimer = null;
+
+  async function arbApi(path, opts = {}) {
+    const res = await fetch('/api/arb' + path, {
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      ...opts,
+    });
+    const text = await res.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch (_) {
+      if (!res.ok) throw new Error(res.statusText || 'Request failed');
+    }
+    if (!res.ok) throw new Error(data.error || res.statusText || 'Request failed');
+    return data;
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function fmtPx(v) {
+    if (v == null || isNaN(v)) return '—';
+    return '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  }
+
+  function fmtPct(v) {
+    if (v == null || isNaN(v)) return '—';
+    return Number(v).toFixed(2) + '%';
+  }
+
+  function dirClass(d) {
+    if (d === 'NSE_HIGH') return 'arb-dir-nse';
+    if (d === 'BSE_HIGH') return 'arb-dir-bse';
+    return '';
+  }
+
+  function gapRow(g, live) {
+    const dur = g.duration_sec != null ? g.duration_sec + 's' : (live ? '…' : '—');
+    const gapCls = Math.abs(Number(g.gap_pct || 0)) >= 0.5 ? 'arb-gap-high' : '';
+    return `<tr>
+      <td><strong>${escapeHtml(g.symbol)}</strong></td>
+      <td>${escapeHtml(g.started_at || '')}</td>
+      <td>${live ? '—' : escapeHtml(g.ended_at || '')}</td>
+      <td>${dur}</td>
+      <td>${fmtPx(g.nse_ltp)}</td>
+      <td>${fmtPx(g.bse_ltp)}</td>
+      <td class="${gapCls}">${fmtPct(g.gap_pct)}</td>
+      <td class="${dirClass(g.direction)}">${escapeHtml(g.direction || '')}</td>
+      <td>${fmtPct(g.max_gap_pct)}</td>
+      <td>${g.sample_count ?? '—'}</td>
+      <td>${escapeHtml(g.isin || '')}</td>
+    </tr>`;
+  }
+
+  function gapsTable(gaps, live) {
+    if (!gaps || !gaps.length) {
+      return '<div class="arb-empty">No gap episodes' + (live ? ' open right now' : ' for these filters') + '.</div>';
+    }
+    const head = `<thead><tr>
+      <th>Symbol</th><th>Started</th><th>Ended</th><th>Duration</th>
+      <th>NSE LTP</th><th>BSE LTP</th><th>Gap %</th><th>Direction</th>
+      <th>Max gap %</th><th>Samples</th><th>ISIN</th>
+    </tr></thead>`;
+    const body = gaps.map(g => gapRow(g, live)).join('');
+    return `<div class="arb-table-wrap"><table class="arb-table">${head}<tbody>${body}</tbody></table></div>`;
+  }
+
+  async function loadArbLive() {
+    const el = $('#arb-live-container');
+    const st = $('#arb-live-status');
+    if (!el) return;
+    try {
+      const data = await arbApi('/live');
+      el.innerHTML = gapsTable(data.gaps || [], true);
+      if (st) st.textContent = `${data.count || 0} open · source: ${data.source || 'db'}`;
+      el.classList.remove('loading');
+    } catch (e) {
+      el.innerHTML = `<div class="arb-empty">Failed: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  async function loadArbHistory() {
+    const el = $('#arb-history-container');
+    if (!el) return;
+    const qs = new URLSearchParams();
+    const from = $('#arb-hist-from')?.value;
+    const to = $('#arb-hist-to')?.value;
+    const sym = ($('#arb-hist-symbol')?.value || '').trim();
+    const minGap = $('#arb-hist-min-gap')?.value;
+    const minDur = $('#arb-hist-min-dur')?.value;
+    if (from) qs.set('from', from);
+    if (to) qs.set('to', to);
+    if (sym) qs.set('symbol', sym.toUpperCase());
+    if (minGap !== '' && minGap != null) qs.set('min_gap_pct', minGap);
+    if (minDur !== '' && minDur != null) qs.set('min_duration_sec', minDur);
+    qs.set('limit', '300');
+    try {
+      const data = await arbApi('/gaps?' + qs.toString());
+      el.innerHTML = gapsTable(data.gaps || [], false);
+      el.classList.remove('loading');
+    } catch (e) {
+      el.innerHTML = `<div class="arb-empty">Failed: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  async function loadArbPairs() {
+    const el = $('#arb-pairs-container');
+    const st = $('#arb-pairs-status');
+    if (!el) return;
+    try {
+      const data = await arbApi('/pairs');
+      const rows = data.pairs || [];
+      if (!rows.length) {
+        el.innerHTML = '<div class="arb-empty">No pairs yet — click Rebuild from master (requires Zerodha login).</div>';
+      } else {
+        const body = rows.map(p => `<tr>
+          <td>${escapeHtml(p.symbol)}</td>
+          <td>${escapeHtml(p.nse_symbol)}</td>
+          <td>${escapeHtml(p.bse_symbol)}</td>
+          <td>${escapeHtml(p.isin || '')}</td>
+          <td>${p.active ? 'yes' : 'no'}</td>
+        </tr>`).join('');
+        el.innerHTML = `<div class="arb-table-wrap"><table class="arb-table">
+          <thead><tr><th>Symbol</th><th>NSE</th><th>BSE</th><th>ISIN</th><th>Active</th></tr></thead>
+          <tbody>${body}</tbody></table></div>`;
+      }
+      if (st) st.textContent = `${data.count || rows.length} pairs`;
+      el.classList.remove('loading');
+    } catch (e) {
+      el.innerHTML = `<div class="arb-empty">Failed: ${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  async function refreshPairs() {
+    const st = $('#arb-pairs-status');
+    if (st) st.textContent = 'Refreshing…';
+    try {
+      const data = await arbApi('/pairs/refresh', { method: 'POST', body: '{}' });
+      if (typeof window.toast === 'function') {
+        window.toast(`Rebuilt ${data.pairs_refreshed} pairs (${data.universe})`, 'ok');
+      }
+      await loadArbPairs();
+    } catch (e) {
+      if (typeof window.toast === 'function') window.toast(e.message, 'err');
+      if (st) st.textContent = e.message;
+    }
+  }
+
+  function startLivePoll() {
+    stopLivePoll();
+    _liveTimer = setInterval(loadArbLive, 3000);
+  }
+
+  function stopLivePoll() {
+    if (_liveTimer) {
+      clearInterval(_liveTimer);
+      _liveTimer = null;
+    }
+  }
+
+  function onArbTabEnter(tab) {
+    if (tab === 'arb-live') {
+      loadArbLive().then(() => startLivePoll());
+    } else {
+      stopLivePoll();
+      if (tab === 'arb-history') loadArbHistory();
+      if (tab === 'arb-pairs') loadArbPairs();
+    }
+  }
+
+  function onArbTabLeave() {
+    stopLivePoll();
+  }
+
+  ARB_TABS.forEach(tab => {
+    if (typeof window.registerDashboardTab === 'function') {
+      window.registerDashboardTab(tab, () => onArbTabEnter(tab), onArbTabLeave);
+    }
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    $('#arb-live-refresh')?.addEventListener('click', loadArbLive);
+    $('#arb-hist-apply')?.addEventListener('click', loadArbHistory);
+    $('#arb-pairs-refresh')?.addEventListener('click', refreshPairs);
+    const today = new Date();
+    const iso = d => d.toISOString().slice(0, 10);
+    const fromEl = $('#arb-hist-from');
+    const toEl = $('#arb-hist-to');
+    if (fromEl && !fromEl.value) fromEl.value = iso(today);
+    if (toEl && !toEl.value) toEl.value = iso(today);
+  });
+})();

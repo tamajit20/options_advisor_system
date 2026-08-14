@@ -143,8 +143,9 @@ class TokenMeta:
     strike: Optional[float] = None
     option_type: Optional[str] = None
     is_index: bool = False
-    # options_index | options_leg | scout_equity — set by SubscriptionManager.
+    # options_index | options_leg | scout_equity | arb_nse | arb_bse
     product: Optional[str] = None
+    exchange: Optional[str] = None
 
 
 # Backwards-compat private alias used internally.
@@ -165,14 +166,19 @@ def _tick_to_quote(tick: dict, meta: Optional[_TokenMeta], provider_name: str) -
     """
     last_price = float(tick.get("last_price", 0.0) or 0.0)
     bid = ask = None
+    bid_qty = ask_qty = None
     depth = tick.get("depth")
     if depth:
         buy = depth.get("buy") or []
         sell = depth.get("sell") or []
         if buy:
             bid = float(buy[0].get("price", 0.0) or 0.0) or None
+            qty = buy[0].get("quantity")
+            bid_qty = int(qty) if qty is not None else None
         if sell:
             ask = float(sell[0].get("price", 0.0) or 0.0) or None
+            qty = sell[0].get("quantity")
+            ask_qty = int(qty) if qty is not None else None
 
     ts = tick.get("exchange_timestamp") or tick.get("timestamp")
     # Kite Connect sends exchange_timestamp / timestamp as naive IST datetimes —
@@ -194,6 +200,7 @@ def _tick_to_quote(tick: dict, meta: Optional[_TokenMeta], provider_name: str) -
         strike = meta.strike
         option_type = meta.option_type
 
+    exchange = meta.exchange if meta is not None else None
     return LiveQuote(
         symbol=symbol,
         expiry=expiry,
@@ -202,6 +209,9 @@ def _tick_to_quote(tick: dict, meta: Optional[_TokenMeta], provider_name: str) -
         last_price=last_price,
         bid=bid,
         ask=ask,
+        bid_qty=bid_qty,
+        ask_qty=ask_qty,
+        exchange=exchange,
         volume=tick.get("volume_traded") or tick.get("volume"),
         open_interest=tick.get("oi"),
         timestamp=ts,
