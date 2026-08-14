@@ -11,6 +11,7 @@ from scout.settings_schema import (
     format_square_off_time,
     in_trading_window,
     merge_scout_settings,
+    scout_trading_enabled,
     square_off_datetime,
     strength_allowed,
     suggested_quantity,
@@ -20,6 +21,7 @@ from scout.settings_schema import (
 
 def test_default_settings_has_investment_sizing():
     d = default_scout_settings()
+    assert d["trading_enabled"] is True
     assert d["use_investment_sizing"] is True
     assert d["investment_per_trade_inr"] == 20_000
     assert d["max_trades_per_day"] == 5
@@ -183,3 +185,18 @@ def test_merge_scout_settings_keeps_zerodha_flag():
     merged = merge_scout_settings({"zerodha_execute_orders": True})
     assert merged["zerodha_execute_orders"] is True
     assert merged["square_off_time"] == "15:10"
+
+
+def test_validate_trading_enabled():
+    assert validate_scout_settings({"trading_enabled": False})["trading_enabled"] is False
+    assert validate_scout_settings({})["trading_enabled"] is True
+
+
+def test_scout_trading_enabled_respects_kill_switch():
+    assert scout_trading_enabled({"trading_enabled": True}) is True
+    assert scout_trading_enabled({"trading_enabled": False}) is False
+
+
+@patch("scout.settings_schema.SCOUT_CONFIG", {"enabled": False})
+def test_scout_trading_enabled_respects_code_config():
+    assert scout_trading_enabled({"trading_enabled": True}) is False

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import timedelta
 
 from config import SCOUT_CONFIG
 from database.connection import SQLServerConnection
 from database.scout_models import ScoutScanLogRepo, ScoutSignalRepo
+from scout.config_loader import get_scout_settings
 from scout.market_data import ScoutMarketData, ScoutMarketError, zerodha_ready
 from scout.scanner import scan_watchlist
+from scout.settings_schema import merge_scout_settings
 from scout.utils import is_market_open
 from utils import now_ist
 
@@ -42,27 +45,48 @@ def run_scout_scan(db: SQLServerConnection) -> int:
         mkt = ScoutMarketData()
         rows, symbols_scanned = scan_watchlist(mkt, db)
         triggered = now_ist()
+        settings = merge_scout_settings(get_scout_settings(db))
+        dedupe_mins = int(settings.get("push_dedupe_minutes", 60))
+        dedupe_per_symbol = bool(settings.get("dedupe_per_symbol", False))
+        since_at = triggered - timedelta(minutes=dedupe_mins)
         for row in rows:
-            sig_repo.insert(
-                scan_id=scan_id,
-                symbol=row["symbol"],
-                exchange="NSE",
-                action=row["action"],
-                signal_type=row["signal_type"],
-                reason=row["reason"],
-                ltp=float(row["ltp"]),
-                invalidation=row.get("invalidation"),
-                strength=row.get("strength") or "WEAK",
-                triggered_at=triggered,
-                meta={
-                    k: row[k] for k in row
-                    if k not in (
-                        "symbol", "action", "signal_type", "reason",
-                        "ltp", "invalidation", "strength",
-                    )
-                },
-            )
-            signals_found += 1
+            sym = str(row["symbol"]).upper()
+            stype = str(row["signal_type"])
+            if sig_repo.has_recent_duplicate(
+                symbol=sym,
+                signal_type=stype,
+                since_at=since_at,
+                dedupe_per_symbol=dedupe_per_symbol,
+            ):
+                continue
+            try:
+                sig_repo.insert(
+                    scan_id=scan_id,
+                    symbol=sym,
+                    exchange="NSE",
+                    action=row["action"],
+                    signal_type=stype,
+                    reason=row["reason"],
+                    ltp=float(row["ltp"]),
+                    invalidation=row.get("invalidation"),
+                    strength=row.get("strength") or "WEAK",
+                    triggered_at=triggered,
+                    meta={
+                        **{
+                            k: row[k] for k in row
+                            if k not in (
+                                "symbol", "action", "signal_type", "reason",
+                                "ltp", "invalidation", "strength",
+                            )
+                        },
+                        "source": "scan",
+                    },
+                )
+                db.commit()
+                signals_found += 1
+            except Exception:
+                db.rollback()
+                logger.exception("Scout scan insert failed for %s", sym)
         log_repo.finish(
             scan_id,
             status="SUCCESS",

@@ -139,6 +139,7 @@ def test_flush_at_uses_settings_dedupe_minutes(mocker):
     )
     mocker.patch("scout.push_engine.detect_signals", return_value=[fake_sig])
     mocker.patch.object(engine._sig_repo, "insert", return_value=0)
+    mocker.patch.object(engine._sig_repo, "has_recent_duplicate", return_value=False)
 
     engine.flush_at(datetime(2026, 8, 7, 10, 1, 0))
     engine._sig_repo.insert.assert_not_called()
@@ -183,6 +184,7 @@ def test_flush_at_inserts_signal_when_pattern_fires(mocker):
     )
     mocker.patch("scout.push_engine.detect_signals", return_value=[fake_sig])
     mocker.patch.object(engine._sig_repo, "insert", return_value=55)
+    mocker.patch.object(engine._sig_repo, "has_recent_duplicate", return_value=False)
     mocker.patch("scout.auto_trader.on_signals_committed")
 
     engine.flush_at(datetime(2026, 8, 7, 10, 1, 0))

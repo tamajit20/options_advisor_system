@@ -27,6 +27,11 @@ from scout.filters import min_candles_ok
 from scout.config_loader import get_scout_settings
 from scout.patterns import detect_signals
 from scout.settings_schema import effective_pattern_config
+from scout.signal_dedupe import (
+    build_dedupe_cache,
+    is_within_dedupe_window,
+    signal_dedupe_key,
+)
 from scout.tick_filter import is_scout_equity_tick
 from scout.utils import is_market_open, pct_change
 from utils import now_ist
@@ -122,6 +127,7 @@ class ScoutPushEngine:
             if self._unsub_scout is not None:
                 return
             self._seed_history()
+            self._hydrate_dedupe_from_db()
             self._unsub_scout = self._bus.subscribe(TOPIC_TICK_SCOUT, self._on_tick)
             self._unsub_index = self._bus.subscribe(TOPIC_TICK_INDEX, self._on_tick)
         self._stop_event.clear()
@@ -218,6 +224,22 @@ class ScoutPushEngine:
         except Exception:
             logger.exception("ScoutPushEngine: REST seed failed — ticks only")
             self._seeded = True
+
+    def _hydrate_dedupe_from_db(self) -> None:
+        """Restore dedupe cache from DB so restarts do not replay signals."""
+        try:
+            settings = get_scout_settings(self._db)
+            mins = int(settings.get("push_dedupe_minutes", self._dedupe_minutes))
+            per_sym = bool(settings.get("dedupe_per_symbol", False))
+            rows = self._sig_repo.recent_dedupe_rows(since_minutes=mins)
+            self._recent = build_dedupe_cache(rows, dedupe_per_symbol=per_sym)
+            if self._recent:
+                logger.info(
+                    "ScoutPushEngine: hydrated dedupe cache (%d keys, %d min window)",
+                    len(self._recent), mins,
+                )
+        except Exception:
+            logger.exception("ScoutPushEngine: dedupe hydrate failed — using empty cache")
 
     def _on_tick(self, q: LiveQuote) -> None:
         if q is None or not self._watchlist:
@@ -332,48 +354,67 @@ class ScoutPushEngine:
                 pdl=pdl,
                 cfg=cfg,
             ):
-                dedupe_key = sym if dedupe_per_symbol else f"{sym}:{sig.signal_type}"
-                if self._is_duplicate(dedupe_key, triggered, dedupe_mins):
+                dedupe_key = signal_dedupe_key(sym, sig.signal_type, dedupe_per_symbol=dedupe_per_symbol)
+                if is_within_dedupe_window(
+                    self._recent.get(dedupe_key), triggered, dedupe_mins,
+                ):
+                    continue
+                since_at = triggered - timedelta(minutes=dedupe_mins)
+                if self._sig_repo.has_recent_duplicate(
+                    symbol=sym,
+                    signal_type=str(sig.signal_type),
+                    since_at=since_at,
+                    dedupe_per_symbol=dedupe_per_symbol,
+                ):
+                    self._recent[dedupe_key] = triggered
                     continue
                 row = sig.to_dict()
-                signal_id = self._sig_repo.insert(
-                    scan_id=scan_id,
-                    symbol=sym,
-                    exchange="NSE",
-                    action=row["action"],
-                    signal_type=row["signal_type"],
-                    reason=row["reason"],
-                    ltp=float(row["ltp"]),
-                    invalidation=row.get("invalidation"),
-                    strength=row.get("strength") or "WEAK",
-                    triggered_at=triggered,
-                    meta={
-                        **(row.get("meta") or {}),
-                        "source": "ws_push",
-                        "stock_pct_from_open": round(stock_pct, 3),
-                        "nifty_pct_from_open": round(bench_pct, 3),
-                        "nifty_open": self._nifty_open,
-                        "pdh": pdh,
-                        "pdl": pdl,
-                    },
-                )
-                if signal_id:
+                try:
+                    signal_id = self._sig_repo.insert(
+                        scan_id=scan_id,
+                        symbol=sym,
+                        exchange="NSE",
+                        action=row["action"],
+                        signal_type=row["signal_type"],
+                        reason=row["reason"],
+                        ltp=float(row["ltp"]),
+                        invalidation=row.get("invalidation"),
+                        strength=row.get("strength") or "WEAK",
+                        triggered_at=triggered,
+                        meta={
+                            **(row.get("meta") or {}),
+                            "source": "ws_push",
+                            "stock_pct_from_open": round(stock_pct, 3),
+                            "nifty_pct_from_open": round(bench_pct, 3),
+                            "nifty_open": self._nifty_open,
+                            "pdh": pdh,
+                            "pdl": pdl,
+                        },
+                    )
+                    if not signal_id:
+                        continue
+                    self._db.commit()
                     inserted_ids.append(signal_id)
-                self._recent[dedupe_key] = triggered
-                signals += 1
+                    self._recent[dedupe_key] = triggered
+                    signals += 1
+                except Exception:
+                    self._db.rollback()
+                    logger.exception(
+                        "ScoutPushEngine: signal insert failed for %s %s",
+                        sym, sig.signal_type,
+                    )
 
-        if signals:
+        if inserted_ids:
             try:
-                self._db.commit()
                 logger.info(
-                    "ScoutPushEngine: %d signal(s) at %s", signals, boundary.isoformat()
+                    "ScoutPushEngine: %d signal(s) at %s", len(inserted_ids), boundary.isoformat(),
                 )
                 from scout.auto_trader import on_signals_committed
                 on_signals_committed(self._db, inserted_ids, self._spot_lookup)
                 self._db.commit()
             except Exception:
                 self._db.rollback()
-                logger.exception("ScoutPushEngine: commit failed")
+                logger.exception("ScoutPushEngine: auto-enter hook failed")
 
     def _benchmark_pct(self) -> float:
         ltp = self._spot_lookup("NIFTY")
@@ -382,8 +423,5 @@ class ScoutPushEngine:
         return pct_change(self._nifty_open, float(ltp))
 
     def _is_duplicate(self, key: str, at: datetime, dedupe_minutes: Optional[int] = None) -> bool:
-        prev = self._recent.get(key)
-        if prev is None:
-            return False
         mins = dedupe_minutes if dedupe_minutes is not None else self._dedupe_minutes
-        return (at - prev).total_seconds() < mins * 60
+        return is_within_dedupe_window(self._recent.get(key), at, mins)

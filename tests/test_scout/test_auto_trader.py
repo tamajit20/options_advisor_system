@@ -11,6 +11,7 @@ import pytest
 from scout.auto_trader import (
     _auto_enter_block_reason,
     on_signals_committed,
+    run_execution_poll,
     try_auto_close_trades,
     try_auto_execute_signal,
 )
@@ -29,6 +30,7 @@ def _trading_window_open(mocker):
 
 def _scout_settings(**overrides):
     base = {
+        "trading_enabled": True,
         "auto_execute_signals": True,
         "auto_close_trades": False,
         "use_investment_sizing": False,
@@ -483,3 +485,50 @@ def test_try_auto_execute_passes_regime_when_clear(db, mocker):
     out = try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 101.05)
     assert out["trade_id"] == 42
     mock_enter.assert_called_once()
+
+
+def test_try_auto_execute_skipped_when_trading_paused(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_scout_settings(trading_enabled=False, auto_execute_signals=True),
+    )
+    mock_enter = mocker.patch("scout.auto_trader.execute_entry")
+    assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.0) is None
+    mock_enter.assert_not_called()
+
+
+def test_run_execution_poll_noop_when_trading_paused(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_scout_settings(trading_enabled=False, auto_execute_signals=True, auto_close_trades=True),
+    )
+    mock_pending = mocker.patch("scout.auto_trader.process_pending_entries")
+    mock_close = mocker.patch("scout.auto_trader.try_auto_close_trades", return_value=[])
+    mock_enter = mocker.patch("scout.auto_trader.try_auto_enter_pending_signals", return_value=[])
+    out = run_execution_poll(db, spot_lookup=lambda s: 100.0)
+    assert out == {"pending_filled": [], "protection_retried": [], "entered": [], "closed": []}
+    mock_pending.assert_not_called()
+    mock_close.assert_not_called()
+    mock_enter.assert_not_called()
+
+
+def test_on_signals_committed_skipped_when_trading_paused(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_scout_settings(trading_enabled=False, auto_execute_signals=True),
+    )
+    mock_exec = mocker.patch("scout.auto_trader.try_auto_execute_signal")
+    on_signals_committed(db, [1, 2], spot_lookup=lambda s: 100.0)
+    mock_exec.assert_not_called()
+
+
+def test_try_auto_close_skipped_when_trading_paused(db, mocker):
+    mocker.patch(
+        "scout.auto_trader.get_scout_settings",
+        return_value=_scout_settings(trading_enabled=False, auto_close_trades=True),
+    )
+    mocker.patch("scout.auto_trader.is_market_open", return_value=True)
+    mock_close = mocker.patch("scout.auto_trader.paper_close_if_triggered")
+    closed = try_auto_close_trades(db, spot_lookup=lambda s: 100.0)
+    assert closed == []
+    mock_close.assert_not_called()

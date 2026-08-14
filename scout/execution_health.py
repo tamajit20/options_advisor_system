@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from database.connection import SQLServerConnection
 from database.scout_models import ScoutTradeRepo
 from scout.execution_engine import zerodha_execute_enabled
+from scout.settings_schema import scout_trading_enabled
 from scout.wallet import last_wallet_error, wallet_summary
 from utils import now_ist
 
@@ -150,6 +151,13 @@ def build_execution_health(
         perm = None
 
     alarms: List[dict] = []
+
+    if not scout_trading_enabled(settings):
+        alarms.append({
+            "level": "critical",
+            "code": "trading_paused",
+            "message": "Scout trading is PAUSED — no new entries or auto-management until re-enabled in Config",
+        })
 
     if live:
         if perm is not None and not perm.get("overall_ok"):

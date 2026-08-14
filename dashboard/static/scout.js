@@ -141,6 +141,9 @@
     if (!bar || !st) return;
     renderAlarmBanner(st.health);
     const parts = [];
+    if (st.trading_enabled === false) {
+      parts.push('🛑 Trading PAUSED');
+    }
     parts.push(st.market_open ? '🟢 Market open' : '⚫ Market closed');
     parts.push(st.zerodha_ok ? '🔑 Zerodha OK' : '🔑 ' + (st.zerodha_message || 'Not logged in'));
     const execMode = st.zerodha_execute_orders
@@ -186,59 +189,6 @@
       }
     }
     bar.innerHTML = parts.map(p => `<span class="scout-stat">${escapeHtml(p)}</span>`).join('');
-    syncAutomationUI(st.automation);
-  }
-
-  let _automationSaving = false;
-
-  function syncAutomationUI(automation) {
-    if (!automation || _automationSaving) return;
-    const exec = $('#scout-auto-execute');
-    const close = $('#scout-auto-close');
-    if (exec) exec.checked = !!automation.auto_execute_signals;
-    if (close) close.checked = !!automation.auto_close_trades;
-  }
-
-  async function saveAutomation(patch) {
-    if (_automationSaving) return;
-    _automationSaving = true;
-    const exec = $('#scout-auto-execute');
-    const close = $('#scout-auto-close');
-    const body = {
-      auto_execute_signals: patch.auto_execute_signals ?? !!(exec && exec.checked),
-      auto_close_trades: patch.auto_close_trades ?? !!(close && close.checked),
-    };
-    try {
-      const data = await scoutApi('/automation', {
-        method: 'PUT',
-        body: JSON.stringify(body),
-      });
-      syncAutomationUI(data.automation || body);
-      const labels = [];
-      if (body.auto_execute_signals) labels.push('auto-enter');
-      if (body.auto_close_trades) labels.push('auto-close');
-      toast(
-        labels.length
-          ? 'Automation on: ' + labels.join(', ')
-          : 'Manual mode — mark taken and close trades yourself',
-        'info'
-      );
-      const st = await scoutApi('/status');
-      renderStatus(st);
-    } catch (e) {
-      toast('Automation save failed: ' + e.message, 'error');
-    } finally {
-      _automationSaving = false;
-    }
-  }
-
-  function bindAutomationControls() {
-    $('#scout-auto-execute')?.addEventListener('change', (ev) => {
-      saveAutomation({ auto_execute_signals: ev.target.checked });
-    });
-    $('#scout-auto-close')?.addEventListener('change', (ev) => {
-      saveAutomation({ auto_close_trades: ev.target.checked });
-    });
   }
 
   function fmtTimeShort(iso) {
@@ -461,19 +411,29 @@
     return true;
   }
 
-  function renderMarkTakenBlock(s) {
-    const entryDefault = s.live_ltp != null ? Number(s.live_ltp) : Number(s.ltp || 0);
-    const qtyDefault = Math.max(1, parseInt(s.suggested_quantity, 10) || 1);
+  function renderTradeStatusBadge(s) {
     if (isSignalTradeOpen(s)) {
-      return `<span class="muted scout-trade-badge">Trade open${s.trade_id ? ` · TRD #${s.trade_id}` : ''}</span>`;
+      return `<div class="scout-trade-badge-row scout-trade-badge-row--open">
+        <span class="scout-trade-badge">Trade open${s.trade_id ? ` · TRD #${s.trade_id}` : ''}</span>
+      </div>`;
     }
     if (!canMarkSignalTaken(s)) {
       const parts = ['Open trade exists'];
       if (s.blocking_signal_id != null) parts.push(`SIG #${s.blocking_signal_id}`);
       if (s.blocking_trade_id != null) parts.push(`TRD #${s.blocking_trade_id}`);
       const detail = parts.length > 1 ? ` · ${parts.slice(1).join(' · ')}` : '';
-      return `<span class="muted scout-trade-badge scout-trade-badge--blocked" title="Close or void the open ${escapeHtml(s.symbol || '')} trade before taking another signal on this symbol">${escapeHtml(parts[0])}${escapeHtml(detail)}</span>`;
+      return `<div class="scout-trade-badge-row scout-trade-badge-row--blocked"
+        title="Close or void the open ${escapeHtml(s.symbol || '')} trade before taking another signal on this symbol">
+        <span class="scout-trade-badge scout-trade-badge--blocked">${escapeHtml(parts[0])}${escapeHtml(detail)}</span>
+      </div>`;
     }
+    return '';
+  }
+
+  function renderMarkTakenBlock(s) {
+    if (!canMarkSignalTaken(s)) return '';
+    const entryDefault = s.live_ltp != null ? Number(s.live_ltp) : Number(s.ltp || 0);
+    const qtyDefault = Math.max(1, parseInt(s.suggested_quantity, 10) || 1);
     return `<div class="scout-mark-row">
           <input type="number" step="0.05" class="scout-entry-input" value="${entryDefault}"
             data-signal-id="${s.id}" aria-label="Entry fill price" title="Your Zerodha fill price">
@@ -517,9 +477,10 @@
     const strength = (s.strength || 'WEAK').toLowerCase();
     const d = s.dashboard || {};
     const setupCode = d.setup_code || (s.signal_type || '').replace(/_/g, ' ');
-    const markBlock = renderMarkTakenBlock(s);
     const setupHint = scoutHint(setupCode);
     const setupTitle = setupHint ? ` title="${escapeHtml(setupHint)}"` : '';
+    const tradeBadge = renderTradeStatusBadge(s);
+    const markBlock = renderMarkTakenBlock(s);
     return `
       <div class="scout-card ${cls}" data-signal-id="${s.id}" data-symbol="${escapeHtml(s.symbol)}"
         data-action="${escapeHtml(action)}"
@@ -532,6 +493,7 @@
         data-blocking-trade-id="${s.blocking_trade_id != null ? s.blocking_trade_id : ''}"
         data-blocking-signal-id="${s.blocking_signal_id != null ? s.blocking_signal_id : ''}"
         data-auto-ready="${s.auto_enter && s.auto_enter.ready ? '1' : '0'}">
+        ${tradeBadge}
         <div class="scout-card-head">
           <strong class="scout-symbol">${escapeHtml(s.symbol)}</strong>
           <span class="scout-action tag tag-${action === 'BUY' ? 'ok' : action === 'SELL' ? 'err' : 'muted'}" title="Suggested direction for this intraday setup">${escapeHtml(action)}</span>
@@ -542,7 +504,7 @@
         </div>
         <div class="scout-card-body">
           ${renderSignalDashboard(s)}
-          <div class="scout-card-actions">${markBlock}</div>
+          ${markBlock ? `<div class="scout-card-actions">${markBlock}</div>` : ''}
         </div>
       </div>`;
   }
@@ -1287,38 +1249,106 @@
     };
   }
 
+  function renderExecutionMtmSummary(mtm) {
+    if (mtm.mtm == null || isNaN(mtm.mtm)) return '';
+    const gross = Number(mtm.mtm);
+    const net = mtm.mtm_net != null ? Number(mtm.mtm_net) : null;
+    const pct = mtm.mtm_pct != null ? Number(mtm.mtm_pct).toFixed(2) : null;
+    const perShare = mtm.mtm_per_share != null ? fmtPx(mtm.mtm_per_share) : null;
+    const tip = [
+      'Unrealized P&L (MTM): profit or loss if you closed now at the live price.',
+      `Gross: ${fmtPnl(gross)} (entry vs live × qty).`,
+      net != null && !isNaN(net) ? `Est. net after intraday charges: ${fmtPnl(net)}.` : '',
+      perShare ? `Per share: ${perShare}.` : '',
+    ].filter(Boolean).join(' ');
+    const netHint = net != null && !isNaN(net)
+      ? ` <span class="scout-exec-mtm-net muted">net ${fmtPnl(net)}</span>`
+      : '';
+    const pctHint = pct != null ? ` <span class="muted">(${pct}%)</span>` : '';
+    return `<span class="scout-exec-mtm ${pnlClass(gross)}" title="${escapeHtml(tip).replace(/"/g, '&quot;')}">MTM ${fmtPnl(gross)}${pctHint}${netHint}</span>`;
+  }
+
+  function renderExecutionLivePrice(liveLtp, marketOpen) {
+    if (liveLtp != null && !isNaN(liveLtp)) {
+      return `<span class="scout-exec-live" title="Latest live quote (WebSocket / tick cache)">Live <strong>${fmtPx(liveLtp)}</strong></span>`;
+    }
+    const tip = marketOpen === false
+      ? 'Market closed — no live price'
+      : 'No live quote yet — check Zerodha login / WS runner';
+    return `<span class="scout-exec-live scout-exec-live--missing muted" title="${escapeHtml(tip)}">Live —</span>`;
+  }
+
+  function renderExecutionStepIndicator(step) {
+    const st = String(step.status || 'pending').toLowerCase();
+    const num = step.step;
+    const titles = {
+      done: `Step ${num} complete`,
+      active: `Step ${num} in progress`,
+      pending: `Step ${num} pending`,
+      failed: `Step ${num} failed`,
+    };
+    const title = titles[st] || `Step ${num}`;
+    if (st === 'done') {
+      return `<span class="scout-exec-step-num scout-exec-step-num--done" title="${title}" aria-label="${title}">✓</span>`;
+    }
+    if (st === 'failed') {
+      return `<span class="scout-exec-step-num scout-exec-step-num--failed" title="${title}" aria-label="${title}">✕</span>`;
+    }
+    return `<span class="scout-exec-step-num scout-exec-step-num--${st}" title="${title}" aria-label="${title}">${num}</span>`;
+  }
+
+  function renderOrderStatusIcon(statusClass, rawStatus) {
+    const cls = String(statusClass || 'pending').toLowerCase();
+    const labels = {
+      done: 'Filled',
+      active: 'Working',
+      pending: 'Pending',
+      failed: 'Failed',
+    };
+    const icons = { done: '✓', active: '◉', pending: '○', failed: '✕' };
+    const label = labels[cls] || String(rawStatus || cls);
+    const icon = icons[cls] || '○';
+    return `<span class="scout-exec-order-status-icon scout-exec-order-status-icon--${cls}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${icon}</span>`;
+  }
+
   function renderExecutionStep(step) {
-    const stCls = 'scout-exec-step--' + (step.status || 'pending');
+    const st = String(step.status || 'pending').toLowerCase();
+    const stCls = 'scout-exec-step--' + st;
     const ordersHtml = (step.orders || []).map(o => {
       const px = o.trigger_price != null
         ? `trigger ₹${fmtPx(o.trigger_price)} · limit ₹${fmtPx(o.price)}`
         : (o.price != null ? `₹${fmtPx(o.price)}` : '—');
       const oid = o.kite_order_id ? ` · #${escapeHtml(String(o.kite_order_id))}` : '';
-      return `<li class="scout-exec-order scout-exec-order--${escapeHtml(o.status_class || 'pending')}">
+      const legCls = 'scout-exec-order--' + (o.status_class || 'pending');
+      return `<li class="scout-exec-order ${legCls}">
         <span class="scout-exec-order-leg">${escapeHtml(o.leg_label || o.leg || '')}</span>
         <span class="scout-exec-order-detail">${escapeHtml(o.transaction_type || '')} ${escapeHtml(o.order_type || '')}
           × ${o.quantity || '—'} @ ${px}${oid}</span>
-        <span class="scout-exec-order-status">${escapeHtml(o.status || '')}</span>
+        ${renderOrderStatusIcon(o.status_class, o.status)}
       </li>`;
     }).join('');
     return `<div class="scout-exec-step ${stCls}">
       <div class="scout-exec-step-head">
-        <span class="scout-exec-step-num">${step.step}</span>
-        <strong>${escapeHtml(step.label || '')}</strong>
-        <span class="scout-exec-step-badge">${escapeHtml(step.status || '')}</span>
+        ${renderExecutionStepIndicator(step)}
+        <strong class="scout-exec-step-label">${escapeHtml(step.label || '')}</strong>
       </div>
       ${ordersHtml ? `<ul class="scout-exec-orders">${ordersHtml}</ul>` : '<p class="muted scout-exec-empty">No orders yet</p>'}
     </div>`;
   }
 
-  function renderExecutionFlowCard(item) {
+  function renderExecutionFlowCard(item, marketOpen) {
     if (item.kind === 'signal' && !item.trade) {
       const s = item.signal || {};
+      const liveLtp = item.live_ltp != null ? Number(item.live_ltp) : (s.live_ltp != null ? Number(s.live_ltp) : null);
       return `<div class="scout-card scout-exec-card scout-exec-card--signal">
         <div class="scout-card-head">
           <strong>${escapeHtml(s.symbol || '')}</strong>
           <span class="muted">Awaiting entry · Step 1</span>
           ${renderScoutRefIds(s.id, null)}
+        </div>
+        <div class="scout-exec-summary">
+          ${renderExecutionLivePrice(liveLtp, marketOpen)}
+          <span class="muted">Signal ₹${s.ltp != null ? Number(s.ltp).toFixed(2) : '—'}</span>
         </div>
         <p class="muted">Signal active — auto-enter or mark taken to start execution flow.</p>
       </div>`;
@@ -1334,6 +1364,7 @@
     const mtm = ex.mtm || {};
     const plan = ex.exit_plan || {};
     const prices = (plan.dashboard && plan.dashboard.prices) || {};
+    const liveLtp = ex.live_ltp != null ? Number(ex.live_ltp) : (mtm.live_ltp != null ? Number(mtm.live_ltp) : null);
     return `<div class="scout-card scout-exec-card${cardCls}" data-trade-id="${t.id || ''}">
       <div class="scout-card-head">
         <strong>${escapeHtml(t.symbol || ex.symbol || '')}</strong>
@@ -1344,11 +1375,12 @@
       </div>
       ${renderExitAlertBanner(ex.exit_alerts)}
       <div class="scout-exec-summary">
+        ${renderExecutionLivePrice(liveLtp, marketOpen)}
         <span>Entry ${fmtPx(prices.entry)}</span>
         <span>Stop ${fmtPx(prices.stop)}</span>
         <span>Target ${fmtPx(prices.target)}</span>
         <span>Exit by ${escapeHtml(ex.square_off_time || '')}</span>
-        ${mtm.mtm != null ? `<span class="scout-exec-mtm">MTM ${fmtPnl(mtm.mtm)}</span>` : ''}
+        ${renderExecutionMtmSummary(mtm)}
       </div>
       <div class="scout-exec-flow">${stepsHtml}</div>
       ${t.status === 'OPEN' || unprot ? renderTradeCloseRow(t, ex.exit_alerts) : ''}
@@ -1387,12 +1419,12 @@
       c.className = '';
       const msg = marketOpen === false
         ? 'Market is closed. Open trades appear here during the session; new entries resume when the market opens.'
-        : 'No active executions. Enable auto-enter on the <strong>Signals</strong> tab or mark a signal taken.';
+        : 'No active executions. Enable auto-enter in <strong>Config</strong> (Save settings) or mark a signal taken.';
       c.innerHTML = `<div class="empty">${msg}</div>`;
       return;
     }
     c.className = 'scout-exec-list';
-    c.innerHTML = visible.map(renderExecutionFlowCard).join('');
+    c.innerHTML = visible.map(it => renderExecutionFlowCard(it, marketOpen)).join('');
     bindExecutionCloseButtons(c);
   }
 
@@ -1449,6 +1481,7 @@
       ]);
       if (health) renderAlarmBanner(health, ['scout-trades-alarm-banner', 'scout-alarm-banner']);
       if (data.poll_seconds) _scoutPollMs = Math.max(5, Number(data.poll_seconds) * 1000);
+      if (data.live_poll_seconds) _scoutLivePollMs = Math.max(2, Number(data.live_poll_seconds) * 1000);
       renderExecutionFlow(data.items || [], data.market_open);
     } catch (e) {
       c.className = '';
@@ -1608,6 +1641,7 @@
       const el = form.querySelector(`[name="${name}"]`);
       if (el && el.type !== 'checkbox') el.value = val != null ? String(val) : '';
     };
+    setCheck('trading_enabled', settings.trading_enabled !== false);
     setCheck('auto_execute_signals', settings.auto_execute_signals);
     setCheck('auto_close_trades', settings.auto_close_trades);
     setVal('auto_close_poll_seconds', settings.auto_close_poll_seconds ?? 10);
@@ -1658,10 +1692,6 @@
         ? `Trades opened today: ${tradesToday != null ? tradesToday : '—'} / ${max} max`
         : 'Daily trade cap disabled (0 = unlimited)';
     }
-    syncAutomationUI({
-      auto_execute_signals: settings.auto_execute_signals,
-      auto_close_trades: settings.auto_close_trades,
-    });
   }
 
   function readConfigForm() {
@@ -1683,6 +1713,7 @@
       return el.value;
     };
     return {
+      trading_enabled: !!form.querySelector('[name="trading_enabled"]')?.checked,
       auto_execute_signals: !!form.querySelector('[name="auto_execute_signals"]')?.checked,
       auto_close_trades: !!form.querySelector('[name="auto_close_trades"]')?.checked,
       auto_close_poll_seconds: num('auto_close_poll_seconds'),
@@ -2309,9 +2340,10 @@
     _scoutTimer = setInterval(loadScoutSignals, _scoutPollMs);
   }
 
-  function startScoutFlowAutoRefresh() {
+  function startScoutFlowAutoRefresh(fast) {
     stopScoutFlowAutoRefresh();
-    _scoutFlowTimer = setInterval(loadScoutFlow, _scoutPollMs);
+    const ms = fast ? _scoutLivePollMs : _scoutPollMs;
+    _scoutFlowTimer = setInterval(loadScoutFlow, ms);
   }
 
   function onScoutTabEnter(tab) {
@@ -2321,7 +2353,7 @@
         startScoutAutoRefresh();
         startScoutLiveRefresh();
       });
-      loadScoutFlow().then(() => startScoutFlowAutoRefresh());
+      loadScoutFlow().then(() => startScoutFlowAutoRefresh(false));
     } else {
       stopScoutAutoRefresh();
       stopScoutLiveRefresh();
@@ -2330,7 +2362,7 @@
         loadScoutWatchlist({ reset: true });
       }
       if (tab === 'scout-trades') {
-        loadScoutFlow().then(() => startScoutFlowAutoRefresh());
+        loadScoutFlow().then(() => startScoutFlowAutoRefresh(true));
       } else if (tab !== 'scout-signals') {
         stopScoutFlowAutoRefresh();
       }
@@ -2362,7 +2394,6 @@
     bindScoutSubtabs();
     bindNavSections();
     bindWatchlistToolbar();
-    bindAutomationControls();
     bindConfigForm();
     $('#scout-err-apply')?.addEventListener('click', () => loadScoutErrors());
     $('#scout-err-recheck')?.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); rerunZerodhaChecks(); });

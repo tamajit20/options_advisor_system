@@ -59,6 +59,39 @@ class ScoutSignalRepo:
         cur.close()
         return int(row[0]) if row else 0
 
+    def recent_dedupe_rows(self, *, since_minutes: int) -> List[dict]:
+        """Recent signals for hydrating push-engine dedupe after restart."""
+        since = now_ist() - timedelta(minutes=max(1, since_minutes))
+        return self.db.fetch_all(
+            "SELECT symbol, signal_type, triggered_at "
+            "FROM scout_signals WHERE triggered_at >= ?",
+            [since],
+        )
+
+    def has_recent_duplicate(
+        self,
+        *,
+        symbol: str,
+        signal_type: str,
+        since_at: datetime,
+        dedupe_per_symbol: bool,
+    ) -> bool:
+        """True if an equal dedupe key fired at or after ``since_at``."""
+        sym = str(symbol).upper()
+        if dedupe_per_symbol:
+            row = self.db.fetch_one(
+                "SELECT TOP 1 1 AS ok FROM scout_signals "
+                "WHERE symbol = ? AND triggered_at >= ?",
+                [sym, since_at],
+            )
+        else:
+            row = self.db.fetch_one(
+                "SELECT TOP 1 1 AS ok FROM scout_signals "
+                "WHERE symbol = ? AND signal_type = ? AND triggered_at >= ?",
+                [sym, str(signal_type).upper(), since_at],
+            )
+        return row is not None
+
     def recent(self, limit: int = 50, since_minutes: int = 120) -> List[dict]:
         since = now_ist() - timedelta(minutes=since_minutes)
         rows = self.db.fetch_all(

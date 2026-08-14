@@ -32,7 +32,7 @@ from scout.config_loader import (
     set_scout_settings,
     watchlist_set,
 )
-from scout.settings_schema import format_square_off_time, suggested_quantity
+from scout.settings_schema import format_square_off_time, scout_trading_enabled, suggested_quantity
 from scout.index_groups import INDEX_GROUPS, index_tags, nifty_bank_symbols
 from scout.instruments import (
     ScoutInstrumentError,
@@ -141,6 +141,7 @@ def api_scout_flow(db: SQLServerConnection):
         "execution_mode": execution_mode_label(settings),
         "square_off_time": _format_square_off_time(settings),
         "poll_seconds": int(SCOUT_CONFIG.get("signals_poll_seconds", 10)),
+        "live_poll_seconds": int(SCOUT_CONFIG.get("signals_live_poll_seconds", 3)),
         "market_open": is_market_open(),
     })
 
@@ -162,6 +163,7 @@ def api_scout_status(db: SQLServerConnection):
         perm = None
     return jsonify({
         "enabled": bool(SCOUT_CONFIG.get("enabled", True)),
+        "trading_enabled": scout_trading_enabled(settings),
         "mode": "websocket",
         "market_open": is_market_open(),
         "zerodha_ok": ok,
@@ -509,6 +511,11 @@ def api_scout_mark_taken(db: SQLServerConnection, signal_id: int):
     """Record execution — enter fill price/qty from your Zerodha order (like mark-executed)."""
     body = request.get_json(silent=True) or {}
     settings = get_scout_settings(db)
+    if not scout_trading_enabled(settings):
+        return jsonify({
+            "error": "Scout trading is paused — enable trading in Config (Save settings)",
+        }), 503
+
     entry_price = body.get("entry_price")
 
     sig_repo = ScoutSignalRepo(db)

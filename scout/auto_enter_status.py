@@ -10,6 +10,7 @@ from scout.profit_gate import effective_min_net_profit, entry_profit_block_reaso
 from scout.settings_schema import (
     compute_trade_quantity,
     in_trading_window,
+    scout_trading_enabled,
     strength_allowed,
 )
 from scout.utils import is_market_open
@@ -53,6 +54,7 @@ def evaluate_auto_enter_status(
     strength = str(signal.get("strength") or "WEAK")
     signal_type = str(signal.get("signal_type") or "")
     automation_on = bool(settings.get("auto_execute_signals"))
+    trading_on = scout_trading_enabled(settings)
     scout_enabled = bool(SCOUT_CONFIG.get("enabled", True))
     mkt_open = is_market_open() if market_open is None else bool(market_open)
 
@@ -156,7 +158,7 @@ def evaluate_auto_enter_status(
                 wallet_detail = f"₹{float(free):,.0f} free of ₹{float(cap):,.0f} deployable"
 
     block = None
-    if signal_id > 0 and automation_on and scout_enabled and mkt_open and not has_open_trade:
+    if signal_id > 0 and trading_on and automation_on and scout_enabled and mkt_open and not has_open_trade:
         block = _auto_enter_block_reason(
             trade_repo,
             settings,
@@ -167,6 +169,9 @@ def evaluate_auto_enter_status(
         )
 
     checks: List[dict] = [
+        _check("trading", "Scout trading enabled", trading_on, detail=(
+            "paused — enable in Config to resume" if not trading_on else ""
+        )),
         _check("automation", "Auto-enter enabled", automation_on),
         _check("scout_on", "Scout module on", scout_enabled),
         _check("market", "Market open", mkt_open),
@@ -215,7 +220,8 @@ def evaluate_auto_enter_status(
     ]
 
     ready = (
-        automation_on
+        trading_on
+        and automation_on
         and scout_enabled
         and mkt_open
         and not has_open_trade

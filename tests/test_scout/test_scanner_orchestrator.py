@@ -66,9 +66,11 @@ def test_run_scout_scan_success_inserts_signals(mocker):
     mocker.patch.object(orch, "ScoutMarketData", MagicMock())
     mock_sig = MagicMock()
     mock_sig.insert.return_value = 42
+    mock_sig.has_recent_duplicate.return_value = False
     mock_log = MagicMock()
     mocker.patch.object(orch, "ScoutSignalRepo", return_value=mock_sig)
     mocker.patch.object(orch, "ScoutScanLogRepo", return_value=mock_log)
+    mocker.patch.object(orch, "get_scout_settings", return_value={})
     db = MagicMock()
     n = run_scout_scan(db)
     assert n == 1

@@ -26,6 +26,7 @@ from scout.settings_schema import (
     compute_trade_quantity,
     effective_pattern_config,
     in_trading_window,
+    scout_trading_enabled,
     strength_allowed,
 )
 from scout.signal_enrichment import enrich_signal
@@ -89,9 +90,9 @@ def try_auto_execute_signal(
 ) -> Optional[dict]:
     """Auto-enter via 3-step execution engine (paper or Zerodha)."""
     settings = get_scout_settings(db)
-    if not settings.get("auto_execute_signals"):
+    if not scout_trading_enabled(settings):
         return None
-    if not SCOUT_CONFIG.get("enabled", True):
+    if not settings.get("auto_execute_signals"):
         return None
     if not is_market_open():
         return None
@@ -223,9 +224,9 @@ def try_auto_close_trades(
 ) -> List[dict]:
     """Step 3 — manage open trades (paper LTP or live Zerodha)."""
     settings = get_scout_settings(db)
-    if not settings.get("auto_close_trades"):
+    if not scout_trading_enabled(settings):
         return []
-    if not SCOUT_CONFIG.get("enabled", True):
+    if not settings.get("auto_close_trades"):
         return []
     if not is_market_open():
         return []
@@ -295,9 +296,11 @@ def try_auto_enter_pending_signals(
 ) -> List[dict]:
     """Retry auto-enter on recent signals that never got a trade row."""
     settings = get_scout_settings(db)
+    if not scout_trading_enabled(settings):
+        return []
     if not settings.get("auto_execute_signals"):
         return []
-    if not SCOUT_CONFIG.get("enabled", True) or not is_market_open():
+    if not is_market_open():
         return []
 
     valid_mins = int(settings.get("signal_valid_minutes", 30))
@@ -326,6 +329,8 @@ def run_execution_poll(
         "entered": [],
         "closed": [],
     }
+    if not scout_trading_enabled(settings):
+        return out
     if zerodha_execute_enabled(settings):
         out["pending_filled"] = process_pending_entries(
             db, spot_lookup=spot_lookup, settings=settings,
@@ -347,6 +352,8 @@ def on_signals_committed(
     if not signal_ids:
         return
     settings = get_scout_settings(db)
+    if not scout_trading_enabled(settings):
+        return
     if not settings.get("auto_execute_signals"):
         return
     for sid in signal_ids:

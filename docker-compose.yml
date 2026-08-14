@@ -26,6 +26,7 @@ services:
       MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env.docker}
     volumes:
       - sqlserver_data:/var/opt/mssql
+      - ./deploy/sql/mssql-identity-trace.conf:/var/opt/mssql/mssql.conf.d/identity-trace.conf:ro
     # Do NOT publish 1433 to the internet — app reaches DB on the internal network.
     healthcheck:
       test:

@@ -400,14 +400,6 @@
         <div id="scout-alarm-banner" class="scout-alarm-banner" hidden></div>
         <div id="scout-status-bar" class="scout-status-bar muted">Loading status…</div>
         <div class="scout-toolbar">
-          <label class="scout-auto-toggle" title="Auto-enter when signal checks pass. Live vs paper mode is set in Config → Zerodha execution.">
-            <input type="checkbox" id="scout-auto-execute">
-            <span>Auto-enter</span>
-          </label>
-          <label class="scout-auto-toggle" title="Auto-close on target, stop, or square-off (15:10 IST for Nifty/CAS stocks)">
-            <input type="checkbox" id="scout-auto-close">
-            <span>Auto-close</span>
-          </label>
           <button type="button" class="btn btn-ghost btn-sm" id="scout-refresh">Refresh</button>
         </div>
       </div>
@@ -530,6 +522,16 @@
       <p class="muted scout-intro">Tune automation, position sizing, trade limits, and signal filters. Changes apply immediately to new signals and auto-enter.</p>
       <div id="scout-config-notice" class="scout-config-notice" hidden></div>
       <form id="scout-config-form" class="scout-config-form" autocomplete="off">
+        <section class="scout-config-section scout-config-section--stop">
+          <h3 class="scout-config-heading">Emergency stop</h3>
+          <p class="muted scout-config-hint">Uncheck to halt all Scout trading immediately after save — no new entries, auto-enter, auto-close, or pending-order processing. You can still close or void open positions manually.</p>
+          <div class="scout-config-grid">
+            <label class="scout-config-check scout-config-check--stop">
+              <input type="checkbox" name="trading_enabled" id="cfg-trading-enabled" checked>
+              <span>Scout trading enabled</span>
+            </label>
+          </div>
+        </section>
         <section class="scout-config-section">
           <h3 class="scout-config-heading">Zerodha execution</h3>
           <p class="muted scout-config-hint">Saved in the database — survives redeploy. When live orders are off, Scout updates the DB only (safe for testing).</p>

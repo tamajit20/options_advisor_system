@@ -17,6 +17,8 @@ def _default_square_off_hhmm() -> str:
 def default_scout_settings() -> dict:
     """Persisted Scout settings (merged over SCOUT_CONFIG at runtime)."""
     return {
+        # Emergency stop — when False, Scout halts all automated trading activity
+        "trading_enabled": True,
         # Automation
         "auto_execute_signals": bool(SCOUT_CONFIG.get("auto_execute_signals", False)),
         "auto_close_trades": bool(SCOUT_CONFIG.get("auto_close_trades", False)),
@@ -101,6 +103,7 @@ def validate_scout_settings(raw: dict) -> dict:
     d = default_scout_settings()
     src = raw if isinstance(raw, dict) else {}
 
+    d["trading_enabled"] = bool(src.get("trading_enabled", d["trading_enabled"]))
     d["auto_execute_signals"] = bool(src.get("auto_execute_signals", d["auto_execute_signals"]))
     d["auto_close_trades"] = bool(src.get("auto_close_trades", d["auto_close_trades"]))
     d["auto_close_poll_seconds"] = max(
@@ -200,6 +203,14 @@ def validate_scout_settings(raw: dict) -> dict:
         d["trade_window_start"], d["trade_window_end"] = "09:45", "14:30"
 
     return d
+
+
+def scout_trading_enabled(settings: Optional[dict] = None) -> bool:
+    """Master kill switch — code-level SCOUT_CONFIG plus persisted UI setting."""
+    if not SCOUT_CONFIG.get("enabled", True):
+        return False
+    s = settings if settings is not None else default_scout_settings()
+    return bool(s.get("trading_enabled", True))
 
 
 def format_square_off_time(settings: Optional[dict] = None) -> str:

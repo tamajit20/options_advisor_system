@@ -424,12 +424,16 @@ def execute_entry(
     source: str = "auto_execute",
 ) -> dict:
     """Step 1 — create trade row and entry order (live or simulated)."""
+    from scout.settings_schema import scout_trading_enabled
     from scout.wallet import (
         cap_quantity_for_wallet,
         entry_wallet_block_reason,
         verify_entry_margin,
         wallet_summary,
     )
+
+    if not scout_trading_enabled(settings):
+        raise RuntimeError("Scout trading is paused — enable in Config")
 
     trade_repo = ScoutTradeRepo(db)
     order_repo = ScoutTradeOrderRepo(db)

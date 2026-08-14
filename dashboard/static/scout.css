@@ -213,21 +213,6 @@
   align-items: center;
   flex: 0 0 auto;
 }
-.scout-auto-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: .78rem;
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-}
-.scout-auto-toggle input {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
 .scout-signal-list {
   display: grid;
   gap: 12px;
@@ -308,6 +293,15 @@
   gap: 8px;
   font-size: .9rem;
   cursor: pointer;
+}
+.scout-config-section--stop {
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: rgba(220, 38, 38, 0.06);
+}
+.scout-config-check--stop span {
+  font-weight: 600;
 }
 .scout-config-strengths { display: flex; flex-wrap: wrap; gap: 14px; }
 .scout-config-hint { margin: 4px 0 0; font-size: .82rem; grid-column: 1 / -1; }
@@ -510,6 +504,24 @@
 .scout-card-actions { margin-top: 10px; }
 .scout-trade-badge { font-size: .78rem; }
 .scout-trade-badge--blocked { color: var(--text-dim); cursor: help; }
+.scout-trade-badge-row {
+  margin: -12px -14px 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: .78rem;
+  font-weight: 600;
+}
+.scout-trade-badge-row--open {
+  background: rgba(52, 211, 153, 0.12);
+  border-bottom-color: rgba(52, 211, 153, 0.25);
+  color: #6ee7b7;
+}
+.scout-trade-badge-row--blocked {
+  background: rgba(245, 158, 11, 0.08);
+  border-bottom-color: rgba(245, 158, 11, 0.25);
+  color: var(--text-dim);
+  cursor: help;
+}
 
 .scout-ref-ids { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .scout-ref-id {
@@ -1046,7 +1058,16 @@
   margin: 8px 0 10px;
   color: var(--text-dim);
 }
-.scout-exec-mtm { font-weight: 700; color: var(--text); }
+.scout-exec-mtm { font-weight: 700; }
+.scout-exec-mtm-net { font-weight: 500; font-size: .72rem; }
+.scout-exec-live {
+  font-weight: 600;
+  color: var(--text);
+}
+.scout-exec-live strong {
+  color: var(--accent, #6ecfff);
+}
+.scout-exec-live--missing { font-weight: 500; }
 .scout-exec-flow {
   display: flex;
   flex-direction: column;
@@ -1058,33 +1079,73 @@
   border-radius: 8px;
   padding: 8px 10px;
   background: rgba(0, 0, 0, .15);
+  transition: border-color .15s ease, background .15s ease;
 }
-.scout-exec-step--active { border-color: var(--primary); }
-.scout-exec-step--done { border-color: rgba(80, 200, 120, .45); }
-.scout-exec-step--failed { border-color: rgba(255, 100, 100, .45); }
+.scout-exec-step--pending {
+  border-color: rgba(255, 255, 255, .08);
+  opacity: .88;
+}
+.scout-exec-step--active {
+  border-color: rgba(59, 130, 246, .55);
+  background: rgba(59, 130, 246, .07);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, .12);
+}
+.scout-exec-step--done {
+  border-color: rgba(52, 211, 153, .5);
+  background: rgba(52, 211, 153, .06);
+}
+.scout-exec-step--failed {
+  border-color: rgba(248, 113, 113, .55);
+  background: rgba(248, 113, 113, .07);
+}
 .scout-exec-step-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: .82rem;
   margin-bottom: 6px;
 }
+.scout-exec-step-label { flex: 1; min-width: 0; }
+.scout-exec-step--done .scout-exec-step-label { color: #a7f3d0; }
+.scout-exec-step--active .scout-exec-step-label { color: #bfdbfe; }
+.scout-exec-step--failed .scout-exec-step-label { color: #fecaca; }
+.scout-exec-step--pending .scout-exec-step-label { color: var(--text-dim); }
 .scout-exec-step-num {
-  width: 22px;
-  height: 22px;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
-  background: var(--primary-dim);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: .75rem;
   font-weight: 700;
+  line-height: 1;
 }
-.scout-exec-step-badge {
-  margin-left: auto;
-  font-size: .7rem;
-  text-transform: uppercase;
+.scout-exec-step-num--pending {
+  background: rgba(255, 255, 255, .06);
   color: var(--text-dim);
+  border: 1px solid rgba(255, 255, 255, .12);
+}
+.scout-exec-step-num--active {
+  background: rgba(59, 130, 246, .22);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, .55);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, .2);
+}
+.scout-exec-step-num--done {
+  background: rgba(52, 211, 153, .22);
+  color: #6ee7b7;
+  border: 1px solid rgba(52, 211, 153, .55);
+  font-size: .85rem;
+  font-weight: 800;
+}
+.scout-exec-step-num--failed {
+  background: rgba(248, 113, 113, .2);
+  color: #fca5a5;
+  border: 1px solid rgba(248, 113, 113, .55);
+  font-size: .8rem;
+  font-weight: 800;
 }
 .scout-exec-orders {
   list-style: none;
@@ -1096,16 +1157,56 @@
 }
 .scout-exec-order {
   display: grid;
-  grid-template-columns: 100px 1fr auto;
+  grid-template-columns: 100px 1fr 24px;
   gap: 6px;
+  align-items: center;
   font-size: .76rem;
   padding: 4px 6px;
   border-radius: 4px;
   background: rgba(255, 255, 255, .03);
+  border-left: 2px solid transparent;
 }
-.scout-exec-order--done { background: rgba(80, 200, 120, .08); }
-.scout-exec-order--active { background: rgba(100, 180, 255, .08); }
-.scout-exec-order--failed { background: rgba(255, 100, 100, .08); }
+.scout-exec-order--done {
+  background: rgba(52, 211, 153, .08);
+  border-left-color: rgba(52, 211, 153, .55);
+}
+.scout-exec-order--active {
+  background: rgba(59, 130, 246, .08);
+  border-left-color: rgba(59, 130, 246, .55);
+}
+.scout-exec-order--failed {
+  background: rgba(248, 113, 113, .08);
+  border-left-color: rgba(248, 113, 113, .55);
+}
+.scout-exec-order--pending {
+  border-left-color: rgba(255, 255, 255, .1);
+}
 .scout-exec-order-leg { font-weight: 600; }
-.scout-exec-order-status { font-size: .7rem; color: var(--text-dim); text-align: right; }
+.scout-exec-order-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: .72rem;
+  font-weight: 800;
+  line-height: 1;
+}
+.scout-exec-order-status-icon--done {
+  background: rgba(52, 211, 153, .2);
+  color: #6ee7b7;
+}
+.scout-exec-order-status-icon--active {
+  background: rgba(59, 130, 246, .2);
+  color: #93c5fd;
+}
+.scout-exec-order-status-icon--failed {
+  background: rgba(248, 113, 113, .2);
+  color: #fca5a5;
+}
+.scout-exec-order-status-icon--pending {
+  background: rgba(255, 255, 255, .06);
+  color: var(--text-dim);
+}
 .scout-exec-empty { margin: 0; font-size: .76rem; }
