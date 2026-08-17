@@ -62,6 +62,31 @@ def _quote(symbol, exchange, ltp, ts, expiry=None):
     )
 
 
+def test_basis_engine_opens_with_string_expiry_lookup(mocker):
+    mocker.patch("basis.basis_engine.get_basis_settings", return_value={
+        "enabled": True,
+        "tick_staleness_sec": 3,
+        "min_basis_store_pct": 0,
+        "min_duration_store_sec": 0,
+    })
+    mocker.patch("basis.basis_engine.BASIS_CONFIG", {
+        "enabled": True,
+        "db_flush_interval_sec": 60,
+        "leg_stale_close_sec": 5,
+    })
+    db = MagicMock()
+    engine = BasisEngine(
+        db=db,
+        event_bus=MagicMock(),
+        expiry_lookup=lambda _s: "2026-09-25",
+        clock=lambda: datetime(2026, 8, 14, 10, 0, 0),
+    )
+    now = datetime(2026, 8, 14, 10, 0, 0)
+    engine._on_tick(_quote("RELIANCE", "NSE", 100.0, now))
+    engine._on_tick(_quote("RELIANCE", "NFO", 101.0, now))
+    assert len(engine.live_basis()) == 1
+
+
 def test_basis_engine_opens_episode_on_paired_ticks(mocker):
     mocker.patch("basis.basis_engine.get_basis_settings", return_value={
         "enabled": True,

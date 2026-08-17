@@ -30,6 +30,30 @@ from utils import now_ist
 logger = logging.getLogger(__name__)
 
 
+def _coerce_date(raw: object) -> Optional[date]:
+    """Normalize DB/API expiry values to ``date``."""
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+    if hasattr(raw, "date"):
+        try:
+            return raw.date()  # type: ignore[union-attr]
+        except Exception:
+            return None
+    return None
+
+
 class _DbOp(str, Enum):
     INSERT = "insert"
     UPDATE = "update"
@@ -68,13 +92,16 @@ def compute_basis(
     as_of: Optional[date] = None,
 ) -> tuple[float, float, float, str]:
     """Return (basis_abs, basis_pct, annualized_pct, direction)."""
+    expiry_date = _coerce_date(expiry)
+    if expiry_date is None:
+        raise ValueError(f"invalid fut expiry: {expiry!r}")
     basis_abs = round(fut - spot, 4)
     if spot <= 0:
         basis_pct = 0.0
     else:
         basis_pct = round(basis_abs / spot * 100.0, 4)
     today = as_of or date.today()
-    dte = max((expiry - today).days, 1)
+    dte = max((expiry_date - today).days, 1)
     annualized_pct = round(basis_pct * 365 / dte, 4)
     if basis_abs > 0:
         direction = "CONTANGO"
@@ -86,9 +113,7 @@ def compute_basis(
 
 
 def _quote_to_leg(quote: LiveQuote) -> _LegSnapshot:
-    exp = quote.expiry
-    if isinstance(exp, datetime):
-        exp = exp.date()
+    exp = _coerce_date(quote.expiry)
     return _LegSnapshot(
         ltp=float(quote.last_price or 0),
         bid=quote.bid,
@@ -285,12 +310,13 @@ class BasisEngine:
 
     def _resolve_expiry(self, symbol: str, spot: _LegSnapshot, fut: _LegSnapshot) -> Optional[date]:
         for leg in (fut, spot):
-            if leg.expiry is not None:
-                return leg.expiry
+            exp = _coerce_date(leg.expiry)
+            if exp is not None:
+                return exp
         ep = self._open.get(symbol)
         if ep and ep.fut_expiry:
-            return ep.fut_expiry
-        return self._expiry_lookup(symbol)
+            return _coerce_date(ep.fut_expiry)
+        return _coerce_date(self._expiry_lookup(symbol))
 
     def _evaluate_symbol(self, symbol: str) -> None:
         now = self._clock()

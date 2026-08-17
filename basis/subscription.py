@@ -8,6 +8,7 @@ from typing import Callable, Iterable, List
 
 from config import BASIS_CONFIG
 from database.connection import SQLServerConnection
+from basis.basis_engine import _coerce_date
 from database.basis_models import BasisConfigRepo, BasisPairRepo
 
 BasisPairLoader = Callable[[], Iterable["BasisSubscriptionPair"]]
@@ -34,9 +35,9 @@ def make_basis_pair_loader(db: SQLServerConnection) -> BasisPairLoader:
         out: List[BasisSubscriptionPair] = []
         for r in rows:
             try:
-                exp = r["fut_expiry"]
-                if hasattr(exp, "date"):
-                    exp = exp.date()
+                exp = _coerce_date(r["fut_expiry"])
+                if exp is None:
+                    continue
                 out.append(
                     BasisSubscriptionPair(
                         symbol=str(r["symbol"]).upper(),

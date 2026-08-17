@@ -9,6 +9,14 @@ import pytest
 from basis.basis_engine import compute_basis
 
 
+def test_compute_basis_accepts_iso_string_expiry():
+    _, basis_pct, _, direction = compute_basis(
+        100.0, 101.0, "2026-09-25", as_of=date(2026, 8, 17),
+    )
+    assert basis_pct == 1.0
+    assert direction == "CONTANGO"
+
+
 def test_compute_basis_formula():
     spot, fut = 2500.0, 2512.5
     expiry = date(2026, 8, 28)

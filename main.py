@@ -348,13 +348,10 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
         isin_lookup=lambda s: isin_by_symbol.get(str(s).upper()),
     )
 
+    from basis.basis_engine import _coerce_date
+
     def _basis_expiry_lookup(sym: str):
-        raw = expiry_by_symbol.get(str(sym).upper())
-        if raw is None:
-            return None
-        if hasattr(raw, "date"):
-            return raw.date()
-        return raw
+        return _coerce_date(expiry_by_symbol.get(str(sym).upper()))
 
     basis_engine = BasisEngine(
         db=db,
