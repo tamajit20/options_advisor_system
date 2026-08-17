@@ -654,7 +654,8 @@ function switchTab(name) {
     const isBottomNav = b.classList.contains('bnav-item');
     const active = tab === name
       || (isBottomNav && tab === 'scout-signals' && name.startsWith('scout-'))
-      || (isBottomNav && tab === 'arb-live' && name.startsWith('arb-'));
+      || (isBottomNav && tab === 'arb-live' && name.startsWith('arb-'))
+      || (isBottomNav && tab === 'basis-live' && name.startsWith('basis-'));
     b.classList.toggle('active', active);
   });
   if (name === 'suggestion')    loadSuggestion();
@@ -671,6 +672,9 @@ function switchTab(name) {
     if (sec) sec.open = true;
   } else if (name.startsWith('arb-')) {
     const sec = document.getElementById('nav-section-arb');
+    if (sec) sec.open = true;
+  } else if (name.startsWith('basis-')) {
+    const sec = document.getElementById('nav-section-basis');
     if (sec) sec.open = true;
   } else if (TABS.includes(name)) {
     const sec = document.getElementById('nav-section-options');
@@ -701,6 +705,7 @@ function _restoreActiveTab() {
   if (hash === 'scout') initial = 'scout-signals';
   else if (hash && hash.startsWith('scout-')) initial = hash;
   else if (hash && hash.startsWith('arb-')) initial = hash;
+  else if (hash && hash.startsWith('basis-')) initial = hash;
   else if (hash && TABS.includes(hash)) initial = hash;
   if (!initial) {
     try {
@@ -708,6 +713,7 @@ function _restoreActiveTab() {
       if (saved === 'scout') initial = 'scout-signals';
       else if (saved && saved.startsWith('scout-')) initial = saved;
       else if (saved && saved.startsWith('arb-')) initial = saved;
+      else if (saved && saved.startsWith('basis-')) initial = saved;
       else if (saved && TABS.includes(saved)) initial = saved;
     } catch (_) {}
   }
@@ -5625,8 +5631,54 @@ function renderWsMonitorSnap(snap, { silent = false } = {}) {
   }
 }
 
+async function loadAppsRuntimeToggles() {
+  const notice = document.getElementById('apps-runtime-notice');
+  try {
+    const data = await API('/api/runtime-flags');
+    const byKey = Object.fromEntries((data.flags || []).map(f => [f.key, f.value]));
+    document.querySelectorAll('.apps-runtime-toggle').forEach(el => {
+      const key = el.dataset.appFlag;
+      if (!key) return;
+      const raw = byKey[key];
+      el.checked = raw === undefined ? true : String(raw).toLowerCase() === 'true';
+    });
+    if (notice) notice.hidden = true;
+  } catch (err) {
+    if (notice) {
+      notice.hidden = false;
+      notice.textContent = 'Failed to load app toggles: ' + String(err);
+    }
+  }
+}
+
+async function setAppsRuntimeFlag(key, enabled) {
+  const notice = document.getElementById('apps-runtime-notice');
+  try {
+    await API('/api/runtime-flags/' + encodeURIComponent(key), {
+      method: 'POST',
+      body: JSON.stringify({ value: !!enabled }),
+    });
+    if (notice) {
+      notice.hidden = false;
+      notice.classList.add('scout-config-notice--ok');
+      notice.textContent = 'Saved — WS subscriptions update within ~60s, engines within ~30s.';
+    }
+    refreshGlobalBanners();
+  } catch (err) {
+    if (notice) {
+      notice.hidden = false;
+      notice.classList.remove('scout-config-notice--ok');
+      notice.textContent = 'Save failed: ' + String(err);
+    }
+    throw err;
+  }
+}
+
 async function loadWsMonitor({ silent = false } = {}) {
-  if (!silent) loadZerodhaStatus();
+  if (!silent) {
+    loadZerodhaStatus();
+    loadAppsRuntimeToggles();
+  }
   const summary = $('#wsmon-summary');
   if (!silent && summary) summary.classList.add('loading');
 
@@ -5654,6 +5706,18 @@ async function loadWsMonitor({ silent = false } = {}) {
 document.addEventListener('DOMContentLoaded', () => {
   const panel = document.getElementById('panel-wsmon');
   if (!panel) return;
+  document.querySelectorAll('.apps-runtime-toggle').forEach(el => {
+    el.addEventListener('change', async () => {
+      const key = el.dataset.appFlag;
+      if (!key) return;
+      const prev = !el.checked;
+      try {
+        await setAppsRuntimeFlag(key, el.checked);
+      } catch (_) {
+        el.checked = prev;
+      }
+    });
+  });
   $('#wsmon-refresh')?.addEventListener('click', () => loadWsMonitor());
   $('#wsmon-topic')?.addEventListener('change', () => {
     stopWsMonitorAutoRefresh();

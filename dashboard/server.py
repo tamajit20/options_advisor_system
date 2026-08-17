@@ -814,14 +814,22 @@ def _notif_row_simple(r: Dict[str, Any]) -> Dict[str, Any]:
 def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
     """Runtime flags + scheduler summary for global banners."""
     from database.runtime_flags import (
+        FLAG_ARB_APP_ENABLED,
+        FLAG_BASIS_APP_ENABLED,
         FLAG_CIRCUIT_BREAKER_ACTIVE,
         FLAG_KILL_SWITCH,
+        FLAG_OPTIONS_ADVISOR_ENABLED,
+        FLAG_SCOUT_APP_ENABLED,
         FLAG_TRADE_EXECUTION_ENABLED,
         RuntimeFlagsRepo,
     )
     cb_active = False
     kill_switch = False
     trade_exec_enabled = True
+    options_app_enabled = True
+    scout_app_enabled = True
+    arb_app_enabled = True
+    basis_app_enabled = True
     try:
         repo = RuntimeFlagsRepo(db, cache_ttl_seconds=0)
         cb_active = repo.get_bool(FLAG_CIRCUIT_BREAKER_ACTIVE, default=False)
@@ -829,6 +837,10 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
         trade_exec_enabled = repo.get_bool(
             FLAG_TRADE_EXECUTION_ENABLED, default=True,
         )
+        options_app_enabled = repo.get_bool(FLAG_OPTIONS_ADVISOR_ENABLED, default=True)
+        scout_app_enabled = repo.get_bool(FLAG_SCOUT_APP_ENABLED, default=True)
+        arb_app_enabled = repo.get_bool(FLAG_ARB_APP_ENABLED, default=True)
+        basis_app_enabled = repo.get_bool(FLAG_BASIS_APP_ENABLED, default=True)
     except Exception:
         logger.debug("system-status: runtime_flags read failed", exc_info=True)
     sch_running = False
@@ -842,6 +854,10 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
         "circuit_breaker_active": cb_active,
         "kill_switch":             kill_switch,
         "trade_execution_enabled": trade_exec_enabled,
+        "options_advisor_enabled": options_app_enabled,
+        "scout_app_enabled":       scout_app_enabled,
+        "arb_app_enabled":         arb_app_enabled,
+        "basis_app_enabled":       basis_app_enabled,
         "scheduler_running":       sch_running,
     }
 
@@ -2426,8 +2442,12 @@ def create_app() -> Flask:
         # ---- runtime flags -------------------------------------------
         try:
             from database.runtime_flags import (
+                FLAG_ARB_APP_ENABLED,
+                FLAG_BASIS_APP_ENABLED,
                 FLAG_CIRCUIT_BREAKER_ACTIVE,
                 FLAG_KILL_SWITCH,
+                FLAG_OPTIONS_ADVISOR_ENABLED,
+                FLAG_SCOUT_APP_ENABLED,
                 FLAG_TRADE_EXECUTION_ENABLED,
                 RuntimeFlagsRepo,
             )
@@ -2436,6 +2456,10 @@ def create_app() -> Flask:
                 "circuit_breaker_active": r.get_bool(FLAG_CIRCUIT_BREAKER_ACTIVE, default=False),
                 "kill_switch":             r.get_bool(FLAG_KILL_SWITCH, default=False),
                 "trade_execution_enabled": r.get_bool(FLAG_TRADE_EXECUTION_ENABLED, default=True),
+                "options_advisor_enabled": r.get_bool(FLAG_OPTIONS_ADVISOR_ENABLED, default=True),
+                "scout_app_enabled":       r.get_bool(FLAG_SCOUT_APP_ENABLED, default=True),
+                "arb_app_enabled":         r.get_bool(FLAG_ARB_APP_ENABLED, default=True),
+                "basis_app_enabled":       r.get_bool(FLAG_BASIS_APP_ENABLED, default=True),
             }
         except Exception as exc:  # pragma: no cover
             out["runtime_flags"] = {"available": False, "reason": str(exc)}
@@ -2599,8 +2623,10 @@ def create_app() -> Flask:
 
     from scout.routes import register_scout
     from arb.routes import register_arb
+    from basis.routes import register_basis
     register_scout(app)
     register_arb(app)
+    register_basis(app)
 
     import threading as _threading
 

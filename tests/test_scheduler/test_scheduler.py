@@ -95,7 +95,7 @@ class TestEodPipeline:
             sched.JOB_FUNCS[step] = _make_tracker(step)
 
         sched.job_eod_nightly_pipeline()
-        assert calls == list(sched._EOD_PIPELINE_STEPS)
+        assert calls == list(sched.active_eod_pipeline_steps())
 
     def test_morning_catchup_runs_all_steps(self, patched_db, mocker):
         calls: list[str] = []
@@ -106,11 +106,15 @@ class TestEodPipeline:
                 sched._LAST_STATUS[name] = "SUCCESS"
             return _fn
 
-        for step in sched._EOD_PIPELINE_STEPS:
+        for step in sched.active_eod_pipeline_steps():
             sched.JOB_FUNCS[step] = _make_tracker(step)
 
         sched.job_morning_eod_catchup()
-        assert calls == list(sched._EOD_PIPELINE_STEPS)
+        assert calls == list(sched.active_eod_pipeline_steps())
+
+    def test_eod_pipeline_skips_suggestion_engine_by_default(self):
+        assert "suggestion_engine" not in sched.active_eod_pipeline_steps()
+        assert "iv_calculation" in sched.active_eod_pipeline_steps()
 
     def test_continues_when_fo_bhav_has_no_data(self, patched_db, mocker):
         """Best-effort: pipeline runs all steps even when bhav is NO_DATA."""
@@ -125,7 +129,7 @@ class TestEodPipeline:
             sched.JOB_FUNCS[step] = _make(step)
 
         sched.job_eod_nightly_pipeline()
-        for step in sched._EOD_PIPELINE_STEPS:
+        for step in sched.active_eod_pipeline_steps():
             assert step in sched._LAST_STATUS
 
 

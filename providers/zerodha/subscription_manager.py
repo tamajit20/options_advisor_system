@@ -92,6 +92,11 @@ try:
 except ImportError:  # pragma: no cover
     ArbPairLoader = Callable[[], Iterable[object]]  # type: ignore[misc,assignment]
 
+try:
+    from basis.subscription import BasisPairLoader
+except ImportError:  # pragma: no cover
+    BasisPairLoader = Callable[[], Iterable[object]]  # type: ignore[misc,assignment]
+
 
 # Default indexes streamed for opportunity regeneration. Tied to
 # `STRATEGY_CONFIG["underlyings"]` plus INDIA VIX.
@@ -140,6 +145,9 @@ class SubscriptionManager:
     arb_pair_loader:
         Zero-arg callable returning ``ArbSubscriptionPair`` rows (NSE+BSE
         tokens for dual-listed symbols). Tagged ``arb_nse`` / ``arb_bse``.
+    basis_pair_loader:
+        Zero-arg callable returning ``BasisSubscriptionPair`` rows (NSE spot
+        + NFO near-month fut). Tagged ``basis_spot`` / ``basis_fut``.
     interval_seconds:
         Poll cadence (default 60s).
     """
@@ -152,9 +160,14 @@ class SubscriptionManager:
         index_loader: Optional[IndexLoader] = None,
         equity_loader: Optional[EquityLoader] = None,
         arb_pair_loader: Optional[ArbPairLoader] = None,
+        basis_pair_loader: Optional[BasisPairLoader] = None,
         *,
         interval_seconds: float = 60.0,
         kill_switch_fn: Optional[Callable[[], bool]] = None,
+        options_enabled_fn: Optional[Callable[[], bool]] = None,
+        scout_enabled_fn: Optional[Callable[[], bool]] = None,
+        arb_enabled_fn: Optional[Callable[[], bool]] = None,
+        basis_enabled_fn: Optional[Callable[[], bool]] = None,
     ):
         if interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive")
@@ -166,11 +179,16 @@ class SubscriptionManager:
         )
         self._equity_loader: EquityLoader = equity_loader or (lambda: [])
         self._arb_pair_loader: ArbPairLoader = arb_pair_loader or (lambda: [])
+        self._basis_pair_loader: BasisPairLoader = basis_pair_loader or (lambda: [])
         self._interval = float(interval_seconds)
         # `kill_switch_fn()` returns True when live data is globally disabled.
         # When True, we apply an empty token set every cycle. The runner stays
         # connected (so flipping the switch back on resumes immediately).
         self._kill_switch_fn: Callable[[], bool] = kill_switch_fn or (lambda: False)
+        self._options_enabled_fn: Callable[[], bool] = options_enabled_fn or (lambda: True)
+        self._scout_enabled_fn: Callable[[], bool] = scout_enabled_fn or (lambda: True)
+        self._arb_enabled_fn: Callable[[], bool] = arb_enabled_fn or (lambda: True)
+        self._basis_enabled_fn: Callable[[], bool] = basis_enabled_fn or (lambda: True)
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -230,10 +248,14 @@ class SubscriptionManager:
                 )
             return tokens
 
-        legs = list(self._leg_loader())
-        indexes = list(self._index_loader())
-        equities = list(self._equity_loader())
-        arb_pairs = list(self._arb_pair_loader())
+        legs = list(self._leg_loader()) if self._options_enabled_fn() else []
+        indexes = list(self._index_loader()) if self._options_enabled_fn() else []
+        basis_pairs = list(self._basis_pair_loader()) if self._basis_enabled_fn() else []
+        basis_symbols = {str(getattr(p, "symbol", "") or "").upper() for p in basis_pairs}
+        basis_symbols.discard("")
+        equities_raw = list(self._equity_loader()) if self._scout_enabled_fn() else []
+        equities = [s for s in equities_raw if str(s).upper() not in basis_symbols]
+        arb_pairs = list(self._arb_pair_loader()) if self._arb_enabled_fn() else []
 
         tokens = set()
         unresolved = 0
@@ -316,6 +338,36 @@ class SubscriptionManager:
             self._runner.set_token_meta(
                 bse_tok,
                 TokenMeta(symbol=sym, is_index=False, product="arb_bse", exchange="BSE"),
+            )
+
+        for pair in basis_pairs:
+            sym = str(getattr(pair, "symbol", "") or "").upper()
+            spot_tok = int(getattr(pair, "spot_token", 0) or 0)
+            fut_tok = int(getattr(pair, "fut_token", 0) or 0)
+            fut_exp = getattr(pair, "fut_expiry", None)
+            if not sym or not spot_tok or not fut_tok:
+                continue
+            tokens.add(spot_tok)
+            tokens.add(fut_tok)
+            expiry_dt = None
+            if fut_exp is not None:
+                if isinstance(fut_exp, date):
+                    expiry_dt = datetime(fut_exp.year, fut_exp.month, fut_exp.day)
+                elif isinstance(fut_exp, datetime):
+                    expiry_dt = fut_exp
+            self._runner.set_token_meta(
+                spot_tok,
+                TokenMeta(symbol=sym, is_index=False, product="basis_spot", exchange="NSE"),
+            )
+            self._runner.set_token_meta(
+                fut_tok,
+                TokenMeta(
+                    symbol=sym,
+                    expiry=expiry_dt,
+                    is_index=False,
+                    product="basis_fut",
+                    exchange="NFO",
+                ),
             )
 
         current = self._runner.desired_tokens()

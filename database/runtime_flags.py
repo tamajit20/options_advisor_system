@@ -32,6 +32,15 @@ Flag inventory
                                                    orders today, but the flag is
                                                    reserved so the dashboard UI
                                                    can show it as "off".
+- `options_advisor_enabled` (bool, default True)  — Options Advisor WS load:
+                                                   index/option ticks, chain
+                                                   aggregator, intraday monitors.
+- `scout_app_enabled`       (bool, default True)  — Scout equity ticks, signal
+                                                   engine, auto-trader poll.
+- `arb_app_enabled`         (bool, default True)  — Arb NSE/BSE ticks and gap
+                                                   engine.
+- `basis_app_enabled`       (bool, default True)  — Basis NSE spot + NFO fut
+                                                   ticks and basis engine.
 """
 
 from __future__ import annotations
@@ -59,6 +68,10 @@ FLAG_CLOSURE_ALERTS = "closure_alerts"
 FLAG_OPPORTUNITY_ALERTS = "opportunity_alerts"
 FLAG_TRADE_EXECUTION_ENABLED = "trade_execution_enabled"
 FLAG_CIRCUIT_BREAKER_ACTIVE = "circuit_breaker_active"
+FLAG_OPTIONS_ADVISOR_ENABLED = "options_advisor_enabled"
+FLAG_SCOUT_APP_ENABLED = "scout_app_enabled"
+FLAG_ARB_APP_ENABLED = "arb_app_enabled"
+FLAG_BASIS_APP_ENABLED = "basis_app_enabled"
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +132,41 @@ DEFAULT_FLAGS: List[_FlagSpec] = [
             "capital. While True, execution_validator vetoes new "
             "PENDING→EXECUTED transitions. Operator clears manually after "
             "reviewing the day's losses."
+        ),
+    ),
+    _FlagSpec(
+        key=FLAG_OPTIONS_ADVISOR_ENABLED,
+        default="true",
+        type="bool",
+        description=(
+            "Options Advisor app — index/option WS subscriptions, chain "
+            "aggregator, live risk and intraday monitors. Off saves CPU/bandwidth."
+        ),
+    ),
+    _FlagSpec(
+        key=FLAG_SCOUT_APP_ENABLED,
+        default="true",
+        type="bool",
+        description=(
+            "Scout app — equity watchlist WS subscriptions, push signal engine, "
+            "and auto-trader poll loop."
+        ),
+    ),
+    _FlagSpec(
+        key=FLAG_ARB_APP_ENABLED,
+        default="true",
+        type="bool",
+        description=(
+            "Arb Monitor app — dual-listed NSE/BSE WS subscriptions and gap engine."
+        ),
+    ),
+    _FlagSpec(
+        key=FLAG_BASIS_APP_ENABLED,
+        default="true",
+        type="bool",
+        description=(
+            "Basis Monitor app — NSE spot + NFO near-month fut WS subscriptions "
+            "and cash-futures basis engine."
         ),
     ),
 ]

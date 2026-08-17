@@ -65,7 +65,8 @@
 
   function gapRow(g, live) {
     const dur = g.duration_sec != null ? g.duration_sec + 's' : (live ? '…' : '—');
-    const gapCls = Math.abs(Number(g.gap_pct || 0)) >= 0.5 ? 'arb-gap-high' : '';
+    const peakPct = Math.max(Math.abs(Number(g.gap_pct || 0)), Math.abs(Number(g.max_gap_pct || 0)));
+    const peakCls = peakPct >= 0.5 ? 'arb-gap-high' : '';
     return `<tr>
       <td><strong>${escapeHtml(g.symbol)}</strong></td>
       <td>${escapeHtml(g.started_at || '')}</td>
@@ -73,9 +74,9 @@
       <td>${dur}</td>
       <td>${fmtPx(g.nse_ltp)}</td>
       <td>${fmtPx(g.bse_ltp)}</td>
-      <td class="${gapCls}">${fmtPct(g.gap_pct)}</td>
+      <td>${fmtPct(g.gap_pct)}</td>
       <td class="${dirClass(g.direction)}">${escapeHtml(g.direction || '')}</td>
-      <td>${fmtPct(g.max_gap_pct)}</td>
+      <td class="${peakCls}">${fmtPct(g.max_gap_pct)}</td>
       <td>${g.sample_count ?? '—'}</td>
       <td>${escapeHtml(g.isin || '')}</td>
     </tr>`;
@@ -85,10 +86,12 @@
     if (!gaps || !gaps.length) {
       return '<div class="arb-empty">No gap episodes' + (live ? ' open right now' : ' for these filters') + '.</div>';
     }
+    const gapCol = live ? 'Gap %' : 'Gap % at close';
+    const peakCol = 'Peak gap %';
     const head = `<thead><tr>
       <th>Symbol</th><th>Started</th><th>Ended</th><th>Duration</th>
-      <th>NSE LTP</th><th>BSE LTP</th><th>Gap %</th><th>Direction</th>
-      <th>Max gap %</th><th>Samples</th><th>ISIN</th>
+      <th>NSE LTP</th><th>BSE LTP</th><th>${gapCol}</th><th>Direction</th>
+      <th>${peakCol}</th><th>Samples</th><th>ISIN</th>
     </tr></thead>`;
     const body = gaps.map(g => gapRow(g, live)).join('');
     return `<div class="arb-table-wrap"><table class="arb-table">${head}<tbody>${body}</tbody></table></div>`;

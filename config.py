@@ -82,6 +82,11 @@ SCHEDULER_CONFIG = {
     # disabled — no 20:30 VM window. Individual EOD crons stay off (manual re-run only).
     # When eod_nightly_pipeline is enabled, individual EOD crons below are not scheduled
     # (enabled: False) but still appear in Jobs for manual step re-runs.
+    #
+    # Steps skipped inside morning_eod_catchup / eod_nightly_pipeline (still runnable
+    # manually from Jobs). Use live_suggestion_engine during market hours instead of
+    # EOD bhav-based suggestions.
+    "eod_pipeline_skip_steps": ["suggestion_engine"],
     "jobs": {
         # --- EOD chain (scheduled via eod_nightly_pipeline @ 20:35 Mon–Fri) ---
         "fo_bhav_download":   {"hour": 19, "minute": 30, "enabled": False},
@@ -227,6 +232,29 @@ ARB_CONFIG: dict = {
     # Persist to arb_gaps only when |gap_pct| >= this (0 = store all episodes).
     # Live SSE still shows sub-threshold gaps; History/DB holds filtered rows only.
     "min_gap_store_pct": 0.0,
+    # On close, skip DB if episode lasted fewer seconds (0 = no duration gate).
+    "min_duration_store_sec": 0,
+}
+
+# ---------------------------------------------------------------------------
+# Cash-Futures Basis Monitor (separate module — basis_* tables, /api/basis/*)
+# ---------------------------------------------------------------------------
+BASIS_CONFIG: dict = {
+    "enabled": True,
+    # Universe for pair building: nifty50_fo | all_nse_fo
+    "universe": "nifty50_fo",
+    # Max age (seconds) for pairing spot+fut legs on the same tick cycle.
+    "tick_staleness_sec": 3,
+    # Close open episode when either leg is older than this (seconds).
+    "leg_stale_close_sec": 5,
+    # Background DB writer flush interval (seconds).
+    "db_flush_interval_sec": 1,
+    # Shared snapshot for dashboard SSE (written by ws_runner basis engine).
+    "live_state_path": "data/basis_live_state.json",
+    # Server-side watch interval for /api/basis/live/stream (seconds).
+    "live_stream_poll_sec": 0.5,
+    # Persist to basis_episodes only when |basis_pct| >= this (0 = store all).
+    "min_basis_store_pct": 0.0,
     # On close, skip DB if episode lasted fewer seconds (0 = no duration gate).
     "min_duration_store_sec": 0,
 }

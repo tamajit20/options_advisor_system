@@ -177,6 +177,19 @@ class InstrumentMaster:
         """All BSE cash equities (EQ)."""
         return self._list_equity("BSE")
 
+    def list_nfo_futures(self, name: str) -> List[Instrument]:
+        """All NFO FUT for underlying `name` (Kite `name` = EQ tradingsymbol)."""
+        sym = str(name).upper()
+        with self._lock:
+            out = [
+                inst for inst in self._by_symbol.values()
+                if inst.exchange == "NFO"
+                and inst.instrument_type == "FUT"
+                and inst.name.upper() == sym
+            ]
+        out.sort(key=lambda i: (i.expiry or date.max))
+        return out
+
     def _list_equity(self, exchange: str) -> List[Instrument]:
         with self._lock:
             out = [

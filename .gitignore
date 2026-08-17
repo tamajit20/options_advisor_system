@@ -24,6 +24,7 @@ Thumbs.db
 # Runtime live state (written by ws_runner / dashboard SSE)
 data/live_mtm_state.json
 data/arb_live_state.json
+data/basis_live_state.json
 data/live_risk_status.json
 data/ws_status.json
 

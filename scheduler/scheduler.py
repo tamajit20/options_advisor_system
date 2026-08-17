@@ -62,7 +62,7 @@ from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
 
-# EOD steps run sequentially by eod_nightly_pipeline (Azure VM 20:30–21:00 window).
+# EOD steps run sequentially by eod_nightly_pipeline / morning_eod_catchup.
 _EOD_PIPELINE_STEPS: tuple[str, ...] = (
     "fo_bhav_download",
     "spot_bhav_download",
@@ -77,6 +77,12 @@ _EOD_PIPELINE_STEPS: tuple[str, ...] = (
 )
 
 _EOD_JOBS_SUPERSEDED = frozenset(_EOD_PIPELINE_STEPS)
+
+
+def active_eod_pipeline_steps() -> tuple[str, ...]:
+    """Pipeline steps after applying ``eod_pipeline_skip_steps`` from config."""
+    skip = frozenset(SCHEDULER_CONFIG.get("eod_pipeline_skip_steps") or ())
+    return tuple(s for s in _EOD_PIPELINE_STEPS if s not in skip)
 
 
 def _eod_pipeline_enabled() -> bool:
@@ -454,7 +460,7 @@ def _run_eod_pipeline_steps(label: str) -> int:
     FII, simulation) always get a chance to run even when bhav is late.
     """
     summary: dict[str, str] = {}
-    for step in _EOD_PIPELINE_STEPS:
+    for step in active_eod_pipeline_steps():
         step_fn = JOB_FUNCS.get(step)
         if step_fn is None:
             logger.warning("%s: missing handler for %s", label, step)

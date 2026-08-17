@@ -181,3 +181,47 @@ def test_gap_engine_persists_when_gap_meets_min_store_pct(mocker):
     engine._on_tick(_quote("RELIANCE", "BSE", 100.0, t0))
     engine._flush_pending()
     engine._gap_repo.insert_open.assert_called_once()
+
+
+def test_close_episode_peak_includes_final_gap_pct(mocker):
+    """Stale/direction-flip close must bump peak so it is never below gap at close."""
+    mocker.patch("arb.gap_engine.get_arb_settings", return_value={
+        "enabled": True,
+        "tick_staleness_sec": 3,
+        "leg_stale_close_sec": 5,
+        "min_gap_store_pct": 0,
+        "min_duration_store_sec": 0,
+    })
+    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+        "enabled": True,
+        "db_flush_interval_sec": 60,
+    })
+    db = MagicMock()
+    t0 = datetime(2026, 8, 17, 9, 34, 41)
+    t1 = t0 + timedelta(seconds=4)
+    engine = ArbGapEngine(db=db, event_bus=MagicMock(), clock=lambda: t0)
+    engine._gap_repo = MagicMock()
+
+    # Mid-episode sample: smaller % because min leg was BSE (higher base).
+    engine._on_tick(_quote("BPCL", "NSE", 319.0, t0))
+    engine._on_tick(_quote("BPCL", "BSE", 317.63, t0))
+    ep = engine._open["BPCL"]
+    assert ep.max_gap_pct == pytest.approx(0.4313, abs=0.001)
+
+    # Stale close with NSE as cheaper leg → higher % at same rupee gap scale.
+    nse = _LegSnapshot(ltp=316.15, bid=None, ask=None, updated_at=t0)
+    bse = _LegSnapshot(ltp=318.1, bid=None, ask=None, updated_at=t0)
+    gap_abs, gap_pct, direction = compute_gap(316.15, 318.1)
+    assert gap_pct == pytest.approx(0.6168, abs=0.001)
+
+    queued = []
+    engine._q.put = lambda item: queued.append(item)
+    ep.db_id = 7
+    engine._close_episode("BPCL", ep, t1, nse, bse, gap_abs, gap_pct, direction)
+
+    close_ops = [item for item in queued if getattr(item[0], "value", item[0]) == "close"]
+    assert len(close_ops) == 1
+    payload = close_ops[0][4]
+    assert payload["gap_pct"] == pytest.approx(0.6168, abs=0.001)
+    assert payload["max_gap_pct"] >= payload["gap_pct"]
+    assert payload["max_gap_pct"] == pytest.approx(0.6168, abs=0.001)

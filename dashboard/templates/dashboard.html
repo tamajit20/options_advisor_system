@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ cache_bust }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='scout.css') }}?v={{ cache_bust }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='arb.css') }}?v={{ cache_bust }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='basis.css') }}?v={{ cache_bust }}">
 <link rel="icon" href="data:,">
 <style>
   /* Inject theme tokens from server */
@@ -122,6 +123,23 @@
         </button>
         <button class="nav-item" data-tab="arb-config">
           <span class="nav-icon">⚙️</span><span class="nav-label">Arb Config</span>
+        </button>
+      </div>
+    </details>
+    <details class="nav-section nav-section--basis" id="nav-section-basis" open>
+      <summary class="nav-section-summary">Basis Monitor</summary>
+      <div class="nav-section-items">
+        <button class="nav-item" data-tab="basis-live">
+          <span class="nav-icon">📊</span><span class="nav-label">Basis Live</span>
+        </button>
+        <button class="nav-item" data-tab="basis-history">
+          <span class="nav-icon">📈</span><span class="nav-label">History</span>
+        </button>
+        <button class="nav-item" data-tab="basis-pairs">
+          <span class="nav-icon">🔗</span><span class="nav-label">Pairs</span>
+        </button>
+        <button class="nav-item" data-tab="basis-config">
+          <span class="nav-icon">⚙️</span><span class="nav-label">Config</span>
         </button>
       </div>
     </details>
@@ -282,6 +300,37 @@
       <p class="muted" style="margin:0 0 .75rem 0;font-size:.72rem;">
         Zerodha session, live tick stream, and connection health — one place for the WS runner.
       </p>
+
+      <!-- Applications (runtime CPU toggles) -->
+      <div id="apps-runtime-card" class="card wsmon-config-card">
+        <h3 class="wsmon-config-title">Applications</h3>
+        <p class="muted wsmon-config-hint" style="margin:0 0 .75rem 0;">
+          Disable an app to stop its WS subscriptions and background engines (saves CPU). Takes effect within ~30–60s — no container restart.
+        </p>
+        <div class="apps-runtime-grid">
+          <label class="apps-runtime-row">
+            <span class="apps-runtime-name">Options Advisor</span>
+            <span class="apps-runtime-desc muted">Index/option ticks, chain aggregator, risk monitors</span>
+            <input type="checkbox" class="apps-runtime-toggle" data-app-flag="options_advisor_enabled" checked>
+          </label>
+          <label class="apps-runtime-row">
+            <span class="apps-runtime-name">Scout</span>
+            <span class="apps-runtime-desc muted">Equity watchlist ticks, signal engine, auto-trader poll</span>
+            <input type="checkbox" class="apps-runtime-toggle" data-app-flag="scout_app_enabled" checked>
+          </label>
+          <label class="apps-runtime-row">
+            <span class="apps-runtime-name">Arb Monitor</span>
+            <span class="apps-runtime-desc muted">NSE/BSE pair ticks, gap engine (monitor only)</span>
+            <input type="checkbox" class="apps-runtime-toggle" data-app-flag="arb_app_enabled" checked>
+          </label>
+          <label class="apps-runtime-row">
+            <span class="apps-runtime-name">Basis Monitor</span>
+            <span class="apps-runtime-desc muted">NSE spot + NFO near-month fut ticks, basis engine</span>
+            <input type="checkbox" class="apps-runtime-toggle" data-app-flag="basis_app_enabled" checked>
+          </label>
+        </div>
+        <div id="apps-runtime-notice" class="scout-config-notice" hidden></div>
+      </div>
 
       <!-- Zerodha session / WS connection -->
       <div id="zerodha-session-card" class="card wsmon-config-card">
@@ -762,6 +811,7 @@
         <button class="arb-subtab" data-atab="arb-config">Config</button>
       </div>
       <h2 class="panel-title">Arb Monitor — Gap History</h2>
+      <p class="muted arb-intro">Peak gap % is the highest gap during the episode; Gap % at close is the last snapshot when it ended (LTPs in that row).</p>
       <div class="arb-filters">
         <label>From <input type="date" id="arb-hist-from"></label>
         <label>To <input type="date" id="arb-hist-to"></label>
@@ -852,6 +902,105 @@
       </form>
     </article>
 
+    <article class="panel" id="panel-basis-live" aria-hidden="true">
+      <div class="basis-subtabs" role="tablist" aria-label="Basis Monitor sections">
+        <button class="basis-subtab active" data-btab="basis-live">Live</button>
+        <button class="basis-subtab" data-btab="basis-history">History</button>
+        <button class="basis-subtab" data-btab="basis-pairs">Pairs</button>
+        <button class="basis-subtab" data-btab="basis-config">Config</button>
+      </div>
+      <h2 class="panel-title">Basis Live</h2>
+      <p class="muted basis-intro">Open cash-futures basis episodes (spot vs near-month NFO FUT). Updates on each paired tick.</p>
+      <div class="basis-toolbar">
+        <button type="button" class="btn btn-ghost" id="basis-live-refresh">Refresh</button>
+        <span id="basis-live-status" class="muted"></span>
+      </div>
+      <div id="basis-live-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-basis-history" aria-hidden="true">
+      <div class="basis-subtabs" role="tablist" aria-label="Basis Monitor sections">
+        <button class="basis-subtab" data-btab="basis-live">Live</button>
+        <button class="basis-subtab active" data-btab="basis-history">History</button>
+        <button class="basis-subtab" data-btab="basis-pairs">Pairs</button>
+        <button class="basis-subtab" data-btab="basis-config">Config</button>
+      </div>
+      <h2 class="panel-title">Basis History</h2>
+      <p class="muted basis-intro">Peak |basis| % is the highest during the episode; Basis % at close is the last snapshot when it ended.</p>
+      <div class="basis-filters">
+        <label>From <input type="date" id="basis-hist-from"></label>
+        <label>To <input type="date" id="basis-hist-to"></label>
+        <label>Symbol <input type="text" id="basis-hist-symbol" placeholder="RELIANCE"></label>
+        <label>Min |basis| % <input type="number" id="basis-hist-min-pct" step="0.01" min="0" placeholder="0"></label>
+        <label>Min duration (s) <input type="number" id="basis-hist-min-dur" step="1" min="0" placeholder="0"></label>
+        <button type="button" class="btn btn-accent" id="basis-hist-apply">Apply</button>
+      </div>
+      <div id="basis-history-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-basis-pairs" aria-hidden="true">
+      <div class="basis-subtabs" role="tablist" aria-label="Basis Monitor sections">
+        <button class="basis-subtab" data-btab="basis-live">Live</button>
+        <button class="basis-subtab" data-btab="basis-history">History</button>
+        <button class="basis-subtab active" data-btab="basis-pairs">Pairs</button>
+        <button class="basis-subtab" data-btab="basis-config">Config</button>
+      </div>
+      <h2 class="panel-title">Basis Pairs</h2>
+      <p class="muted basis-intro">NSE EQ + earliest NFO FUT expiry ≥ today, built from Kite instrument master.</p>
+      <div class="basis-toolbar">
+        <button type="button" class="btn btn-accent" id="basis-pairs-refresh">Rebuild from master</button>
+        <span id="basis-pairs-status" class="muted"></span>
+      </div>
+      <div id="basis-pairs-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-basis-config" aria-hidden="true">
+      <div class="basis-subtabs" role="tablist" aria-label="Basis Monitor sections">
+        <button class="basis-subtab" data-btab="basis-live">Live</button>
+        <button class="basis-subtab" data-btab="basis-history">History</button>
+        <button class="basis-subtab" data-btab="basis-pairs">Pairs</button>
+        <button class="basis-subtab active" data-btab="basis-config">Config</button>
+      </div>
+      <h2 class="panel-title">Basis Config</h2>
+      <p class="muted basis-intro">Runtime settings saved in the database — survive redeploy.</p>
+      <div id="basis-config-notice" class="scout-config-notice" hidden></div>
+      <form id="basis-config-form" class="scout-config-form" autocomplete="off">
+        <section class="scout-config-section">
+          <h3>General</h3>
+          <label class="scout-config-field scout-config-field--check">
+            <input type="checkbox" name="enabled" checked> Enabled
+          </label>
+          <label class="scout-config-field">
+            Universe
+            <select name="universe">
+              <option value="nifty50_fo">Nifty 50 (F&amp;O)</option>
+              <option value="all_nse_fo">All NSE with near FUT</option>
+            </select>
+          </label>
+          <label class="scout-config-field">
+            Tick staleness (sec)
+            <input type="number" name="tick_staleness_sec" step="0.1" min="0.5" max="30">
+          </label>
+        </section>
+        <section class="scout-config-section">
+          <h3>History store filter</h3>
+          <label class="scout-config-field">
+            Min |basis| % to store
+            <input type="number" name="min_basis_store_pct" step="0.01" min="0" max="10">
+          </label>
+          <label class="scout-config-field">
+            Min duration to store (sec)
+            <input type="number" name="min_duration_store_sec" step="1" min="0" max="3600">
+          </label>
+          <p class="muted scout-config-hint">0 = no filter. Live tab always shows all open episodes.</p>
+        </section>
+        <div class="scout-config-actions">
+          <button type="submit" class="btn btn-accent" id="basis-config-save">Save settings</button>
+          <button type="button" class="btn btn-ghost" id="basis-config-reload">Reload</button>
+        </div>
+      </form>
+    </article>
+
     <article class="panel" id="panel-config" aria-hidden="true">
       <h2 class="panel-title">Configuration</h2>
       <p class="muted">Runtime overrides — these take precedence over <code>config.py</code> defaults. Zerodha / WS connection is on the <strong>WS Monitor</strong> tab.</p>
@@ -874,6 +1023,7 @@
   </button>
   <button class="bnav-item" data-tab="scout-signals"><span>🔍</span><span>Scout</span></button>
   <button class="bnav-item" data-tab="arb-live"><span>⚡</span><span>Arb</span></button>
+  <button class="bnav-item" data-tab="basis-live"><span>📊</span><span>Basis</span></button>
   <button class="bnav-item" data-tab="config"><span>⚙️</span><span>Cfg</span></button>
 </nav>
 
@@ -883,5 +1033,6 @@
 <script src="{{ url_for('static', filename='dashboard.js') }}?v={{ cache_bust }}"></script>
 <script src="{{ url_for('static', filename='scout.js') }}?v={{ cache_bust }}"></script>
 <script src="{{ url_for('static', filename='arb.js') }}?v={{ cache_bust }}"></script>
+<script src="{{ url_for('static', filename='basis.js') }}?v={{ cache_bust }}"></script>
 </body>
 </html>

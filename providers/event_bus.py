@@ -39,6 +39,7 @@ TOPIC_TICK_OPTIONS = "tick.options"          # payload: LiveQuote (option legs)
 TOPIC_TICK_INDEX = "tick.index"              # payload: LiveQuote (index/VIX spots)
 TOPIC_TICK_SCOUT = "tick.scout"              # payload: LiveQuote (scout watchlist EQ)
 TOPIC_TICK_ARB = "tick.arb"                  # payload: LiveQuote (arb NSE/BSE pair legs)
+TOPIC_TICK_BASIS = "tick.basis"              # payload: LiveQuote (basis NSE spot + NFO fut legs)
 TOPIC_CONNECTION_STATE = "connection_state"  # payload: {"provider": str, "state": "connected"/"disconnected"/"degraded", "detail": str}
 TOPIC_TOKEN_EXPIRED = "token_expired"        # payload: {"provider": str}
 TOPIC_TRADE_OPENED = "trade_opened"          # payload: {"trade_id": str}

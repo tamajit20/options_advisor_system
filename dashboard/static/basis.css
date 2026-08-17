@@ -1,0 +1,94 @@
+.nav-section--basis {
+  border-left: 3px solid var(--ok, #059669);
+}
+
+.basis-subtabs {
+  display: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+@media (max-width: 1024px) {
+  .basis-subtabs {
+    display: flex;
+  }
+}
+.basis-subtab {
+  flex: 1;
+  min-width: 4.5rem;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid #2a3744;
+  border-radius: 8px;
+  background: var(--surface-alt, rgba(255, 255, 255, 0.04));
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.basis-subtab.active {
+  background: rgba(5, 150, 105, 0.12);
+  color: var(--ok, #059669);
+  border-color: var(--ok, #059669);
+  font-weight: 600;
+}
+
+.basis-intro {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.basis-toolbar,
+.basis-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.basis-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.basis-filters input {
+  min-width: 7rem;
+}
+
+.basis-table-wrap {
+  overflow-x: auto;
+}
+
+.basis-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.basis-table th,
+.basis-table td {
+  padding: 0.35rem 0.45rem;
+  border-bottom: 1px solid var(--surface-alt, #eee);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.basis-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface, #fff);
+  z-index: 1;
+}
+
+.basis-dir-contango { color: var(--warn, #d97706); font-weight: 600; }
+.basis-dir-backwardation { color: var(--ok, #059669); font-weight: 600; }
+
+.basis-pct-high { font-weight: 600; }
+
+.basis-empty {
+  padding: 1rem;
+  color: var(--text-dim);
+}
