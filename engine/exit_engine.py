@@ -55,12 +55,20 @@ def evaluate_exit(
         (float(r["strike"]), r["option_type"]): float(r.get("mid_price") or 0.0)
         for r in current_chain
     }
+    # Calendar spreads (and any same strike/type legs) pass one chain row per leg
+    # in leg order — use positional mids when lengths match.
+    ordered_mids: list[float] | None = None
+    if len(current_chain) == len(legs):
+        ordered_mids = [float(r.get("mid_price") or 0.0) for r in current_chain]
 
     current_value = 0.0  # what it costs to close the position now
     qty_total = 0
-    for leg in legs:
-        key = (float(leg["strike"]), leg["option_type"])
-        mid = chain_lookup.get(key, 0.0)
+    for i, leg in enumerate(legs):
+        if ordered_mids is not None:
+            mid = ordered_mids[i]
+        else:
+            key = (float(leg["strike"]), leg["option_type"])
+            mid = chain_lookup.get(key, 0.0)
         lots = int(leg.get("lots") or 0)
         lot_size = int(leg.get("lot_size") or 0)
         qty = lots * lot_size

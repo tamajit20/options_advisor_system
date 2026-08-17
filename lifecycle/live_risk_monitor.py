@@ -90,6 +90,26 @@ logger = logging.getLogger(__name__)
 LegKey = Tuple[str, Optional[date], Optional[float], Optional[str]]
 
 
+def _leg_expiry(raw: object) -> Optional[date]:
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return date.fromisoformat(raw.strip()[:10])
+        except ValueError:
+            return None
+    if hasattr(raw, "date"):
+        try:
+            return raw.date()  # type: ignore[union-attr]
+        except Exception:
+            return None
+    return None
+
+
 # ---------------------------------------------------------------------------
 # In-memory views
 # ---------------------------------------------------------------------------
@@ -186,8 +206,18 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                     continue
                 strike = float(sleg["strike"])
                 otype = str(sleg["option_type"]).upper()
+                leg_expiry = _leg_expiry(sleg.get("expiry_date"))
+                if leg_expiry is None:
+                    logger.warning(
+                        "LiveRiskMonitor: trade %s leg %s missing expiry; skipping leg",
+                        trade_id, tl.get("leg_order"),
+                    )
+                    continue
                 key: LegKey = (
-                    str(sug["underlying"]), sug["expiry_date"], strike, otype,
+                    str(sleg.get("symbol") or sug["underlying"]).upper(),
+                    leg_expiry,
+                    strike,
+                    otype,
                 )
                 lots_actual = tl.get("lots_actual")
                 lots_sug = sleg.get("lots")

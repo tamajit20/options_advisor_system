@@ -976,3 +976,35 @@ class TestUnifiedProfitAndLegStress:
         types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
         assert "TARGET_HIT" not in types
 
+
+def test_calendar_spread_mtm_uses_distinct_expiries():
+    """Near/far legs at same strike must not share one LTP key."""
+    near = date(2026, 8, 28)
+    far = date(2026, 9, 30)
+    legs = [
+        _LegRef(
+            leg_order=1, action="SELL", strike=56000.0, option_type="CE",
+            fill_price=200.0, lots=1, lot_size=35,
+            key=("BANKNIFTY", near, 56000.0, "CE"),
+        ),
+        _LegRef(
+            leg_order=2, action="BUY", strike=56000.0, option_type="CE",
+            fill_price=500.0, lots=1, lot_size=35,
+            key=("BANKNIFTY", far, 56000.0, "CE"),
+        ),
+    ]
+    state = _TradeState(
+        trade_id="TRD-CAL", trade_name="BNIFTY-CALENDAR-AUG4-26",
+        strategy="CALENDAR_SPREAD", underlying="BANKNIFTY", expiry=near,
+        entry_net_credit=-10500.0,
+        max_profit=8000.0, max_loss=10500.0,
+        sl_level=None, legs=legs,
+    )
+    monitor, notifier, bus = _build_monitor(
+        state, clock_at=datetime(2026, 8, 17, 15, 20),
+    )
+    bus.publish("tick", _q("BANKNIFTY", near, 56000.0, "CE", 180.0))
+    bus.publish("tick", _q("BANKNIFTY", far, 56000.0, "CE", 480.0))
+    assert monitor._current_pnl(state) == pytest.approx(0.0, abs=50.0)
+    types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+    assert "LOSS_LIMIT_HIT" not in types

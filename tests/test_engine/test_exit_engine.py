@@ -183,6 +183,35 @@ def test_long_straddle_holds_below_hybrid_cap():
 # FUTURE-SCOPE PLACEHOLDERS — see FUTURE_ENHANCEMENT_SCOPES.md
 # ---------------------------------------------------------------------------
 
+def test_calendar_spread_same_strike_uses_per_leg_mids():
+    """CALENDAR: near SELL + far BUY at same strike must not collapse to one mid."""
+    legs = [
+        {"action": "SELL", "strike": 56000.0, "option_type": "CE",
+         "fill_price": 200.0, "lots": 1, "lot_size": 35},
+        {"action": "BUY", "strike": 56000.0, "option_type": "CE",
+         "fill_price": 500.0, "lots": 1, "lot_size": 35},
+    ]
+    entry_debit = -(500 - 200) * 35  # -10500
+    chain = [
+        {"strike": 56000.0, "option_type": "CE", "mid_price": 180.0},
+        {"strike": 56000.0, "option_type": "CE", "mid_price": 480.0},
+    ]
+    result = evaluate_exit(
+        trade_id="T-CAL",
+        legs=legs,
+        current_chain=chain,
+        entry_net_credit=entry_debit,
+        max_profit_rs=8000.0,
+        max_loss_rs=10500.0,
+        sl_level_per_share=None,
+        days_to_expiry=8,
+        strategy="CALENDAR_SPREAD",
+    )
+    # Close: buy back short @180, sell long @480 → +10500; PnL ≈ 0
+    assert result.decision == "HOLD"
+    assert "₹0" in result.reason or "P&L ₹0" in result.reason
+
+
 def test_put_side_uses_tighter_sl_fraction():
     """S5: BULL_PUT_SPREAD uses 40% SL fraction (tighter than default 50%)."""
     from engine.sl_threshold import strategy_sl_config

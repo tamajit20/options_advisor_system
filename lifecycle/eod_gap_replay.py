@@ -65,10 +65,16 @@ def _compute_mtm(
         (float(r["strike"]), r["option_type"]): float(r.get("mid_price") or 0.0)
         for r in current_chain
     }
+    ordered_mids: list[float] | None = None
+    if len(current_chain) == len(legs):
+        ordered_mids = [float(r.get("mid_price") or 0.0) for r in current_chain]
     current_value = 0.0
-    for leg in legs:
-        key = (float(leg["strike"]), leg["option_type"])
-        mid = chain_lookup.get(key, 0.0)
+    for i, leg in enumerate(legs):
+        if ordered_mids is not None:
+            mid = ordered_mids[i]
+        else:
+            key = (float(leg["strike"]), leg["option_type"])
+            mid = chain_lookup.get(key, 0.0)
         qty = int(leg.get("lots") or 0) * int(leg.get("lot_size") or 0)
         sign = -1.0 if leg["action"] == "SELL" else 1.0
         current_value += sign * mid * qty
