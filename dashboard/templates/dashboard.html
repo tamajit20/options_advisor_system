@@ -736,6 +736,11 @@
     </article>
 
     <article class="panel" id="panel-arb-live" aria-hidden="true">
+      <div class="arb-subtabs" role="tablist" aria-label="Arb Monitor sections">
+        <button class="arb-subtab active" data-atab="arb-live">Live</button>
+        <button class="arb-subtab" data-atab="arb-history">History</button>
+        <button class="arb-subtab" data-atab="arb-pairs">Pairs</button>
+      </div>
       <h2 class="panel-title">Arb Monitor — Live Gaps</h2>
       <p class="muted arb-intro">Open NSE↔BSE gap episodes updating on each paired tick. Filter history on the Gap History tab.</p>
       <div class="arb-toolbar">
@@ -746,6 +751,11 @@
     </article>
 
     <article class="panel" id="panel-arb-history" aria-hidden="true">
+      <div class="arb-subtabs" role="tablist" aria-label="Arb Monitor sections">
+        <button class="arb-subtab" data-atab="arb-live">Live</button>
+        <button class="arb-subtab active" data-atab="arb-history">History</button>
+        <button class="arb-subtab" data-atab="arb-pairs">Pairs</button>
+      </div>
       <h2 class="panel-title">Arb Monitor — Gap History</h2>
       <div class="arb-filters">
         <label>From <input type="date" id="arb-hist-from"></label>
@@ -759,6 +769,11 @@
     </article>
 
     <article class="panel" id="panel-arb-pairs" aria-hidden="true">
+      <div class="arb-subtabs" role="tablist" aria-label="Arb Monitor sections">
+        <button class="arb-subtab" data-atab="arb-live">Live</button>
+        <button class="arb-subtab" data-atab="arb-history">History</button>
+        <button class="arb-subtab active" data-atab="arb-pairs">Pairs</button>
+      </div>
       <h2 class="panel-title">Arb Monitor — NSE↔BSE Pairs</h2>
       <p class="muted arb-intro">Dual-listed mapping built from Kite instrument master (ISIN match, else tradingsymbol).</p>
       <div class="arb-toolbar">
@@ -789,6 +804,7 @@
     <span>🔔</span><span>Alerts</span>
   </button>
   <button class="bnav-item" data-tab="scout-signals"><span>🔍</span><span>Scout</span></button>
+  <button class="bnav-item" data-tab="arb-live"><span>⚡</span><span>Arb</span></button>
   <button class="bnav-item" data-tab="config"><span>⚙️</span><span>Cfg</span></button>
 </nav>
 

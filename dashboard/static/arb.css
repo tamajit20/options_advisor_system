@@ -2,6 +2,37 @@
   border-left: 3px solid var(--accent, #6366f1);
 }
 
+/* In-panel sub-nav (mobile — side nav hidden below 1025px) */
+.arb-subtabs {
+  display: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+@media (max-width: 1024px) {
+  .arb-subtabs {
+    display: flex;
+  }
+}
+.arb-subtab {
+  flex: 1;
+  min-width: 4.5rem;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid #2a3744;
+  border-radius: 8px;
+  background: var(--surface-alt, rgba(255, 255, 255, 0.04));
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.arb-subtab.active {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
 .arb-intro {
   margin: 0 0 0.75rem;
   font-size: 0.9rem;

@@ -699,11 +699,15 @@ function _restoreActiveTab() {
   let initial = null;
   const hash = (window.location.hash || '').replace(/^#/, '');
   if (hash === 'scout') initial = 'scout-signals';
+  else if (hash && hash.startsWith('scout-')) initial = hash;
+  else if (hash && hash.startsWith('arb-')) initial = hash;
   else if (hash && TABS.includes(hash)) initial = hash;
   if (!initial) {
     try {
       const saved = localStorage.getItem('activeTab');
       if (saved === 'scout') initial = 'scout-signals';
+      else if (saved && saved.startsWith('scout-')) initial = saved;
+      else if (saved && saved.startsWith('arb-')) initial = saved;
       else if (saved && TABS.includes(saved)) initial = saved;
     } catch (_) {}
   }

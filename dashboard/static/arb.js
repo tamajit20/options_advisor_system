@@ -6,8 +6,24 @@
 
   const ARB_TABS = ['arb-live', 'arb-history', 'arb-pairs'];
   const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
   let _liveSource = null;
+
+  function updateArbSubtabs(activeTab) {
+    $$('.arb-subtab').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.atab === activeTab);
+    });
+  }
+
+  function bindArbSubtabs() {
+    $$('.arb-subtab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.dataset.atab;
+        if (tab && typeof window.switchTab === 'function') window.switchTab(tab);
+      });
+    });
+  }
 
   async function arbApi(path, opts = {}) {
     const res = await fetch('/api/arb' + path, {
@@ -199,6 +215,7 @@
   }
 
   function onArbTabEnter(tab) {
+    updateArbSubtabs(tab);
     if (tab === 'arb-live') {
       loadArbLive().then(() => startLivePoll());
     } else {
@@ -219,6 +236,7 @@
   });
 
   document.addEventListener('DOMContentLoaded', () => {
+    bindArbSubtabs();
     $('#arb-live-refresh')?.addEventListener('click', loadArbLive);
     $('#arb-hist-apply')?.addEventListener('click', loadArbHistory);
     $('#arb-pairs-refresh')?.addEventListener('click', refreshPairs);
