@@ -224,6 +224,11 @@ ARB_CONFIG: dict = {
     "live_state_path": "data/arb_live_state.json",
     # Server-side watch interval for /api/arb/live/stream (seconds).
     "live_stream_poll_sec": 0.5,
+    # Persist to arb_gaps only when |gap_pct| >= this (0 = store all episodes).
+    # Live SSE still shows sub-threshold gaps; History/DB holds filtered rows only.
+    "min_gap_store_pct": 0.0,
+    # On close, skip DB if episode lasted fewer seconds (0 = no duration gate).
+    "min_duration_store_sec": 0,
 }
 
 SCOUT_CONFIG: dict = {

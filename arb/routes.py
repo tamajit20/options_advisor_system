@@ -104,6 +104,8 @@ def arb_status(db):
         "universe": cfg.get_universe(default=ARB_CONFIG.get("universe", "nifty50_dual")),
         "pairs_count": pairs,
         "tick_staleness_sec": ARB_CONFIG.get("tick_staleness_sec", 3),
+        "min_gap_store_pct": float(ARB_CONFIG.get("min_gap_store_pct", 0) or 0),
+        "min_duration_store_sec": int(ARB_CONFIG.get("min_duration_store_sec", 0) or 0),
     })
 
 

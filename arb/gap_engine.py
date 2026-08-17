@@ -143,6 +143,8 @@ class ArbGapEngine:
         self._pair_staleness = float(ARB_CONFIG.get("tick_staleness_sec", 3))
         self._close_staleness = float(ARB_CONFIG.get("leg_stale_close_sec", 5))
         self._flush_interval = float(ARB_CONFIG.get("db_flush_interval_sec", 1))
+        self._min_gap_store_pct = float(ARB_CONFIG.get("min_gap_store_pct", 0) or 0)
+        self._min_duration_store_sec = int(ARB_CONFIG.get("min_duration_store_sec", 0) or 0)
         self._live_state_path = str(ARB_CONFIG.get("live_state_path") or "data/arb_live_state.json")
 
         self._lock = threading.RLock()
@@ -193,6 +195,31 @@ class ArbGapEngine:
         with self._lock:
             gaps = list(self._live.values())
         return {"gaps": gaps, "count": len(gaps), "source": "engine"}
+
+    def _store_filter_enabled(self) -> bool:
+        return self._min_gap_store_pct > 0 or self._min_duration_store_sec > 0
+
+    def _gap_pct_meets_store(self, gap_pct: float) -> bool:
+        if self._min_gap_store_pct <= 0:
+            return True
+        return float(gap_pct) >= self._min_gap_store_pct
+
+    def _episode_meets_store(self, ep: _OpenEpisode, *, duration_sec: int) -> bool:
+        """True when an episode qualifies for DB insert/close."""
+        if not self._store_filter_enabled():
+            return True
+        if self._min_gap_store_pct > 0 and ep.max_gap_pct < self._min_gap_store_pct:
+            return False
+        if self._min_duration_store_sec > 0 and duration_sec < self._min_duration_store_sec:
+            return False
+        return True
+
+    def _maybe_queue_insert(self, symbol: str, ep: _OpenEpisode) -> None:
+        if ep.db_id is not None:
+            return
+        if not self._gap_pct_meets_store(ep.max_gap_pct):
+            return
+        self._q.put((_DbOp.INSERT, symbol, dict(ep.last_payload)))
 
     def _publish_live_state(self, now: Optional[datetime] = None) -> None:
         """Write open gaps to a shared file for the dashboard SSE stream."""
@@ -283,6 +310,7 @@ class ArbGapEngine:
         ep.last_payload = payload
         ep.dirty = True
         self._live[symbol] = {**payload, "started_at": payload["started_at"].isoformat(sep=" ", timespec="seconds")}
+        self._maybe_queue_insert(symbol, ep)
         self._publish_live_state(now)
 
     def _start_episode(
@@ -322,7 +350,7 @@ class ArbGapEngine:
         )
         self._open[symbol] = ep
         self._live[symbol] = {**payload, "started_at": now.isoformat(sep=" ", timespec="seconds")}
-        self._q.put((_DbOp.INSERT, symbol, payload))
+        self._maybe_queue_insert(symbol, ep)
         self._publish_live_state(now)
 
     def _close_episode(
@@ -354,6 +382,8 @@ class ArbGapEngine:
         self._open.pop(symbol, None)
         self._live.pop(symbol, None)
         self._publish_live_state(now)
+        if not self._episode_meets_store(ep, duration_sec=duration):
+            return
         close_item = (now, duration, payload)
         if ep.db_id is not None:
             self._q.put((_DbOp.CLOSE, ep.db_id, now, duration, payload))

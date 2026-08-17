@@ -108,3 +108,55 @@ def test_gap_engine_direction_flip_starts_new_episode(mocker):
     engine._on_tick(_quote("INFY", "NSE", 99.0, t0))
     engine._on_tick(_quote("INFY", "BSE", 100.0, t0))
     assert engine.live_gaps()[0]["direction"] == "BSE_HIGH"
+
+
+def test_gap_engine_skips_db_when_below_min_gap_store_pct(mocker):
+    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+        "enabled": True,
+        "tick_staleness_sec": 3,
+        "leg_stale_close_sec": 5,
+        "db_flush_interval_sec": 60,
+        "min_gap_store_pct": 0.5,
+        "min_duration_store_sec": 0,
+    })
+    db = MagicMock()
+    t0 = datetime(2026, 8, 14, 10, 0, 0)
+    t1 = t0 + timedelta(seconds=2)
+    clock = MagicMock(side_effect=[t0, t0, t1, t1])
+    engine = ArbGapEngine(db=db, event_bus=MagicMock(), clock=clock)
+    engine._gap_repo = MagicMock()
+    engine._gap_repo.insert_open.return_value = 99
+
+    # 0.4% gap — live yes, DB no (min store 0.5%)
+    engine._on_tick(_quote("BPCL", "NSE", 100.4, t0))
+    engine._on_tick(_quote("BPCL", "BSE", 100.0, t0))
+    assert len(engine.live_gaps()) == 1
+    engine._flush_pending()
+    engine._gap_repo.insert_open.assert_not_called()
+
+    # Close — still no DB row (max 0.5% < threshold if we used 0.5 min... 0.5% is exactly 0.5)
+    engine._on_tick(_quote("BPCL", "NSE", 100.0, t1))
+    engine._on_tick(_quote("BPCL", "BSE", 100.0, t1))
+    engine._flush_pending()
+    engine._gap_repo.insert_open.assert_not_called()
+
+
+def test_gap_engine_persists_when_gap_meets_min_store_pct(mocker):
+    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+        "enabled": True,
+        "tick_staleness_sec": 3,
+        "leg_stale_close_sec": 5,
+        "db_flush_interval_sec": 60,
+        "min_gap_store_pct": 0.5,
+        "min_duration_store_sec": 0,
+    })
+    db = MagicMock()
+    t0 = datetime(2026, 8, 14, 10, 0, 0)
+    engine = ArbGapEngine(db=db, event_bus=MagicMock(), clock=lambda: t0)
+    engine._gap_repo = MagicMock()
+    engine._gap_repo.insert_open.return_value = 42
+
+    engine._on_tick(_quote("RELIANCE", "NSE", 101.0, t0))
+    engine._on_tick(_quote("RELIANCE", "BSE", 100.0, t0))
+    engine._flush_pending()
+    engine._gap_repo.insert_open.assert_called_once()
