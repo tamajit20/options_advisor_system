@@ -93,3 +93,13 @@
   padding: 1rem;
   color: var(--text-dim);
 }
+
+.scout-config-field select {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #333);
+  background: var(--surface, #1a1a1a);
+  color: inherit;
+  font: inherit;
+  max-width: 280px;
+}

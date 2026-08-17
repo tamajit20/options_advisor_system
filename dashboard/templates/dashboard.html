@@ -120,6 +120,9 @@
         <button class="nav-item" data-tab="arb-pairs">
           <span class="nav-icon">🔗</span><span class="nav-label">Pairs</span>
         </button>
+        <button class="nav-item" data-tab="arb-config">
+          <span class="nav-icon">⚙️</span><span class="nav-label">Arb Config</span>
+        </button>
       </div>
     </details>
   </nav>
@@ -740,6 +743,7 @@
         <button class="arb-subtab active" data-atab="arb-live">Live</button>
         <button class="arb-subtab" data-atab="arb-history">History</button>
         <button class="arb-subtab" data-atab="arb-pairs">Pairs</button>
+        <button class="arb-subtab" data-atab="arb-config">Config</button>
       </div>
       <h2 class="panel-title">Arb Monitor — Live Gaps</h2>
       <p class="muted arb-intro">Open NSE↔BSE gap episodes updating on each paired tick. Filter history on the Gap History tab.</p>
@@ -755,6 +759,7 @@
         <button class="arb-subtab" data-atab="arb-live">Live</button>
         <button class="arb-subtab active" data-atab="arb-history">History</button>
         <button class="arb-subtab" data-atab="arb-pairs">Pairs</button>
+        <button class="arb-subtab" data-atab="arb-config">Config</button>
       </div>
       <h2 class="panel-title">Arb Monitor — Gap History</h2>
       <div class="arb-filters">
@@ -773,6 +778,7 @@
         <button class="arb-subtab" data-atab="arb-live">Live</button>
         <button class="arb-subtab" data-atab="arb-history">History</button>
         <button class="arb-subtab active" data-atab="arb-pairs">Pairs</button>
+        <button class="arb-subtab" data-atab="arb-config">Config</button>
       </div>
       <h2 class="panel-title">Arb Monitor — NSE↔BSE Pairs</h2>
       <p class="muted arb-intro">Dual-listed mapping built from Kite instrument master (ISIN match, else tradingsymbol).</p>
@@ -781,6 +787,69 @@
         <span id="arb-pairs-status" class="muted"></span>
       </div>
       <div id="arb-pairs-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-arb-config" aria-hidden="true">
+      <div class="arb-subtabs" role="tablist" aria-label="Arb Monitor sections">
+        <button class="arb-subtab" data-atab="arb-live">Live</button>
+        <button class="arb-subtab" data-atab="arb-history">History</button>
+        <button class="arb-subtab" data-atab="arb-pairs">Pairs</button>
+        <button class="arb-subtab active" data-atab="arb-config">Config</button>
+      </div>
+      <h2 class="panel-title">Arb Monitor — Config</h2>
+      <p class="muted arb-intro">Runtime settings saved in the database — survive redeploy. Store-filter changes apply on the next gap-engine flush (no ws_runner restart).</p>
+      <div id="arb-config-notice" class="scout-config-notice" hidden></div>
+      <form id="arb-config-form" class="scout-config-form" autocomplete="off">
+        <section class="scout-config-section">
+          <h3 class="scout-config-heading">Monitor</h3>
+          <div class="scout-config-grid">
+            <label class="scout-config-check">
+              <input type="checkbox" name="enabled" checked>
+              <span>Arb monitor enabled</span>
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Universe (pair rebuild)</span>
+              <select name="universe">
+                <option value="nifty50_dual">NIFTY 50 dual-listed</option>
+                <option value="all_matched">All ISIN-matched pairs</option>
+              </select>
+            </label>
+          </div>
+          <p class="muted scout-config-hint">Disabling stops new gap tracking after ws_runner restart. Live SSE still shows in-memory gaps until then.</p>
+        </section>
+        <section class="scout-config-section">
+          <h3 class="scout-config-heading">Tick pairing</h3>
+          <div class="scout-config-grid">
+            <label class="scout-config-field">
+              <span class="scout-config-label">Tick staleness (seconds)</span>
+              <input type="number" name="tick_staleness_sec" step="0.1" min="0.5" max="30">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Leg stale close (seconds)</span>
+              <input type="number" name="leg_stale_close_sec" step="0.1" min="1" max="60">
+            </label>
+          </div>
+          <p class="muted scout-config-hint">Max age for pairing NSE+BSE legs; close open episode when either leg exceeds stale close threshold.</p>
+        </section>
+        <section class="scout-config-section">
+          <h3 class="scout-config-heading">DB store filter</h3>
+          <div class="scout-config-grid">
+            <label class="scout-config-field">
+              <span class="scout-config-label">Min gap % to store</span>
+              <input type="number" name="min_gap_store_pct" step="0.01" min="0" max="10">
+            </label>
+            <label class="scout-config-field">
+              <span class="scout-config-label">Min duration to store (seconds)</span>
+              <input type="number" name="min_duration_store_sec" step="1" min="0" max="3600">
+            </label>
+          </div>
+          <p class="muted scout-config-hint">0 = no filter. Live tab always shows all open gaps; History/DB only stores episodes meeting both thresholds on close.</p>
+        </section>
+        <div class="scout-config-actions">
+          <button type="submit" class="btn btn-accent" id="arb-config-save">Save settings</button>
+          <button type="button" class="btn btn-ghost" id="arb-config-reload">Reload</button>
+        </div>
+      </form>
     </article>
 
     <article class="panel" id="panel-config" aria-hidden="true">

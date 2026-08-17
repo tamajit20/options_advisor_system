@@ -15,6 +15,8 @@ from typing import Callable, Optional
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from config import ARB_CONFIG
+from arb.config_loader import get_arb_settings, reload_arb_settings, set_arb_settings
+from arb.settings_schema import default_arb_settings
 from database.arb_models import ArbConfigRepo, ArbGapRepo, ArbPairRepo
 from database.connection import SQLServerConnection
 
@@ -98,15 +100,38 @@ def _with_db(handler: Callable) -> Callable:
 @_with_db
 def arb_status(db):
     pairs = ArbPairRepo(db).count_active()
-    cfg = ArbConfigRepo(db)
+    settings = get_arb_settings(db)
     return jsonify({
-        "enabled": cfg.get_enabled(default=ARB_CONFIG.get("enabled", True)),
-        "universe": cfg.get_universe(default=ARB_CONFIG.get("universe", "nifty50_dual")),
+        "enabled": settings.get("enabled", True),
+        "universe": settings.get("universe", "nifty50_dual"),
         "pairs_count": pairs,
-        "tick_staleness_sec": ARB_CONFIG.get("tick_staleness_sec", 3),
-        "min_gap_store_pct": float(ARB_CONFIG.get("min_gap_store_pct", 0) or 0),
-        "min_duration_store_sec": int(ARB_CONFIG.get("min_duration_store_sec", 0) or 0),
+        "tick_staleness_sec": settings.get("tick_staleness_sec"),
+        "leg_stale_close_sec": settings.get("leg_stale_close_sec"),
+        "min_gap_store_pct": settings.get("min_gap_store_pct", 0),
+        "min_duration_store_sec": settings.get("min_duration_store_sec", 0),
     })
+
+
+@arb_bp.get("/config")
+@_with_db
+def arb_config_get(db):
+    return jsonify({
+        "settings": get_arb_settings(db),
+        "defaults": default_arb_settings(),
+    })
+
+
+@arb_bp.put("/config")
+@_with_db
+def arb_config_put(db):
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"error": "body must be a JSON object"}), 400
+    current = reload_arb_settings(db)
+    merged = {**current, **body}
+    cleaned = set_arb_settings(db, merged)
+    db.commit()
+    return jsonify({"status": "ok", "settings": cleaned})
 
 
 @arb_bp.get("/pairs")
@@ -133,7 +158,8 @@ def refresh_pairs(db):
         body = request.get_json(silent=True) or {}
         universe = body.get("universe")
     if not universe:
-        universe = ArbConfigRepo(db).get_universe(default=ARB_CONFIG.get("universe", "nifty50_dual"))
+        settings = get_arb_settings(db)
+        universe = settings.get("universe", ARB_CONFIG.get("universe", "nifty50_dual"))
 
     facade = KiteFacade(api_key=session.api_key, access_token=session.access_token)
     master = InstrumentMaster(loader=lambda: facade.instruments())

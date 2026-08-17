@@ -7,6 +7,17 @@ from unittest.mock import MagicMock
 import pytest
 
 import dashboard.server as server
+from database.arb_models import ArbConfigRepo
+
+
+_DEFAULT_ARB_SETTINGS = {
+    "enabled": True,
+    "universe": "nifty50_dual",
+    "tick_staleness_sec": 3.0,
+    "leg_stale_close_sec": 5.0,
+    "min_gap_store_pct": 0.0,
+    "min_duration_store_sec": 0,
+}
 
 
 @pytest.fixture
@@ -22,8 +33,10 @@ def client(mocker):
     mocker.patch("database.arb_models.ArbPairRepo.list_all", return_value=[])
     mocker.patch("database.arb_models.ArbGapRepo.list_gaps", return_value=[])
     mocker.patch("database.arb_models.ArbGapRepo.open_gaps", return_value=[])
-    mocker.patch("database.arb_models.ArbConfigRepo.get_enabled", return_value=True)
-    mocker.patch("database.arb_models.ArbConfigRepo.get_universe", return_value="nifty50_dual")
+    mocker.patch(
+        "arb.routes.get_arb_settings",
+        return_value=dict(_DEFAULT_ARB_SETTINGS),
+    )
     app = server.create_app()
     app.config["TESTING"] = True
     return app.test_client()
@@ -73,3 +86,66 @@ def test_arb_live_stream_route(client):
     # First chunk should include SSE connected comment.
     chunk = next(rv.response)
     assert b": connected" in chunk
+
+
+def test_arb_config_get(client, mocker):
+    mocker.patch(
+        "arb.routes.get_arb_settings",
+        return_value={**_DEFAULT_ARB_SETTINGS, "min_gap_store_pct": 0.5},
+    )
+    rv = client.get("/api/arb/config")
+    assert rv.status_code == 200
+    data = rv.get_json()
+    assert data["settings"]["min_gap_store_pct"] == 0.5
+    assert "defaults" in data
+
+
+def test_arb_config_put(client, mocker):
+    mocker.patch(
+        "arb.routes.reload_arb_settings",
+        return_value=dict(_DEFAULT_ARB_SETTINGS),
+    )
+    mocker.patch(
+        "arb.routes.set_arb_settings",
+        return_value={**_DEFAULT_ARB_SETTINGS, "min_gap_store_pct": 0.25},
+    )
+    rv = client.put(
+        "/api/arb/config",
+        json={"min_gap_store_pct": 0.25, "min_duration_store_sec": 10},
+    )
+    assert rv.status_code == 200
+    data = rv.get_json()
+    assert data["status"] == "ok"
+    assert data["settings"]["min_gap_store_pct"] == 0.25
+
+
+def test_arb_config_put_rejects_non_object_body(client):
+    rv = client.put("/api/arb/config", json=1)
+    assert rv.status_code == 400
+
+
+def test_arb_config_repo_get_set_settings_roundtrip():
+    import json
+
+    db = MagicMock()
+    stored: dict = {}
+
+    def _execute(query, params):
+        if "MERGE arb_config" in query:
+            key, val = params[0], params[1]
+            stored[key] = json.loads(val)
+
+    def _fetch_one(query, params):
+        if params and params[0] == ArbConfigRepo.SETTINGS_KEY:
+            raw = stored.get(ArbConfigRepo.SETTINGS_KEY)
+            return {"config_value": json.dumps(raw)} if raw else None
+        return None
+
+    db.execute.side_effect = _execute
+    db.fetch_one.side_effect = _fetch_one
+
+    repo = ArbConfigRepo(db)
+    assert repo.get_settings() is None
+    payload = {"min_gap_store_pct": 0.5, "min_duration_store_sec": 5}
+    repo.set_settings(payload)
+    assert repo.get_settings() == payload

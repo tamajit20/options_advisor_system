@@ -50,10 +50,15 @@ def _quote(symbol, exchange, ltp, ts):
 
 
 def test_gap_engine_opens_episode_on_paired_ticks(mocker):
-    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+    mocker.patch("arb.gap_engine.get_arb_settings", return_value={
         "enabled": True,
         "tick_staleness_sec": 3,
         "leg_stale_close_sec": 5,
+        "min_gap_store_pct": 0,
+        "min_duration_store_sec": 0,
+    })
+    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+        "enabled": True,
         "db_flush_interval_sec": 60,
     })
     db = MagicMock()
@@ -71,10 +76,15 @@ def test_gap_engine_opens_episode_on_paired_ticks(mocker):
 
 
 def test_gap_engine_closes_on_zero_gap(mocker):
-    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+    mocker.patch("arb.gap_engine.get_arb_settings", return_value={
         "enabled": True,
         "tick_staleness_sec": 3,
         "leg_stale_close_sec": 5,
+        "min_gap_store_pct": 0,
+        "min_duration_store_sec": 0,
+    })
+    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+        "enabled": True,
         "db_flush_interval_sec": 60,
     })
     db = MagicMock()
@@ -92,10 +102,15 @@ def test_gap_engine_closes_on_zero_gap(mocker):
 
 
 def test_gap_engine_direction_flip_starts_new_episode(mocker):
-    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+    mocker.patch("arb.gap_engine.get_arb_settings", return_value={
         "enabled": True,
         "tick_staleness_sec": 3,
         "leg_stale_close_sec": 5,
+        "min_gap_store_pct": 0,
+        "min_duration_store_sec": 0,
+    })
+    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+        "enabled": True,
         "db_flush_interval_sec": 60,
     })
     db = MagicMock()
@@ -111,13 +126,16 @@ def test_gap_engine_direction_flip_starts_new_episode(mocker):
 
 
 def test_gap_engine_skips_db_when_below_min_gap_store_pct(mocker):
-    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+    mocker.patch("arb.gap_engine.get_arb_settings", return_value={
         "enabled": True,
         "tick_staleness_sec": 3,
         "leg_stale_close_sec": 5,
-        "db_flush_interval_sec": 60,
         "min_gap_store_pct": 0.5,
         "min_duration_store_sec": 0,
+    })
+    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+        "enabled": True,
+        "db_flush_interval_sec": 60,
     })
     db = MagicMock()
     t0 = datetime(2026, 8, 14, 10, 0, 0)
@@ -142,13 +160,16 @@ def test_gap_engine_skips_db_when_below_min_gap_store_pct(mocker):
 
 
 def test_gap_engine_persists_when_gap_meets_min_store_pct(mocker):
-    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+    mocker.patch("arb.gap_engine.get_arb_settings", return_value={
         "enabled": True,
         "tick_staleness_sec": 3,
         "leg_stale_close_sec": 5,
-        "db_flush_interval_sec": 60,
         "min_gap_store_pct": 0.5,
         "min_duration_store_sec": 0,
+    })
+    mocker.patch("arb.gap_engine.ARB_CONFIG", {
+        "enabled": True,
+        "db_flush_interval_sec": 60,
     })
     db = MagicMock()
     t0 = datetime(2026, 8, 14, 10, 0, 0)

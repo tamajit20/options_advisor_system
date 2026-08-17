@@ -19,6 +19,8 @@ from enum import Enum
 from typing import Callable, Dict, Optional
 
 from config import ARB_CONFIG
+from arb.config_loader import get_arb_settings
+from arb.settings_schema import arb_enabled
 from database.arb_models import ArbGapRepo
 from database.connection import SQLServerConnection
 from providers.base import LiveQuote
@@ -140,12 +142,9 @@ class ArbGapEngine:
         self._isin_lookup = isin_lookup or (lambda _s: None)
         self._clock = clock
 
-        self._pair_staleness = float(ARB_CONFIG.get("tick_staleness_sec", 3))
-        self._close_staleness = float(ARB_CONFIG.get("leg_stale_close_sec", 5))
         self._flush_interval = float(ARB_CONFIG.get("db_flush_interval_sec", 1))
-        self._min_gap_store_pct = float(ARB_CONFIG.get("min_gap_store_pct", 0) or 0)
-        self._min_duration_store_sec = int(ARB_CONFIG.get("min_duration_store_sec", 0) or 0)
         self._live_state_path = str(ARB_CONFIG.get("live_state_path") or "data/arb_live_state.json")
+        self._reload_runtime_settings()
 
         self._lock = threading.RLock()
         self._nse: Dict[str, _LegSnapshot] = {}
@@ -160,9 +159,18 @@ class ArbGapEngine:
         self._stale_thread: Optional[threading.Thread] = None
         self._unsubscribe: Optional[Callable[[], None]] = None
 
+    def _reload_runtime_settings(self) -> None:
+        """Refresh store thresholds and staleness from DB (no ws_runner restart)."""
+        s = get_arb_settings(self._db, use_cache=False)
+        self._pair_staleness = float(s.get("tick_staleness_sec", 3))
+        self._close_staleness = float(s.get("leg_stale_close_sec", 5))
+        self._min_gap_store_pct = float(s.get("min_gap_store_pct", 0) or 0)
+        self._min_duration_store_sec = int(s.get("min_duration_store_sec", 0) or 0)
+
     def start(self) -> None:
-        if not ARB_CONFIG.get("enabled", True):
-            logger.info("ArbGapEngine disabled via ARB_CONFIG")
+        settings = get_arb_settings(self._db)
+        if not arb_enabled(settings):
+            logger.info("ArbGapEngine disabled via settings")
             return
         self._unsubscribe = self._bus.subscribe(TOPIC_TICK_ARB, self._on_tick)
         self._stop.clear()
@@ -393,6 +401,7 @@ class ArbGapEngine:
 
     def _stale_loop(self) -> None:
         while not self._stop.wait(self._flush_interval):
+            self._reload_runtime_settings()
             now = self._clock()
             with self._lock:
                 for symbol in list(self._open.keys()):
@@ -436,6 +445,7 @@ class ArbGapEngine:
 
     def _writer_loop(self) -> None:
         while not self._stop.wait(self._flush_interval):
+            self._reload_runtime_settings()
             self._flush_pending()
             with self._lock:
                 self._flush_dirty_locked(self._clock())

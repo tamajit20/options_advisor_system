@@ -4,7 +4,7 @@
 (function () {
   'use strict';
 
-  const ARB_TABS = ['arb-live', 'arb-history', 'arb-pairs'];
+  const ARB_TABS = ['arb-live', 'arb-history', 'arb-pairs', 'arb-config'];
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -205,6 +205,93 @@
     }
   }
 
+  function setArbConfigNotice(msg, ok) {
+    const el = $('#arb-config-notice');
+    if (!el) return;
+    if (!msg) {
+      el.hidden = true;
+      el.textContent = '';
+      el.classList.remove('scout-config-notice--ok');
+      return;
+    }
+    el.hidden = false;
+    el.textContent = msg;
+    el.classList.toggle('scout-config-notice--ok', !!ok);
+  }
+
+  function fillArbConfigForm(settings) {
+    const form = $('#arb-config-form');
+    if (!form || !settings) return;
+    const setCheck = (name, val) => {
+      const el = form.querySelector(`[name="${name}"]`);
+      if (el && el.type === 'checkbox') el.checked = !!val;
+    };
+    const setVal = (name, val) => {
+      const el = form.querySelector(`[name="${name}"]`);
+      if (!el) return;
+      if (el.tagName === 'SELECT') {
+        el.value = val != null ? String(val) : el.options[0]?.value || '';
+      } else if (el.type !== 'checkbox') {
+        el.value = val != null ? String(val) : '';
+      }
+    };
+    setCheck('enabled', settings.enabled !== false);
+    setVal('universe', settings.universe || 'nifty50_dual');
+    setVal('tick_staleness_sec', settings.tick_staleness_sec);
+    setVal('leg_stale_close_sec', settings.leg_stale_close_sec);
+    setVal('min_gap_store_pct', settings.min_gap_store_pct);
+    setVal('min_duration_store_sec', settings.min_duration_store_sec);
+  }
+
+  function readArbConfigForm() {
+    const form = $('#arb-config-form');
+    if (!form) return {};
+    const num = (name) => {
+      const el = form.querySelector(`[name="${name}"]`);
+      if (!el) return undefined;
+      if (el.type === 'checkbox') return el.checked;
+      if (el.type === 'number') return el.value === '' ? undefined : Number(el.value);
+      return el.value;
+    };
+    return {
+      enabled: !!form.querySelector('[name="enabled"]')?.checked,
+      universe: form.querySelector('[name="universe"]')?.value,
+      tick_staleness_sec: num('tick_staleness_sec'),
+      leg_stale_close_sec: num('leg_stale_close_sec'),
+      min_gap_store_pct: num('min_gap_store_pct'),
+      min_duration_store_sec: num('min_duration_store_sec'),
+    };
+  }
+
+  async function loadArbConfig() {
+    const form = $('#arb-config-form');
+    if (!form) return;
+    setArbConfigNotice('');
+    try {
+      const data = await arbApi('/config');
+      fillArbConfigForm(data.settings || {});
+    } catch (e) {
+      setArbConfigNotice('Failed to load settings: ' + e.message, false);
+    }
+  }
+
+  async function saveArbConfig(ev) {
+    if (ev) ev.preventDefault();
+    const body = readArbConfigForm();
+    try {
+      const data = await arbApi('/config', {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      });
+      fillArbConfigForm(data.settings || body);
+      setArbConfigNotice('Settings saved.', true);
+      if (typeof window.toast === 'function') window.toast('Arb settings saved', 'info');
+    } catch (e) {
+      setArbConfigNotice('Save failed: ' + e.message, false);
+      if (typeof window.toast === 'function') window.toast('Save failed: ' + e.message, 'err');
+    }
+  }
+
   function startLivePoll() {
     stopLivePoll();
     loadArbLive().then(() => ensureArbLiveStream());
@@ -222,6 +309,7 @@
       stopLivePoll();
       if (tab === 'arb-history') loadArbHistory();
       if (tab === 'arb-pairs') loadArbPairs();
+      if (tab === 'arb-config') loadArbConfig();
     }
   }
 
@@ -240,6 +328,8 @@
     $('#arb-live-refresh')?.addEventListener('click', loadArbLive);
     $('#arb-hist-apply')?.addEventListener('click', loadArbHistory);
     $('#arb-pairs-refresh')?.addEventListener('click', refreshPairs);
+    $('#arb-config-form')?.addEventListener('submit', saveArbConfig);
+    $('#arb-config-reload')?.addEventListener('click', () => loadArbConfig());
     const today = new Date();
     const iso = d => d.toISOString().slice(0, 10);
     const fromEl = $('#arb-hist-from');

@@ -243,9 +243,25 @@ class ArbGapRepo:
 class ArbConfigRepo:
     ENABLED_KEY = "enabled"
     UNIVERSE_KEY = "universe"
+    SETTINGS_KEY = "settings"
 
     def __init__(self, db: SQLServerConnection):
         self.db = db
+
+    def _merge_json(self, key: str, payload: dict, *, updated_by: str = "ui") -> None:
+        val = json.dumps(payload)
+        self.db.execute(
+            """
+            MERGE arb_config AS T
+            USING (SELECT ? AS config_key, ? AS config_value) AS S
+            ON T.config_key = S.config_key
+            WHEN MATCHED THEN UPDATE SET config_value = S.config_value,
+                updated_at = SYSUTCDATETIME(), updated_by = ?
+            WHEN NOT MATCHED THEN INSERT (config_key, config_value, updated_by)
+                VALUES (S.config_key, S.config_value, ?);
+            """,
+            [key, val, updated_by, updated_by],
+        )
 
     def get_json(self, key: str) -> Optional[Any]:
         row = self.db.fetch_one(
@@ -285,3 +301,10 @@ class ArbConfigRepo:
     def get_universe(self, default: str = "nifty50_dual") -> str:
         val = self.get_json(self.UNIVERSE_KEY)
         return str(val) if val else default
+
+    def get_settings(self) -> Optional[dict]:
+        val = self.get_json(self.SETTINGS_KEY)
+        return val if isinstance(val, dict) else None
+
+    def set_settings(self, settings: dict, *, updated_by: str = "ui") -> None:
+        self._merge_json(self.SETTINGS_KEY, settings, updated_by=updated_by)
