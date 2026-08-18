@@ -6,8 +6,10 @@ Sideways-market regime pairs: one range trade + one breakout trade.
 
 The dashboard shows both so the operator can pick a thesis. ``pick_regime_pair_preferred``
 marks which leg has better estimated success (PoP + edge) for the current data.
-``complete_regime_pair`` always emits two tagged partners — a failed leg becomes a
-``NoSuggestion`` in the same group rather than leaving the survivor alone.
+``complete_regime_pair`` always emits two tagged partners — a failed construction
+becomes a ``NoSuggestion``; an entry-gate veto that still built legs stays a
+``Suggestion`` with ``strategy_veto_reason`` so the operator can inspect and
+optionally execute.
 """
 
 from __future__ import annotations
@@ -126,6 +128,19 @@ def pick_regime_pair_preferred(
     return preferred, reason
 
 
+def _blocked_reason_text(item: RegimePairMember) -> str:
+    if isinstance(item, NoSuggestion) and item.reason:
+        return item.reason
+    veto = getattr(item, "strategy_veto_reason", None)
+    if veto:
+        return str(veto)
+    return ""
+
+
+def _is_unblocked_suggestion(item: RegimePairMember) -> bool:
+    return isinstance(item, Suggestion) and not getattr(item, "strategy_veto_reason", None)
+
+
 def apply_regime_pair_metadata(
     suggestions: list[tuple[RegimePairMember, str]],
     *,
@@ -135,7 +150,8 @@ def apply_regime_pair_metadata(
     """Mutate pair members in-place with grouping + preferred flag.
 
     A loner is left untagged — pairing requires both partners so the UI never
-    shows a single "pick the scenario" card.
+    shows a single "pick the scenario" card. Entry-gate-vetoed suggestions with
+    legs still count as partners but cannot be system-preferred.
     """
     if len(suggestions) < 2:
         return
@@ -143,7 +159,7 @@ def apply_regime_pair_metadata(
     live = {
         ptype: item
         for item, ptype in suggestions
-        if isinstance(item, Suggestion)
+        if _is_unblocked_suggestion(item)
     }
     if len(live) >= 2 and "range" in live and "breakout" in live:
         preferred, reason = pick_regime_pair_preferred(
@@ -155,9 +171,7 @@ def apply_regime_pair_metadata(
             (item for item, ptype in suggestions if ptype != preferred),
             None,
         )
-        blocked_reason = ""
-        if isinstance(blocked_item, NoSuggestion) and blocked_item.reason:
-            blocked_reason = blocked_item.reason
+        blocked_reason = _blocked_reason_text(blocked_item) if blocked_item else ""
         if blocked_reason:
             reason = (
                 f"System prefers the {preferred} trade — {blocked_reason}"
@@ -192,7 +206,8 @@ def complete_regime_pair(
 ) -> tuple[list[Suggestion], list[NoSuggestion]]:
     """Always return two tagged partners for a sideways range+breakout pair.
 
-    Legs that assembled become PENDING suggestions. Legs that failed gates
+    Legs that assembled become PENDING suggestions (entry-gate vetoes keep
+    their legs and ``strategy_veto_reason``). Legs that cannot be constructed
     become ``NoSuggestion`` rows in the same ``regime_pair_group``.
     """
     by_type = {ptype: sug for sug, ptype in built}
@@ -236,9 +251,17 @@ def encode_regime_pair_trigger_reason(s: RegimePairMember) -> Optional[str]:
             s, "regime_pair_preference_reason", None,
         ),
     }
+    veto = getattr(s, "strategy_veto_reason", None)
+    if veto:
+        payload["strategy_veto"] = veto
     raw = json.dumps(payload)
     if len(raw) > _TRIGGER_REASON_MAX_CHARS:
         payload["regime_pair_preference_reason"] = None
+        raw = json.dumps(payload)
+    if len(raw) > _TRIGGER_REASON_MAX_CHARS and payload.get("strategy_veto"):
+        overhead = len(json.dumps({**payload, "strategy_veto": ""}))
+        keep = max(0, _TRIGGER_REASON_MAX_CHARS - overhead - 8)
+        payload["strategy_veto"] = str(payload["strategy_veto"])[:keep]
         raw = json.dumps(payload)
     return raw[:_TRIGGER_REASON_MAX_CHARS]
 

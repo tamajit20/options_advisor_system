@@ -48,6 +48,7 @@ Locked-architecture rules
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, date
@@ -137,6 +138,26 @@ def _effective_data_as_of(suggestion: dict) -> Optional[datetime]:
     return raw
 
 
+def _strategy_veto_reason(suggestion: dict) -> Optional[str]:
+    """Entry-gate veto persisted on a PENDING inspectable suggestion."""
+    direct = suggestion.get("strategy_veto") or suggestion.get("strategy_veto_reason")
+    if direct:
+        return str(direct)
+    raw = suggestion.get("trigger_reason")
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        v = raw.get("strategy_veto")
+        return str(v) if v else None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(data, dict) and data.get("strategy_veto"):
+        return str(data["strategy_veto"])
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -169,6 +190,11 @@ def validate_execution(
             "flag to resume executions"
         )
         details["circuit_breaker_active"] = True
+
+    strategy_veto = _strategy_veto_reason(suggestion)
+    if strategy_veto:
+        vetoes.append(strategy_veto)
+        details["strategy_veto"] = True
 
     # 1. Status -------------------------------------------------------------
     status = (suggestion.get("status") or "").upper()

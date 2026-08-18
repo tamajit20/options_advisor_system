@@ -90,6 +90,7 @@ def _assemble_sized_suggestion(
     suggestion_id: str,
     assemble_kw: dict,
     strategy_override: str | None = None,
+    defer_entry_vetoes: bool = False,
 ) -> Suggestion:
     """Build one suggestion with capital-based lot sizing and tail-risk veto."""
     import math as _math
@@ -98,12 +99,14 @@ def _assemble_sized_suggestion(
     kw["suggestion_id"] = suggestion_id
     if strategy_override is not None:
         kw["strategy_override"] = strategy_override
+    kw["defer_entry_vetoes"] = defer_entry_vetoes
 
     _capital = float(STRATEGY_CONFIG.get("trading_capital_rs", 0.0))
     _risk_pct = float(STRATEGY_CONFIG.get("risk_per_trade_pct", 0.02))
     _max_lots = int(STRATEGY_CONFIG.get("max_lots_cap", 3))
     _computed_lots = 1
     _one_lot_max_loss = 0.0
+    _deferred_vetoes: list[str] = []
 
     if _capital > 0:
         try:
@@ -121,14 +124,25 @@ def _assemble_sized_suggestion(
 
         _ml_cap_pct = float(STRATEGY_CONFIG.get("max_loss_pct_of_capital", 0.0) or 0.0)
         if exceeds_max_loss_cap(_one_lot_max_loss, _capital, _ml_cap_pct):
-            raise StrategyVeto(
+            msg = (
                 f"max loss \u20b9{_one_lot_max_loss:,.0f} exceeds "
                 f"{_ml_cap_pct * 100:.0f}% of capital "
                 f"(\u20b9{_ml_cap_pct * _capital:,.0f}) at the 1-lot "
                 f"minimum — position too large for the risk budget"
             )
+            if defer_entry_vetoes:
+                _deferred_vetoes.append(msg)
+            else:
+                raise StrategyVeto(msg)
 
-    return assemble_suggestion(lots=_computed_lots, **kw)
+    sug = assemble_suggestion(lots=_computed_lots, **kw)
+    if _deferred_vetoes:
+        extra = "; ".join(_deferred_vetoes)
+        if sug.strategy_veto_reason:
+            sug.strategy_veto_reason = f"{sug.strategy_veto_reason}; {extra}"
+        else:
+            sug.strategy_veto_reason = extra
+    return sug
 
 
 def _attach_em_calibration_warning(db: SQLServerConnection, sug: Suggestion) -> None:
@@ -799,6 +813,7 @@ def _evaluate_underlying(
                         suggestion_id=sid,
                         assemble_kw=strat_kw,
                         strategy_override=strat,
+                        defer_entry_vetoes=pairing,
                     )
                     sug.pricing_provenance = provenance
                     _attach_em_calibration_warning(db, sug)

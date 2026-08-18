@@ -356,6 +356,42 @@ class TestPersistRegimePair:
         assert "BANKNIFTY:Weekly:2026-08-19" in raw
         assert "breakout" in raw
 
+    def test_persists_vetoed_breakout_as_pending_with_legs(self, mock_db, mocker):
+        from contracts import SuggestionLeg
+        self._patch_persist(mocker)
+        ins = mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.insert")
+        ins_legs = mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.insert_legs")
+        range_sug = _paired_calendar(
+            "BANKNIFTY", "SUG-3", "BANKNIFTY:Weekly:2026-08-19",
+        )
+        breakout = _paired_calendar(
+            "BANKNIFTY", "SUG-4", "BANKNIFTY:Weekly:2026-08-19",
+        )
+        breakout.strategy = "LONG_STRADDLE"
+        breakout.trade_name = "BANKNIFTY-STRADDLE"
+        breakout.regime_pair_type = "breakout"
+        breakout.regime_pair_preferred = False
+        breakout.strategy_veto_reason = "LONG_STRADDLE vetoed: IV rank 5 below 15"
+        breakout.legs = [SuggestionLeg(
+            leg_order=1, hedge_pair_leg=None, symbol="BANKNIFTY",
+            expiry_date=date(2026, 8, 27), strike=55000.0, option_type="CE",
+            action="BUY", lots=1, lot_size=35,
+            suggested_price=400.0, suggested_price_low=380.0,
+            suggested_price_high=420.0, leg_purpose_note="atm call",
+        )]
+        n = se._persist_and_notify(
+            mock_db, [range_sug, breakout], [],
+            trade_date=date(2026, 8, 18),
+            entry_day=date(2026, 8, 19),
+        )
+        assert n == 2
+        assert ins.call_count == 2
+        assert ins_legs.call_count == 2
+        encoded = se.encode_regime_pair_trigger_reason(breakout)
+        assert encoded
+        assert "strategy_veto" in encoded
+        assert "IV rank" in encoded
+
 
 # ---------------------------------------------------------------------------
 class TestEvaluateUnderlying:

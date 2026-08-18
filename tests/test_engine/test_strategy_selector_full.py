@@ -690,6 +690,22 @@ class TestLongVolEntryGate:
                 has_long_vol_catalyst=False,
             )
 
+    def test_defer_entry_vetoes_builds_legs_on_dead_iv(self, sample_chain, mocker):
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})
+        ind = _make_indicators(trend="SIDEWAYS", iv_premium=0.90)
+        sug = ss.assemble_suggestion(
+            **self._assemble_kw(sample_chain, ind, iv_rank=5.0),
+            strategy_override="LONG_STRADDLE",
+            has_long_vol_catalyst=False,
+            defer_entry_vetoes=True,
+        )
+        assert sug.strategy == "LONG_STRADDLE"
+        assert len(sug.legs) >= 2
+        assert sug.strategy_veto_reason
+        assert "IV rank" in sug.strategy_veto_reason
+        assert "catalyst" in sug.strategy_veto_reason.lower()
+
     def test_allows_dead_iv_with_catalyst(self, sample_chain, mocker):
         from config import STRATEGY_CONFIG
         mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})

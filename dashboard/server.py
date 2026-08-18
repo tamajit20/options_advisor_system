@@ -244,6 +244,9 @@ def _execution_gate_label(gate, row: Dict[str, Any]) -> Optional[str]:
         return "Retired"
     if status == "EXECUTED":
         return "Executed"
+    details = getattr(gate, "details", None) or {}
+    if details.get("strategy_veto") or row.get("strategy_veto") or row.get("strategy_veto_reason"):
+        return "Scenario blocked"
     vstatus = (row.get("validator_status") or "").upper()
     if vstatus == "STALE_0935":
         return "Stale at open"
@@ -1180,6 +1183,9 @@ def create_app() -> Flask:
                 r_out["age_minutes"] = None
                 r_out["is_stale"] = False
 
+            r_out.update(decode_regime_pair_trigger_reason(r.get("trigger_reason")))
+            if r_out.get("strategy_veto") and not r_out.get("no_suggestion_reason"):
+                r_out["no_suggestion_reason"] = r_out["strategy_veto"]
             gate = validate_execution(
                 r, legs_out, now=now, circuit_breaker_active=cb_active,
             )
@@ -1190,13 +1196,18 @@ def create_app() -> Flask:
                 "vetoes": list(gate.vetoes),
                 "warnings": list(gate.warnings),
                 "reason": gate.reason(),
-                "label": _execution_gate_label(gate, r),
+                "label": _execution_gate_label(gate, r_out),
+                "details": dict(gate.details or {}),
             }
-            r_out.update(decode_regime_pair_trigger_reason(r.get("trigger_reason")))
             out.append(r_out)
 
         pending_groups = {
             r.get("regime_pair_group") for r in out if r.get("regime_pair_group")
+        }
+        pending_pair_slots = {
+            (r.get("regime_pair_group"), r.get("regime_pair_type"))
+            for r in out
+            if r.get("regime_pair_group") and r.get("regime_pair_type")
         }
         pending_underlyings = {
             r.get("underlying") for r in out
@@ -1209,6 +1220,8 @@ def create_app() -> Flask:
             r_out.update(decode_regime_pair_trigger_reason(r.get("trigger_reason")))
             gid = r_out.get("regime_pair_group")
             if gid and gid in pending_groups:
+                if (gid, r_out.get("regime_pair_type")) in pending_pair_slots:
+                    continue
                 r_out["confidence_display"] = _confidence_display(r)
                 r_out["market_regime"] = regime_from_sit_out_row(r_out)
                 out.append(r_out)

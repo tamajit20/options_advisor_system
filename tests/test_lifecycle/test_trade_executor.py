@@ -1,7 +1,7 @@
 """Tests for lifecycle/trade_executor.py — mark_executed + supplement + close."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -297,6 +297,98 @@ class TestCircuitBreakerBlocks:
         assert call_arg["spot_at_execution"] == 23000.0
         prov.assert_called_once()
         assert prov.call_args.kwargs.get("gate_passed") is False
+
+    def test_execute_at_suggested_skips_strategy_veto_gate(
+        self, mock_db, mocker, fake_legs,
+    ):
+        import json as _json
+        vetoed = {
+            "trade_name": "BN-STRADDLE-1",
+            "max_profit": None, "max_loss": 28000.0,
+            "upper_breakeven": 55800.0, "lower_breakeven": 54200.0,
+            "stop_loss_level": None,
+            "status": "PENDING",
+            "spot_at_generation": 55000.0,
+            "validator_status": None,
+            "data_as_of": datetime(2026, 8, 18, 9, 30),
+            "entry_date": date(2026, 8, 18),
+            "data_source": "LIVE",
+            "trigger_type": "LIVE_RUN",
+            "generated_on": datetime(2026, 8, 18, 9, 30),
+            "trigger_reason": _json.dumps({
+                "regime_pair_group": "BANKNIFTY:Weekly:2026-08-19",
+                "regime_pair_type": "breakout",
+                "regime_pair_preferred": False,
+                "strategy_veto": "LONG_STRADDLE vetoed: IV rank 5 below 15",
+            }),
+        }
+        legs = [
+            {**leg, "suggested_price": 50.0 + i, "action": "BUY"}
+            for i, leg in enumerate(fake_legs[:2], start=0)
+        ]
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=vetoed)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=legs)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.update_status")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.next_trade_id",
+                     return_value="TRD-VETO")
+        ins = mocker.patch("lifecycle.trade_executor.TradeRepo.insert")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.insert_legs")
+        mocker.patch(
+            "lifecycle.trade_executor.RuntimeFlagsRepo.get_bool",
+            return_value=False,
+        )
+        mocker.patch(
+            "lifecycle.trade_executor.TradeRepo.write_execution_provenance",
+        )
+        tid = te.mark_executed(
+            mock_db, "SUG-X", [], execute_at_suggested=True,
+        )
+        assert tid == "TRD-VETO"
+        assert ins.call_args[0][0]["position_type"] == "FULL_VALID"
+
+    def test_live_execute_blocked_by_strategy_veto(
+        self, mock_db, mocker, fake_legs,
+    ):
+        import json as _json
+        vetoed = {
+            "trade_name": "BN-STRADDLE-1",
+            "max_profit": None, "max_loss": 28000.0,
+            "upper_breakeven": 55800.0, "lower_breakeven": 54200.0,
+            "stop_loss_level": None,
+            "status": "PENDING",
+            "spot_at_generation": 55000.0,
+            "validator_status": None,
+            "data_as_of": datetime(2026, 8, 18, 9, 30),
+            "entry_date": None,
+            "data_source": "EOD",
+            "trigger_type": "EOD_RUN",
+            "generated_on": datetime(2026, 8, 18, 9, 30),
+            "trigger_reason": _json.dumps({
+                "regime_pair_group": "BANKNIFTY:Weekly:2026-08-19",
+                "regime_pair_type": "breakout",
+                "regime_pair_preferred": False,
+                "strategy_veto": "LONG_STRADDLE vetoed: IV rank 5 below 15",
+            }),
+        }
+        legs = [
+            {**leg, "suggested_price": 50.0, "action": "BUY"}
+            for leg in fake_legs[:2]
+        ]
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=vetoed)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=legs)
+        mocker.patch(
+            "lifecycle.trade_executor.RuntimeFlagsRepo.get_bool",
+            return_value=False,
+        )
+        fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
+                              fill_time=datetime(2026, 8, 18, 9, 40))
+                 for i in (1, 2)]
+        with pytest.raises(ValueError, match="IV rank"):
+            te.mark_executed(mock_db, "SUG-X", fills)
 
     def test_skip_gate_records_manual_fill_prices(
         self, mock_db, mocker, fake_legs,

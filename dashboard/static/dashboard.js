@@ -3131,21 +3131,32 @@ function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
   }
   const gate = s.execution_gate;
   if (!gate || gate.ok) return '';
-  const label = gate.label || 'Cannot execute';
-  const detail = (gate.reason && gate.reason !== 'OK') ? gate.reason : '';
+  const strategyVeto = s.strategy_veto || s.strategy_veto_reason || s.no_suggestion_reason || '';
+  const isStrategyVeto = !!(s.strategy_veto || s.strategy_veto_reason || (gate.details && gate.details.strategy_veto)
+    || (gate.vetoes || []).some(v => String(v).toLowerCase().includes('vetoed')));
+  const label = isStrategyVeto ? (gate.label || 'Scenario blocked') : (gate.label || 'Cannot execute');
+  const heading = isStrategyVeto ? 'This scenario is blocked' : 'Live checks failed';
+  const detail = isStrategyVeto
+    ? (strategyVeto || ((gate.reason && gate.reason !== 'OK') ? gate.reason : ''))
+    : ((gate.reason && gate.reason !== 'OK') ? gate.reason : '');
+  const hint = isStrategyVeto
+    ? 'Inspect the structure below. Record the trade as suggested, or enter fill prices and click Execute \u2014 this is not a live-gate-OK signal.'
+    : 'Record the trade as suggested, or enter your fill prices below and click <strong>Execute</strong>.';
   return `<div class="suggestion-gate-banner suggestion-gate-blocked" role="alert">
     <div class="suggestion-gate-head">
       <span class="tag tag-warn">${escapeHtml(label.toUpperCase())}</span>
-      <strong>Live checks failed</strong>
+      <strong>${heading}</strong>
     </div>
     ${detail ? `<p class="suggestion-gate-detail">${escapeHtml(detail)}</p>` : ''}
-    <p class="suggestion-gate-hint muted">Record the trade as suggested, or enter your fill prices below and click <strong>Execute</strong>.</p>
+    <p class="suggestion-gate-hint muted">${hint}</p>
   </div>`;
 }
 
 function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader = false, expanded = true) {
   const isNoSug = s.strategy === 'NONE' || s.status === 'NO_SUGGESTION';
-  if (isNoSug) {
+  const hasLegs = Array.isArray(s.legs) && s.legs.length > 0;
+  const isPairMember = s.regime_pair_type === 'range' || s.regime_pair_type === 'breakout';
+  if (isNoSug || (isPairMember && !hasLegs)) {
     return renderSitOutCard(s);
   }
   const sugStatus = (s.status || '').toUpperCase();

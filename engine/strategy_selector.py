@@ -253,6 +253,14 @@ _DEBIT_STRATEGIES = frozenset({
 })
 
 
+def _entry_veto(message: str, collected: list[str], *, defer: bool) -> None:
+    """Raise ``StrategyVeto`` or record it when assembling a vetoed pair partner."""
+    if defer:
+        collected.append(message)
+        return
+    raise StrategyVeto(message)
+
+
 def assemble_suggestion(
     *,
     suggestion_id: str,
@@ -272,6 +280,7 @@ def assemble_suggestion(
     generated_on: datetime | None = None,
     strategy_override: str | None = None,
     execution_window: str = "09:20\u201309:45 IST tomorrow",
+    defer_entry_vetoes: bool = False,
     data_date: date | None = None,
     entry_date: date | None = None,
     spot_data_date: date | None = None,
@@ -286,7 +295,13 @@ def assemble_suggestion(
     If ``strategy_override`` is provided it bypasses ``select_strategy()`` and
     builds legs for that strategy directly.  Used to generate companion
     spread suggestions (BPS / BCS) alongside the primary IC / IB.
+
+    ``defer_entry_vetoes``: when True, entry-quality gates (IV rank, IV/HV,
+    PoP floor, …) are recorded on ``Suggestion.strategy_veto_reason`` instead
+    of aborting. Structural failures (empty chain, no strikes, zero prices)
+    still raise ``StrategyVeto``.
     """
+    collected_vetoes: list[str] = []
     if not confidence.all_passed:
         raise StrategyVeto(
             "Confidence gate not all-pass: " + "; ".join(confidence.failed_reasons)
@@ -301,12 +316,15 @@ def assemble_suggestion(
         has_long_vol_catalyst=has_long_vol_catalyst,
     )
 
-    _enforce_long_vol_entry_gate(
-        strategy=strategy,
-        iv_rank=iv_rank,
-        indicators=indicators,
-        has_long_vol_catalyst=has_long_vol_catalyst,
-    )
+    try:
+        _enforce_long_vol_entry_gate(
+            strategy=strategy,
+            iv_rank=iv_rank,
+            indicators=indicators,
+            has_long_vol_catalyst=has_long_vol_catalyst,
+        )
+    except StrategyVeto as veto:
+        _entry_veto(str(veto), collected_vetoes, defer=defer_entry_vetoes)
 
     # Phase 3: strategy-aware soft-gate threshold.
     # Some strategies (naked longs, jade lizard) carry asymmetric risk and warrant
@@ -318,8 +336,9 @@ def assemble_suggestion(
         soft_checks = list(confidence.checks)[:7]
         soft_pass_count = sum(1 for c in soft_checks if c.status not in ("FAIL", "SOFT_FAIL"))
         if soft_pass_count < required:
-            raise StrategyVeto(
-                f"{strategy} requires {required}/7 soft gates, got {soft_pass_count}/7"
+            _entry_veto(
+                f"{strategy} requires {required}/7 soft gates, got {soft_pass_count}/7",
+                collected_vetoes, defer=defer_entry_vetoes,
             )
 
     # Per-strategy IV/HV ceiling for the BUYING regime.
@@ -336,10 +355,11 @@ def assemble_suggestion(
         iv_buying_max_rank = STRATEGY_CONFIG["iv_rank_buying_max"]
         in_buying_regime = (iv_rank is not None) and (iv_rank < iv_buying_max_rank)
         if in_buying_regime and iv_prem is not None and iv_prem > strat_iv_cap:
-            raise StrategyVeto(
+            _entry_veto(
                 f"{strategy} requires IV/HV \u2264 {strat_iv_cap:.2f}\u00d7 "
                 f"(strategy_iv_premium_buy_max), got {iv_prem:.2f}\u00d7 \u2014 "
-                f"naked long premium overpays for IV here"
+                f"naked long premium overpays for IV here",
+                collected_vetoes, defer=defer_entry_vetoes,
             )
 
     # Per-strategy IV/HV FLOOR for the WRITING regime (fix D — counterpart of
@@ -356,10 +376,11 @@ def assemble_suggestion(
         iv_writing_min_rank = STRATEGY_CONFIG["iv_rank_writing_min"]
         in_writing_regime = (iv_rank is not None) and (iv_rank > iv_writing_min_rank)
         if in_writing_regime and iv_prem is not None and iv_prem < float(sell_min):
-            raise StrategyVeto(
+            _entry_veto(
                 f"{strategy} requires IV/HV \u2265 {float(sell_min):.2f}\u00d7 "
                 f"(strategy_iv_premium_sell_min), got {iv_prem:.2f}\u00d7 \u2014 "
-                f"realised vol exceeds implied: negative selling edge"
+                f"realised vol exceeds implied: negative selling edge",
+                collected_vetoes, defer=defer_entry_vetoes,
             )
 
     # Per-strategy ADX band (fix D companion). Non-directional credit
@@ -373,16 +394,18 @@ def assemble_suggestion(
         adx_min, adx_max = adx_band
         if adx_value is not None:
             if adx_min is not None and adx_value < float(adx_min):
-                raise StrategyVeto(
+                _entry_veto(
                     f"{strategy} requires ADX \u2265 {float(adx_min):.0f}, "
                     f"got {adx_value:.1f} \u2014 market is in chop, not "
-                    f"consolidation; range-bound credit thesis unreliable"
+                    f"consolidation; range-bound credit thesis unreliable",
+                    collected_vetoes, defer=defer_entry_vetoes,
                 )
             if adx_max is not None and adx_value > float(adx_max):
-                raise StrategyVeto(
+                _entry_veto(
                     f"{strategy} requires ADX \u2264 {float(adx_max):.0f}, "
                     f"got {adx_value:.1f} \u2014 market is trending; "
-                    f"directional break risk exceeds range-bound edge"
+                    f"directional break risk exceeds range-bound edge",
+                    collected_vetoes, defer=defer_entry_vetoes,
                 )
 
     # Per-strategy IV/HV buy_pass veto (review item #8 follow-up).
@@ -401,10 +424,11 @@ def assemble_suggestion(
         tol = float(STRATEGY_CONFIG.get("iv_premium_buy_pass_tolerance", 0.10))
         threshold = float(buy_pass) * (1.0 + tol)
         if in_buying_regime and iv_prem is not None and iv_prem > threshold:
-            raise StrategyVeto(
+            _entry_veto(
                 f"{strategy} IV/HV {iv_prem:.2f}\u00d7 exceeds buy_pass threshold "
                 f"{buy_pass:.2f}\u00d7 (+{tol*100:.0f}% tolerance \u2192 ceiling "
-                f"{threshold:.2f}\u00d7) \u2014 marginal buying edge, premium too rich"
+                f"{threshold:.2f}\u00d7) \u2014 marginal buying edge, premium too rich",
+                collected_vetoes, defer=defer_entry_vetoes,
             )
 
     # VIX spike veto (S4): protect short-premium structures when VIX is surging.
@@ -415,45 +439,52 @@ def assemble_suggestion(
         vix_nd = getattr(indicators, "vix_nd_change_pct", None)
         vix_spike_thresh = float(STRATEGY_CONFIG.get("vix_spike_veto_pct", 20.0))
         if vix_nd is not None and vix_nd >= vix_spike_thresh:
-            raise StrategyVeto(
+            _entry_veto(
                 f"{strategy} vetoed: VIX has risen {vix_nd:.1f}% over last "
                 f"{int(STRATEGY_CONFIG.get('vix_spike_lookback_days', 3))} sessions "
                 f"(threshold {vix_spike_thresh:.0f}%) — short-premium thesis unreliable "
-                f"during a volatility spike"
+                f"during a volatility spike",
+                collected_vetoes, defer=defer_entry_vetoes,
             )
 
     # Build legs by strategy (registry-driven dispatch)
     em_builder, no_em_builder = _builder_for(strategy)
-    if strategy == "CALENDAR_SPREAD":
-        # Calendar spread needs two expiries: near + far, supplied by caller.
-        if calendar_legs is None:
-            raise StrategyVeto(
-                "CALENDAR_SPREAD requires calendar_legs kwarg (near_expiry, far_expiry, "
-                "near_chain, far_chain) — suggestion engine must supply it"
+    try:
+        if strategy == "CALENDAR_SPREAD":
+            # Calendar spread needs two expiries: near + far, supplied by caller.
+            if calendar_legs is None:
+                raise StrategyVeto(
+                    "CALENDAR_SPREAD requires calendar_legs kwarg (near_expiry, far_expiry, "
+                    "near_chain, far_chain) — suggestion engine must supply it"
+                )
+            legs = leg_builder.build_calendar_spread(
+                underlying=underlying,
+                near_expiry=calendar_legs["near_expiry"],
+                far_expiry=calendar_legs["far_expiry"],
+                near_chain=calendar_legs["near_chain"],
+                far_chain=calendar_legs["far_chain"],
+                spot=spot,
+                lots=lots,
+                lot_size=lot_size,
             )
-        legs = leg_builder.build_calendar_spread(
-            underlying=underlying,
-            near_expiry=calendar_legs["near_expiry"],
-            far_expiry=calendar_legs["far_expiry"],
-            near_chain=calendar_legs["near_chain"],
-            far_chain=calendar_legs["far_chain"],
-            spot=spot,
-            lots=lots,
-            lot_size=lot_size,
-        )
-    elif em_builder is not None:
-        legs = em_builder(
-            underlying=underlying, expiry=expiry, chain=chain,
-            spot=spot, expected_move=indicators.expected_move,
-            lots=lots, lot_size=lot_size,
-        )
-    elif no_em_builder is not None:
-        legs = no_em_builder(
-            underlying=underlying, expiry=expiry, chain=chain,
-            spot=spot, lots=lots, lot_size=lot_size,
-        )
-    else:
-        raise StrategyVeto(f"Unsupported strategy: {strategy}")
+        elif em_builder is not None:
+            legs = em_builder(
+                underlying=underlying, expiry=expiry, chain=chain,
+                spot=spot, expected_move=indicators.expected_move,
+                lots=lots, lot_size=lot_size,
+            )
+        elif no_em_builder is not None:
+            legs = no_em_builder(
+                underlying=underlying, expiry=expiry, chain=chain,
+                spot=spot, lots=lots, lot_size=lot_size,
+            )
+        else:
+            raise StrategyVeto(f"Unsupported strategy: {strategy}")
+    except ValueError as exc:
+        raise StrategyVeto(f"No constructible strikes: {exc}") from exc
+
+    if not legs:
+        raise StrategyVeto("No constructible strikes — empty structure")
 
     # Liquidity / pricing veto: any leg with zero suggested price → bail
     if any(l.suggested_price <= 0 for l in legs):
@@ -479,10 +510,11 @@ def assemble_suggestion(
             ref_lot_size = legs[0].lot_size or 75
             net_credit_per_share = np_per_share / (ref_lots * ref_lot_size)
             if net_credit_per_share < cs_width_pts:
-                raise StrategyVeto(
+                _entry_veto(
                     f"JADE_LIZARD: net credit/share {net_credit_per_share:.1f} < call spread "
                     f"width {cs_width_pts:.0f} pts — upside risk not fully hedged. "
-                    f"Increase short put premium or tighten call spread width."
+                    f"Increase short put premium or tighten call spread width.",
+                    collected_vetoes, defer=defer_entry_vetoes,
                 )
 
     # Credit-to-width ratio veto: for defined-risk credit strategies the net credit
@@ -500,9 +532,10 @@ def assemble_suggestion(
     spread_w_for_grade = leg_builder.spread_width(legs)
     if strategy in _CREDIT_STRATEGIES:
         if spread_w_for_grade > 0 and np_per_share < min_cw_ratio * spread_w_for_grade:
-            raise StrategyVeto(
+            _entry_veto(
                 f"Credit-to-width ratio too low: {np_per_share:.1f}/{spread_w_for_grade:.0f} = "
-                f"{np_per_share/spread_w_for_grade*100:.1f}% < {min_cw_ratio*100:.0f}% minimum"
+                f"{np_per_share/spread_w_for_grade*100:.1f}% < {min_cw_ratio*100:.0f}% minimum",
+                collected_vetoes, defer=defer_entry_vetoes,
             )
 
     max_profit_ps, max_loss_ps = leg_builder.max_profit_loss(legs, strategy)
@@ -521,12 +554,13 @@ def assemble_suggestion(
     pop_floor_overrides = STRATEGY_CONFIG.get("strategy_min_pop", {}) or {}
     pop_floor = pop_floor_overrides.get(strategy)
     if pop_floor is not None and pop < float(pop_floor):
-        raise StrategyVeto(
+        _entry_veto(
             f"{strategy} vetoed: probability of profit {pop:.0f}% below "
             f"{float(pop_floor):.0f}% floor (strategy_min_pop) — strikes sit at "
             f"the expected-move boundary, so this debit structure only pays off "
             f"on a breakout beyond the priced move; theta bleed dominates at "
-            f"this PoP"
+            f"this PoP",
+            collected_vetoes, defer=defer_entry_vetoes,
         )
 
     # Charges (per-share priced — we want totals → multiply by qty)
@@ -628,6 +662,7 @@ def assemble_suggestion(
         vix_data_date=vix_data_date,
         oi_pcr_change=oi_pcr_change,
         entry_quality_score=entry_quality_score,
+        strategy_veto_reason="; ".join(collected_vetoes) if collected_vetoes else None,
     )
 
 

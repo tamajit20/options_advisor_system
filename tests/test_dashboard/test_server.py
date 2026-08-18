@@ -78,7 +78,12 @@ class TestExecutionGateLabel:
         gate = self._gate(vetoes=["daily P&L circuit breaker is active"])
         assert server._execution_gate_label(gate, {"status": "PENDING"}) == "Circuit breaker"
 
-    def test_stale_at_open_label(self):
+    def test_scenario_blocked_label(self):
+        gate = self._gate(vetoes=["LONG_STRADDLE vetoed: IV rank 5 below 15"])
+        gate.details = {"strategy_veto": True}
+        assert server._execution_gate_label(
+            gate, {"status": "PENDING", "strategy_veto": "LONG_STRADDLE vetoed"},
+        ) == "Scenario blocked"
         gate = self._gate(vetoes=["validator failed"])
         row = {"status": "PENDING", "validator_status": "STALE_0935"}
         assert server._execution_gate_label(gate, row) == "Stale at open"
@@ -314,6 +319,148 @@ class TestApiSuggestionToday:
         assert len(preferred) == 1
         assert preferred[0]["status"] == "PENDING"
         assert data["sit_out"] == []
+
+    def test_vetoed_breakout_pending_has_legs_and_blocked_gate(self, client, mocker):
+        """Constructed-but-vetoed breakout is a full PENDING card, not sit-out."""
+        import json as _json
+        group = "BANKNIFTY:Weekly:2026-08-19"
+        range_row = {
+            "suggestion_id": "SUG-20260818-011",
+            "underlying": "BANKNIFTY",
+            "strategy": "CALENDAR_SPREAD",
+            "status": "PENDING",
+            "generated_on": datetime(2026, 8, 18, 9, 0),
+            "expiry_date": date(2026, 8, 27),
+            "net_credit_suggested": -80.0,
+            "trigger_reason": _json.dumps({
+                "regime_pair_group": group,
+                "regime_pair_type": "range",
+                "regime_pair_preferred": True,
+                "regime_pair_preference_reason": "System prefers the range trade",
+            }),
+        }
+        breakout_row = {
+            "suggestion_id": "SUG-20260818-012",
+            "underlying": "BANKNIFTY",
+            "strategy": "LONG_STRADDLE",
+            "status": "PENDING",
+            "generated_on": datetime(2026, 8, 18, 9, 1),
+            "expiry_date": date(2026, 8, 27),
+            "net_credit_suggested": -200.0,
+            "no_suggestion_reason": "LONG_STRADDLE vetoed: IV rank 5 below 15",
+            "trigger_reason": _json.dumps({
+                "regime_pair_group": group,
+                "regime_pair_type": "breakout",
+                "regime_pair_preferred": False,
+                "strategy_veto": "LONG_STRADDLE vetoed: IV rank 5 below 15",
+            }),
+        }
+        legs_by_sid = {
+            "SUG-20260818-011": [{
+                "leg_order": 1, "strike": 55000.0, "option_type": "CE",
+                "action": "SELL", "lots": 1, "lot_size": 35,
+                "suggested_price": 120.0,
+            }],
+            "SUG-20260818-012": [
+                {
+                    "leg_order": 1, "strike": 55000.0, "option_type": "CE",
+                    "action": "BUY", "lots": 1, "lot_size": 35,
+                    "suggested_price": 400.0,
+                },
+                {
+                    "leg_order": 2, "strike": 55000.0, "option_type": "PE",
+                    "action": "BUY", "lots": 1, "lot_size": 35,
+                    "suggested_price": 380.0,
+                },
+            ],
+        }
+        mocker.patch("dashboard.server.SuggestionRepo.active_pending",
+                     return_value=[range_row, breakout_row])
+        mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today",
+                     return_value=[])
+        mocker.patch(
+            "dashboard.server.SuggestionRepo.legs",
+            side_effect=lambda sid: legs_by_sid.get(sid, []),
+        )
+        resp = client.get("/api/suggestion/today")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["sit_out"] == []
+        assert len(data["suggestions"]) == 2
+        by_type = {s["regime_pair_type"]: s for s in data["suggestions"]}
+        assert by_type["range"]["strategy"] == "CALENDAR_SPREAD"
+        br = by_type["breakout"]
+        assert br["strategy"] == "LONG_STRADDLE"
+        assert br["status"] == "PENDING"
+        assert len(br["legs"]) == 2
+        assert br["execution_gate"]["ok"] is False
+        assert br["execution_gate"]["label"] == "Scenario blocked"
+        assert any("IV rank" in v for v in br["execution_gate"]["vetoes"])
+        assert {s["regime_pair_group"] for s in data["suggestions"]} == {group}
+
+    def test_does_not_merge_sit_out_when_pending_partner_exists(self, client, mocker):
+        """A constructed PENDING breakout wins over a leftover NO_SUGGESTION row."""
+        import json as _json
+        group = "BANKNIFTY:Weekly:2026-08-19"
+        range_row = {
+            "suggestion_id": "SUG-R",
+            "underlying": "BANKNIFTY",
+            "strategy": "CALENDAR_SPREAD",
+            "status": "PENDING",
+            "generated_on": datetime(2026, 8, 18, 9, 0),
+            "trigger_reason": _json.dumps({
+                "regime_pair_group": group,
+                "regime_pair_type": "range",
+                "regime_pair_preferred": True,
+            }),
+        }
+        breakout_row = {
+            "suggestion_id": "SUG-B",
+            "underlying": "BANKNIFTY",
+            "strategy": "LONG_STRADDLE",
+            "status": "PENDING",
+            "generated_on": datetime(2026, 8, 18, 9, 1),
+            "trigger_reason": _json.dumps({
+                "regime_pair_group": group,
+                "regime_pair_type": "breakout",
+                "regime_pair_preferred": False,
+                "strategy_veto": "LONG_STRADDLE vetoed: IV rank 5 below 15",
+            }),
+        }
+        ns_row = {
+            "suggestion_id": "SUG-NS",
+            "underlying": "BANKNIFTY",
+            "strategy": "NONE",
+            "status": "NO_SUGGESTION",
+            "generated_on": datetime(2026, 8, 18, 8, 0),
+            "no_suggestion_reason": "Sideways breakout scenario blocked: LONG_STRADDLE veto",
+            "trigger_reason": _json.dumps({
+                "regime_pair_group": group,
+                "regime_pair_type": "breakout",
+                "regime_pair_preferred": False,
+            }),
+        }
+        mocker.patch("dashboard.server.SuggestionRepo.active_pending",
+                     return_value=[range_row, breakout_row])
+        mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today",
+                     return_value=[ns_row])
+        mocker.patch(
+            "dashboard.server.SuggestionRepo.legs",
+            return_value=[{
+                "leg_order": 1, "strike": 55000.0, "option_type": "CE",
+                "action": "BUY", "lots": 1, "lot_size": 35,
+                "suggested_price": 400.0,
+            }],
+        )
+        data = client.get("/api/suggestion/today").get_json()
+        assert data["sit_out"] == []
+        assert len(data["suggestions"]) == 2
+        types = [s["regime_pair_type"] for s in data["suggestions"]]
+        assert types.count("breakout") == 1
+        assert types.count("range") == 1
+        br = next(s for s in data["suggestions"] if s["regime_pair_type"] == "breakout")
+        assert br["strategy"] == "LONG_STRADDLE"
+        assert br["status"] == "PENDING"
 
     def test_includes_blocked_pending_with_execution_gate(self, client, mocker):
         from datetime import timedelta
@@ -814,3 +961,16 @@ class TestWsMonitorEndpoint:
         assert resp.status_code == 200
         body = resp.get_json()
         assert body["available"] is False
+
+
+class TestJsRegimePairContracts:
+    def test_pair_group_renders_full_suggestion_and_two_scenarios(self):
+        from pathlib import Path
+        js = Path(server.__file__).resolve().parent.joinpath(
+            "static", "dashboard.js",
+        ).read_text(encoding="utf-8")
+        assert "TWO SCENARIOS" in js
+        assert "renderSuggestion(s, false, items" in js
+        assert "isPairMember && !hasLegs" in js
+        assert "This scenario is blocked" in js
+        assert "Mark Executed at suggested prices" in js

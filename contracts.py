@@ -283,6 +283,8 @@ class Suggestion:
     regime_pair_type:               Optional[str] = None   # "range" | "breakout"
     regime_pair_preferred:          bool = False
     regime_pair_preference_reason:  Optional[str] = None
+    # Entry-gate veto that did not prevent constructing legs (inspect + optional execute).
+    strategy_veto_reason:           Optional[str] = None
 
 
 @dataclass

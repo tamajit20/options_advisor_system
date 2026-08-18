@@ -289,3 +289,25 @@ class TestMultipleVetoes:
         assert len(r.vetoes) >= 3
         # `reason()` joins them with semicolons
         assert ";" in r.reason()
+
+
+class TestStrategyVeto:
+    def test_trigger_reason_json_blocks_even_when_live_checks_pass(self):
+        import json as _json
+        raw = _json.dumps({
+            "regime_pair_group": "BANKNIFTY:Weekly:2026-08-19",
+            "regime_pair_type": "breakout",
+            "regime_pair_preferred": False,
+            "strategy_veto": "LONG_STRADDLE vetoed: IV rank 5 below 15",
+        })
+        r = validate_execution(
+            _sug(trigger_reason=raw),
+            [
+                {"leg_order": 1, "strike": 23000.0, "option_type": "CE", "action": "BUY"},
+                {"leg_order": 2, "strike": 23000.0, "option_type": "PE", "action": "BUY"},
+            ],
+            now=_NOW, today=_TODAY,
+        )
+        assert not r.ok
+        assert r.details.get("strategy_veto") is True
+        assert any("IV rank" in v for v in r.vetoes)

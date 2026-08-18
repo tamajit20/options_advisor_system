@@ -604,10 +604,10 @@ class SuggestionRepo:
                execution_window, plain_english,
                data_date, entry_date, spot_data_date, fii_data_date, vix_data_date,
                oi_pcr_change, edge_score, credit_grade, em_calibration_warning,
-               entry_quality_score, trigger_reason)
+               entry_quality_score, trigger_reason, no_suggestion_reason)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING',
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 s.suggestion_id, s.trade_name, s.generated_on, s.strategy, s.strategy_type,
@@ -624,6 +624,7 @@ class SuggestionRepo:
                 getattr(s, "em_calibration_warning", None),
                 getattr(s, "entry_quality_score", None),
                 encode_regime_pair_trigger_reason(s),
+                getattr(s, "strategy_veto_reason", None),
             ],
         ).close()
 
