@@ -10,6 +10,8 @@ from engine.exit_pricing import (
     build_close_suggestion,
     format_leg_quote_key,
     leg_close_pnl,
+    lookup_leg_ltp,
+    unique_leg_expiries,
 )
 
 
@@ -134,3 +136,140 @@ def test_aligned_chain_keeps_calendar_mids_positional():
     assert [r["mid_price"] for r in chain] == [500.0, 1100.0]
     assert chain[0]["expiry_date"] == "2026-08-25"
     assert chain[1]["expiry_date"] == "2026-09-29"
+
+
+def test_lookup_prefers_4part_calendar_keys():
+    near = format_leg_quote_key("BANKNIFTY", date(2026, 8, 25), 57600, "CE")
+    far = format_leg_quote_key("BANKNIFTY", date(2026, 9, 29), 57600, "CE")
+    marks = {near: 303.0, far: 982.5}
+    assert lookup_leg_ltp(
+        marks, symbol="BANKNIFTY", strike=57600, option_type="CE",
+        expiry=date(2026, 8, 25),
+    ) == pytest.approx(303.0)
+    assert lookup_leg_ltp(
+        marks, symbol="banknifty", strike="57600.0000", option_type="ce",
+        expiry="2026-09-29",
+    ) == pytest.approx(982.5)
+
+
+def test_lookup_ambiguous_3part_returns_none():
+    marks = {
+        "BANKNIFTY|57600.0|CE": 303.0,
+        "NIFTY|57600.0|CE": 10.0,  # different symbol — not a collision
+    }
+    # Two 3-part keys for the SAME symbol+strike+CE cannot live in one dict.
+    # Simulate the map the old exporter built when it overwrote: one key.
+    # Ambiguity is two 3-part keys that both match want3 — use duplicate
+    # formatting variants that JS would treat as the same after parseFloat.
+    # Python dict can't hold two identical keys, so pass a synthetic pair
+    # via a map that lookup iterates: CE vs ce stored before uppercasing.
+    # lookup uppercases on compare, so "BANKNIFTY|57600.0|CE" and
+    # "banknifty|57600.0|ce" both match want3.
+    colliding = {
+        "BANKNIFTY|57600.0|CE": 303.0,
+        "banknifty|57600.0|ce": 982.5,
+    }
+    assert lookup_leg_ltp(
+        colliding, symbol="BANKNIFTY", strike=57600, option_type="CE",
+        expiry=date(2026, 8, 25),
+    ) is None
+
+
+def test_lookup_unique_legacy_3part_still_works_for_verticals():
+    marks = {"NIFTY|23000.0|CE": 90.0, "NIFTY|23200.0|CE": 25.0}
+    assert lookup_leg_ltp(
+        marks, symbol="NIFTY", strike=23000, option_type="CE",
+        expiry=date(2026, 8, 27),
+    ) == pytest.approx(90.0)
+    assert lookup_leg_ltp(
+        marks, symbol="NIFTY", strike=23200, option_type="CE",
+        expiry=date(2026, 8, 27),
+    ) == pytest.approx(25.0)
+
+
+def test_lookup_4part_wins_over_legacy_same_strike():
+    marks = {
+        "BANKNIFTY|57600.0|CE": 977.55,
+        format_leg_quote_key("BANKNIFTY", date(2026, 8, 25), 57600, "CE"): 303.0,
+        format_leg_quote_key("BANKNIFTY", date(2026, 9, 29), 57600, "CE"): 982.5,
+    }
+    assert lookup_leg_ltp(
+        marks, symbol="BANKNIFTY", strike=57600, option_type="CE",
+        expiry=date(2026, 8, 25),
+    ) == pytest.approx(303.0)
+
+
+def test_calendar_collapsed_marks_equal_minus_premium():
+    """If both legs are marked at the same mid, gross P&L == −premium paid."""
+    near, far = date(2026, 8, 25), date(2026, 9, 29)
+    legs = [
+        {
+            "leg_order": 1, "action": "SELL", "symbol": "BANKNIFTY",
+            "expiry_date": near, "strike": 57600.0, "option_type": "CE",
+            "fill_price": 535.6, "lots": 1, "lot_size": 35,
+        },
+        {
+            "leg_order": 2, "action": "BUY", "symbol": "BANKNIFTY",
+            "expiry_date": far, "strike": 57600.0, "option_type": "CE",
+            "fill_price": 1177.2, "lots": 1, "lot_size": 35,
+        },
+    ]
+    collapsed = {
+        near: [{"strike": 57600.0, "option_type": "CE", "settle_price": 977.55}],
+        far: [{"strike": 57600.0, "option_type": "CE", "settle_price": 977.55}],
+    }
+    payload = build_close_suggestion(legs, collapsed, spot=57000.0)
+    premium = (1177.2 - 535.6) * 35
+    assert payload["est_gross_pnl"] == pytest.approx(-premium)
+
+
+def test_strangle_same_expiry_resolves_by_strike():
+    exp = date(2026, 8, 27)
+    legs = [
+        {"leg_order": 1, "action": "BUY", "symbol": "NIFTY", "expiry_date": exp,
+         "strike": 22800.0, "option_type": "PE", "fill_price": 70.0,
+         "lots": 1, "lot_size": 75},
+        {"leg_order": 2, "action": "BUY", "symbol": "NIFTY", "expiry_date": exp,
+         "strike": 23200.0, "option_type": "CE", "fill_price": 80.0,
+         "lots": 1, "lot_size": 75},
+    ]
+    chain = [
+        {"strike": 22800.0, "option_type": "PE", "settle_price": 55.0},
+        {"strike": 23200.0, "option_type": "CE", "settle_price": 110.0},
+    ]
+    payload = build_close_suggestion(legs, {exp: chain}, spot=23000.0)
+    assert [l["suggested_close"] for l in payload["legs"]] == [55.0, 110.0]
+    assert payload["est_gross_pnl"] == pytest.approx((55 - 70) * 75 + (110 - 80) * 75)
+
+
+def test_unique_leg_expiries_preserves_order():
+    near, far = date(2026, 8, 25), date(2026, 9, 29)
+    legs = [
+        {"expiry_date": near},
+        {"expiry_date": far},
+        {"expiry_date": near},
+    ]
+    assert unique_leg_expiries(legs) == [near, far]
+
+
+def test_aligned_chain_accepts_iso_string_map_keys():
+    near, far = date(2026, 8, 25), date(2026, 9, 29)
+    legs = [
+        {"strike": 57600.0, "option_type": "CE", "expiry_date": near},
+        {"strike": 57600.0, "option_type": "CE", "expiry_date": far},
+    ]
+    chain = aligned_current_chain(legs, {
+        "2026-08-25": [{"strike": 57600.0, "option_type": "CE", "settle_price": 303.0}],
+        "2026-09-29": [{"strike": 57600.0, "option_type": "CE", "settle_price": 982.5}],
+    })
+    assert [r["mid_price"] for r in chain] == [303.0, 982.5]
+
+
+def test_dashboard_js_lookup_keeps_calendar_contract():
+    """UI lookup must keep the same 4-part / unique-3-part rules as Python."""
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[2] / "dashboard" / "static" / "dashboard.js"
+    text = src.read_text(encoding="utf-8")
+    assert "parts.length === 4" in text
+    assert "matches.length === 1" in text
+    assert "lookup_leg_ltp" in text

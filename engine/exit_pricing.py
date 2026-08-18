@@ -115,6 +115,60 @@ def format_leg_quote_key(
     )
 
 
+def _legacy_leg_quote_key(symbol: Any, strike: Any, option_type: Any) -> str:
+    """Pre-expiry snapshot key: ``SYMBOL|strike|CE``."""
+    return (
+        f"{str(symbol or '').upper()}|"
+        f"{float(strike)}|"
+        f"{str(option_type or '').upper()}"
+    )
+
+
+def lookup_leg_ltp(
+    leg_ltps: Optional[Mapping[str, Any]],
+    *,
+    symbol: Any,
+    strike: Any,
+    option_type: Any,
+    expiry: Any = None,
+) -> Optional[float]:
+    """Resolve a live mark from a snapshot map. Mirrors dashboard ``_lookupLegLtp``.
+
+    Prefer the 4-part expiry key. Fall back to a legacy 3-part key only when
+    exactly one match exists — two calendar CEs at the same strike must not
+    share a price.
+    """
+    if not leg_ltps:
+        return None
+    exp = expiry_iso(expiry)
+    if exp:
+        want = format_leg_quote_key(symbol, exp, strike, option_type)
+        for key, value in leg_ltps.items():
+            parts = str(key).split("|")
+            if len(parts) != 4:
+                continue
+            if format_leg_quote_key(parts[0], parts[1], parts[2], parts[3]) == want:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+    want3 = _legacy_leg_quote_key(symbol, strike, option_type)
+    matches: list[float] = []
+    for key, value in leg_ltps.items():
+        parts = str(key).split("|")
+        if len(parts) != 3:
+            continue
+        if _legacy_leg_quote_key(parts[0], parts[1], parts[2]) != want3:
+            continue
+        try:
+            matches.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def leg_close_pnl(
     *,
     action: str,

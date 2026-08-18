@@ -88,6 +88,16 @@ class TestExecutionGateLabel:
         row = {"status": "PENDING", "validator_status": "STALE_0935"}
         assert server._execution_gate_label(gate, row) == "Stale at open"
 
+    def test_scenario_blocked_wins_over_stale_veto_text(self):
+        gate = self._gate(vetoes=[
+            "LONG_STRADDLE vetoed: IV rank 5 below 15",
+            "suggestion generated 42m ago (max 30m)",
+        ])
+        gate.details = {"strategy_veto": True}
+        assert server._execution_gate_label(
+            gate, {"status": "PENDING", "strategy_veto": "LONG_STRADDLE vetoed"},
+        ) == "Scenario blocked"
+
 
 class TestHistoryFilterHelpers:
     def test_append_quality_band_excellent(self):
@@ -397,6 +407,75 @@ class TestApiSuggestionToday:
         assert br["execution_gate"]["label"] == "Scenario blocked"
         assert any("IV rank" in v for v in br["execution_gate"]["vetoes"])
         assert {s["regime_pair_group"] for s in data["suggestions"]} == {group}
+
+    def test_stale_range_and_vetoed_breakout_keep_distinct_gate_labels(self, client, mocker):
+        import json as _json
+        from datetime import timedelta
+        from utils import now_ist
+
+        now = now_ist()
+        group = "BANKNIFTY:Weekly:2026-08-19"
+        range_row = {
+            "suggestion_id": "SUG-R",
+            "underlying": "BANKNIFTY",
+            "strategy": "CALENDAR_SPREAD",
+            "status": "PENDING",
+            "data_source": "LIVE",
+            "trigger_type": "LIVE_RUN",
+            "generated_on": now - timedelta(minutes=42),
+            "entry_date": now.date(),
+            "spot_at_generation": 57335.0,
+            "trigger_reason": _json.dumps({
+                "regime_pair_group": group,
+                "regime_pair_type": "range",
+                "regime_pair_preferred": True,
+            }),
+        }
+        breakout_row = {
+            "suggestion_id": "SUG-B",
+            "underlying": "BANKNIFTY",
+            "strategy": "LONG_STRADDLE",
+            "status": "PENDING",
+            "data_source": "LIVE",
+            "trigger_type": "LIVE_RUN",
+            "generated_on": now - timedelta(minutes=5),
+            "entry_date": now.date(),
+            "spot_at_generation": 57335.0,
+            "trigger_reason": _json.dumps({
+                "regime_pair_group": group,
+                "regime_pair_type": "breakout",
+                "regime_pair_preferred": False,
+                "strategy_veto": "LONG_STRADDLE vetoed: IV rank 5 below 15",
+            }),
+        }
+        mocker.patch("dashboard.server.SuggestionRepo.active_pending",
+                     return_value=[range_row, breakout_row])
+        mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today",
+                     return_value=[])
+        mocker.patch(
+            "dashboard.server.SuggestionRepo.legs",
+            side_effect=lambda sid: [
+                {"leg_order": 1, "strike": 55000.0, "option_type": "CE",
+                 "action": "BUY", "lots": 1, "lot_size": 35,
+                 "suggested_price": 400.0},
+                {"leg_order": 2, "strike": 55000.0, "option_type": "PE",
+                 "action": "BUY", "lots": 1, "lot_size": 35,
+                 "suggested_price": 380.0},
+            ] if sid == "SUG-B" else [
+                {"leg_order": 1, "strike": 56000.0, "option_type": "CE",
+                 "action": "SELL", "lots": 1, "lot_size": 35,
+                 "suggested_price": 120.0},
+                {"leg_order": 2, "strike": 56000.0, "option_type": "CE",
+                 "action": "BUY", "lots": 1, "lot_size": 35,
+                 "suggested_price": 400.0, "expiry_date": now.date() + timedelta(days=35)},
+            ],
+        )
+        data = client.get("/api/suggestion/today").get_json()
+        by_type = {s["regime_pair_type"]: s for s in data["suggestions"]}
+        assert by_type["range"]["execution_gate"]["label"] == "Stale"
+        assert by_type["breakout"]["execution_gate"]["label"] == "Scenario blocked"
+        assert len(by_type["breakout"]["legs"]) == 2
+        assert data["sit_out"] == []
 
     def test_does_not_merge_sit_out_when_pending_partner_exists(self, client, mocker):
         """A constructed PENDING breakout wins over a leftover NO_SUGGESTION row."""
@@ -974,3 +1053,6 @@ class TestJsRegimePairContracts:
         assert "isPairMember && !hasLegs" in js
         assert "This scenario is blocked" in js
         assert "Mark Executed at suggested prices" in js
+        assert "parts.length === 4" in js
+        assert "matches.length === 1" in js
+        assert "_lookupLegLtp" in js

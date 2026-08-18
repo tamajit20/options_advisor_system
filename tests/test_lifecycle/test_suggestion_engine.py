@@ -391,6 +391,13 @@ class TestPersistRegimePair:
         assert encoded
         assert "strategy_veto" in encoded
         assert "IV rank" in encoded
+        persisted = {}
+        for call in ins.call_args_list:
+            sug_obj = call.args[-1]
+            persisted[sug_obj.suggestion_id] = sug_obj
+        assert persisted["SUG-4"].strategy_veto_reason
+        assert persisted["SUG-4"].legs
+        assert persisted["SUG-3"].regime_pair_preferred is True
 
 
 # ---------------------------------------------------------------------------

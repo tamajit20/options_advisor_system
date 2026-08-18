@@ -138,6 +138,20 @@ def test_complete_pair_breakout_vetoed_still_two_rows():
     assert "long-vol" in ns[0].reason.lower()
 
 
+def test_resolve_very_high_iv_butterfly_omits_breakout():
+    r, b = resolve_regime_pair_strategies(iv_rank=75.0)
+    assert r == "IRON_BUTTERFLY"
+    assert b is None
+
+
+def test_pick_preferred_breakout_when_score_higher():
+    range_sug = _sug("CALENDAR_SPREAD", pop=30.0, edge=20.0)
+    breakout_sug = _sug("LONG_STRADDLE", pop=55.0, edge=60.0)
+    preferred, reason = pick_regime_pair_preferred(range_sug, breakout_sug, iv_rank=18.0)
+    assert preferred == "breakout"
+    assert "breakout" in reason.lower()
+
+
 def test_complete_pair_vetoed_breakout_with_legs_prefers_range():
     """Entry-gate veto with constructed legs stays a Suggestion, Range preferred."""
     range_sug = _sug("CALENDAR_SPREAD", pop=55.0, edge=40.0)
@@ -165,6 +179,86 @@ def test_complete_pair_vetoed_breakout_with_legs_prefers_range():
     decoded = decode_regime_pair_trigger_reason(raw)
     assert decoded["strategy_veto"]
     assert decoded["regime_pair_type"] == "breakout"
+
+
+def test_complete_pair_vetoed_range_with_legs_prefers_breakout():
+    range_sug = _sug("CALENDAR_SPREAD", pop=70.0, edge=80.0)
+    range_sug.strategy_veto_reason = "CALENDAR_SPREAD vetoed: empty far-month chain"
+    breakout_sug = _sug("LONG_STRADDLE", pop=35.0, edge=20.0)
+    sugs, ns = complete_regime_pair(
+        [(range_sug, "range"), (breakout_sug, "breakout")],
+        missing_reasons={},
+        group_id="NIFTY:Weekly:2026-08-19",
+        iv_rank=22.0,
+        underlying="NIFTY",
+        confidence=range_sug.confidence,
+        generated_on=datetime.now(),
+    )
+    assert ns == []
+    by_type = {s.regime_pair_type: s for s in sugs}
+    assert by_type["breakout"].regime_pair_preferred is True
+    assert by_type["range"].regime_pair_preferred is False
+    assert by_type["range"].strategy_veto_reason
+
+
+def test_complete_pair_both_vetoed_with_legs_neither_preferred():
+    range_sug = _sug("CALENDAR_SPREAD", pop=55.0)
+    range_sug.strategy_veto_reason = "range veto"
+    breakout_sug = _sug("LONG_STRADDLE", pop=42.0, edge=90.0)
+    breakout_sug.strategy_veto_reason = "breakout veto"
+    sugs, ns = complete_regime_pair(
+        [(range_sug, "range"), (breakout_sug, "breakout")],
+        missing_reasons={},
+        group_id="BANKNIFTY:Weekly:2026-08-19",
+        iv_rank=5.0,
+        underlying="BANKNIFTY",
+        confidence=range_sug.confidence,
+        generated_on=datetime.now(),
+    )
+    assert ns == []
+    assert all(s.regime_pair_preferred is False for s in sugs)
+    assert all(s.regime_pair_group == "BANKNIFTY:Weekly:2026-08-19" for s in sugs)
+
+
+def test_complete_pair_vetoed_breakout_cannot_win_on_edge():
+    """Higher PoP/edge on a vetoed partner must not make it system-preferred."""
+    range_sug = _sug("CALENDAR_SPREAD", pop=20.0, edge=10.0)
+    breakout_sug = _sug("LONG_STRADDLE", pop=90.0, edge=90.0)
+    breakout_sug.strategy_veto_reason = "LONG_STRADDLE vetoed: IV rank 5 below 15"
+    sugs, ns = complete_regime_pair(
+        [(range_sug, "range"), (breakout_sug, "breakout")],
+        missing_reasons={},
+        group_id="BANKNIFTY:Weekly:2026-08-19",
+        iv_rank=5.0,
+        underlying="BANKNIFTY",
+        confidence=range_sug.confidence,
+        generated_on=datetime.now(),
+    )
+    assert ns == []
+    preferred = next(s for s in sugs if s.regime_pair_preferred)
+    assert preferred.regime_pair_type == "range"
+    assert preferred.strategy == "CALENDAR_SPREAD"
+
+
+def test_trigger_reason_keeps_strategy_veto_when_reason_is_long():
+    sug = _sug("LONG_STRADDLE", pop=40.0)
+    sug.regime_pair_group = "BANKNIFTY:Weekly:2026-08-19"
+    sug.regime_pair_type = "breakout"
+    sug.regime_pair_preferred = False
+    sug.regime_pair_preference_reason = "x" * 400
+    sug.strategy_veto_reason = "LONG_STRADDLE vetoed: IV rank 5 below 15 with no HIGH-impact catalyst"
+    raw = encode_regime_pair_trigger_reason(sug)
+    assert raw
+    assert len(raw) <= 500
+    decoded = decode_regime_pair_trigger_reason(raw)
+    assert decoded["regime_pair_type"] == "breakout"
+    assert "IV rank" in (decoded.get("strategy_veto") or "")
+
+
+def test_decode_ignores_plain_text_trigger_reason():
+    assert decode_regime_pair_trigger_reason("stale live chain") == {}
+    assert decode_regime_pair_trigger_reason("{not json") == {}
+    assert decode_regime_pair_trigger_reason(None) == {}
 
 
 def test_complete_pair_both_fail_two_no_suggestions():

@@ -42,6 +42,7 @@ function formatLegInstrument(l) {
   return escapeHtml(bits.join(' '));
 }
 
+// Contract: engine.exit_pricing.lookup_leg_ltp (tests/test_engine/test_exit_pricing.py)
 function _lookupLegLtp(legLtps, symbol, strike, optionType, expiry) {
   if (!legLtps || typeof legLtps !== 'object') return null;
   if (expiry) {

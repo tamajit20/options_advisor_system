@@ -311,3 +311,41 @@ class TestStrategyVeto:
         assert not r.ok
         assert r.details.get("strategy_veto") is True
         assert any("IV rank" in v for v in r.vetoes)
+
+    def test_strategy_veto_reason_column_blocks_without_trigger_json(self):
+        r = validate_execution(
+            _sug(strategy_veto_reason="LONG_STRADDLE vetoed: IV rank 5 below 15"),
+            [
+                {"leg_order": 1, "strike": 23000.0, "option_type": "CE", "action": "BUY"},
+                {"leg_order": 2, "strike": 23000.0, "option_type": "PE", "action": "BUY"},
+            ],
+            now=_NOW, today=_TODAY,
+        )
+        assert not r.ok
+        assert r.details.get("strategy_veto") is True
+
+    def test_strategy_veto_and_stale_are_both_reported(self):
+        import json as _json
+        raw = _json.dumps({
+            "regime_pair_group": "BANKNIFTY:Weekly:2026-08-19",
+            "regime_pair_type": "breakout",
+            "strategy_veto": "LONG_STRADDLE vetoed: IV rank 5 below 15",
+        })
+        r = validate_execution(
+            _sug(
+                trigger_reason=raw,
+                data_source="LIVE",
+                trigger_type="LIVE_RUN",
+                generated_on=_NOW - timedelta(minutes=90),
+                data_as_of=_NOW - timedelta(minutes=5),
+            ),
+            [
+                {"leg_order": 1, "strike": 23000.0, "option_type": "CE", "action": "BUY"},
+                {"leg_order": 2, "strike": 23000.0, "option_type": "PE", "action": "BUY"},
+            ],
+            now=_NOW, today=_TODAY,
+        )
+        assert not r.ok
+        assert r.details.get("strategy_veto") is True
+        assert any("IV rank" in v for v in r.vetoes)
+        assert any("ago" in v for v in r.vetoes)
