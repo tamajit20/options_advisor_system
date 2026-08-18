@@ -130,6 +130,11 @@
     const sig = (intro.signals || []).length
       ? `<ul class="sg-list sg-signals">${intro.signals.map(t => `<li>${_esc(t)}</li>`).join('')}</ul>`
       : '';
+    const onCard = (intro.on_card || []).length
+      ? `<dl class="sg-look">${intro.on_card.map(r =>
+          `<div class="sg-look-row"><dt>${_esc(r.place)}</dt><dd>${_esc(r.why)}</dd></div>`
+        ).join('')}</dl>`
+      : '';
     const order = guide.order || Object.keys(guide.strategies || {});
     const toc = [];
     const articles = [];
@@ -144,6 +149,8 @@
     return `<div class="sg-page">
       <p class="sg-lede">${_esc(intro.lede || '')}</p>
       <div class="sg-families">${fam}</div>
+      <h3>Already on the Suggestion / My Trades card</h3>
+      ${onCard}
       <h3>Header shapes (this dashboard)</h3>
       ${sig}
       <input type="search" id="sg-filter" class="sg-filter" placeholder="Filter strategies…" value="${_esc(filter || '')}">
@@ -257,13 +264,15 @@
     document.body.classList.remove('sg-modal-open');
   }
 
+  // Capture phase: summary buttons call stopPropagation, which would hide
+  // this from a bubble listener and also toggle the trade/suggestion card.
   document.addEventListener('click', (ev) => {
     const btn = ev.target.closest('.strategy-guide-btn');
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
     openStrategyGuide(btn.getAttribute('data-strategy'));
-  });
+  }, true);
 
   window.loadStrategyGuide = loadStrategyGuide;
   window.openStrategyGuide = openStrategyGuide;

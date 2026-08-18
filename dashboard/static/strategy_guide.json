@@ -6,17 +6,17 @@
       {
         "id": "credit",
         "label": "Credit / short premium",
-        "text": "You receive premium up front (iron condor, iron butterfly, bull put, bear call, jade lizard). Time decay helps if the index stays inside the short strikes. This system books take-profit as a fraction of max profit (credit captured) and uses a time-decay exit when DTE is very small."
+        "text": "You receive premium up front (iron condor, iron butterfly, bull put, bear call, jade lizard). Time decay helps if the index stays inside the short strikes. This system books take-profit as a fraction of max profit (credit captured) and uses a time-decay exit when DTE is very small. Do not calculate credit vs width — look at the Credit: weak / good / strong chip in the context row (with Edge and checks). Skip weak. Prefer good or strong."
       },
       {
         "id": "debit_spread",
         "label": "Debit spreads",
-        "text": "You pay a net debit for a defined-width directional spread (bull call, bear put). Profit is capped at the far strike. This system targets a fraction of the debit paid — not a DTE-scaled multiple."
+        "text": "You pay a net debit for a defined-width directional spread (bull call, bear put). Profit is capped at the far strike. This system targets a fraction of the debit paid — not a DTE-scaled multiple. Look at Edge, the checks chip, quality badge, PoP, and Exit Plan on the card — there is no Credit: weak/good/strong chip on debit spreads."
       },
       {
         "id": "long_premium",
         "label": "Long premium / calendar",
-        "text": "You pay debit for long options or a calendar. More DTE usually means a larger rupee target (this system: target multiple = base + DTE / scale, capped). Theta works against naked longs; calendars want a quiet near expiry."
+        "text": "You pay debit for long options or a calendar. More DTE usually means a larger rupee target (this system: target multiple = base + DTE / scale, capped). Theta works against naked longs; calendars want a quiet near expiry. Look at Edge, quality, PoP, DTE, and Exit Plan on the card. No Credit: weak/good/strong chip — that is credits only."
       }
     ],
     "signals": [
@@ -27,6 +27,17 @@
       "Circle (dark red) — circuit breaker or kill switch",
       "Hexagon − (rose) — currently in loss, not yet at stop",
       "Hexagon + (teal) — currently in profit, not yet at target"
+    ],
+    "on_card": [
+      { "place": "Credit: weak / good / strong", "why": "Context chip on Suggestion (same row as Edge and checks). Credit-to-width is already graded — skip weak, keep good or strong. Hover for the band. Debit/long cards omit this chip." },
+      { "place": "Edge X/100", "why": "Context chip. Blend of PoP, credit-to-width (or debit discount), IV alignment, and confidence. Higher is better. Not a hard gate." },
+      { "place": "N/M checks", "why": "Context chip. Click it for the hard/soft gate table (DTE, liquidity, IV, VIX, PCR, OI, trend, FII)." },
+      { "place": "Quality badge (Excellent / Good / Fair…)", "why": "Header next to the strategy tag. Stored score from Edge + confidence + PoP. Hover for the split." },
+      { "place": "PoP", "why": "Collapsed preview row, and again in the economics grid. Credits: skip only if it looks like a debit (~40% or worse). Long strangle has a 30% floor." },
+      { "place": "IV Rank and IV/HV", "why": "Context chips. Writing wants high IV Rank / rich IV/HV; buying wants the opposite." },
+      { "place": "DTE", "why": "Preview row and economics grid. Must sit in this system's band (typically 7–21)." },
+      { "place": "Max profit / max loss / Exit Plan", "why": "Economics grid + Exit Plan block. Target and stop rupees live here — do not invent a second formula." },
+      { "place": "Current P&L (My Trades)", "why": "Header tag on the open trade. Hexagon +/− on the rail and card mark in-profit vs in-loss before target/stop." }
     ]
   },
   "order": [
@@ -58,7 +69,7 @@
         "IV Rank in the writing zone and IV/HV not collapsing.",
         "Trend labelled sideways; PCR not screaming a one-way move.",
         "Short strikes outside the expected move; wings actually hedge (width and liquidity).",
-        "PoP, credit vs width, and both-side breakevens on the card.",
+        "PoP on the collapsed preview row, and the Credit: weak / good / strong chip in the context chips (same row as Edge / checks). Skip Credit: weak. Prefer good or strong.",
         "DTE inside this system's band (typically 7–21)."
       ],
       "pnl": {
@@ -70,7 +81,8 @@
         "suggestion": [
           { "place": "Name + strategy tag", "why": "Tag IRON_CONDOR. Info icon (ⓘ) opens this same note." },
           { "place": "Why this strategy today / What makes it better", "why": "Range thesis: stay inside the profit zone printed from short strikes." },
-          { "place": "PoP, credit, max profit, max loss, DTE (preview row)", "why": "Credit and max profit should match 'collect premium in a range'. Weak PoP or tiny credit vs width is a skip." },
+          { "place": "Collapsed preview — PoP", "why": "Look at the PoP figure. Credits have no PoP floor here, but skip if it looks like a debit (~40% or worse — shorts too close)." },
+          { "place": "Context chips — Credit: weak / good / strong", "why": "Already graded credit-to-width. Look at this chip — skip weak, keep good or strong. Hover it for the band. Do not recompute from max profit / max loss." },
           { "place": "Legs + role notes", "why": "Two shorts (put and call) plus two long hedges. Confirm OTM on both sides." },
           { "place": "Exit Plan", "why": "Take-profit is a fraction of max profit (credit captured). Stop is the strategy SL table — not a spot-only rule." },
           { "place": "Confidence / quality chips", "why": "Hard DTE + liquidity; soft IV, VIX, PCR, OI, trend, IV premium, FII." }
@@ -97,7 +109,7 @@
       "checks": [
         "IV Rank very high and IV/HV at or above the butterfly premium gate.",
         "Short CE and PE at the same (or nearly ATM) strike.",
-        "Wings far enough that max loss is acceptable.",
+        "Wings far enough that max loss is acceptable. Look at Credit: weak / good / strong — butterfly should read strong (this system requires a richer credit than condor).",
         "Profit zone is a tight band around ATM — if expected move is wide, condor is healthier."
       ],
       "pnl": {
@@ -110,6 +122,7 @@
           { "place": "Strategy tag IRON_BUTTERFLY", "why": "Not a condor — shorts should be ATM body, not EM wings." },
           { "place": "Why this strategy today", "why": "Should mention high IV and pin / max credit at ATM." },
           { "place": "Breakevens / profit zone", "why": "Much tighter than condor. If the zone looks as wide as a condor, the legs are wrong." },
+          { "place": "Context chips — Credit: weak / good / strong", "why": "Look at this chip. Butterfly should be strong. Skip weak." },
           { "place": "Exit Plan take-profit", "why": "Higher capture fraction than condor (Config: strategy_take_profit_fraction for IRON_BUTTERFLY)." }
         ],
         "trade": [
@@ -131,7 +144,7 @@
       "checks": [
         "Trend bullish / PCR not screaming puts.",
         "Short put below spot (OTM), long put further below.",
-        "Credit vs width sensible; downside max loss = width − credit.",
+        "Look at the Credit: weak / good / strong chip. Skip weak. Prefer good or strong.",
         "You are OK being wrong if the index dumps through the short put."
       ],
       "pnl": {
@@ -144,6 +157,7 @@
           { "place": "Tag BULL_PUT_SPREAD", "why": "Put-side credit only — no short call." },
           { "place": "Why / What makes it better", "why": "Should talk about holding above the short put." },
           { "place": "Legs", "why": "SELL PE + BUY lower PE. Role notes: short put collects, long put hedges." },
+          { "place": "Context chips — Credit: weak / good / strong", "why": "Look at this chip — skip weak, keep good or strong. Hover for the band." },
           { "place": "Exit Plan", "why": "Take-profit = fraction of max profit; SL from bull-put limits (tighter than condor in this system)." }
         ],
         "trade": [
@@ -165,7 +179,7 @@
       "checks": [
         "Trend bearish; PCR / OI not screaming a squeeze.",
         "Short call above spot, long call further above.",
-        "Credit vs width; upside max loss defined.",
+        "Look at the Credit: weak / good / strong chip. Skip weak. Prefer good or strong.",
         "Event risk: a squeeze through the short call is the failure mode."
       ],
       "pnl": {
@@ -178,6 +192,7 @@
           { "place": "Tag BEAR_CALL_SPREAD", "why": "Call-side credit only." },
           { "place": "Rationale text", "why": "Should say stay below the short call." },
           { "place": "Legs", "why": "SELL CE + BUY higher CE." },
+          { "place": "Context chips — Credit: weak / good / strong", "why": "Look at this chip — skip weak, keep good or strong. Hover for the band." },
           { "place": "Exit Plan", "why": "Credit-capture target; SL from bear-call limits." }
         ],
         "trade": [
@@ -198,6 +213,7 @@
       ],
       "checks": [
         "Net credit ≥ call-spread width (zero upside risk). If not, it is a sloppy lizard.",
+        "Look at the Credit: weak / good / strong chip. Skip weak (jade should not be thin).",
         "Strong bullish evidence (PCR / trend), not a mild bounce.",
         "Short put still OTM with acceptable crash loss.",
         "Three (or four) legs match: short put + short call + long higher call."
@@ -211,7 +227,7 @@
         "suggestion": [
           { "place": "Tag JADE_LIZARD", "why": "Not BPS-only — you should see a call spread plus a short put." },
           { "place": "Why this strategy today", "why": "Should mention strong bullish conviction and zero upside risk." },
-          { "place": "Credit vs call width", "why": "If credit is smaller than the call spread, upside is not zero — skip or size down." },
+          { "place": "Credit vs call width", "why": "Two places: (1) Context chip Credit: weak / good / strong — skip weak. (2) Legs: net credit per unit must cover the call-spread width, or upside is not zero — skip." },
           { "place": "Exit Plan", "why": "Same credit-capture family as BPS; SL uses jade-lizard limits." }
         ],
         "trade": [
@@ -246,6 +262,8 @@
           { "place": "Tag CALENDAR_SPREAD", "why": "Legs must show two different expiry dates." },
           { "place": "Why this strategy today", "why": "Should mention calm / near vs far decay, not a breakout." },
           { "place": "Debit / max profit language", "why": "You paid debit — max profit is not 'credit captured'." },
+          { "place": "Context chips — Edge / checks / quality", "why": "Look at Edge X/100, the checks chip, and the quality badge on the header. No Credit: weak/good/strong chip on calendars — that is credits only." },
+          { "place": "Collapsed preview — PoP and DTE", "why": "Look at PoP and DTE here. Calendar PoP is structurally mid; DTE is for the near (short) expiry." },
           { "place": "Exit Plan", "why": "Target uses the long-premium DTE formula (base + DTE/scale). SL is calendar's loss fraction of max loss / debit." }
         ],
         "trade": [

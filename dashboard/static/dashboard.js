@@ -1079,20 +1079,39 @@ function _renderSignalRail(st) {
   host.innerHTML = tiles.join('');
   host.hidden = tiles.length === 0;
   host.querySelectorAll('.signal-tile[data-trade-id]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      switchTab('trades');
-      const tid = btn.getAttribute('data-trade-id');
-      if (!tid) return;
-      requestAnimationFrame(() => {
-        const card = document.getElementById(`trade-card-${tid}`)
-          || document.querySelector(`.card[data-trade-id="${CSS.escape(tid)}"]`);
-        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      });
-    });
+    btn.addEventListener('click', () => _gotoTradeCard(btn.getAttribute('data-trade-id')));
   });
   host.querySelectorAll('.signal-tile--breaker, .signal-tile--kill').forEach(btn => {
-    btn.addEventListener('click', () => switchTab('config'));
+    btn.addEventListener('click', () => {
+      const panel = document.getElementById('panel-config');
+      if (panel && panel.classList.contains('active')) return;
+      switchTab('config');
+    });
   });
+}
+
+let _pendingTradeFocus = null;
+
+function _gotoTradeCard(tid) {
+  if (!tid) return;
+  _pendingTradeFocus = tid;
+  const panel = document.getElementById('panel-trades');
+  if (panel && panel.classList.contains('active')) {
+    _focusPendingTradeCard();
+    return;
+  }
+  switchTab('trades');
+}
+
+function _focusPendingTradeCard() {
+  const tid = _pendingTradeFocus;
+  if (!tid) return;
+  const card = document.getElementById(`trade-card-${tid}`)
+    || document.querySelector(`.card[data-trade-id="${CSS.escape(tid)}"]`);
+  if (!card) return;
+  _pendingTradeFocus = null;
+  if (card.matches && card.matches('details')) card.open = true;
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 function _refreshPnlSignalRail() {
@@ -1292,7 +1311,10 @@ function bindCollapsibleCardInteractions(root) {
   scope.querySelectorAll('.collapsible-card summary button, .collapsible-card summary a, .collapsible-card summary input, .collapsible-card summary select, .collapsible-card summary textarea, .collapsible-card summary label').forEach(el => {
     if (el.dataset.collapseBound === '1') return;
     el.dataset.collapseBound = '1';
-    el.addEventListener('click', e => e.stopPropagation());
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      if (el.classList.contains('strategy-guide-btn')) e.preventDefault();
+    });
   });
   scope.querySelectorAll('.collapsible-card summary .btn, .collapsible-card summary .card-head-btn').forEach(el => {
     if (el.dataset.collapseBound === '2') return;
@@ -3544,7 +3566,10 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     });
   const summaryHtml = `
     <div class="card-head collapsible-card-head">
-        <h3>${escapeHtml(s.trade_name || s.suggestion_id)} ${strategyGuideInfoBtn(s.strategy)}</h3>
+        <div class="card-head-title">
+          <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
+          ${strategyGuideInfoBtn(s.strategy)}
+        </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
         ${regimePairChip(s)}
@@ -4088,6 +4113,7 @@ async function loadTrades() {
     }));
     bindGapReplayPanels();
     bindCollapsibleCardInteractions(c);
+    _focusPendingTradeCard();
   } catch (e) {
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -4776,7 +4802,8 @@ function renderTrade(t, expanded = true) {
           exitInstruction: t.exit_instruction,
           riskNotif: t.risk_alert && t.risk_alert.notif_type,
         }))}</span>
-        <h3>${escapeHtml(t.trade_name || t.trade_id)} ${strategyGuideInfoBtn(t.suggestion && t.suggestion.strategy)}</h3>
+        <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
+        ${strategyGuideInfoBtn((t.suggestion && t.suggestion.strategy) || t.strategy)}
       </div>
       <div class="card-head-tags">
         ${(() => {

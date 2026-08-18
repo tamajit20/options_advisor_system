@@ -47,6 +47,10 @@ class TestStrategyGuideJson:
         fam_ids = {f["id"] for f in intro["families"]}
         assert fam_ids == FAMILIES
         assert len(intro["signals"]) >= 6
+        assert len(intro["on_card"]) >= 6
+        for row in intro["on_card"]:
+            assert row.get("place")
+            assert row.get("why")
 
     def test_each_strategy_has_required_fields(self):
         strategies = _guide()["strategies"]
