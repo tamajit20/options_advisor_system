@@ -253,10 +253,12 @@ BASIS_CONFIG: dict = {
     "live_state_path": "data/basis_live_state.json",
     # Server-side watch interval for /api/basis/live/stream (seconds).
     "live_stream_poll_sec": 0.5,
-    # Persist to basis_episodes only when |basis_pct| >= this (0 = store all).
+    # Persist to basis_episodes only when |basis_pct| >= this (0 = no % gate).
     "min_basis_store_pct": 0.0,
-    # On close, skip DB if episode lasted fewer seconds (0 = no duration gate).
-    "min_duration_store_sec": 0,
+    # Persist only when the episode lasted at least this many seconds.
+    # Live tab still shows every open gap; History/DB is filtered.
+    # 60 = must stay ≥ 1 minute. 0 = store regardless of duration.
+    "min_duration_store_sec": 60,
 }
 
 SCOUT_CONFIG: dict = {

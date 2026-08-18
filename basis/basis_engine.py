@@ -82,6 +82,7 @@ class _OpenEpisode:
     sample_count: int = 0
     last_payload: dict = field(default_factory=dict)
     dirty: bool = False
+    insert_queued: bool = False
 
 
 def compute_basis(
@@ -145,6 +146,9 @@ def _episode_payload(
         "symbol": symbol,
         "fut_expiry": fut_expiry,
         "started_at": started_at,
+        # Last paired sample while the episode is open (gap end on Live).
+        # Closed rows persist ended_at in DB; duration_sec is always end − start.
+        "last_seen_at": now,
         "duration_sec": duration,
         "spot_ltp": spot.ltp,
         "fut_ltp": fut.ltp,
@@ -246,11 +250,6 @@ class BasisEngine:
     def _store_filter_enabled(self) -> bool:
         return self._min_basis_store_pct > 0 or self._min_duration_store_sec > 0
 
-    def _basis_pct_meets_store(self, basis_pct: float) -> bool:
-        if self._min_basis_store_pct <= 0:
-            return True
-        return abs(float(basis_pct)) >= self._min_basis_store_pct
-
     def _episode_meets_store(self, ep: _OpenEpisode, *, duration_sec: int) -> bool:
         if not self._store_filter_enabled():
             return True
@@ -261,10 +260,17 @@ class BasisEngine:
         return True
 
     def _maybe_queue_insert(self, symbol: str, ep: _OpenEpisode) -> None:
-        if ep.db_id is not None:
+        """Queue a DB insert only after store filters (pct + duration) are met.
+
+        Live SSE still shows the episode immediately. Short flashes never
+        become ``basis_episodes`` rows.
+        """
+        if ep.db_id is not None or ep.insert_queued:
             return
-        if not self._basis_pct_meets_store(ep.max_basis_pct):
+        duration = int((ep.last_payload or {}).get("duration_sec") or 0)
+        if not self._episode_meets_store(ep, duration_sec=duration):
             return
+        ep.insert_queued = True
         self._q.put((_DbOp.INSERT, symbol, dict(ep.last_payload)))
 
     def _publish_live_state(self, now: Optional[datetime] = None) -> None:
@@ -390,9 +396,10 @@ class BasisEngine:
 
     def _live_row(self, payload: dict) -> dict:
         row = {**payload}
-        started = payload.get("started_at")
-        if isinstance(started, datetime):
-            row["started_at"] = started.isoformat(sep=" ", timespec="seconds")
+        for key in ("started_at", "last_seen_at"):
+            val = payload.get(key)
+            if isinstance(val, datetime):
+                row[key] = val.isoformat(sep=" ", timespec="seconds")
         exp = payload.get("fut_expiry")
         if isinstance(exp, date):
             row["fut_expiry"] = exp.isoformat()
@@ -568,6 +575,12 @@ class BasisEngine:
                 self._db.commit()
         except Exception:
             logger.exception("basis episode DB write failed")
+            if item and item[0] == _DbOp.INSERT:
+                symbol = item[1]
+                with self._lock:
+                    ep = self._open.get(symbol)
+                    if ep is not None:
+                        ep.insert_queued = False
             try:
                 self._db.rollback()
             except Exception:

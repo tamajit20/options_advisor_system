@@ -63,16 +63,68 @@
     return '';
   }
 
+  function parseDt(s) {
+    if (!s) return null;
+    const d = new Date(String(s).replace(' ', 'T'));
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  function addSeconds(dt, sec) {
+    if (!dt || sec == null || isNaN(sec)) return null;
+    return new Date(dt.getTime() + Number(sec) * 1000);
+  }
+
+  function fmtDt(s) {
+    if (s instanceof Date) {
+      if (Number.isNaN(s.getTime())) return '—';
+      const p = n => String(n).padStart(2, '0');
+      return `${s.getFullYear()}-${p(s.getMonth() + 1)}-${p(s.getDate())} ${p(s.getHours())}:${p(s.getMinutes())}:${p(s.getSeconds())}`;
+    }
+    return s ? String(s) : '—';
+  }
+
+  function fmtDurationSec(sec) {
+    const n = Math.max(0, Math.round(Number(sec) || 0));
+    const h = Math.floor(n / 3600);
+    const m = Math.floor((n % 3600) / 60);
+    const s = n % 60;
+    if (h) return `${h}h ${m}m ${s}s`;
+    if (m) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
+
+  function gapWindow(b, live) {
+    const start = parseDt(b.started_at);
+    let end = parseDt(b.ended_at) || parseDt(b.last_seen_at);
+    if (!end && start && b.duration_sec != null) end = addSeconds(start, b.duration_sec);
+    let durationSec = null;
+    if (start && end) durationSec = Math.max(0, Math.round((end - start) / 1000));
+    else if (b.duration_sec != null) durationSec = Number(b.duration_sec);
+    return { start, end, durationSec, live };
+  }
+
   function basisRow(b, live) {
-    const dur = b.duration_sec != null ? b.duration_sec + 's' : (live ? '…' : '—');
+    const w = gapWindow(b, live);
+    const dur = w.durationSec != null
+      ? fmtDurationSec(w.durationSec)
+      : (live ? '…' : '—');
+    const durTitle = w.start && w.end
+      ? `Duration = gap end − gap start (${w.durationSec}s)`
+      : (live ? 'Waiting for a paired sample' : 'Duration unavailable');
+    const endTitle = live
+      ? 'Last paired tick while this gap is still open (not a close). Duration uses this time minus Gap start.'
+      : 'When the episode closed (basis flat, direction flip, or stale ticks).';
     const peakPct = Math.max(Math.abs(Number(b.basis_pct || 0)), Math.abs(Number(b.max_basis_pct || 0)));
     const peakCls = peakPct >= 0.5 ? 'basis-pct-high' : '';
+    const startLabel = b.started_at || fmtDt(w.start);
+    const endLabel = (live ? (b.last_seen_at || b.ended_at) : (b.ended_at || b.last_seen_at))
+      || fmtDt(w.end);
     return `<tr>
       <td><strong>${escapeHtml(b.symbol)}</strong></td>
       <td>${escapeHtml(b.fut_expiry || '')}</td>
-      <td>${escapeHtml(b.started_at || '')}</td>
-      <td>${live ? '—' : escapeHtml(b.ended_at || '')}</td>
-      <td>${dur}</td>
+      <td title="When this CONTANGO/BACKWARDATION episode started">${escapeHtml(startLabel)}</td>
+      <td title="${escapeHtml(endTitle)}">${escapeHtml(endLabel)}</td>
+      <td title="${escapeHtml(durTitle)}">${escapeHtml(dur)}</td>
       <td>${fmtPx(b.spot_ltp)}</td>
       <td>${fmtPx(b.fut_ltp)}</td>
       <td>${fmtPct(b.basis_pct)}</td>
@@ -88,8 +140,14 @@
       return '<div class="basis-empty">No basis episodes' + (live ? ' open right now' : ' for these filters') + '.</div>';
     }
     const pctCol = live ? 'Basis %' : 'Basis % at close';
+    const endHead = live
+      ? 'Gap end (last seen)'
+      : 'Gap end';
     const head = `<thead><tr>
-      <th>Symbol</th><th>FUT expiry</th><th>Started</th><th>Ended</th><th>Duration</th>
+      <th>Symbol</th><th>FUT expiry</th>
+      <th title="When this price-gap episode started">Gap start</th>
+      <th title="${live ? 'Last paired sample while still open' : 'When the episode closed'}">${endHead}</th>
+      <th title="Gap end minus gap start">Duration</th>
       <th>Spot LTP</th><th>FUT LTP</th><th>${pctCol}</th><th>Ann. %</th><th>Direction</th>
       <th>Peak |basis| %</th><th>Samples</th>
     </tr></thead>`;

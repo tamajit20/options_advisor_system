@@ -910,7 +910,7 @@
         <button class="basis-subtab" data-btab="basis-config">Config</button>
       </div>
       <h2 class="panel-title">Basis Live</h2>
-      <p class="muted basis-intro">Open cash-futures basis episodes (spot vs near-month NFO FUT). Updates on each paired tick.</p>
+      <p class="muted basis-intro">Open cash-futures basis episodes (spot vs near-month NFO FUT). <strong>Gap start</strong> is when this episode opened; <strong>Gap end (last seen)</strong> is the last paired tick (still open). Duration is end minus start.</p>
       <div class="basis-toolbar">
         <button type="button" class="btn btn-ghost" id="basis-live-refresh">Refresh</button>
         <span id="basis-live-status" class="muted"></span>
@@ -926,7 +926,7 @@
         <button class="basis-subtab" data-btab="basis-config">Config</button>
       </div>
       <h2 class="panel-title">Basis History</h2>
-      <p class="muted basis-intro">Peak |basis| % is the highest during the episode; Basis % at close is the last snapshot when it ended.</p>
+      <p class="muted basis-intro">Closed episodes: <strong>Gap start</strong> / <strong>Gap end</strong> are the full window; Duration is end minus start. Peak |basis| % is the highest during the episode; Basis % at close is the last snapshot.</p>
       <div class="basis-filters">
         <label>From <input type="date" id="basis-hist-from"></label>
         <label>To <input type="date" id="basis-hist-to"></label>
@@ -967,8 +967,9 @@
       <form id="basis-config-form" class="scout-config-form" autocomplete="off">
         <section class="scout-config-section">
           <h3>General</h3>
-          <label class="scout-config-field scout-config-field--check">
-            <input type="checkbox" name="enabled" checked> Enabled
+          <label class="scout-config-check">
+            <input type="checkbox" name="enabled" checked>
+            <span>Enabled</span>
           </label>
           <label class="scout-config-field">
             Universe
@@ -983,16 +984,16 @@
           </label>
         </section>
         <section class="scout-config-section">
-          <h3>History store filter</h3>
+          <h3>DB store filter</h3>
           <label class="scout-config-field">
             Min |basis| % to store
             <input type="number" name="min_basis_store_pct" step="0.01" min="0" max="10">
           </label>
           <label class="scout-config-field">
-            Min duration to store (sec)
+            Min duration to store (seconds)
             <input type="number" name="min_duration_store_sec" step="1" min="0" max="3600">
           </label>
-          <p class="muted scout-config-hint">0 = no filter. Live tab always shows all open episodes.</p>
+          <p class="muted scout-config-hint">Same idea as Arb. Live always shows every open episode. History/DB only stores when both thresholds are met (default duration 60 = must stay at least 1 minute). 0 on a field = no filter for that field.</p>
         </section>
         <div class="scout-config-actions">
           <button type="submit" class="btn btn-accent" id="basis-config-save">Save settings</button>
