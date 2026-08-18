@@ -24,7 +24,14 @@ from database.runtime_flags import FLAG_CIRCUIT_BREAKER_ACTIVE, RuntimeFlagsRepo
 from engine.adverse_move_advisor import assess_adverse_move
 from engine.circuit_breaker import check_daily_pnl_breach
 from engine.exit_engine import evaluate_exit
-from engine.exit_pricing import sanitized_close_price as _sanitized_close_price
+from engine.exit_pricing import (
+    aligned_current_chain,
+    expiry_date,
+    expiry_iso,
+    leg_close_pnl,
+    sanitized_close_price as _sanitized_close_price,
+    unique_leg_expiries,
+)
 from utils import days_between, now_ist, today_ist
 from lifecycle.eod_session import effective_bhav_end_date
 
@@ -74,9 +81,7 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
         legs = trd.legs(trade_id)
         if not legs:
             continue
-        # All legs share underlying + expiry (they're from one suggestion)
-        # We need to look up the suggestion legs to get strike/option_type
-        # But trade_legs only has fill prices. Pull suggestion legs:
+        # Look up suggestion legs for strike / option_type / per-leg expiry.
         sug_legs = db.fetch_all(
             "SELECT * FROM options_suggestion_legs WHERE suggestion_id = ? ORDER BY leg_order",
             [trade["suggestion_id"]],
@@ -92,27 +97,33 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
         strategy = (sug_row or {}).get("strategy", "") or ""
 
         underlying = sug_legs[0]["symbol"]
-        expiry = sug_legs[0]["expiry_date"]
+        unique_expiries = unique_leg_expiries(sug_legs)
+        # Near-expiry DTE (calendars: min of near/far). Fallback to first leg.
+        near_expiry = min(unique_expiries) if unique_expiries else expiry_date(
+            sug_legs[0]["expiry_date"]
+        )
+        expiry = near_expiry or sug_legs[0]["expiry_date"]
         dte = days_between(trade_date, expiry)
 
         # Current chain — skip this trade if no EOD data for today (holiday/weekend).
         # Without chain data, all mid_prices would be 0 which causes evaluate_exit
         # to see full profit on every credit leg and fire spurious TAKE_PROFIT signals.
-        chain_rows = fo.get_chain(underlying, trade_date, expiry)
-        if not chain_rows:
-            logger.info(
-                "Exit engine: no chain data for %s/%s on %s — skipping (holiday/weekend)",
-                underlying, expiry, trade_date,
-            )
+        # One chain per distinct expiry: calendars must not reuse the near chain
+        # for the far leg.
+        chains_by_expiry = {}
+        missing_expiry = False
+        for exp in unique_expiries or [expiry]:
+            rows = fo.get_chain(underlying, trade_date, exp)
+            if not rows:
+                missing_expiry = True
+                logger.info(
+                    "Exit engine: no chain data for %s/%s on %s — skipping (holiday/weekend)",
+                    underlying, exp, trade_date,
+                )
+                break
+            chains_by_expiry[exp] = rows
+        if missing_expiry:
             continue
-        current_chain = [
-            {
-                "strike":     float(c["strike"]),
-                "option_type": c["option_type"],
-                "mid_price":  float(c.get("settle_price") or c.get("close_price") or 0.0),
-            }
-            for c in chain_rows
-        ]
 
         legs_for_engine = []
         by_order = {l["leg_order"]: l for l in legs}
@@ -121,16 +132,20 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
             if not tl or not tl.get("executed"):
                 continue
             legs_for_engine.append({
+                "leg_order":   sl["leg_order"],
                 "action":      sl["action"],
                 "strike":      float(sl["strike"]),
                 "option_type": sl["option_type"],
                 "lots":        sl["lots"],
                 "lot_size":    sl["lot_size"],
                 "fill_price":  tl.get("fill_price"),
+                "expiry_date": sl["expiry_date"],
             })
 
         if not legs_for_engine:
             continue
+
+        current_chain = aligned_current_chain(legs_for_engine, chains_by_expiry)
 
         decision = evaluate_exit(
             trade_id=trade_id,
@@ -180,10 +195,8 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
             entry_credit = float(trade.get("net_credit_actual") or 0.0)
             max_loss_rs  = float(trade.get("actual_max_loss") or 0.0)
             current_value = 0.0
-            for leg in legs_for_engine:
-                key = (float(leg["strike"]), leg["option_type"])
-                mid = next((c["mid_price"] for c in current_chain
-                            if (c["strike"], c["option_type"]) == key), 0.0)
+            for leg, crow in zip(legs_for_engine, current_chain):
+                mid = float(crow.get("mid_price") or 0.0)
                 qty = int(leg["lots"]) * int(leg["lot_size"])
                 sign = -1.0 if leg["action"] == "SELL" else 1.0
                 current_value += sign * mid * qty
@@ -222,29 +235,32 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
             # falling back to intrinsic if the chain row is clearly bogus).
             suggested_lines = []
             est_gross = 0.0
-            for leg in legs_for_engine:
-                key = (leg["strike"], leg["option_type"])
-                raw_mid = next((c["mid_price"] for c in current_chain
-                                if (c["strike"], c["option_type"]) == key), 0.0)
+            for leg, crow in zip(legs_for_engine, current_chain):
+                raw_mid = float(crow.get("mid_price") or 0.0)
                 close_px, src = _sanitized_close_price(
                     option_type=leg["option_type"], strike=float(leg["strike"]),
                     raw_mid=raw_mid, spot=spot_close,
                 )
                 if src == "intrinsic_fallback":
                     logger.warning(
-                        "exit_engine: bogus mid for %s %s%s (raw=%.2f) — using intrinsic %.2f",
-                        trade_id, leg["strike"], leg["option_type"], raw_mid, close_px,
+                        "exit_engine: bogus mid for %s %s %s%s (raw=%.2f) — using intrinsic %.2f",
+                        trade_id, expiry_iso(leg.get("expiry_date")),
+                        leg["strike"], leg["option_type"], raw_mid, close_px,
                     )
-                qty = int(leg["lots"]) * int(leg["lot_size"])
                 fill = float(leg.get("fill_price") or 0.0)
                 close_action = "Buy back" if leg["action"] == "SELL" else "Sell back"
+                exp_label = expiry_iso(leg.get("expiry_date"))
                 suggested_lines.append(
-                    f"{close_action} {leg['strike']:g} {leg['option_type']} @ ~₹{close_px:.2f}"
+                    f"{close_action} {leg['strike']:g} {leg['option_type']}"
+                    f"{(' ' + exp_label) if exp_label else ''} @ ~₹{close_px:.2f}"
                 )
-                if leg["action"] == "SELL":
-                    est_gross += (fill - close_px) * qty
-                else:
-                    est_gross += (close_px - fill) * qty
+                est_gross += leg_close_pnl(
+                    action=leg["action"],
+                    fill_price=fill,
+                    close_price=close_px,
+                    lots=int(leg["lots"]),
+                    lot_size=int(leg["lot_size"]),
+                )
             instruction = (
                 f"{decision.reason} | Suggested close: "
                 + "; ".join(suggested_lines)
@@ -263,30 +279,29 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
             if decision.decision == "EXPIRE":
                 try:
                     by_order_lookup = {l["leg_order"]: l for l in legs}
-                    sug_by_order = {sl["leg_order"]: sl for sl in sug_legs}
                     leg_results: list[tuple[int, float, float]] = []
                     settle_gross = 0.0
-                    for sl in sug_legs:
-                        order = sl["leg_order"]
+                    for leg, crow in zip(legs_for_engine, current_chain):
+                        order = leg["leg_order"]
                         tl = by_order_lookup.get(order)
                         if not tl or not tl.get("executed"):
                             continue
                         close_px, _ = _sanitized_close_price(
-                            option_type=sl["option_type"],
-                            strike=float(sl["strike"]),
-                            raw_mid=next(
-                                (c["mid_price"] for c in current_chain
-                                 if (c["strike"], c["option_type"]) == (float(sl["strike"]), sl["option_type"])),
-                                0.0,
-                            ),
+                            option_type=leg["option_type"],
+                            strike=float(leg["strike"]),
+                            raw_mid=float(crow.get("mid_price") or 0.0),
                             spot=spot_close,
                         )
-                        lots = int(tl.get("lots_actual") or sl["lots"])
-                        qty = lots * int(sl["lot_size"])
+                        lots = int(tl.get("lots_actual") or leg["lots"])
                         fill = float(tl.get("fill_price") or 0.0)
-                        action = sl["action"]
-                        leg_pnl = (fill - close_px) * qty if action == "SELL" \
-                            else (close_px - fill) * qty
+                        action = leg["action"]
+                        leg_pnl = leg_close_pnl(
+                            action=action,
+                            fill_price=fill,
+                            close_price=close_px,
+                            lots=lots,
+                            lot_size=int(leg["lot_size"]),
+                        )
                         settle_gross += leg_pnl
                         leg_results.append((order, close_px, leg_pnl))
                     if leg_results:

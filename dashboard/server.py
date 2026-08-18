@@ -51,7 +51,7 @@ from database.models import (
     TradeRepo,
     VixRepo,
 )
-from engine.exit_pricing import sanitized_close_price
+from engine.exit_pricing import build_close_suggestion, unique_leg_expiries
 from lifecycle.eod_gap_replay import replay_gap_for_trade
 from lifecycle.resuggestion_engine import generate_resuggestion
 from lifecycle.trade_executor import close_trade_with_fills, mark_executed, supplement_trade
@@ -1423,24 +1423,21 @@ def create_app() -> Flask:
         if not executed:
             return jsonify({"legs": [], "est_gross_pnl": 0.0})
         underlying = executed[0]["symbol"]
-        expiry = executed[0]["expiry_date"]
         today = today_ist()
         fo = FoEodRepo(db)
         # During live market hours today's bhavcopy hasn't been published yet.
         # Fall back to the most recent available date so we don't return all-zeros.
-        chain = fo.get_chain(underlying, today, expiry)
-        if not chain:
-            from datetime import timedelta
-            for delta in (1, 2, 3, 4, 5):
-                chain = fo.get_chain(underlying, today - timedelta(days=delta), expiry)
-                if chain:
-                    break
-        as_of = today
-        chain_mid = {
-            (float(c["strike"]), c["option_type"]):
-                float(c.get("settle_price") or c.get("close_price") or 0.0)
-            for c in chain
-        }
+        # Fetch one chain per distinct expiry so calendar legs (same strike,
+        # different expiry) do not share a single mid.
+        chains_by_expiry: dict = {}
+        for exp in unique_leg_expiries(executed):
+            chain = fo.get_chain(underlying, today, exp)
+            if not chain:
+                for delta in (1, 2, 3, 4, 5):
+                    chain = fo.get_chain(underlying, today - timedelta(days=delta), exp)
+                    if chain:
+                        break
+            chains_by_expiry[exp] = chain or []
         # Look up underlying spot so sanitized_close_price can sanity-check
         # each leg's mid against intrinsic. Without this the close-suggestion
         # endpoint used to pre-fill the Close Trade modal with absurd values
@@ -1449,46 +1446,20 @@ def create_app() -> Flask:
         # phantom profit on simple straddles.
         spot_row = SpotEodRepo(db).for_date(underlying, today)
         if spot_row is None:
-            from datetime import timedelta
             for delta in (1, 2, 3, 4, 5):
                 spot_row = SpotEodRepo(db).for_date(underlying, today - timedelta(days=delta))
                 if spot_row:
                     break
         spot_close = float(spot_row["close_price"]) if spot_row else None
-        out = []
-        est = 0.0
-        for l in executed:
-            raw_mid = chain_mid.get((float(l["strike"]), l["option_type"]), 0.0)
-            mid, src = sanitized_close_price(
-                option_type=l["option_type"],
-                strike=float(l["strike"]),
-                raw_mid=raw_mid,
-                spot=spot_close,
-            )
-            if src == "intrinsic_fallback":
+        payload = build_close_suggestion(executed, chains_by_expiry, spot_close)
+        for sug in payload["legs"]:
+            if sug.get("price_source") == "intrinsic_fallback":
                 logger.warning(
-                    "close-suggestion: bogus settle for %s %s%s (raw=%.2f) — using intrinsic %.2f",
-                    underlying, l["strike"], l["option_type"], raw_mid, mid,
+                    "close-suggestion: bogus settle for %s %s %s%s — using intrinsic %.2f",
+                    underlying, sug.get("expiry_date"), sug.get("strike"),
+                    sug.get("option_type"), sug.get("suggested_close") or 0.0,
                 )
-            lots = int(l.get("lots_actual") or l.get("lots") or 0)
-            qty = lots * int(l.get("lot_size") or 0)
-            fill = float(l.get("fill_price") or 0.0)
-            if l["action"] == "SELL":
-                est += (fill - mid) * qty
-            else:
-                est += (mid - fill) * qty
-            out.append({
-                "leg_order":       l["leg_order"],
-                "action":          l["action"],
-                "symbol":          l["symbol"],
-                "strike":          float(l["strike"]),
-                "option_type":     l["option_type"],
-                "fill_price":      fill,
-                "lots":            lots,
-                "suggested_close": round(mid, 2),
-                "price_source":    src,  # "mid" | "intrinsic_fallback"
-            })
-        return jsonify({"legs": out, "est_gross_pnl": round(est, 2)})
+        return jsonify(payload)
 
     # ---------- Tab 3: History ----------
     @app.route("/api/history/suggestions")

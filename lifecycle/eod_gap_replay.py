@@ -19,6 +19,7 @@ from config import STRATEGY_CONFIG
 from database.connection import SQLServerConnection
 from database.models import FoEodRepo, TradeRepo
 from engine.exit_engine import evaluate_exit
+from engine.exit_pricing import aligned_current_chain, unique_leg_expiries
 from engine.sl_threshold import effective_sl_rs
 from lifecycle.data_backfill import weekdays_in_range
 from utils import days_between, now_ist, today_ist
@@ -43,17 +44,6 @@ def _as_date(val: Any) -> Optional[date]:
     if isinstance(val, datetime):
         return val.date()
     return date.fromisoformat(str(val)[:10])
-
-
-def _chain_mid_rows(chain_rows: Sequence[Mapping]) -> List[dict]:
-    return [
-        {
-            "strike": float(c["strike"]),
-            "option_type": c["option_type"],
-            "mid_price": float(c.get("settle_price") or c.get("close_price") or 0.0),
-        }
-        for c in chain_rows
-    ]
 
 
 def _compute_mtm(
@@ -98,6 +88,7 @@ def _build_legs_for_engine(
             "lots": sl["lots"],
             "lot_size": sl["lot_size"],
             "fill_price": tl.get("fill_price"),
+            "expiry_date": sl["expiry_date"],
         })
     return out
 
@@ -151,7 +142,8 @@ def replay_gap_for_trade(
     strategy = (sug_row or {}).get("strategy", "") or ""
 
     underlying = sug_legs[0]["symbol"]
-    expiry = _as_date(sug_legs[0]["expiry_date"])
+    unique_expiries = unique_leg_expiries(sug_legs)
+    expiry = min(unique_expiries) if unique_expiries else _as_date(sug_legs[0]["expiry_date"])
     if expiry is None:
         return {"error": "no_expiry"}
 
@@ -183,10 +175,17 @@ def replay_gap_for_trade(
 
     if replay_from <= end:
         for d in weekdays_in_range(replay_from, end):
-            chain_rows = fo.get_chain(underlying, d, expiry)
-            if not chain_rows:
+            chains_by_expiry = {}
+            missing = False
+            for exp in unique_expiries or [expiry]:
+                rows = fo.get_chain(underlying, d, exp)
+                if not rows:
+                    missing = True
+                    break
+                chains_by_expiry[exp] = rows
+            if missing:
                 continue
-            current_chain = _chain_mid_rows(chain_rows)
+            current_chain = aligned_current_chain(legs_for_engine, chains_by_expiry)
             dte = days_between(d, expiry)
             mtm = _compute_mtm(legs_for_engine, current_chain, entry_net_credit)
 

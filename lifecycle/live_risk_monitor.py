@@ -69,6 +69,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from config import STRATEGY_CONFIG
 from engine.exit_engine import evaluate_exit
+from engine.exit_pricing import format_leg_quote_key
 from engine.sl_threshold import effective_sl_rs
 from providers.base import LiveQuote
 from providers.event_bus import (
@@ -859,13 +860,7 @@ class LiveRiskMonitor:
                 "max_loss": state.max_loss,
                 "trailing_pnl_floor": state.trailing_pnl_floor,
                 "as_of": now.isoformat(timespec="seconds"),
-                # Per-leg live prices keyed by "symbol|strike|option_type"
-                # (LegKey is (symbol, expiry, strike, option_type) so we use
-                #  indices 0, 2, 3 to match the frontend legKey format)
-                "leg_ltps": {
-                    f"{k[0]}|{k[2]}|{k[3]}": round(v, 2)
-                    for k, v in state.leg_ltps.items()
-                },
+                "leg_ltps": self._leg_ltps_dict(state),
             }
 
         snapshot_payload: Optional[dict] = None
@@ -881,10 +876,7 @@ class LiveRiskMonitor:
                 "max_profit": state.max_profit,
                 "max_loss": state.max_loss,
                 "as_of": now.isoformat(timespec="seconds"),
-                "leg_ltps": {
-                    f"{k[0]}|{k[2]}|{k[3]}": round(v, 2)
-                    for k, v in state.leg_ltps.items()
-                },
+                "leg_ltps": self._leg_ltps_dict(state),
                 "feed_source": self._feed_source(state, now),
             }
 
@@ -1068,8 +1060,9 @@ class LiveRiskMonitor:
     }
 
     def _leg_ltps_dict(self, state: _TradeState) -> Dict[str, float]:
+        """Per-leg LTPs keyed by symbol|expiry|strike|option_type."""
         return {
-            f"{k[0]}|{k[2]}|{k[3]}": round(v, 2)
+            format_leg_quote_key(k[0], k[1], k[2], k[3]): round(v, 2)
             for k, v in state.leg_ltps.items()
         }
 

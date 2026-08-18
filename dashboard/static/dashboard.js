@@ -23,18 +23,42 @@ const API = (path, opts={}) => {
 };
 
 // Normalize leg keys so SSE/poll prices match DOM spans regardless of
-// strike formatting (26000 vs 26000.0 vs 26000.0000).
-function _normLegKey(sym, strike, ot) {
+// strike formatting (26000 vs 26000.0 vs 26000.0000). Expiry is required
+// so calendar legs (same strike CE, different expiry) do not collide.
+function _normExpiry(exp) {
+  if (exp == null || exp === '') return '';
+  return String(exp).slice(0, 10);
+}
+function _normLegKey(sym, expiry, strike, ot) {
+  return `${String(sym || '').toUpperCase()}|${_normExpiry(expiry)}|${parseFloat(strike)}|${String(ot || '').toUpperCase()}`;
+}
+function _legacyLegKey(sym, strike, ot) {
   return `${String(sym || '').toUpperCase()}|${parseFloat(strike)}|${String(ot || '').toUpperCase()}`;
 }
+function formatLegInstrument(l) {
+  const exp = _normExpiry(l && (l.expiry_date || l.expiry));
+  const bits = [l && l.symbol, exp, l && l.strike != null ? l.strike : '', l && l.option_type]
+    .filter(b => b !== '' && b != null);
+  return escapeHtml(bits.join(' '));
+}
 
-function _lookupLegLtp(legLtps, symbol, strike, optionType) {
+function _lookupLegLtp(legLtps, symbol, strike, optionType, expiry) {
   if (!legLtps || typeof legLtps !== 'object') return null;
-  const want = _normLegKey(symbol, strike, optionType);
+  if (expiry) {
+    const want = _normLegKey(symbol, expiry, strike, optionType);
+    for (const [k, v] of Object.entries(legLtps)) {
+      const parts = k.split('|');
+      if (parts.length === 4 && _normLegKey(parts[0], parts[1], parts[2], parts[3]) === want) return v;
+    }
+  }
+  // Legacy 3-part keys (pre-expiry): only if a single match exists.
+  const want3 = _legacyLegKey(symbol, strike, optionType);
+  const matches = [];
   for (const [k, v] of Object.entries(legLtps)) {
     const parts = k.split('|');
-    if (parts.length === 3 && _normLegKey(parts[0], parts[1], parts[2]) === want) return v;
+    if (parts.length === 3 && _legacyLegKey(parts[0], parts[1], parts[2]) === want3) matches.push(v);
   }
+  if (matches.length === 1) return matches[0];
   return null;
 }
 
@@ -414,8 +438,12 @@ function _applyLegLtpsToClosePanel(tradeId, legLtps) {
   let anyUpdated = false;
   closePanel.querySelectorAll('.cf-live-price[data-leg-key]').forEach(span => {
     const parts = span.dataset.legKey.split('|');
-    if (parts.length !== 3) return;
-    const ltp = _lookupLegLtp(legLtps, parts[0], parts[1], parts[2]);
+    let ltp = null;
+    if (parts.length === 4) {
+      ltp = _lookupLegLtp(legLtps, parts[0], parts[2], parts[3], parts[1]);
+    } else if (parts.length === 3) {
+      ltp = _lookupLegLtp(legLtps, parts[0], parts[1], parts[2], null);
+    }
     if (ltp == null || ltp <= 0) return;
     span.textContent = `\u20b9${fmt(ltp)}`;
     span.dataset.ltp = ltp;
@@ -2622,7 +2650,7 @@ function execOrderSeqHtml(legs, strategy, mode) {
     return `<span class="exec-seq-item">
       <span class="${stepCls}">${map.get(l.leg_order)}</span>
       <span class="tag ${verbClass} tag-sm">${verb}</span>
-      ${l.strike || ''} ${escapeHtml(l.option_type || '')}
+      ${l.strike || ''} ${escapeHtml(_normExpiry(l.expiry_date || l.expiry) || '')} ${escapeHtml(l.option_type || '')}
     </span>`;
   }).join('<span class="exec-seq-arrow">\u2192</span>');
   const heading = mode === 'close'
@@ -3783,7 +3811,7 @@ async function openSupplementForm(tradeId) {
         ${execStepBadge(data.legs, l, suppStrategy, 'entry')}
         <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'}">${escapeHtml(l.action)}</span>
         <div>
-          <div><strong>${escapeHtml(l.symbol)} ${l.strike} ${escapeHtml(l.option_type)}</strong></div>
+          <div><strong>${formatLegInstrument(l)}</strong></div>
           <div class="leg-meta">
             <input type="number" class="leg-lots" min="1" value="${l.lots || 1}"
                    data-lot-size="${l.lot_size}" data-leg-order="${l.leg_order}"
@@ -3900,7 +3928,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       priceSrcMap[s.leg_order] = s.price_source || 'mid';
     });
     data.legs.forEach(l => {
-      const live = _lookupLegLtp(liveLtps, l.symbol, l.strike, l.option_type);
+      const live = _lookupLegLtp(liveLtps, l.symbol, l.strike, l.option_type, l.expiry_date);
       if (live != null && live > 0) {
         mktPriceMap[l.leg_order] = live;
         priceSrcMap[l.leg_order] = 'live';
@@ -3921,7 +3949,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       const mp = (mktPriceMap[l.leg_order] != null && mktPriceMap[l.leg_order] > 0)
                  ? mktPriceMap[l.leg_order] : null;
       const psrc = priceSrcMap[l.leg_order];
-      const legKey = _normLegKey(l.symbol, l.strike, l.option_type);
+      const legKey = _normLegKey(l.symbol, l.expiry_date, l.strike, l.option_type);
       let priceDisplay = mp != null ? `\u20b9${fmt(mp)}` : '<span class="muted">—</span>';
       if (mp != null && psrc === 'intrinsic_fallback') priceDisplay += ' <span class="tag tag-warn" style="font-size:.65rem">intrinsic est.</span>';
       return `<div class="cf-live-leg"
@@ -3931,7 +3959,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
                    data-lots="${lotsUsed}"
                    data-lot-size="${l.lot_size || 1}">
         <span class="muted" style="font-size:.78rem">${escapeHtml(closeAction)}</span>
-        <strong>${escapeHtml(l.symbol)} ${l.strike} ${escapeHtml(l.option_type)}</strong>
+        <strong>${formatLegInstrument(l)}</strong>
         <span class="cf-live-price" data-leg-key="${escapeHtml(legKey)}"
               data-ltp="${mp != null ? mp : ''}">${priceDisplay}</span>
       </div>`;
@@ -3951,7 +3979,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
           <div class="leg-exit-head">
             ${execStepBadge(data.legs, l, closeStrategy, 'close')}
             <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'}">${escapeHtml(l.action)}</span>
-            <strong>${escapeHtml(l.symbol)} ${l.strike} ${escapeHtml(l.option_type)}</strong>
+            <strong>${formatLegInstrument(l)}</strong>
             <span class="muted" style="font-size:.8rem">Entry \u20b9${fmt(l.fill_price)} \u00d7 ${lotsUsed} lots</span>
           </div>
           <div class="leg-exit-input">
@@ -4344,7 +4372,7 @@ function renderTrade(t, expanded = true) {
           : closeVerb;
         return `<div class="target-row">
           <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'} tag-sm">${escapeHtml(l.action||'')}</span>
-          <span><strong>${escapeHtml(l.symbol||'')} ${l.strike||''} ${escapeHtml(l.option_type||'')}</strong></span>
+          <span><strong>${formatLegInstrument(l)}</strong></span>
           <span>${priceBit} <span class="muted">(${capLabel} \u00b7 entry \u20b9${fmt(l.fill_price)} \u00d7 ${qty}u)</span></span>
         </div>`;
       }).join('');
@@ -4384,7 +4412,7 @@ function renderTrade(t, expanded = true) {
         const done = !!l.executed;
         const lotsUsed = l.lots_actual || l.lots || 0;
         const tag = `<span class="tag ${(l.action||'') === 'SELL' ? 'tag-err' : 'tag-ok'}">${escapeHtml(l.action||'')}</span>`;
-        const instrument = `${escapeHtml(l.symbol||'')} ${l.strike||''} ${escapeHtml(l.option_type||'')}`;
+        const instrument = formatLegInstrument(l);
         if (done && l.exit_price != null) {
           const pnlClass = l.leg_pnl != null ? (l.leg_pnl >= 0 ? 'pnl-profit' : 'pnl-loss') : '';
           return `<div class="trade-leg-row leg-done leg-exited action-${l.action}">

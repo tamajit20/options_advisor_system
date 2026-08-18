@@ -261,6 +261,80 @@ class TestCloseSuggestion:
         # Gross P&L: CE (0-361.80)*75 + PE (682-224.25)*75 = -27135 + 34331.25 = +7196.25
         assert data["est_gross_pnl"] == pytest.approx(7196.25)
 
+    def test_calendar_spread_uses_per_expiry_chains(self, client, mocker):
+        """Same strike CE on two expiries must not share one mid (TRD-20260817-005)."""
+        near, far = date(2026, 8, 25), date(2026, 9, 29)
+        mocker.patch("dashboard.server.TradeRepo.get",
+                     return_value={"trade_id": "TRD-20260817-005"})
+        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info",
+                     return_value=[
+                         {"leg_order": 1, "executed": True, "symbol": "BANKNIFTY",
+                          "expiry_date": near, "strike": 57600.0, "option_type": "CE",
+                          "action": "SELL", "fill_price": 535.6,
+                          "lots": 1, "lots_actual": 1, "lot_size": 35},
+                         {"leg_order": 2, "executed": True, "symbol": "BANKNIFTY",
+                          "expiry_date": far, "strike": 57600.0, "option_type": "CE",
+                          "action": "BUY", "fill_price": 1177.2,
+                          "lots": 1, "lots_actual": 1, "lot_size": 35},
+                     ])
+
+        def _chain(_sym, _as_of, expiry):
+            if expiry == near:
+                return [{"strike": 57600.0, "option_type": "CE", "settle_price": 500.0}]
+            if expiry == far:
+                return [{"strike": 57600.0, "option_type": "CE", "settle_price": 1100.0}]
+            return []
+
+        mocker.patch("dashboard.server.FoEodRepo.get_chain", side_effect=_chain)
+        mocker.patch("dashboard.server.SpotEodRepo.for_date",
+                     return_value={"close_price": 57000.0})
+        resp = client.get("/api/trades/TRD-20260817-005/close-suggestion")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        by_order = {l["leg_order"]: l for l in data["legs"]}
+        assert by_order[1]["suggested_close"] == pytest.approx(500.0)
+        assert by_order[2]["suggested_close"] == pytest.approx(1100.0)
+        assert by_order[1]["expiry_date"] == "2026-08-25"
+        assert by_order[2]["expiry_date"] == "2026-09-29"
+        assert data["est_gross_pnl"] == pytest.approx(-1456.0)
+
+    def test_iron_condor_same_expiry_keeps_distinct_strikes(self, client, mocker):
+        exp = date(2026, 8, 27)
+        mocker.patch("dashboard.server.TradeRepo.get",
+                     return_value={"trade_id": "TRD-IC"})
+        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info",
+                     return_value=[
+                         {"leg_order": 1, "executed": True, "symbol": "NIFTY",
+                          "expiry_date": exp, "strike": 22800.0, "option_type": "PE",
+                          "action": "BUY", "fill_price": 40.0,
+                          "lots": 1, "lots_actual": 1, "lot_size": 75},
+                         {"leg_order": 2, "executed": True, "symbol": "NIFTY",
+                          "expiry_date": exp, "strike": 23000.0, "option_type": "PE",
+                          "action": "SELL", "fill_price": 80.0,
+                          "lots": 1, "lots_actual": 1, "lot_size": 75},
+                         {"leg_order": 3, "executed": True, "symbol": "NIFTY",
+                          "expiry_date": exp, "strike": 23600.0, "option_type": "CE",
+                          "action": "SELL", "fill_price": 70.0,
+                          "lots": 1, "lots_actual": 1, "lot_size": 75},
+                         {"leg_order": 4, "executed": True, "symbol": "NIFTY",
+                          "expiry_date": exp, "strike": 23800.0, "option_type": "CE",
+                          "action": "BUY", "fill_price": 35.0,
+                          "lots": 1, "lots_actual": 1, "lot_size": 75},
+                     ])
+        mocker.patch("dashboard.server.FoEodRepo.get_chain", return_value=[
+            {"strike": 22800.0, "option_type": "PE", "settle_price": 30.0},
+            {"strike": 23000.0, "option_type": "PE", "settle_price": 55.0},
+            {"strike": 23600.0, "option_type": "CE", "settle_price": 50.0},
+            {"strike": 23800.0, "option_type": "CE", "settle_price": 22.0},
+        ])
+        mocker.patch("dashboard.server.SpotEodRepo.for_date",
+                     return_value={"close_price": 23300.0})
+        resp = client.get("/api/trades/TRD-IC/close-suggestion")
+        data = resp.get_json()
+        closes = [l["suggested_close"] for l in data["legs"]]
+        assert closes == [30.0, 55.0, 50.0, 22.0]
+        assert len({l["expiry_date"] for l in data["legs"]}) == 1
+
 
 class TestHistoryRoutes:
     def test_history_paired(self, client, mocker, app):

@@ -1003,8 +1003,16 @@ def test_calendar_spread_mtm_uses_distinct_expiries():
     monitor, notifier, bus = _build_monitor(
         state, clock_at=datetime(2026, 8, 17, 15, 20),
     )
+    captured = []
+    bus.subscribe("trade_mtm", lambda p: captured.append(p))
     bus.publish("tick", _q("BANKNIFTY", near, 56000.0, "CE", 180.0))
     bus.publish("tick", _q("BANKNIFTY", far, 56000.0, "CE", 480.0))
     assert monitor._current_pnl(state) == pytest.approx(0.0, abs=50.0)
     types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
     assert "LOSS_LIMIT_HIT" not in types
+    assert captured
+    keys = set(captured[-1]["leg_ltps"])
+    assert "BANKNIFTY|2026-08-28|56000.0|CE" in keys
+    assert "BANKNIFTY|2026-09-30|56000.0|CE" in keys
+    assert captured[-1]["leg_ltps"]["BANKNIFTY|2026-08-28|56000.0|CE"] == pytest.approx(180.0)
+    assert captured[-1]["leg_ltps"]["BANKNIFTY|2026-09-30|56000.0|CE"] == pytest.approx(480.0)

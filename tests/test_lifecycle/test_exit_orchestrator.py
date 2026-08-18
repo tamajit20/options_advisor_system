@@ -98,6 +98,49 @@ class TestRunExitEngine:
         eval_mock.assert_not_called()
 
 
+    def test_calendar_spread_does_not_collapse_to_near_chain(self, mock_db, mocker):
+        """Same strike CE, two expiries — far mid must not be overwritten by near."""
+        near, far = date(2026, 8, 25), date(2026, 9, 29)
+        trade = _open_trade("TRD-CAL", "SUG-CAL")
+        trade["net_credit_actual"] = -22456.0
+        trade["actual_max_profit"] = 18746.0
+        trade["actual_max_loss"] = 22456.0
+        mocker.patch.object(orch.TradeRepo, "open_trades", return_value=[trade])
+        mocker.patch.object(orch.TradeRepo, "legs", return_value=[
+            {"leg_order": 1, "executed": 1, "fill_price": 535.6},
+            {"leg_order": 2, "executed": 1, "fill_price": 1177.2},
+        ])
+        mock_db.fetch_all.return_value = [
+            {"leg_order": 1, "symbol": "BANKNIFTY", "expiry_date": near,
+             "strike": 57600.0, "option_type": "CE", "action": "SELL",
+             "lots": 1, "lot_size": 35},
+            {"leg_order": 2, "symbol": "BANKNIFTY", "expiry_date": far,
+             "strike": 57600.0, "option_type": "CE", "action": "BUY",
+             "lots": 1, "lot_size": 35},
+        ]
+        mock_db.fetch_one.return_value = {"strategy": "CALENDAR_SPREAD"}
+
+        def _chain(_sym, _as_of, expiry):
+            if expiry == near:
+                return [{"strike": 57600.0, "option_type": "CE",
+                         "settle_price": 544.10, "close_price": 544.10}]
+            if expiry == far:
+                return [{"strike": 57600.0, "option_type": "CE",
+                         "settle_price": 1200.0, "close_price": 1200.0}]
+            return []
+
+        mocker.patch.object(orch.FoEodRepo, "get_chain", side_effect=_chain)
+        mocker.patch.object(orch.SpotEodRepo, "for_date",
+                            return_value={"close_price": 57000.0})
+        update_status = mocker.patch.object(orch.TradeRepo, "update_status")
+        n = orch.run_exit_engine(mock_db, date(2026, 8, 18))
+        assert n == 1
+        # Collapsed mids (both 544.10) would mark SL_HIT at -₹22,456.
+        # Distinct mids: MTM = -22456 + (-544.10 + 1200)*35 ≈ +500 → HOLD.
+        call_args = update_status.call_args
+        assert call_args[0][2] == "OPEN"
+
+
 class TestSanitizedClosePrice:
     """Fix E — guard against bogus EOD chain rows (settle_price ≈ spot)."""
 
