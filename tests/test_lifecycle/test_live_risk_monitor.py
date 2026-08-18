@@ -102,13 +102,11 @@ class TestEvaluation:
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 90.0))
         notifier.notify.assert_not_called()
 
-    def test_target_hit_fires_when_live_fraction_crossed(self):
+    def test_target_hit_fires_when_strategy_take_profit_crossed(self):
         state = _make_state(max_profit=10000.0)
         monitor, notifier, bus = _build_monitor(state, target_fraction=0.70)
         # SELL @ 100 each (qty=50 each). Close at 25 each:
-        # current_value = -1 * 25 * 50 (CE close cost) -1 * 25 * 50 (PE close cost) = -2500
-        # current_pnl = entry_net_credit (10000) + current_value (-2500) = 7500
-        # 7500 >= 0.70 * 10000 → fire TARGET_HIT.
+        # current_pnl = 10000 - 2500 = 7500 ≥ IC 50% of max profit → TARGET_HIT.
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 25.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 25.0))
         notifier.notify.assert_called_once()
@@ -117,14 +115,16 @@ class TestEvaluation:
         assert kwargs["severity"] == "INFO"
         assert kwargs["related_trade_id"] == "T-001"
 
-    def test_target_not_fired_when_only_eod_threshold_crossed(self):
-        # exit_engine considers 0.5 a TAKE_PROFIT, but our live monitor requires 0.7.
+    def test_target_hit_fires_at_eod_take_profit_threshold(self):
+        # Live TARGET_HIT uses the same rupee target as Exit Plan / EOD TAKE_PROFIT
+        # (IC = 50% of max profit). Previously live required a stricter 70%.
         state = _make_state(max_profit=10000.0)
         monitor, notifier, bus = _build_monitor(state, target_fraction=0.70)
-        # Close at 50 each → current_value = -5000 → current_pnl = 5000 = 50% of max profit.
+        # Close at 50 each → current_pnl = 5000 = 50% of max profit.
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 50.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 50.0))
-        notifier.notify.assert_not_called()
+        notifier.notify.assert_called_once()
+        assert notifier.notify.call_args.kwargs["notif_type"] == "TARGET_HIT"
 
     def test_sl_trigger_fires_when_loss_crosses_threshold(self):
         state = _make_state(max_loss=10000.0)
@@ -407,11 +407,9 @@ class TestPreBreachWarning:
 
 
 class TestDTEAwareTarget:
-    def test_target_tightens_at_low_dte(self):
-        """Item #6 — DTE ≤ 3 should require only the lower target fraction."""
-        # expiry tomorrow → DTE=1 → uses target_min (0.50).
+    def test_credit_target_follows_strategy_fraction_at_low_dte(self):
+        """IC take-profit is 50% of max profit — same at DTE 1 as at DTE 15."""
         state = _make_state(max_profit=10000.0, max_loss=10000.0)
-        # Override expiry to be near.
         from dataclasses import replace
         new_legs = [
             _LegRef(leg_order=l.leg_order, action=l.action, strike=l.strike,
@@ -424,14 +422,14 @@ class TestDTEAwareTarget:
 
         monitor, notifier, bus = _build_monitor_full(
             state, cfg_overrides={
-                "target_fraction_at_min_dte": 0.50,
+                "target_fraction_at_min_dte": 0.80,
                 "target_fraction_at_max_dte": 0.80,
                 "target_min_dte": 3, "target_max_dte": 15,
                 "stale_leg_seconds": 9999, "pre_breach_fraction": 0.99,
             },
             clock_at=datetime(2026, 5, 5, 11, 0),  # DTE=1
         )
-        # At 50% pnl (close at 50 each → pnl = 5000) → fire because target=0.50.
+        # 50% pnl (close at 50 each → pnl = 5000) → TARGET_HIT (IC 50%).
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 50.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 50.0))
         assert notifier.notify.call_count == 1
@@ -610,6 +608,34 @@ class TestConfigValidation:
         from datetime import time as dtime
         assert monitor._session_start == dtime(9, 15)
 
+    def test_reload_rebinds_from_strategy_config(self):
+        from config import STRATEGY_CONFIG
+        from database.config_overlay import restore_file_defaults
+
+        snap = _Snapshot()
+        bus = EventBus()
+        notifier = MagicMock()
+        original = int(STRATEGY_CONFIG["live_risk_monitor"]["cooldown_minutes"])
+
+        def reloader():
+            lrm = dict(STRATEGY_CONFIG["live_risk_monitor"])
+            lrm["cooldown_minutes"] = 3
+            STRATEGY_CONFIG["live_risk_monitor"] = lrm
+
+        monitor = LiveRiskMonitor(
+            notifier=notifier,
+            snapshot_loader=lambda: snap,
+            event_bus=bus,
+            config_reloader=reloader,
+            clock=lambda: datetime(2026, 5, 5, 11, 0),
+        )
+        try:
+            assert monitor._cooldown.total_seconds() == original * 60
+            monitor._reload()
+            assert monitor._cooldown.total_seconds() == 3 * 60
+        finally:
+            restore_file_defaults()
+
 
 @pytest.mark.future
 @pytest.mark.skip(reason="future: per-leg sanity check on tick prices "
@@ -665,9 +691,10 @@ class TestTrailingSL:
         assert state.trailing_step_idx == 1
         assert state.trailing_pnl_floor == 0.0
         assert persisted == [("T-001", 0.0, 1)]
-        # PROFIT_FLOOR_SET notification fired.
-        assert any(c.kwargs.get("notif_type") == "PROFIT_FLOOR_SET"
-                   for c in notifier.notify.call_args_list)
+        # Floor persists even if TARGET_HIT (same 50% IC threshold) is the
+        # alert returned on this tick instead of PROFIT_FLOOR_SET.
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "TARGET_HIT" in types or "PROFIT_FLOOR_SET" in types
 
     def test_floor_breach_fires_profit_floor_hit(self):
         # Two-step: 50% locks breakeven, 80% locks 40% of max.

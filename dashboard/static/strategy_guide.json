@@ -1,0 +1,456 @@
+{
+  "intro": {
+    "title": "Strategy learning",
+    "lede": "Each Options Advisor suggestion is one defined-risk structure. This page explains what that structure is, when this system picks it, what to verify before you trade, how P&L usually develops, and exactly where those facts appear on the Suggestion and My Trades screens.",
+    "families": [
+      {
+        "id": "credit",
+        "label": "Credit / short premium",
+        "text": "You receive premium up front (iron condor, iron butterfly, bull put, bear call, jade lizard). Time decay helps if the index stays inside the short strikes. This system books take-profit as a fraction of max profit (credit captured) and uses a time-decay exit when DTE is very small."
+      },
+      {
+        "id": "debit_spread",
+        "label": "Debit spreads",
+        "text": "You pay a net debit for a defined-width directional spread (bull call, bear put). Profit is capped at the far strike. This system targets a fraction of the debit paid — not a DTE-scaled multiple."
+      },
+      {
+        "id": "long_premium",
+        "label": "Long premium / calendar",
+        "text": "You pay debit for long options or a calendar. More DTE usually means a larger rupee target (this system: target multiple = base + DTE / scale, capped). Theta works against naked longs; calendars want a quiet near expiry."
+      }
+    ],
+    "signals": [
+      "Octagon (red) — stop-loss / loss-limit hit, close now",
+      "Diamond (orange) — thesis failed, close now",
+      "Up-triangle (green) — take-profit target hit, close now",
+      "Square (gold) — other close pending (expiry / profit-floor)",
+      "Circle (dark red) — circuit breaker or kill switch",
+      "Hexagon − (rose) — currently in loss, not yet at stop",
+      "Hexagon + (teal) — currently in profit, not yet at target"
+    ]
+  },
+  "order": [
+    "IRON_CONDOR",
+    "IRON_BUTTERFLY",
+    "BULL_PUT_SPREAD",
+    "BEAR_CALL_SPREAD",
+    "JADE_LIZARD",
+    "CALENDAR_SPREAD",
+    "BULL_CALL_SPREAD",
+    "BEAR_PUT_SPREAD",
+    "LONG_STRADDLE",
+    "LONG_STRANGLE",
+    "LONG_CALL",
+    "LONG_PUT"
+  ],
+  "strategies": {
+    "IRON_CONDOR": {
+      "name": "Iron Condor",
+      "family": "credit",
+      "target_kind": "credit",
+      "what": "A four-leg credit: sell an OTM put and an OTM call, and buy further OTM wings. Defined risk on both sides. Max profit is the net credit if the index expires between the short strikes.",
+      "when": [
+        "This system picks it in the writing regime: IV Rank above the writing minimum, trend SIDEWAYS.",
+        "Iron butterfly is preferred instead only when IV Rank is very high and IV/HV premium is rich enough; otherwise condor (short legs at the expected-move, more room).",
+        "You want range-bound price action, not a breakout."
+      ],
+      "checks": [
+        "IV Rank in the writing zone and IV/HV not collapsing.",
+        "Trend labelled sideways; PCR not screaming a one-way move.",
+        "Short strikes outside the expected move; wings actually hedge (width and liquidity).",
+        "PoP, credit vs width, and both-side breakevens on the card.",
+        "DTE inside this system's band (typically 7–21)."
+      ],
+      "pnl": {
+        "wins_when": "Index stays between the short put and short call. Theta (time decay) is the engine — quiet days help.",
+        "loses_when": "A trend day drives spot through a short strike. One side's short premium blows up; the wing only caps the loss.",
+        "dte": "More DTE = more time for a breakout to hit a short strike, but also more credit. This system still takes profit as a fraction of max profit (not a bigger target just because DTE is high). Near expiry, gamma jumps — credit structures get a time-decay exit when DTE is very low (Config: time_decay_exit_dte)."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Name + strategy tag", "why": "Tag IRON_CONDOR. Info icon (ⓘ) opens this same note." },
+          { "place": "Why this strategy today / What makes it better", "why": "Range thesis: stay inside the profit zone printed from short strikes." },
+          { "place": "PoP, credit, max profit, max loss, DTE (preview row)", "why": "Credit and max profit should match 'collect premium in a range'. Weak PoP or tiny credit vs width is a skip." },
+          { "place": "Legs + role notes", "why": "Two shorts (put and call) plus two long hedges. Confirm OTM on both sides." },
+          { "place": "Exit Plan", "why": "Take-profit is a fraction of max profit (credit captured). Stop is the strategy SL table — not a spot-only rule." },
+          { "place": "Confidence / quality chips", "why": "Hard DTE + liquidity; soft IV, VIX, PCR, OI, trend, IV premium, FII." }
+        ],
+        "trade": [
+          { "place": "ⓘ next to the trade name", "why": "Same article as this page." },
+          { "place": "Current P&L tag", "why": "Live MTM. Hexagon + means in profit but not at target; hexagon − means in loss but not at stop." },
+          { "place": "Header shapes / card signal", "why": "Green triangle = target hit (close). Red octagon = loss limit. Do not wait for EOD if those fire." },
+          { "place": "Live profit levels (target / floor / SL)", "why": "Target line is the credit-capture rupee amount. Trailing floor may arm after a large run-up." },
+          { "place": "Stop-loss monitor (two-sided)", "why": "Upper and lower spot triggers for the two credit spreads — close the breached side, not necessarily both." },
+          { "place": "SHORT_LEG_STRESS / PRE_BREACH badges", "why": "Early warnings: a short leg doubled, or loss approaching the SL fraction." }
+        ]
+      }
+    },
+    "IRON_BUTTERFLY": {
+      "name": "Iron Butterfly",
+      "family": "credit",
+      "target_kind": "credit",
+      "what": "Like a condor but both shorts sit at the same ATM strike (the body). Higher credit, much narrower sweet spot. Wings still cap the loss.",
+      "when": [
+        "Writing regime, SIDEWAYS, and IV Rank above the butterfly minimum with IV/HV premium rich enough (this system requires both — otherwise it falls back to iron condor).",
+        "You expect pin / IV crush near ATM, not a wide range."
+      ],
+      "checks": [
+        "IV Rank very high and IV/HV at or above the butterfly premium gate.",
+        "Short CE and PE at the same (or nearly ATM) strike.",
+        "Wings far enough that max loss is acceptable.",
+        "Profit zone is a tight band around ATM — if expected move is wide, condor is healthier."
+      ],
+      "pnl": {
+        "wins_when": "Spot pins near the body through expiry, or IV crush after an event while spot stays close.",
+        "loses_when": "Spot trends away from ATM. The body is ATM short premium — delta hurts fast.",
+        "dte": "Same credit-capture take-profit as other credits, but this system books butterfly earlier (higher fraction of max profit) because ATM shorts give back quickly. Time-decay exit still applies at low DTE."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Strategy tag IRON_BUTTERFLY", "why": "Not a condor — shorts should be ATM body, not EM wings." },
+          { "place": "Why this strategy today", "why": "Should mention high IV and pin / max credit at ATM." },
+          { "place": "Breakevens / profit zone", "why": "Much tighter than condor. If the zone looks as wide as a condor, the legs are wrong." },
+          { "place": "Exit Plan take-profit", "why": "Higher capture fraction than condor (Config: strategy_take_profit_fraction for IRON_BUTTERFLY)." }
+        ],
+        "trade": [
+          { "place": "Current P&L vs target line", "why": "ATM body can swing from green to red in one trend candle — respect the triangle / octagon." },
+          { "place": "Two-sided SL monitor", "why": "Same idea as condor: independent upper/lower triggers." },
+          { "place": "Short-leg stress", "why": "The ATM short is the first to double on a spike." }
+        ]
+      }
+    },
+    "BULL_PUT_SPREAD": {
+      "name": "Bull Put Spread",
+      "family": "credit",
+      "target_kind": "credit",
+      "what": "Credit put spread: sell a put, buy a lower put. Bullish-to-neutral. Max profit = credit if spot stays above the short put.",
+      "when": [
+        "Writing regime (high IV Rank) and trend BULLISH.",
+        "Mild bullish → bull put; very strong PCR bullish at high IV → jade lizard instead."
+      ],
+      "checks": [
+        "Trend bullish / PCR not screaming puts.",
+        "Short put below spot (OTM), long put further below.",
+        "Credit vs width sensible; downside max loss = width − credit.",
+        "You are OK being wrong if the index dumps through the short put."
+      ],
+      "pnl": {
+        "wins_when": "Index rises or holds above the short put. Theta helps the short put decay.",
+        "loses_when": "Sharp decline through the short put toward the long put. Defined loss, but it can hit the SL fraction before expiry.",
+        "dte": "Credit-capture target does not increase with DTE. Extra DTE is extra crash time. Time-decay exit at low DTE still applies."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Tag BULL_PUT_SPREAD", "why": "Put-side credit only — no short call." },
+          { "place": "Why / What makes it better", "why": "Should talk about holding above the short put." },
+          { "place": "Legs", "why": "SELL PE + BUY lower PE. Role notes: short put collects, long put hedges." },
+          { "place": "Exit Plan", "why": "Take-profit = fraction of max profit; SL from bull-put limits (tighter than condor in this system)." }
+        ],
+        "trade": [
+          { "place": "Spot vs short-put strike (SL monitor / action panel)", "why": "Thesis dies if spot loses the short put with conviction." },
+          { "place": "Current P&L + hexagon", "why": "Slow grind up often shows hexagon + long before the green triangle." },
+          { "place": "LOSS_LIMIT / PRE_BREACH", "why": "Put spreads can gap through the short on a crash open." }
+        ]
+      }
+    },
+    "BEAR_CALL_SPREAD": {
+      "name": "Bear Call Spread",
+      "family": "credit",
+      "target_kind": "credit",
+      "what": "Credit call spread: sell a call, buy a higher call. Bearish-to-neutral. Max profit = credit if spot stays below the short call.",
+      "when": [
+        "Writing regime and trend BEARISH.",
+        "You want to fade a rally / sell rich call premium with a defined wing."
+      ],
+      "checks": [
+        "Trend bearish; PCR / OI not screaming a squeeze.",
+        "Short call above spot, long call further above.",
+        "Credit vs width; upside max loss defined.",
+        "Event risk: a squeeze through the short call is the failure mode."
+      ],
+      "pnl": {
+        "wins_when": "Index falls or stays under the short call. Theta decays the short call.",
+        "loses_when": "Rally or squeeze through the short call. Loss capped at the long call.",
+        "dte": "Same as other credits: target is credit captured, not DTE-scaled. Low DTE → time-decay exit."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Tag BEAR_CALL_SPREAD", "why": "Call-side credit only." },
+          { "place": "Rationale text", "why": "Should say stay below the short call." },
+          { "place": "Legs", "why": "SELL CE + BUY higher CE." },
+          { "place": "Exit Plan", "why": "Credit-capture target; SL from bear-call limits." }
+        ],
+        "trade": [
+          { "place": "Spot vs short-call strike", "why": "Action / SL monitor — this is the line that invalidates the thesis." },
+          { "place": "Short-leg stress on the short CE", "why": "Squeeze warning before full loss-limit." },
+          { "place": "Green triangle vs hexagon +", "why": "Triangle means the configured capture % is done — don't hold for the last tick of credit." }
+        ]
+      }
+    },
+    "JADE_LIZARD": {
+      "name": "Jade Lizard",
+      "family": "credit",
+      "target_kind": "credit",
+      "what": "Short OTM put plus a short call spread, sized so net credit removes upside risk (no upside loss if constructed correctly). Downside remains if spot crashes through the short put.",
+      "when": [
+        "Writing regime, BULLISH, and strong bullish PCR conviction — this system uses jade lizard instead of a plain bull put.",
+        "You are very bullish / unconcerned about a squeeze, but still want defined-ish downside."
+      ],
+      "checks": [
+        "Net credit ≥ call-spread width (zero upside risk). If not, it is a sloppy lizard.",
+        "Strong bullish evidence (PCR / trend), not a mild bounce.",
+        "Short put still OTM with acceptable crash loss.",
+        "Three (or four) legs match: short put + short call + long higher call."
+      ],
+      "pnl": {
+        "wins_when": "Spot rises or goes sideways. Upside is supposed to be safe; credit is kept.",
+        "loses_when": "Crash through the short put. There is no long call on the downside.",
+        "dte": "Credit-capture target. Extra DTE is extra crash window on the naked-ish put. Time-decay exit at low DTE."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Tag JADE_LIZARD", "why": "Not BPS-only — you should see a call spread plus a short put." },
+          { "place": "Why this strategy today", "why": "Should mention strong bullish conviction and zero upside risk." },
+          { "place": "Credit vs call width", "why": "If credit is smaller than the call spread, upside is not zero — skip or size down." },
+          { "place": "Exit Plan", "why": "Same credit-capture family as BPS; SL uses jade-lizard limits." }
+        ],
+        "trade": [
+          { "place": "Current P&L", "why": "Upside grind should look boring and green. Sudden red is usually the put side." },
+          { "place": "Short PE stress / loss limit", "why": "The crash risk lives entirely in the put." },
+          { "place": "Do not manage like a condor", "why": "There is no long put wing." }
+        ]
+      }
+    },
+    "CALENDAR_SPREAD": {
+      "name": "Calendar Spread",
+      "family": "long_premium",
+      "target_kind": "long_premium",
+      "what": "Sell a nearer-dated option and buy a later-dated option at the same strike (typically ATM). You pay a debit. Profit if the near leg decays faster while spot stays near the strike.",
+      "when": [
+        "Low-IV SIDEWAYS without a long-vol catalyst → calendar (not straddle).",
+        "Mid-IV SIDEWAYS → calendar as well (not rich enough to write condors, not a breakout bet)."
+      ],
+      "checks": [
+        "Two expiries, same strike, opposite actions (short near / long far).",
+        "IV not about to spike on the short leg only (calendar can lose on a vol pop).",
+        "Spot near the strike; a huge trend day before near expiry hurts.",
+        "DTE: near leg inside the calendar near-max, far leg not too close."
+      ],
+      "pnl": {
+        "wins_when": "Quiet tape into the near expiry; IV stable or gently falling. The short decays, the long keeps value.",
+        "loses_when": "Large directional move (both legs go ITM/OTM together) or IV crush on the long / spike on the short.",
+        "dte": "This system treats calendars as long-premium: take-profit is a DTE-aware multiple of debit paid (more DTE → larger multiple, capped). That is the opposite of 'more DTE = take less'. You still need the near expiry to do the decaying; if the move already happened, don't wait for the full multiple."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Tag CALENDAR_SPREAD", "why": "Legs must show two different expiry dates." },
+          { "place": "Why this strategy today", "why": "Should mention calm / near vs far decay, not a breakout." },
+          { "place": "Debit / max profit language", "why": "You paid debit — max profit is not 'credit captured'." },
+          { "place": "Exit Plan", "why": "Target uses the long-premium DTE formula (base + DTE/scale). SL is calendar's loss fraction of max loss / debit." }
+        ],
+        "trade": [
+          { "place": "Current P&L", "why": "Can look sleepy then jump around near expiry of the short." },
+          { "place": "Exit Plan target vs hexagon +", "why": "Hexagon + means profitable but below the DTE-scaled target. Green triangle means that target printed." },
+          { "place": "Thesis / sit-out", "why": "A violent trend may be thesis-fail even if you are not at the rupee SL yet." }
+        ]
+      }
+    },
+    "BULL_CALL_SPREAD": {
+      "name": "Bull Call Spread",
+      "family": "debit_spread",
+      "target_kind": "debit_spread",
+      "what": "Buy a call, sell a higher call. Debit. Bullish with capped upside at the short call.",
+      "when": [
+        "Buying regime (low IV) and BULLISH without a long-vol catalyst and not cheap enough for a naked long call.",
+        "Mid-IV BULLISH — this system's default directional debit (premiums too rich for naked longs, IV too low to write)."
+      ],
+      "checks": [
+        "Trend bullish; you accept capped upside.",
+        "Long CE below short CE; net debit < width.",
+        "Needs the index to actually rise toward the short strike — not a 'theta farm'.",
+        "IV Rank not in the writing zone (or you would be selling puts instead)."
+      ],
+      "pnl": {
+        "wins_when": "Spot rallies toward or through the short call by expiry. Full value ≈ width − debit.",
+        "loses_when": "Flat or down: both calls decay. Max loss = debit paid.",
+        "dte": "Target is a fixed fraction of debit paid (not DTE-scaled). Extra DTE helps the move develop but does not raise the rupee target. Near expiry with no rally, debit is likely gone — don't 'wait for DTE' hoping theta helps; theta hurts the long."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Tag BULL_CALL_SPREAD", "why": "Two calls, net debit." },
+          { "place": "Rationale", "why": "Should be directional upside, not sideways credit." },
+          { "place": "Exit Plan", "why": "Take-profit = debit_spread_target_fraction of debit. SL from bull-call limits." },
+          { "place": "Spot SL note", "why": "Debit structures often skip spot SL and use MTM SL — read the Exit Plan footnote." }
+        ],
+        "trade": [
+          { "place": "Current P&L", "why": "Needs delta: sideways grind usually bleeds the debit (hexagon −)." },
+          { "place": "Target line", "why": "50% of debit (default) — not 50% of max profit like a condor." },
+          { "place": "Green triangle", "why": "Means that debit-fraction target hit, not 'spot at short strike'." }
+        ]
+      }
+    },
+    "BEAR_PUT_SPREAD": {
+      "name": "Bear Put Spread",
+      "family": "debit_spread",
+      "target_kind": "debit_spread",
+      "what": "Buy a put, sell a lower put. Debit. Bearish with capped downside profit at the short put.",
+      "when": [
+        "Buying regime BEARISH without long-vol / naked long put.",
+        "Mid-IV BEARISH — default directional debit."
+      ],
+      "checks": [
+        "Trend bearish.",
+        "Long PE above short PE; net debit < width.",
+        "You need a decline; theta is not your friend.",
+        "IV not so low that a naked put was the selector's choice (very low IV + strong PCR)."
+      ],
+      "pnl": {
+        "wins_when": "Spot falls toward the short put. Full value ≈ width − debit.",
+        "loses_when": "Flat or up: debit decays to zero.",
+        "dte": "Same as bull call: target is a fraction of debit, not DTE-scaled. More DTE = more time for the decline, not a bigger target."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Tag BEAR_PUT_SPREAD", "why": "Two puts, net debit." },
+          { "place": "Rationale", "why": "Decline to the short put — opposite of bull put credit." },
+          { "place": "Exit Plan", "why": "Debit-fraction target; MTM SL, often no spot SL." }
+        ],
+        "trade": [
+          { "place": "Current P&L vs market direction", "why": "Rally = hexagon −. Don't treat it like a credit put spread." },
+          { "place": "Target vs max profit", "why": "The live target is a slice of debit paid, shown on Exit Plan / live profit bar." }
+        ]
+      }
+    },
+    "LONG_STRADDLE": {
+      "name": "Long Straddle",
+      "family": "long_premium",
+      "target_kind": "long_premium",
+      "what": "Buy ATM call and ATM put. Debit. Profits from a large move either way, or a vol spike. Loses if the index sits still.",
+      "when": [
+        "Low-IV SIDEWAYS and this system's long-vol gate passes (catalyst and/or cheap IV/HV) — otherwise calendar.",
+        "You are betting on a breakout, not a range."
+      ],
+      "checks": [
+        "Both legs ATM, same expiry, both BUY.",
+        "Long-vol catalyst / IV cheap vs HV — this system lost money on grind-low-IV straddles without that gate.",
+        "Debit vs expected move: you need a move bigger than the debit.",
+        "PoP is structurally lower than credits — that's normal."
+      ],
+      "pnl": {
+        "wins_when": "Sharp breakout or breakdown, or IV explosion. One side becomes very valuable.",
+        "loses_when": "Chop. Both options decay. This is the classic theta bleed.",
+        "dte": "Take-profit multiple of debit rises with DTE (base + DTE/scale, capped). Example: at 7 DTE the default multiple is 100% of debit. Shorter DTE → smaller target because there is less time premium to recover. Holding extra days without a move usually increases loss, even if the 'target multiple' looks high on a long-dated card — the move must actually happen."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Tag LONG_STRADDLE + Range vs Breakout chip", "why": "This belongs on the breakout side of a regime pair, not the range condor." },
+          { "place": "Why this strategy today", "why": "Should mention cheap IV and a large move, not theta." },
+          { "place": "Debit / breakevens", "why": "Upper and lower breakeven = strike ± debit. Inside that band at expiry = loss." },
+          { "place": "Exit Plan", "why": "DTE-aware debit multiple. SL is 50% of max loss (straddle table) capped in rupees." }
+        ],
+        "trade": [
+          { "place": "Current P&L", "why": "Flat market → hexagon − almost immediately. That's theta, not a 'broken fill'." },
+          { "place": "Green triangle", "why": "Live MTM reached the DTE-scaled debit target — take it; don't wait for a second leg." },
+          { "place": "Thesis fail", "why": "If the catalyst dies and IV sinks, diamond can fire before the rupee SL." }
+        ]
+      }
+    },
+    "LONG_STRANGLE": {
+      "name": "Long Strangle",
+      "family": "long_premium",
+      "target_kind": "long_premium",
+      "what": "Buy OTM call and OTM put. Cheaper than a straddle, needs an even larger move.",
+      "when": [
+        "Low-IV directional trend with long-vol qualified, but not extreme enough / strong PCR enough for a naked long call or put.",
+        "Breakout bet with a wider expected range than a straddle."
+      ],
+      "checks": [
+        "OTM CE and OTM PE, both BUY.",
+        "This system has a minimum PoP gate for strangles — if PoP is below that, it should not have been suggested.",
+        "Debit vs distance to strikes: cheap is useless if strikes are unreachable.",
+        "Same catalyst discipline as straddles."
+      ],
+      "pnl": {
+        "wins_when": "A move large enough to reach an OTM strike with room for profit, or vol spike.",
+        "loses_when": "Mild trend or chop — both OTMs expire worthless. Historically the grind-loss pattern.",
+        "dte": "Same DTE-aware debit multiple as other long premium. More DTE raises the rupee target but also gives more days of bleed if the market doesn't trend. Do not confuse a high DTE target with a reason to hold a dying strangle."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Tag LONG_STRANGLE", "why": "OTM both sides — compare strikes to spot and expected move." },
+          { "place": "PoP", "why": "If this looks tiny vs credits, that's the structure — this system still floors it." },
+          { "place": "Exit Plan", "why": "DTE debit multiple + 50% MTM SL cap like straddle." }
+        ],
+        "trade": [
+          { "place": "Current P&L", "why": "Bleed is the default until a real breakout. Hexagon − is not a surprise." },
+          { "place": "Don't average", "why": "The advisor does not auto-add legs. Close on octagon / diamond / triangle." }
+        ]
+      }
+    },
+    "LONG_CALL": {
+      "name": "Long Call",
+      "family": "long_premium",
+      "target_kind": "long_premium",
+      "what": "Buy a call only. Unlimited upside, loss limited to debit. Highest leverage, fastest theta/IV risk.",
+      "when": [
+        "Very low IV Rank (below naked-long max), BULLISH, and strong bullish PCR — this system prefers this over a debit spread.",
+        "You want uncapped upside and accept full debit loss."
+      ],
+      "checks": [
+        "Single BUY CE. Strike and DTE match a real rally window.",
+        "IV Rank truly low — buying rich IV is how longs die even if you're right on direction.",
+        "Soft-gate bar is strictest for naked longs (this system asks more soft gates to pass).",
+        "Size: max loss is 100% of premium × qty."
+      ],
+      "pnl": {
+        "wins_when": "Strong rally; delta and gamma kick in. IV rising helps.",
+        "loses_when": "Pullback, chop, or IV crush. Debit can vanish in days.",
+        "dte": "Target multiple of debit grows with DTE (same long-premium formula). A 7-DTE long call's default target is ~100% of debit — you need a fast move. More DTE raises the target but is not 'safer'; it's more calendar time for the thesis. SL is tighter than straddles (30% of max loss in this system's table)."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Tag LONG_CALL", "why": "One long call — no hedge." },
+          { "place": "IV Rank / IV premium chips", "why": "Must look cheap. If IV premium is elevated, this system should have vetoed." },
+          { "place": "Exit Plan", "why": "DTE debit multiple; tighter SL than spreads." }
+        ],
+        "trade": [
+          { "place": "Current P&L", "why": "Choppy tape → hexagon − quickly. Don't turn it into a condor in your head." },
+          { "place": "Octagon", "why": "Tighter SL — expect it sooner than on a straddle." },
+          { "place": "Green triangle", "why": "Debit multiple hit. Bank it; theta will take it back." }
+        ]
+      }
+    },
+    "LONG_PUT": {
+      "name": "Long Put",
+      "family": "long_premium",
+      "target_kind": "long_premium",
+      "what": "Buy a put only. Profits from a decline; max loss = debit.",
+      "when": [
+        "Very low IV Rank, BEARISH, strong bearish PCR — naked put instead of a bear put spread.",
+        "Crash / breakdown bet with defined premium risk."
+      ],
+      "checks": [
+        "Single BUY PE.",
+        "IV cheap; strong bearish evidence.",
+        "Same strict soft-gate standard as long call.",
+        "Event risk: a bounce crushes the put."
+      ],
+      "pnl": {
+        "wins_when": "Sharp decline or vol spike to the downside.",
+        "loses_when": "Rally, grind up, or IV crush.",
+        "dte": "Same DTE-aware debit multiple and tighter SL as long call. Short DTE demands an immediate move."
+      },
+      "look": {
+        "suggestion": [
+          { "place": "Tag LONG_PUT", "why": "One long put." },
+          { "place": "Rationale", "why": "Should be a decline, not a credit 'stay above' story." },
+          { "place": "Exit Plan", "why": "DTE debit multiple; 30% MTM SL cap in this system's table." }
+        ],
+        "trade": [
+          { "place": "Current P&L vs spot", "why": "Bounce = hexagon −. That's the structure working as designed (against you)." },
+          { "place": "Triangle / octagon / diamond", "why": "Same close-now language as other longs — this system does not auto-close." }
+        ]
+      }
+    }
+  }
+}

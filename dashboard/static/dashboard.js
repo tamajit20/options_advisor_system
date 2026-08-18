@@ -243,23 +243,31 @@ function _updateLiveRiskStrip(tradeId, state) {
     el.hidden = true;
     if (staticRa) staticRa.hidden = false;
   });
+  _syncCardSignal(tradeId, state);
 }
 
 function _resolveLiveLevelThresholds(section, payload) {
-  const mp = parseFloat(payload.max_profit ?? section.dataset.maxProfit);
+  const mpRaw = payload.max_profit ?? section.dataset.maxProfit;
+  const mp = mpRaw != null && mpRaw !== '' ? parseFloat(mpRaw) : NaN;
   const mlRaw = payload.max_loss ?? section.dataset.maxLoss;
   const ml = mlRaw != null && mlRaw !== '' ? parseFloat(mlRaw) : null;
   const strat = section.dataset.strategy || '';
   const dte = payload.dte != null ? parseInt(payload.dte, 10) : dteFromExpiry(section.dataset.expiry);
-  if (!mp || mp <= 0 || isNaN(mp)) return null;
-  const tgtFrac = liveTargetFraction(dte);
-  const targetRs = Math.round(mp * tgtFrac);
+  const premiumRs = parseFloat(section.dataset.premiumRs);
+  const premiumKind = section.dataset.premiumKind || '';
+  const entryCredit = (!isNaN(premiumRs) && premiumRs > 0)
+    ? (premiumKind === 'received' ? premiumRs : -premiumRs)
+    : null;
+  const targetRs = profitTargetTradeRs(
+    strat, dte, (!isNaN(mp) && mp > 0 ? mp : null), entryCredit,
+  );
   const lossRs = effectiveSlRs(strat, ml);
   let floor = payload.trailing_pnl_floor;
   if (floor == null && section.dataset.trailingFloor != null && section.dataset.trailingFloor !== '') {
     floor = parseFloat(section.dataset.trailingFloor);
   }
   if (floor != null && isNaN(floor)) floor = null;
+  if (targetRs == null && lossRs == null && floor == null) return null;
   return { targetRs, lossRs, floor };
 }
 
@@ -338,7 +346,7 @@ function _updateLiveProfitLevels(tradeId, payload) {
     _setLiveLevelRowStatus(
       targetRow,
       section.querySelector('.lpl-status-target'),
-      liveMtm >= targetRs,
+      targetRs != null && liveMtm >= targetRs,
       'HIT',
       'hit',
     );
@@ -361,11 +369,16 @@ function _updateLiveProfitLevels(tradeId, payload) {
       liveMtm,
       lossHit: lossRs != null && liveMtm <= -lossRs,
       floorBreach: armedFloor != null && liveMtm < armedFloor,
-      targetHit: liveMtm >= targetRs,
+      targetHit: targetRs != null && liveMtm >= targetRs,
+    };
+    _lastMtmByTrade[tradeId] = {
+      ...(_lastMtmByTrade[tradeId] || {}),
+      ...stripState,
     };
   });
   _updateLiveRiskStrip(tradeId, stripState);
   _updateTradeActionPanel(tradeId, payload, stripState);
+  _refreshPnlSignalRail();
 }
 
 function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
@@ -401,6 +414,8 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
     el.title = 'Current profit/loss' + premTip + (asOf ? ' as of ' + asOf + ' IST' : '') + '. ' + feed.tip;
   });
   _updateFeedTag(tradeId);
+  _syncCardSignal(tradeId);
+  _refreshPnlSignalRail();
 }
 
 function _refreshAllFeedTags() {
@@ -644,6 +659,11 @@ const spotDist = (level, spot) => {
   return `<span class="pct-hint">\u00a0(${sign}${fmt(Math.abs(diff))} pts, ${sign}${pct}% from \u20b9${fmt(spot)})</span>`;
 };
 
+function strategyGuideInfoBtn(code) {
+  if (!code || code === 'NONE') return '';
+  return `<button type="button" class="strategy-guide-btn" data-strategy="${escapeHtml(code)}" title="Learn ${escapeHtml(code)}" aria-label="Learn ${escapeHtml(code)} strategy">\u24d8</button>`;
+}
+
 const toast = (msg, kind='info') => {
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
@@ -654,7 +674,7 @@ const toast = (msg, kind='info') => {
 window.toast = toast;
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
+const TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
 const TAB_LOADERS = {};
 const TAB_LEAVE = {};
 
@@ -689,6 +709,9 @@ function switchTab(name) {
   });
   if (name === 'suggestion')    loadSuggestion();
   if (name === 'trades')        loadTrades();
+  if (name === 'learn') {
+    if (typeof window.renderLearningPage === 'function') window.renderLearningPage();
+  }
   if (name === 'history')       loadHistory();
   if (name === 'logs')          loadLogs();
   if (name === 'jobs')          loadJobs();
@@ -714,7 +737,9 @@ function switchTab(name) {
   if (name !== 'wsmon') stopWsMonitorAutoRefresh();
   try { localStorage.setItem('activeTab', name); } catch (_) {}
   try {
-    if (window.location.hash !== '#' + name) {
+    const cur = (window.location.hash || '').replace(/^#/, '');
+    const keepLearnDeep = name === 'learn' && cur.startsWith('learn/');
+    if (!keepLearnDeep && window.location.hash !== '#' + name) {
       history.replaceState(null, '', '#' + name);
     }
   } catch (_) {}
@@ -732,6 +757,7 @@ function _restoreActiveTab() {
   let initial = null;
   const hash = (window.location.hash || '').replace(/^#/, '');
   if (hash === 'scout') initial = 'scout-signals';
+  else if (hash === 'learn' || hash.startsWith('learn/')) initial = 'learn';
   else if (hash && hash.startsWith('scout-')) initial = hash;
   else if (hash && hash.startsWith('arb-')) initial = hash;
   else if (hash && hash.startsWith('basis-')) initial = hash;
@@ -740,6 +766,7 @@ function _restoreActiveTab() {
     try {
       const saved = localStorage.getItem('activeTab');
       if (saved === 'scout') initial = 'scout-signals';
+      else if (saved === 'learn' || (saved && saved.startsWith('learn/'))) initial = 'learn';
       else if (saved && saved.startsWith('scout-')) initial = saved;
       else if (saved && saved.startsWith('arb-')) initial = saved;
       else if (saved && saved.startsWith('basis-')) initial = saved;
@@ -869,40 +896,216 @@ function stopIndexSpotStream() {
 // tab — not just the Suggestion tab. Updated via /api/alerts/stream SSE and
 // after any action that could change banner state (notification mark-as-read,
 // flag toggle, etc.).
+// ---------------- Signal rail + global banners ----------------
+// Action signals are geometric tiles in #signal-rail (left of brand).
+// They follow OPEN trade state (SL_HIT / THESIS_FAIL), not unread text
+// alerts — so marking a notification read cannot hide an open SL.
+// The same marks are painted on each trade card so you can see which
+// trade owns which status.
+// Shapes: octagon = stop-loss hit, diamond = thesis failed,
+// up-triangle = take-profit target hit, square = other close pending,
+// circle = breaker/kill, hexagon − = in loss, hexagon + = in profit
+// (same hexagon on rail and cards; color and +/− tell them apart).
+
+const _SIGNAL_LABELS = {
+  sl: 'Stop-loss — close now',
+  thesis: 'Thesis failed — close now',
+  profit: 'Take profit — target hit',
+  exit: 'Close pending',
+  in_loss: 'In loss — not at stop',
+  in_profit: 'In profit — not at target',
+};
+const _SIGNAL_STATUS_KINDS = new Set(['in_loss', 'in_profit']);
+const _MTM_FLAT_RS = 0.5;
+let _lastStatusForRail = {};
+let _lastRailSignature = '';
+
+function _signalKindFromFields({ dailyStatus, exitInstruction, riskNotif, live } = {}) {
+  const daily = String(dailyStatus || '').toUpperCase();
+  const exitTxt = String(exitInstruction || '').toLowerCase();
+  const risk = String(riskNotif || '').toUpperCase();
+  if (live && live.lossHit) return 'sl';
+  if (['SL_HIT', 'LOSS_LIMIT_HIT'].includes(daily)
+      || exitTxt.includes('sl_hit')
+      || ['LOSS_LIMIT_HIT', 'SL_TRIGGER'].includes(risk)) {
+    return 'sl';
+  }
+  if (daily === 'THESIS_FAIL' || exitTxt.includes('thesis_fail')) return 'thesis';
+  if (live && live.targetHit) return 'profit';
+  if (['TAKE_PROFIT', 'TARGET_HIT', 'TARGET_LOCKED'].includes(daily)
+      || exitTxt.includes('take_profit')
+      || exitTxt.includes('take profit')
+      || exitTxt.includes('target reached')
+      || ['TARGET_HIT', 'TARGET_LOCKED'].includes(risk)) {
+    return 'profit';
+  }
+  if (live && live.floorBreach) return 'exit';
+  if (exitTxt.includes('close pending')
+      || ['EXPIRE', 'EXIT_AT_OPEN'].includes(daily)
+      || risk === 'PROFIT_FLOOR_HIT') {
+    return 'exit';
+  }
+  const mtm = live && live.liveMtm != null ? Number(live.liveMtm) : NaN;
+  if (!isNaN(mtm) && mtm < -_MTM_FLAT_RS) return 'in_loss';
+  if (!isNaN(mtm) && mtm > _MTM_FLAT_RS) return 'in_profit';
+  return null;
+}
+
+function _signalMarkHtml(kind, title) {
+  if (!kind) return '';
+  const tt = title || _SIGNAL_LABELS[kind] || kind;
+  const status = _SIGNAL_STATUS_KINDS.has(kind) ? ' signal-tile--status' : ' is-on';
+  return `<span class="signal-tile signal-tile--${kind} signal-tile--card${status}"
+      title="${escapeHtml(tt)}" aria-label="${escapeHtml(tt)}">
+      <span class="signal-shape" aria-hidden="true"><span class="signal-mark"></span></span>
+    </span>`;
+}
+
+function _syncCardSignal(tradeId, live) {
+  document.querySelectorAll(`.card-signal[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(host => {
+    const card = host.closest('.card');
+    const rec = _lastMtmByTrade[tradeId] || {};
+    const kind = _signalKindFromFields({
+      dailyStatus: card && card.dataset.dailyStatus,
+      exitInstruction: card && card.dataset.exitInstruction,
+      riskNotif: card && card.dataset.riskNotif,
+      live: {
+        ...(live || {}),
+        liveMtm: (live && live.liveMtm != null) ? live.liveMtm : rec.mtm,
+      },
+    });
+    host.innerHTML = _signalMarkHtml(kind);
+    host.hidden = !kind;
+  });
+}
+
+function _signalTile(kind, count, title, tradeId) {
+  const tid = tradeId ? ` data-trade-id="${escapeHtml(tradeId)}"` : '';
+  const n = count > 1 ? `<span class="signal-count">${count}</span>` : '';
+  const status = _SIGNAL_STATUS_KINDS.has(kind) ? ' signal-tile--status' : ' is-on';
+  return `<button type="button" class="signal-tile signal-tile--${kind}${status}"${tid}
+      title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
+      <span class="signal-shape" aria-hidden="true"><span class="signal-mark"></span></span>${n}
+    </button>`;
+}
+
+function _pnlStatusFromMtm(mtm) {
+  const n = Number(mtm);
+  if (isNaN(n)) return null;
+  if (n < -_MTM_FLAT_RS) return 'in_loss';
+  if (n > _MTM_FLAT_RS) return 'in_profit';
+  return null;
+}
+
+function _mergePnlRailSignals(actionSignals) {
+  const actionIds = new Set(
+    (actionSignals || []).filter(s => !_SIGNAL_STATUS_KINDS.has(s.kind)).map(s => String(s.trade_id || ''))
+  );
+  const byId = {};
+  (actionSignals || []).forEach(s => {
+    if (!_SIGNAL_STATUS_KINDS.has(s.kind) || !s.trade_id || actionIds.has(String(s.trade_id))) return;
+    byId[String(s.trade_id)] = s;
+  });
+  Object.entries(_lastMtmByTrade).forEach(([tid, rec]) => {
+    if (!tid || actionIds.has(tid)) return;
+    if (rec.lossHit || rec.targetHit || rec.floorBreach) return;
+    const kind = _pnlStatusFromMtm(rec && rec.mtm);
+    if (!kind) return;
+    byId[tid] = {
+      kind,
+      trade_id: tid,
+      trade_name: rec.trade_name || (byId[tid] && byId[tid].trade_name) || tid,
+    };
+  });
+  return Object.values(byId);
+}
+
+function _renderSignalRail(st) {
+  const host = document.getElementById('signal-rail');
+  if (!host) return;
+  if (st) _lastStatusForRail = st;
+  else st = _lastStatusForRail || {};
+  const signals = Array.isArray(st && st.trade_signals) ? st.trade_signals : [];
+  const sl = signals.filter(s => s.kind === 'sl');
+  const thesis = signals.filter(s => s.kind === 'thesis');
+  const profit = signals.filter(s => s.kind === 'profit');
+  const exitSig = signals.filter(s => s.kind === 'exit');
+  const pnlSig = _mergePnlRailSignals(signals);
+  const inLoss = pnlSig.filter(s => s.kind === 'in_loss');
+  const inProfit = pnlSig.filter(s => s.kind === 'in_profit');
+  const signature = JSON.stringify({
+    breaker: !!(st && st.circuit_breaker_active),
+    kill: !!(st && st.kill_switch),
+    sl: sl.map(s => s.trade_id),
+    thesis: thesis.map(s => s.trade_id),
+    profit: profit.map(s => s.trade_id),
+    exit: exitSig.map(s => s.trade_id),
+    in_loss: inLoss.map(s => s.trade_id),
+    in_profit: inProfit.map(s => s.trade_id),
+  });
+  if (signature === _lastRailSignature && host.innerHTML) return;
+  _lastRailSignature = signature;
+  const tiles = [];
+  if (st && st.circuit_breaker_active) {
+    tiles.push(_signalTile('breaker', 1, 'Daily P&L breaker is active — executions blocked'));
+  }
+  if (st && st.kill_switch) {
+    tiles.push(_signalTile('kill', 1, 'Kill switch is on'));
+  }
+  if (sl.length) {
+    const names = sl.map(s => s.trade_name || s.trade_id).join(', ');
+    tiles.push(_signalTile('sl', sl.length, `Stop-loss — close ${names}`, sl[0].trade_id));
+  }
+  if (thesis.length) {
+    const names = thesis.map(s => s.trade_name || s.trade_id).join(', ');
+    tiles.push(_signalTile('thesis', thesis.length, `Thesis failed — close ${names}`, thesis[0].trade_id));
+  }
+  if (profit.length) {
+    const names = profit.map(s => s.trade_name || s.trade_id).join(', ');
+    tiles.push(_signalTile('profit', profit.length, `Take profit — ${names}`, profit[0].trade_id));
+  }
+  if (exitSig.length) {
+    const names = exitSig.map(s => s.trade_name || s.trade_id).join(', ');
+    tiles.push(_signalTile('exit', exitSig.length, `Close pending ${names}`, exitSig[0].trade_id));
+  }
+  if (inLoss.length) {
+    const names = inLoss.map(s => s.trade_name || s.trade_id).join(', ');
+    tiles.push(_signalTile('in_loss', inLoss.length, `In loss (not at stop) — ${names}`, inLoss[0].trade_id));
+  }
+  if (inProfit.length) {
+    const names = inProfit.map(s => s.trade_name || s.trade_id).join(', ');
+    tiles.push(_signalTile('in_profit', inProfit.length, `In profit (not at target) — ${names}`, inProfit[0].trade_id));
+  }
+  host.innerHTML = tiles.join('');
+  host.hidden = tiles.length === 0;
+  host.querySelectorAll('.signal-tile[data-trade-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      switchTab('trades');
+      const tid = btn.getAttribute('data-trade-id');
+      if (!tid) return;
+      requestAnimationFrame(() => {
+        const card = document.getElementById(`trade-card-${tid}`)
+          || document.querySelector(`.card[data-trade-id="${CSS.escape(tid)}"]`);
+        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    });
+  });
+  host.querySelectorAll('.signal-tile--breaker, .signal-tile--kill').forEach(btn => {
+    btn.addEventListener('click', () => switchTab('config'));
+  });
+}
+
+function _refreshPnlSignalRail() {
+  _renderSignalRail(_lastStatusForRail);
+}
+
 function _renderGlobalBanners(st, unread) {
   const host = document.getElementById('global-banners');
   if (!host) return;
-  const banners = [];
-  try {
-    if (st.circuit_breaker_active) {
-      banners.push(`<div class="sys-banner sys-banner-err" title="Daily P&L circuit breaker is ACTIVE — new executions are blocked until reset. This flag re-triggers tonight at 20:50 IST if aggregate open-trade losses still breach the limit.">\ud83d\udea8 P&amp;L breaker <strong>ACTIVE</strong> <button type="button" class="btn btn-ghost btn-flag-reset" data-flag-key="circuit_breaker_active" data-flag-value="false">Reset</button></div>`);
-    }
-    if (st.kill_switch) {
-      banners.push(`<div class="sys-banner sys-banner-err" title="Kill switch is ON — all alerts and execution are paused.">\ud83d\uded1 Kill switch <strong>ON</strong> <button type="button" class="btn btn-ghost btn-flag-reset" data-flag-key="kill_switch" data-flag-value="false">Disable</button></div>`);
-    }
-    if (st.trade_execution_enabled === false) {
-      banners.push(`<div class="sys-banner sys-banner-warn" title="Trade execution disabled by runtime flag. Suggestions are still generated but cannot auto-execute until you re-enable.">\u26a0\ufe0f Execution <strong>OFF</strong> <button type="button" class="btn btn-ghost btn-flag-reset" data-flag-key="trade_execution_enabled" data-flag-value="true">Enable</button></div>`);
-    }
-  } catch {}
-  try {
-    const crit = (unread || []).filter(n => (n.severity || '').toUpperCase() === 'CRITICAL');
-    const warn = (unread || []).filter(n => (n.severity || '').toUpperCase() === 'WARNING');
-    if (crit.length) {
-      const titles = crit.slice(0, 3).map(n => (n.title || '')).join(' • ');
-      const more = crit.length > 3 ? ` (+${crit.length - 3} more)` : '';
-      const tt = escapeHtml(`${crit.length} CRITICAL alert(s): ${titles}${more}`);
-      banners.push(`<div class="sys-banner sys-banner-err" title="${tt}">\ud83d\udea8 <strong>${crit.length}</strong> critical <button type="button" class="btn btn-ghost" id="open-notif-from-banner">Open</button></div>`);
-    } else if (warn.length) {
-      const titles = warn.slice(0, 3).map(n => (n.title || '')).join(' • ');
-      const more = warn.length > 3 ? ` (+${warn.length - 3} more)` : '';
-      const tt = escapeHtml(`${warn.length} WARNING(s): ${titles}${more}`);
-      banners.push(`<div class="sys-banner sys-banner-warn" title="${tt}">\u26a0\ufe0f <strong>${warn.length}</strong> warning <button type="button" class="btn btn-ghost" id="open-notif-from-banner">Open</button></div>`);
-    }
-  } catch {}
-  host.innerHTML = banners.join('');
-  bindFlagResetButtons();
-  const openBtn = document.getElementById('open-notif-from-banner');
-  if (openBtn) openBtn.addEventListener('click', () => switchTab('notifications'));
+  _renderSignalRail(st);
+  // Text pills retired: unread CRITICAL spam (THESIS_FAIL every 15m) hid real SL.
+  host.innerHTML = '';
+  host.hidden = true;
 }
 
 async function refreshGlobalBanners() {
@@ -910,6 +1113,7 @@ async function refreshGlobalBanners() {
   if (!host) return;
   try {
     const st = await API('/api/system-status');
+    applyPnlRules(st && st.pnl_rules);
     let unread = [];
     try {
       const nd = await API('/api/notifications?unread=1');
@@ -950,6 +1154,7 @@ function _applyNotifStats(st) {
 function _applyAlertsStream(data) {
   if (!data) return;
   if (data.system_status) {
+    applyPnlRules(data.system_status.pnl_rules);
     _renderGlobalBanners(data.system_status, data.notifications || []);
   }
   if (data.stats) _applyNotifStats(data.stats);
@@ -1226,26 +1431,68 @@ async function loadSuggestion() {
   }
 }
 
-// ── Per-strategy MTM SL (mirrors config.py strategy_sl_limits) ──
-const STRATEGY_SL_DEFAULTS = { loss_fraction: 0.50, absolute_cap_rs: 10000, cap_min_max_loss_rs: null };
-const STRATEGY_SL_LIMITS = {
-  LONG_STRADDLE:    { loss_fraction: 0.30, absolute_cap_rs: 10000 },
-  LONG_STRANGLE:    { loss_fraction: 0.30, absolute_cap_rs: 10000 },
-  LONG_CALL:        { loss_fraction: 0.30, absolute_cap_rs: 10000 },
-  LONG_PUT:         { loss_fraction: 0.30, absolute_cap_rs: 10000 },
-  IRON_CONDOR:      { loss_fraction: 0.50, absolute_cap_rs: 15000, cap_min_max_loss_rs: 20000 },
-  IRON_BUTTERFLY:   { loss_fraction: 0.50, absolute_cap_rs: 15000, cap_min_max_loss_rs: 20000 },
-  BEAR_CALL_SPREAD: { loss_fraction: 0.50, absolute_cap_rs: 15000, cap_min_max_loss_rs: 20000 },
-  BULL_PUT_SPREAD:  { loss_fraction: 0.40, absolute_cap_rs: 10000 },
-  BEAR_PUT_SPREAD:  { loss_fraction: 0.40, absolute_cap_rs: 10000 },
-  BULL_CALL_SPREAD: { loss_fraction: 0.50, absolute_cap_rs: 10000 },
-  JADE_LIZARD:      { loss_fraction: 0.40, absolute_cap_rs: 10000 },
-  CALENDAR_SPREAD:  { loss_fraction: 0.50, absolute_cap_rs: 10000 },
+// ── P&L rules from config.py (engine.pnl_targets.pnl_rules_public) ────────
+// Fallbacks match STRATEGY_CONFIG defaults so the page still renders if the
+// bootstrap payload is missing. applyPnlRules() overlays the live copy.
+const PNL_RULES = {
+  strategy_sl_defaults: { loss_fraction: 0.50, absolute_cap_rs: 10000, cap_min_max_loss_rs: null },
+  strategy_sl_limits: {},
+  long_premium_target_base: 0.50,
+  long_premium_target_dte_scale: 14.0,
+  long_premium_target_max: 1.50,
+  long_premium_target_strategies: [
+    'LONG_STRADDLE', 'LONG_STRANGLE', 'LONG_CALL', 'LONG_PUT', 'CALENDAR_SPREAD',
+  ],
+  debit_spread_target_fraction: 0.50,
+  debit_spread_target_strategies: ['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'],
+  take_profit_fraction: 0.80,
+  strategy_take_profit_fraction: {},
+  live_risk_monitor: {
+    trailing_sl_steps: [[0.50, 0.0], [0.80, 0.40]],
+    pre_breach_fraction: 0.70,
+  },
 };
 
+function applyPnlRules(rules) {
+  if (!rules || typeof rules !== 'object') return;
+  const keys = [
+    'long_premium_target_base', 'long_premium_target_dte_scale',
+    'long_premium_target_max', 'debit_spread_target_fraction',
+    'take_profit_fraction',
+  ];
+  keys.forEach(k => {
+    if (rules[k] != null && !isNaN(parseFloat(rules[k]))) PNL_RULES[k] = parseFloat(rules[k]);
+  });
+  if (rules.strategy_sl_defaults && typeof rules.strategy_sl_defaults === 'object') {
+    PNL_RULES.strategy_sl_defaults = {
+      ...PNL_RULES.strategy_sl_defaults,
+      ...rules.strategy_sl_defaults,
+    };
+  }
+  if (rules.strategy_sl_limits && typeof rules.strategy_sl_limits === 'object') {
+    PNL_RULES.strategy_sl_limits = rules.strategy_sl_limits;
+  }
+  if (Array.isArray(rules.long_premium_target_strategies)) {
+    PNL_RULES.long_premium_target_strategies = rules.long_premium_target_strategies;
+  }
+  if (Array.isArray(rules.debit_spread_target_strategies)) {
+    PNL_RULES.debit_spread_target_strategies = rules.debit_spread_target_strategies;
+  }
+  if (rules.strategy_take_profit_fraction && typeof rules.strategy_take_profit_fraction === 'object') {
+    PNL_RULES.strategy_take_profit_fraction = rules.strategy_take_profit_fraction;
+  }
+  if (rules.live_risk_monitor && typeof rules.live_risk_monitor === 'object') {
+    PNL_RULES.live_risk_monitor = {
+      ...PNL_RULES.live_risk_monitor,
+      ...rules.live_risk_monitor,
+    };
+  }
+}
+applyPnlRules(typeof window !== 'undefined' ? window.__PNL_RULES__ : null);
+
 function strategySlConfig(strategy) {
-  const base = STRATEGY_SL_LIMITS[strategy] || STRATEGY_SL_DEFAULTS;
-  return { ...STRATEGY_SL_DEFAULTS, ...base };
+  const base = (PNL_RULES.strategy_sl_limits || {})[strategy] || {};
+  return { ...PNL_RULES.strategy_sl_defaults, ...base };
 }
 
 function capApplies(cfg, maxLossRs) {
@@ -1276,15 +1523,9 @@ function slExitPlanText(strategy, maxLossRs) {
   return `exit if MTM loss reaches ₹${fmt(slRs)} (${pctLabel} of max loss; ${capDesc})`;
 }
 
-// ── Live risk monitor levels (mirrors config.py live_risk_monitor) ─────────
-const LIVE_RISK_MONITOR = {
-  target_fraction_at_min_dte: 0.50,
-  target_fraction_at_max_dte: 0.80,
-  target_min_dte: 3,
-  target_max_dte: 15,
-  trailing_sl_steps: [[0.50, 0.0], [0.80, 0.40]],
-  pre_breach_fraction: 0.70,
-};
+function liveRiskMonitor() {
+  return PNL_RULES.live_risk_monitor || {};
+}
 
 function dteFromExpiry(expiryDateStr) {
   if (!expiryDateStr) return null;
@@ -1297,16 +1538,66 @@ function dteFromExpiry(expiryDateStr) {
   return Math.max(0, Math.round((exp - today) / 86400000));
 }
 
-function liveTargetFraction(dte) {
-  const c = LIVE_RISK_MONITOR;
-  if (dte == null) return c.target_fraction_at_max_dte;
-  if (dte <= c.target_min_dte) return c.target_fraction_at_min_dte;
-  if (dte >= c.target_max_dte) return c.target_fraction_at_max_dte;
-  const span = c.target_max_dte - c.target_min_dte;
-  if (span <= 0) return c.target_fraction_at_max_dte;
-  const f = (dte - c.target_min_dte) / span;
-  return c.target_fraction_at_min_dte
-    + f * (c.target_fraction_at_max_dte - c.target_fraction_at_min_dte);
+function isLongPremiumStrategy(strategy) {
+  return (PNL_RULES.long_premium_target_strategies || []).includes(strategy || '');
+}
+
+function isDebitSpreadStrategy(strategy) {
+  return (PNL_RULES.debit_spread_target_strategies || []).includes(strategy || '');
+}
+
+function longPremiumTargetMult(dte) {
+  const base = PNL_RULES.long_premium_target_base;
+  const scale = PNL_RULES.long_premium_target_dte_scale;
+  const cap = PNL_RULES.long_premium_target_max;
+  const dteSafe = (typeof dte === 'number' && dte > 0) ? dte : 0;
+  if (dteSafe === 0 || !scale) return base;
+  return Math.min(cap, base + dteSafe / scale);
+}
+
+function creditCaptureFraction(strategy) {
+  const map = PNL_RULES.strategy_take_profit_fraction || {};
+  if (map[strategy] != null) return parseFloat(map[strategy]);
+  return PNL_RULES.take_profit_fraction;
+}
+
+function debitSpreadTargetFraction() {
+  return PNL_RULES.debit_spread_target_fraction;
+}
+
+/** Whole-trade rupee profit target — mirrors engine.pnl_targets.profit_target_trade_rs. */
+function profitTargetTradeRs(strategy, dte, maxProfitRs, entryNetCredit) {
+  const credit = entryNetCredit != null ? parseFloat(entryNetCredit) : NaN;
+  const debit = (!isNaN(credit) && credit < 0) ? Math.abs(credit) : 0;
+  if (isLongPremiumStrategy(strategy)) {
+    if (debit <= 0) return null;
+    return Math.round(debit * longPremiumTargetMult(dte));
+  }
+  if (isDebitSpreadStrategy(strategy)) {
+    if (debit <= 0) return null;
+    return Math.round(debit * debitSpreadTargetFraction());
+  }
+  const frac = creditCaptureFraction(strategy);
+  if (maxProfitRs != null && maxProfitRs > 0 && isFinite(maxProfitRs)) {
+    return Math.round(maxProfitRs * frac);
+  }
+  if (!isNaN(credit) && credit > 0) return Math.round(credit * frac);
+  return null;
+}
+
+function profitTargetNote(strategy, dte, maxProfitRs, entryNetCredit) {
+  const dteSafe = (typeof dte === 'number' && dte >= 0) ? dte : null;
+  const dteLabel = dteSafe != null ? `, DTE ${dteSafe}` : '';
+  if (isLongPremiumStrategy(strategy)) {
+    const pct = Math.round(longPremiumTargetMult(dte) * 100);
+    return `Exit goal — ${pct}% of debit paid${dteLabel}`;
+  }
+  if (isDebitSpreadStrategy(strategy)) {
+    const pct = Math.round(debitSpreadTargetFraction() * 100);
+    return `Exit goal — ${pct}% of debit paid`;
+  }
+  const pct = Math.round(creditCaptureFraction(strategy) * 100);
+  return `Exit goal — ${pct}% of max profit${dteLabel}`;
 }
 
 function renderLiveProfitLevels(t) {
@@ -1326,25 +1617,28 @@ function renderLiveProfitLevels(t) {
   const mpRaw = t.actual_max_profit != null ? t.actual_max_profit
               : (sug.max_profit != null ? sug.max_profit : null);
   const mp = mpRaw != null ? parseFloat(mpRaw) : null;
-  if (mp == null || mp <= 0 || isNaN(mp)) {
+  const strat = sug.strategy || '';
+  const expiry = sug.expiry_date;
+  const dte = dteFromExpiry(expiry);
+  const entryCredit = premium
+    ? (premium.kind === 'received' ? premium.rs : -premium.rs)
+    : null;
+  const targetRs = profitTargetTradeRs(strat, dte, mp, entryCredit);
+  const showLevels = (mp != null && mp > 0 && !isNaN(mp)) || targetRs != null;
+  if (!showLevels) {
     return `
     <div class="live-profit-levels live-profit-levels--mtm-only" data-trade-id="${escapeHtml(t.trade_id)}"${premAttrs}>
       <div class="sl-monitor-label">Live P&amp;L</div>
       <div class="lpl-grid">${currentRow}</div>
     </div>`;
   }
-  const expiry = sug.expiry_date;
-  const dte = dteFromExpiry(expiry);
-  const tgtFrac = liveTargetFraction(dte);
-  const targetRs = Math.round(mp * tgtFrac);
-  const strat = sug.strategy || '';
   const mlRaw = t.actual_max_loss != null ? t.actual_max_loss
               : (sug.max_loss != null ? sug.max_loss : null);
   const ml = mlRaw != null ? parseFloat(mlRaw) : null;
   const lossRs = effectiveSlRs(strat, ml);
   const stepIdx = parseInt(t.trailing_step_idx || 0, 10);
   const floor = t.trailing_pnl_floor != null ? parseFloat(t.trailing_pnl_floor) : null;
-  const steps = LIVE_RISK_MONITOR.trailing_sl_steps || [];
+  const steps = liveRiskMonitor().trailing_sl_steps || [];
   const nextStep = stepIdx < steps.length ? steps[stepIdx] : null;
 
   let floorValHtml;
@@ -1352,7 +1646,7 @@ function renderLiveProfitLevels(t) {
   if (floor != null) {
     floorValHtml = `<span class="lpl-val lpl-floor live-profit-floor-val">\u20b9${fmt(floor)}</span>`;
     floorNote = 'Trailing lock — alert if MTM falls below (always below target)';
-  } else if (nextStep) {
+  } else if (nextStep && mp != null && mp > 0) {
     const trigRs = Math.round(mp * nextStep[0]);
     const lockRs = Math.round(mp * nextStep[1]);
     floorValHtml = `<span class="lpl-val muted live-profit-floor-val">Not armed</span>`;
@@ -1362,26 +1656,31 @@ function renderLiveProfitLevels(t) {
     floorNote = 'All trailing steps armed';
   }
 
-  const dteLabel = dte != null ? `, DTE ${dte}` : '';
+  const targetNote = profitTargetNote(strat, dte, mp, entryCredit);
   const floorAttr = floor != null ? String(floor) : '';
-  return `
-    <div class="live-profit-levels" data-trade-id="${escapeHtml(t.trade_id)}"
-         data-max-profit="${mp}"
-         data-max-loss="${ml != null && !isNaN(ml) ? ml : ''}"
-         data-strategy="${escapeHtml(strat)}"
-         data-expiry="${expiry ? escapeHtml(String(expiry).slice(0, 10)) : ''}"
-         data-trailing-floor="${floorAttr}">
-      <div class="sl-monitor-label">Live profit levels</div>
-      <div class="lpl-grid">
-        ${currentRow}
+  const premData = premium
+    ? ` data-premium-rs="${premium.rs}" data-premium-kind="${premium.kind}"`
+    : '';
+  const targetHtml = targetRs != null ? `
         <div class="lpl-row lpl-target-row">
           <span class="lpl-label">Target profit</span>
           <span class="lpl-val-line">
             <span class="lpl-val lpl-target">\u20b9${fmt(targetRs)}</span>
             <span class="lpl-status lpl-status-target" hidden></span>
           </span>
-          <span class="muted lpl-note">Exit goal — ${Math.round(tgtFrac * 100)}% of max profit${dteLabel}</span>
-        </div>
+          <span class="muted lpl-note">${escapeHtml(targetNote)}</span>
+        </div>` : '';
+  return `
+    <div class="live-profit-levels" data-trade-id="${escapeHtml(t.trade_id)}"
+         data-max-profit="${mp != null && mp > 0 ? mp : ''}"
+         data-max-loss="${ml != null && !isNaN(ml) ? ml : ''}"
+         data-strategy="${escapeHtml(strat)}"
+         data-expiry="${expiry ? escapeHtml(String(expiry).slice(0, 10)) : ''}"
+         data-trailing-floor="${floorAttr}"${premData}>
+      <div class="sl-monitor-label">Live profit levels</div>
+      <div class="lpl-grid">
+        ${currentRow}
+        ${targetHtml}
         <div class="lpl-row lpl-floor-row">
           <span class="lpl-label">Profit floor</span>
           <span class="lpl-val-line">
@@ -1727,7 +2026,7 @@ function _updateTradeActionPanel(tradeId, payload, stripState) {
     const lossRs = thresholds && thresholds.lossRs;
     const preBreachNear = (
       liveMtm != null && lossRs != null
-      && liveMtm <= -(LIVE_RISK_MONITOR.pre_breach_fraction * lossRs)
+      && liveMtm <= -(liveRiskMonitor().pre_breach_fraction * lossRs)
       && liveMtm > -lossRs
     );
     const instr = _computeTradeActionInstruction({
@@ -1791,42 +2090,38 @@ function renderExitPlan(s) {
 
   const rows = [];
 
-  // ── 1. Profit target — strategy-specific capture % ───────────────────────
-  // Iron Butterfly: narrow wings → gamma risk rises fast → exit at 25%
-  // All other credit spreads: 50% (Tastyworks research, EV maximised at ~50%)
-  // Long Straddle/Strangle: DTE-aware multiple of debit (mirrors
-  //   engine.leg_builder.long_premium_target_multiple). Replaces the
-  //   historical flat 2× target which was unrealistic at short DTE.
-  // Long Call/Put: DTE-aware (same formula)
-  // Debit spreads (Bull Call, Bear Put): limited profit → 50% of spread width
+  // Profit target — same knobs as engine.pnl_targets (from config.py).
   if (isCredit) {
-    const pct     = strategy === 'IRON_BUTTERFLY' ? 0.25 : 0.50;
-    const pctLabel = strategy === 'IRON_BUTTERFLY' ? '25%' : '50%';
-    const target  = Math.round(np * pct * 10) / 10;
-    const dteStr  = dte ? ` — around day ${Math.round(dte * 0.35)}–${Math.round(dte * 0.55)}` : '';
-    const reason  = strategy === 'IRON_BUTTERFLY' ? ' (narrow wings — exit earlier)' : '';
-    rows.push({ label: 'Profit target', val: `close when ${pctLabel} of credit is captured (₹${fmt(target)}/unit retained)${dteStr}${reason}`, key: true });
+    const pct = creditCaptureFraction(strategy);
+    const pctLabel = `${Math.round(pct * 100)}%`;
+    const target = Math.round(np * pct * 10) / 10;
+    const dteStr = dte ? ` — around day ${Math.round(dte * 0.35)}–${Math.round(dte * 0.55)}` : '';
+    rows.push({
+      label: 'Profit target',
+      val: `close when ${pctLabel} of credit is captured (₹${fmt(target)}/unit retained)${dteStr}`,
+      key: true,
+    });
   } else if (isDebit) {
     const debit = Math.abs(np);
-    // DTE-aware multiplier — see engine.leg_builder.long_premium_target_multiple
-    // Defaults (config.py): base=0.50, dte_scale=14, cap=1.50.
-    const TARGET_BASE = 0.50, TARGET_DTE_SCALE = 14.0, TARGET_MAX = 1.50;
     const dteSafe = (typeof dte === 'number' && dte > 0) ? dte : 0;
-    const mult = dteSafe === 0
-      ? TARGET_BASE
-      : Math.min(TARGET_MAX, TARGET_BASE + dteSafe / TARGET_DTE_SCALE);
-    if (['LONG_STRADDLE', 'LONG_STRANGLE'].includes(strategy)) {
-      const target = Math.round(debit * mult * 10) / 10;
-      const pctLabel = `${Math.round(mult * 100)}%`;
-      rows.push({ label: 'Profit target', val: `close when position gains ₹${fmt(target)}/unit (${pctLabel} of debit, scaled to ${dteSafe} DTE)`, key: true });
-    } else if (['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(strategy)) {
-      const target50 = Math.round(debit * 0.5 * 10) / 10;
-      rows.push({ label: 'Profit target', val: `close when spread gains ₹${fmt(target50)}/unit (50% of debit paid)`, key: true });
+    if (isDebitSpreadStrategy(strategy)) {
+      const frac = debitSpreadTargetFraction();
+      const target = Math.round(debit * frac * 10) / 10;
+      rows.push({
+        label: 'Profit target',
+        val: `close when spread gains ₹${fmt(target)}/unit (${Math.round(frac * 100)}% of debit paid)`,
+        key: true,
+      });
     } else {
-      // LONG_CALL, LONG_PUT — directional, also DTE-aware
+      const mult = longPremiumTargetMult(dteSafe);
       const target = Math.round(debit * mult * 10) / 10;
       const pctLabel = `${Math.round(mult * 100)}%`;
-      rows.push({ label: 'Profit target', val: `close when position gains ₹${fmt(target)}/unit (${pctLabel} of premium, scaled to ${dteSafe} DTE)`, key: true });
+      const ofWhat = ['LONG_STRADDLE', 'LONG_STRANGLE'].includes(strategy) ? 'debit' : 'premium';
+      rows.push({
+        label: 'Profit target',
+        val: `close when position gains ₹${fmt(target)}/unit (${pctLabel} of ${ofWhat}, scaled to ${dteSafe} DTE)`,
+        key: true,
+      });
     }
   }
 
@@ -1894,18 +2189,9 @@ function renderExitPlan(s) {
   </div>`;
 }
 
-// ── Per-leg target close (must mirror renderExitPlan / leg_builder) ─────────
-function longPremiumTargetMult(dte) {
-  const TARGET_BASE = 0.50, TARGET_DTE_SCALE = 14.0, TARGET_MAX = 1.50;
-  const dteSafe = (typeof dte === 'number' && dte > 0) ? dte : 0;
-  return dteSafe === 0
-    ? TARGET_BASE
-    : Math.min(TARGET_MAX, TARGET_BASE + dteSafe / TARGET_DTE_SCALE);
-}
-
+// ── Per-leg target close (must mirror renderExitPlan / pnl_targets) ─────────
 function isDebitStrategy(strategy) {
-  return ['LONG_STRADDLE', 'LONG_STRANGLE', 'LONG_CALL', 'LONG_PUT',
-          'BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD', 'CALENDAR_SPREAD'].includes(strategy || '');
+  return isLongPremiumStrategy(strategy) || isDebitSpreadStrategy(strategy);
 }
 
 /** Credit structures with a persisted Nifty spot stop band (not MTM-only exits). */
@@ -1920,14 +2206,14 @@ function legTargetClosePrice(action, entry, strategy, dte) {
   const px = parseFloat(entry) || 0;
   if (!px) return null;
   if (action === 'SELL') {
-    const capture = strategy === 'IRON_BUTTERFLY' ? 0.25 : 0.50;
+    const capture = creditCaptureFraction(strategy);
     return Math.round(px * (1 - capture) * 100) / 100;
   }
   if (!isDebitStrategy(strategy)) {
     return null;
   }
-  if (['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(strategy)) {
-    return Math.round(px * 1.5 * 100) / 100;
+  if (isDebitSpreadStrategy(strategy)) {
+    return Math.round(px * (1 + debitSpreadTargetFraction()) * 100) / 100;
   }
   const mult = longPremiumTargetMult(dte);
   return Math.round(px * (1 + mult) * 100) / 100;
@@ -1935,13 +2221,13 @@ function legTargetClosePrice(action, entry, strategy, dte) {
 
 function legTargetCloseCaption(action, strategy, dte) {
   if (action === 'SELL') {
-    return strategy === 'IRON_BUTTERFLY' ? '25% credit capture' : '50% credit capture';
+    return `${Math.round(creditCaptureFraction(strategy) * 100)}% credit capture`;
   }
   if (!isDebitStrategy(strategy)) {
     return 'close with spread';
   }
-  if (['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(strategy)) {
-    return '50% gain on premium';
+  if (isDebitSpreadStrategy(strategy)) {
+    return `${Math.round(debitSpreadTargetFraction() * 100)}% gain on premium`;
   }
   return `${Math.round(longPremiumTargetMult(dte) * 100)}% gain on premium`;
 }
@@ -3258,7 +3544,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     });
   const summaryHtml = `
     <div class="card-head collapsible-card-head">
-      <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
+        <h3>${escapeHtml(s.trade_name || s.suggestion_id)} ${strategyGuideInfoBtn(s.strategy)}</h3>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
         ${regimePairChip(s)}
@@ -4360,8 +4646,12 @@ function renderTrade(t, expanded = true) {
         ? parseFloat(t.suggestion.net_credit) : null);
     const isCreditTrade = _netCr != null && _netCr > 0;
     const isDebitTrade  = _netCr != null && _netCr < 0;
-    const tradePct      = _tradeStrategy === 'IRON_BUTTERFLY' ? 0.25 : 0.50;
-    const tradePctLabel = _tradeStrategy === 'IRON_BUTTERFLY' ? '25%' : '50%';
+    const tradePct = isCreditTrade
+      ? creditCaptureFraction(_tradeStrategy)
+      : (isDebitSpreadStrategy(_tradeStrategy)
+        ? debitSpreadTargetFraction()
+        : longPremiumTargetMult(_tradeDte));
+    const tradePctLabel = `${Math.round(tradePct * 100)}%`;
     if (openExecLegs.length > 0) {
       const netCreditActual = t.net_credit_actual || 0;
       const totalQty = openExecLegs.reduce((a, l) => a + ((l.lots_actual || l.lots || 1) * (l.lot_size || 1)), 0) || 1;
@@ -4393,12 +4683,14 @@ function renderTrade(t, expanded = true) {
         footer = `<div class="target-exit-keep">Keep ~\u20b9${fmt(targetPct)} of the \u20b9${fmt(netCreditActual * totalQty)} total credit received</div>`;
       } else if (isDebitTrade) {
         const debit = Math.abs(_netCr);
-        const mult = longPremiumTargetMult(_tradeDte);
-        const targetGain = Math.round(debit * mult * 10) / 10;
-        footer = `<div class="target-exit-keep">Close when position gains ~\u20b9${fmt(targetGain)}/unit (${Math.round(mult * 100)}% of \u20b9${fmt(debit)} debit paid)</div>`;
+        const frac = isDebitSpreadStrategy(_tradeStrategy)
+          ? debitSpreadTargetFraction()
+          : longPremiumTargetMult(_tradeDte);
+        const targetGain = Math.round(debit * frac * 10) / 10;
+        footer = `<div class="target-exit-keep">Close when position gains ~\u20b9${fmt(targetGain)}/unit (${Math.round(frac * 100)}% of \u20b9${fmt(debit)} debit paid)</div>`;
       }
       const titleLabel = isDebitTrade
-        ? `${Math.round(longPremiumTargetMult(_tradeDte) * 100)}% debit gain target`
+        ? `${tradePctLabel} debit gain target`
         : `${tradePctLabel} credit capture`;
       targetSummaryHtml = `<div class="target-exit-box">
         <div class="target-exit-title">\u{1F3AF} Target exit (${titleLabel})</div>
@@ -4478,7 +4770,14 @@ function renderTrade(t, expanded = true) {
     : '';
   const summaryHtml = `
     <div class="card-head collapsible-card-head">
-      <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
+      <div class="card-head-title">
+        <span class="card-signal" data-trade-id="${escapeHtml(t.trade_id)}">${_signalMarkHtml(_signalKindFromFields({
+          dailyStatus: t.daily_status,
+          exitInstruction: t.exit_instruction,
+          riskNotif: t.risk_alert && t.risk_alert.notif_type,
+        }))}</span>
+        <h3>${escapeHtml(t.trade_name || t.trade_id)} ${strategyGuideInfoBtn(t.suggestion && t.suggestion.strategy)}</h3>
+      </div>
       <div class="card-head-tags">
         ${(() => {
           const ra = t.risk_alert;
@@ -4616,7 +4915,10 @@ function renderTrade(t, expanded = true) {
       <div class="close-trade-content"><div class="muted">Loading…</div></div>
     </section>` : ''}
     ${isPartial ? `<div class="supplement-panel" id="supp-${escapeHtml(t.trade_id)}" hidden></div>` : ''}`;
-  return wrapCollapsibleCard(summaryHtml, bodyHtml, { open: expanded });
+  return wrapCollapsibleCard(summaryHtml, bodyHtml, {
+    open: expanded,
+    attrs: `id="trade-card-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}" data-daily-status="${escapeHtml(t.daily_status || '')}" data-exit-instruction="${escapeHtml(t.exit_instruction || '')}" data-risk-notif="${escapeHtml((t.risk_alert && t.risk_alert.notif_type) || '')}"`,
+  });
 }
 
 // ---------------- Tab 3: History ----------------
@@ -5116,6 +5418,7 @@ function renderHistorySuggestion(s) {
       <div class="hist-card-title">
         <strong class="hist-instr">${escapeHtml(s.underlying || '')}</strong>
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
+        ${strategyGuideInfoBtn(s.strategy)}
         <span class="tag ${statusCls}">${escapeHtml(s.status || '')}</span>
         ${_qualityBadge(s.entry_quality_score)}
         ${s.expiry_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(s.expiry_type)}</span>` : ''}
@@ -5186,6 +5489,7 @@ function renderHistoryTrade(t) {
       <div class="hist-card-title">
         <strong class="hist-instr">${escapeHtml(s.underlying || t.trade_id)}</strong>
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
+        ${strategyGuideInfoBtn(s.strategy)}
         <span class="tag ${statusCls}">${escapeHtml(t.status || '')}</span>
         ${_qualityBadge(t.entry_quality_score, 'Entry quality: ')}
         ${t.position_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(t.position_type)}</span>` : ''}
@@ -5293,27 +5597,195 @@ $('#hsug-from').addEventListener('change', loadHistorySuggestions);
 $('#hsug-to').addEventListener('change', loadHistorySuggestions);
 
 // ---------------- Tab 5: Config ----------------
+function _cfgEncode(item) {
+  if (item.type === 'json') return JSON.stringify(item.value, null, 2);
+  if (item.value == null) return '';
+  return String(item.value);
+}
+
+function _cfgRead(item, input) {
+  if (item.type === 'bool') return input.checked;
+  const raw = input.value;
+  if (item.type === 'json') return JSON.parse(raw);
+  if (item.type === 'int') return parseInt(raw, 10);
+  if (item.type === 'number') return parseFloat(raw);
+  return raw;
+}
+
+function _cfgInput(item) {
+  const val = escapeHtml(_cfgEncode(item));
+  const disabled = item.locked ? ' disabled' : '';
+  if (item.type === 'bool') {
+    return `<label class="cfg-toggle"><input type="checkbox" data-cfg-input="${escapeHtml(item.key)}"${item.value ? ' checked' : ''}${disabled}> on</label>`;
+  }
+  if (item.type === 'json') {
+    return `<textarea class="cfg-json" data-cfg-input="${escapeHtml(item.key)}" rows="8" spellcheck="false"${disabled}>${val}</textarea>`;
+  }
+  const step = item.type === 'int' ? '1' : 'any';
+  const inputType = (item.type === 'int' || item.type === 'number') ? 'number' : 'text';
+  return `<input type="${inputType}" step="${step}" data-cfg-input="${escapeHtml(item.key)}" value="${val}"${disabled}>`;
+}
+
+function renderConfigPage(data) {
+  const flags = data.flags || [];
+  const groups = data.groups || [];
+  const flagRows = flags.map(f => {
+    const on = String(f.value).toLowerCase() === 'true';
+    return `<label class="cfg-flag">
+      <input type="checkbox" data-flag-key="${escapeHtml(f.key)}"${on ? ' checked' : ''}>
+      <span>
+        <strong>${escapeHtml(f.key)}</strong>
+        <span class="muted">${escapeHtml(f.description || '')}</span>
+      </span>
+    </label>`;
+  }).join('');
+
+  const groupHtml = groups.map(g => {
+    if (!g.items || !g.items.length) return '';
+    const open = g.id === 'pnl' ? ' open' : '';
+    const rows = g.items.map(item => {
+      const ov = item.overridden
+        ? `<span class="cfg-over">override</span>`
+        : `<span class="cfg-def">default</span>`;
+      const locked = item.locked
+        ? `<span class="cfg-locked-badge">locked</span>`
+        : '';
+      const restart = item.needs_restart
+        ? `<span class="cfg-restart" title="Takes effect after a process restart">restart</span>`
+        : '';
+      const reset = (item.overridden && !item.locked)
+        ? `<button type="button" class="btn btn-ghost cfg-reset" data-key="${escapeHtml(item.key)}">Reset</button>`
+        : '';
+      const save = item.locked
+        ? ''
+        : `<button type="button" class="btn btn-accent cfg-save" data-key="${escapeHtml(item.key)}">Save</button>`;
+      const defPreview = item.type === 'json'
+        ? ''
+        : `<span class="muted cfg-default">file default: ${escapeHtml(String(item.default))}</span>`;
+      return `<div class="cfg-row${item.locked ? ' cfg-locked' : ''}" data-key="${escapeHtml(item.key)}" data-group="${escapeHtml(g.id)}" data-type="${escapeHtml(item.type)}" data-locked="${item.locked ? '1' : '0'}">
+        <div class="cfg-row-head">
+          <code>${escapeHtml(item.key)}</code>
+          ${ov}${locked}${restart}
+        </div>
+        <p class="muted cfg-desc">${escapeHtml(item.description || '')}</p>
+        ${_cfgInput(item)}
+        ${defPreview}
+        <div class="cfg-row-actions">
+          ${save}
+          ${reset}
+        </div>
+      </div>`;
+    }).join('');
+    return `<details class="cfg-group"${open}>
+      <summary>${escapeHtml(g.label)} <span class="muted">(${g.items.length})</span></summary>
+      <div class="cfg-group-body">${rows}</div>
+    </details>`;
+  }).join('');
+
+  return `<div class="cfg-page">
+    <input type="search" id="cfg-filter" class="cfg-filter" placeholder="Filter keys…">
+    <p class="muted cfg-intro">Every editable knob from <code>config.py</code> is listed here. Scout, Arb, and Basis keep their own settings tabs. Secrets (API keys, passwords, tokens) are not shown. Badges marked <em>restart</em> need the matching process restarted (scheduler, WS runner, or dashboard) after Save.</p>
+    <section class="cfg-group cfg-flags">
+      <h3>Runtime switches</h3>
+      <p class="muted">Live kill / alert gates. Take effect without a restart.</p>
+      ${flagRows || '<div class="empty">No runtime flags (database unreachable).</div>'}
+    </section>
+    ${groupHtml}
+  </div>`;
+}
+
+async function _saveCfgKey(key, value) {
+  const data = await API('/api/config/' + encodeURIComponent(key), {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
+  });
+  applyPnlRules(data && data.pnl_rules);
+  return data;
+}
+
 async function loadConfig() {
   const c = $('#config-container');
-  c.className='loading'; c.textContent='Loading…';
+  c.className = 'loading'; c.textContent = 'Loading…';
   try {
     const data = await API('/api/config');
-    if (!data.config.length) {
-      c.className=''; c.innerHTML = '<div class="empty">No runtime overrides set.</div>';
-      return;
+    c.className = '';
+    c.innerHTML = renderConfigPage(data);
+    const filter = $('#cfg-filter');
+    if (filter) {
+      filter.addEventListener('input', () => {
+        const q = filter.value.trim().toLowerCase();
+        c.querySelectorAll('.cfg-row').forEach(row => {
+          const hit = !q || (row.dataset.key || '').toLowerCase().includes(q)
+            || row.textContent.toLowerCase().includes(q);
+          row.hidden = !hit;
+        });
+        c.querySelectorAll('.cfg-group').forEach(g => {
+          if (g.classList.contains('cfg-flags')) return;
+          const any = [...g.querySelectorAll('.cfg-row')].some(r => !r.hidden);
+          g.hidden = q && !any;
+        });
+      });
     }
-    c.className='';
-    c.innerHTML = `<table class="dt"><thead><tr>
-      <th>Key</th><th>Value</th><th>Default</th><th>Modified</th></tr></thead>
-      <tbody>${data.config.map(r => `<tr>
-        <td><code>${escapeHtml(r.config_key)}</code></td>
-        <td><code>${escapeHtml(r.config_value)}</code></td>
-        <td><code class="muted">${escapeHtml(r.default_value || '')}</code></td>
-        <td class="muted" style="font-size:.8rem">${escapeHtml(r.modified_at || '')}</td>
-        </tr>`).join('')}
-      </tbody></table>`;
+    c.querySelectorAll('[data-flag-key]').forEach(el => {
+      el.addEventListener('change', async () => {
+        const key = el.dataset.flagKey;
+        const prev = !el.checked;
+        try {
+          await setAppsRuntimeFlag(key, el.checked);
+          toast(`Flag ${key} = ${el.checked}`, 'ok');
+        } catch (_) {
+          el.checked = prev;
+        }
+      });
+    });
+    c.querySelectorAll('.cfg-save').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const key = btn.dataset.key;
+        const row = btn.closest('.cfg-row');
+        const input = row && row.querySelector('[data-cfg-input]');
+        if (!input || row.dataset.locked === '1') return;
+        const itemType = row.dataset.type || (input.tagName === 'TEXTAREA' ? 'json'
+          : (input.type === 'checkbox' ? 'bool'
+            : (input.type === 'number' ? 'number' : 'text')));
+        btn.disabled = true;
+        try {
+          let value;
+          if (itemType === 'bool' || input.type === 'checkbox') value = input.checked;
+          else if (itemType === 'json' || input.tagName === 'TEXTAREA') value = JSON.parse(input.value);
+          else if (itemType === 'int') value = parseInt(input.value, 10);
+          else if (itemType === 'number') value = parseFloat(input.value);
+          else value = input.value;
+          const data = await _saveCfgKey(key, value);
+          const restartNote = data && data.needs_restart ? ' — restart required' : '';
+          toast(`Saved ${key}${restartNote}`, 'ok');
+          loadConfig();
+        } catch (e) {
+          toast(`Save failed: ${e.message}`, 'err');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+    c.querySelectorAll('.cfg-reset').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const key = btn.dataset.key;
+        if (!window.confirm(`Reset ${key} to the config.py default?`)) return;
+        btn.disabled = true;
+        try {
+          const data = await API('/api/config/' + encodeURIComponent(key), { method: 'DELETE' });
+          applyPnlRules(data && data.pnl_rules);
+          toast(`Reset ${key}`, 'ok');
+          loadConfig();
+        } catch (e) {
+          toast(`Reset failed: ${e.message}`, 'err');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
   } catch (e) {
-    c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
+    c.className = '';
+    c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -5365,6 +5837,12 @@ function _qualityBadge(storedScore, prefix = '', detail = null) {
 let _liveMTMSource = null;
 
 function _applyMtmEvent(m) {
+  if (m && m.trade_id && m.trade_name) {
+    _lastMtmByTrade[m.trade_id] = {
+      ...(_lastMtmByTrade[m.trade_id] || {}),
+      trade_name: m.trade_name,
+    };
+  }
   _updateCurrentPnlBadge(m.trade_id, m.mtm, m.as_of, true);
   _updateLiveProfitLevels(m.trade_id, m);
 

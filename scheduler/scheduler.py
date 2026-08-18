@@ -232,6 +232,11 @@ def _run_job(
     db = SQLServerConnection()
     try:
         db.connect()
+        try:
+            from database.config_overlay import apply_config_overrides
+            apply_config_overrides(db)
+        except Exception:
+            logger.debug("config overlay before job skipped", exc_info=True)
         # Phase 3 — #6: data-based freshness gate. Independent of the
         # in-process `_LAST_STATUS` dict (which is empty after a process
         # restart). For each upstream we run a registered probe against

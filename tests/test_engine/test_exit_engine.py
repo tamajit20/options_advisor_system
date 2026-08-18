@@ -48,6 +48,36 @@ class TestExitEngine:
         )
         assert result.decision == "TAKE_PROFIT"
 
+    def test_calendar_take_profit_at_debit_multiple(self):
+        """CALENDAR TAKE_PROFIT uses DTE-aware % of debit, not % of max_profit."""
+        legs = [
+            {"action": "SELL", "strike": 56000.0, "option_type": "CE",
+             "fill_price": 200.0, "lots": 1, "lot_size": 35},
+            {"action": "BUY", "strike": 56000.0, "option_type": "CE",
+             "fill_price": 500.0, "lots": 1, "lot_size": 35},
+        ]
+        entry_debit = -(500 - 200) * 35  # -10500
+        # Far mid rich, near cheap → large MTM gain vs debit.
+        chain = [
+            {"strike": 56000.0, "option_type": "CE", "mid_price": 50.0},
+            {"strike": 56000.0, "option_type": "CE", "mid_price": 850.0},
+        ]
+        result = evaluate_exit(
+            trade_id="T-CAL-TP",
+            legs=legs,
+            current_chain=chain,
+            entry_net_credit=entry_debit,
+            max_profit_rs=8000.0,
+            max_loss_rs=10500.0,
+            sl_level_per_share=None,
+            days_to_expiry=7,
+            strategy="CALENDAR_SPREAD",
+        )
+        # Close: buy back short @50, sell long @850 → +28000; PnL = 17500
+        # 7 DTE target = 100% of ₹10,500 debit.
+        assert result.decision == "TAKE_PROFIT"
+        assert "debit" in result.reason.lower()
+
     def test_sl_hit_when_loss_exceeds_50pct_max_loss(self):
         # Spot rallied: short call now worth 100, long worth 50 → close cost = (100-50)*75 = 3750
         # PnL = 2250 - 3750 = -1500. SL = 50% × 5250 = 2625. -1500 not yet at SL.

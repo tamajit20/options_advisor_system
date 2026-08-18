@@ -1337,6 +1337,15 @@ class ConfigRepo:
         """
         self.db.execute(sql, [key, v_json, d_json, category, description, modified_by, modified_by]).close()
 
+    def delete(self, key: str) -> bool:
+        """Remove a runtime override. Returns True if a row was deleted."""
+        cur = self.db.execute(
+            "DELETE FROM options_config WHERE config_key = ?", [key]
+        )
+        n = int(getattr(cur, "rowcount", 0) or 0)
+        cur.close()
+        return n > 0
+
 
 # ---------------------------------------------------------------------------
 # Notifications

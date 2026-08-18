@@ -391,6 +391,12 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
         TradeLevelEventRepo(db).insert(payload)
         db.commit()
 
+    from database.config_overlay import apply_strategy_overrides
+    try:
+        apply_strategy_overrides(db)
+    except Exception:
+        logger.exception("config overlay at scheduler start failed")
+
     live_risk_monitor = LiveRiskMonitor(
         notifier=build_notifier(db, provider="zerodha"),
         snapshot_loader=make_db_risk_snapshot_loader(db),
@@ -401,6 +407,7 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
         mtm_snapshot_persister=_persist_mtm_snapshot,
         level_event_persister=_persist_level_event,
         events_repo=EventCalendarRepo(db),
+        config_reloader=lambda: apply_strategy_overrides(db),
     )
 
     monitor = IntradayMonitor(

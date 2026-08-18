@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 
 from flask import Flask, has_request_context, jsonify, redirect, render_template, request
@@ -52,12 +52,22 @@ from database.models import (
     VixRepo,
 )
 from engine.exit_pricing import build_close_suggestion, unique_leg_expiries
+from engine.pnl_targets import pnl_rules_public
 from lifecycle.eod_gap_replay import replay_gap_for_trade
 from lifecycle.resuggestion_engine import generate_resuggestion
 from lifecycle.trade_executor import close_trade_with_fills, mark_executed, supplement_trade
 from utils import market_state_at, now_ist, today_ist
 
 logger = logging.getLogger(__name__)
+
+
+def _pnl_rules_payload():
+    """STRATEGY_CONFIG slice for Exit Plan / live P&L (no DB)."""
+    try:
+        return pnl_rules_public()
+    except Exception:
+        logger.debug("pnl_rules payload failed", exc_info=True)
+        return {}
 
 
 def public_base_url() -> str:
@@ -814,8 +824,190 @@ def _notif_row_simple(r: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+_SL_SIGNAL_STATUSES = frozenset({"SL_HIT", "LOSS_LIMIT_HIT"})
+_THESIS_SIGNAL_STATUSES = frozenset({"THESIS_FAIL"})
+_PROFIT_SIGNAL_STATUSES = frozenset({"TAKE_PROFIT", "TARGET_HIT", "TARGET_LOCKED"})
+_SL_RISK_TYPES = frozenset({"LOSS_LIMIT_HIT", "SL_TRIGGER"})
+_PROFIT_RISK_TYPES = frozenset({"TARGET_HIT", "TARGET_LOCKED"})
+_EXIT_RISK_TYPES = frozenset({"PROFIT_FLOOR_HIT"})
+_MTM_FLAT_RS = 0.5
+
+
+def _live_mtm_by_trade() -> Dict[str, Dict[str, Any]]:
+    """Latest live MTM snapshot written by LiveRiskMonitor. Fail-open."""
+    try:
+        from config import STRATEGY_CONFIG
+        path = (
+            (STRATEGY_CONFIG.get("live_risk_monitor") or {}).get("mtm_state_path")
+            or "data/live_mtm_state.json"
+        )
+        import json as _json
+        import os as _os
+        if not _os.path.exists(path):
+            return {}
+        with open(path, encoding="utf-8") as fh:
+            state = _json.load(fh) or {}
+        trades = state.get("trades") or {}
+        if not isinstance(trades, dict):
+            return {}
+        out: Dict[str, Dict[str, Any]] = {}
+        for tid, payload in trades.items():
+            if not tid or not isinstance(payload, dict):
+                continue
+            mtm = payload.get("mtm")
+            if mtm is None:
+                continue
+            try:
+                out[str(tid)] = {
+                    "mtm": float(mtm),
+                    "trade_name": payload.get("trade_name"),
+                }
+            except (TypeError, ValueError):
+                continue
+        return out
+    except Exception:
+        logger.debug("system-status: live MTM snapshot read failed", exc_info=True)
+        return {}
+
+
+def _signal_kind_for_open_trade(
+    row: Dict[str, Any],
+    *,
+    risk_type: Optional[str] = None,
+    mtm: Optional[float] = None,
+) -> Optional[str]:
+    """Map an open trade row to a header signal kind, or None if quiet.
+
+    ``risk_type`` is today's latest live-risk notification (TARGET_HIT etc.)
+    so the rail lights during the session, not only after the EOD exit job.
+    Loss still wins over profit if both are present.
+    Action kinds (SL / thesis / take-profit / close pending) beat MTM-only
+    in-loss / in-profit status.
+    """
+    daily = (row.get("daily_status") or "").upper()
+    exit_txt = (row.get("exit_instruction") or "").lower()
+    risk = (risk_type or "").upper()
+    if daily in _SL_SIGNAL_STATUSES or "sl_hit" in exit_txt or risk in _SL_RISK_TYPES:
+        return "sl"
+    if daily in _THESIS_SIGNAL_STATUSES or "thesis_fail" in exit_txt:
+        return "thesis"
+    if (
+        daily in _PROFIT_SIGNAL_STATUSES
+        or "take_profit" in exit_txt
+        or "take profit" in exit_txt
+        or "target reached" in exit_txt
+        or risk in _PROFIT_RISK_TYPES
+    ):
+        return "profit"
+    if (
+        "close pending" in exit_txt
+        or daily in {"EXPIRE", "EXIT_AT_OPEN"}
+        or risk in _EXIT_RISK_TYPES
+    ):
+        return "exit"
+    if mtm is None:
+        return None
+    try:
+        val = float(mtm)
+    except (TypeError, ValueError):
+        return None
+    if val < -_MTM_FLAT_RS:
+        return "in_loss"
+    if val > _MTM_FLAT_RS:
+        return "in_profit"
+    return None
+
+
+def _active_trade_signals(db: SQLServerConnection) -> List[Dict[str, Any]]:
+    """Open trades that still need operator action (SL / thesis / profit / close)
+    plus in-loss / in-profit status from live MTM when no action applies.
+
+    Keyed off live trade state, not unread notification count — marking an
+    alert read must not hide a trade that is still in SL_HIT.
+    """
+    try:
+        rows = TradeRepo(db).open_trades() or []
+        if not isinstance(rows, (list, tuple)):
+            return []
+    except Exception:
+        logger.debug("system-status: open_trades read failed", exc_info=True)
+        return []
+    risk_by_trade = _today_risk_type_by_trade(
+        db,
+        [r.get("trade_id") for r in rows if isinstance(r, dict) and r.get("trade_id")],
+    )
+    mtm_by_trade = _live_mtm_by_trade()
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        tid = row.get("trade_id")
+        mtm_rec = mtm_by_trade.get(str(tid) if tid else "") or {}
+        kind = _signal_kind_for_open_trade(
+            row,
+            risk_type=risk_by_trade.get(tid),
+            mtm=mtm_rec.get("mtm"),
+        )
+        if not kind:
+            continue
+        out.append({
+            "kind": kind,
+            "trade_id": tid,
+            "trade_name": row.get("trade_name") or mtm_rec.get("trade_name"),
+            "daily_status": row.get("daily_status"),
+        })
+    return out
+
+
+def _today_risk_type_by_trade(
+    db: SQLServerConnection,
+    trade_ids: List[str],
+) -> Dict[str, str]:
+    """Latest today's live-risk notif_type per open trade. Fail-open."""
+    ids = [tid for tid in trade_ids if tid]
+    if not ids:
+        return {}
+    try:
+        today_start = datetime.combine(now_ist().date(), datetime.min.time())
+        ph = ",".join("?" for _ in ids)
+        rows = db.fetch_all(
+            f"""
+            SELECT related_trade_id, notif_type
+            FROM options_notifications
+            WHERE related_trade_id IN ({ph})
+              AND created_at >= ?
+              AND notif_type IN (
+                    'TARGET_HIT', 'TARGET_LOCKED',
+                    'LOSS_LIMIT_HIT', 'SL_TRIGGER',
+                    'PROFIT_FLOOR_HIT'
+              )
+            ORDER BY created_at DESC
+            """,
+            [*ids, today_start],
+        ) or []
+        if not isinstance(rows, (list, tuple)):
+            return {}
+    except Exception:
+        logger.debug("system-status: today risk alerts read failed", exc_info=True)
+        return {}
+    latest: Dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        tid = row.get("related_trade_id")
+        ntype = row.get("notif_type")
+        if tid and ntype and tid not in latest:
+            latest[str(tid)] = str(ntype)
+    return latest
+
+
 def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
     """Runtime flags + scheduler summary for global banners."""
+    try:
+        from database.config_overlay import apply_strategy_overrides
+        apply_strategy_overrides(db)
+    except Exception:
+        logger.debug("system-status: config overlay skipped", exc_info=True)
     from database.runtime_flags import (
         FLAG_ARB_APP_ENABLED,
         FLAG_BASIS_APP_ENABLED,
@@ -862,6 +1054,8 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
         "arb_app_enabled":         arb_app_enabled,
         "basis_app_enabled":       basis_app_enabled,
         "scheduler_running":       sch_running,
+        "trade_signals":           _active_trade_signals(db),
+        "pnl_rules":               _pnl_rules_payload(),
     }
 
 
@@ -1026,7 +1220,8 @@ def create_app() -> Flask:
                                theme=DASHBOARD_CONFIG["theme"],
                                port=DASHBOARD_CONFIG["port"],
                                zerodha_callback_url=zerodha_callback_url(),
-                               cache_bust=int(time.time()))
+                               cache_bust=int(time.time()),
+                               pnl_rules=_pnl_rules_payload())
 
     # ---------- Theme tokens ----------
     @app.route("/api/theme")
@@ -1981,7 +2176,16 @@ def create_app() -> Flask:
     @app.route("/api/config")
     @_with_db
     def api_config_list(db: SQLServerConnection):
-        return jsonify({"config": [_row(r) for r in ConfigRepo(db).get_all()]})
+        from database.config_overlay import apply_strategy_overrides, catalog_payload
+        try:
+            apply_strategy_overrides(db)
+        except Exception:
+            logger.debug("config overlay before catalog skipped", exc_info=True)
+        payload = catalog_payload(db)
+        payload["config"] = [
+            _row(r) for r in (payload.get("config") or []) if isinstance(r, dict)
+        ]
+        return jsonify(payload)
 
     @app.route("/api/config/<key>", methods=["GET"])
     @_with_db
@@ -1991,17 +2195,74 @@ def create_app() -> Flask:
     @app.route("/api/config/<key>", methods=["PUT"])
     @_with_db
     def api_config_set(db: SQLServerConnection, key: str):
+        from database.config_overlay import (
+            apply_config_overrides, coerce_value, default_value_for, resolve_spec,
+        )
         payload = request.get_json(silent=True) or {}
-        value = payload.get("value")
-        if value is None:
+        if "value" not in payload:
             return jsonify({"error": "Missing 'value'"}), 400
+        try:
+            spec = resolve_spec(key)
+        except KeyError:
+            return jsonify({"error": f"Unknown config key: {key}"}), 400
+        existing = next(
+            (r for r in (ConfigRepo(db).get_all() or [])
+             if isinstance(r, dict) and r.get("config_key") == key),
+            None,
+        )
+        if existing and existing.get("is_locked"):
+            return jsonify({"error": f"Config key is locked: {key}"}), 403
+        try:
+            value = coerce_value(key, payload.get("value"))
+        except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            return jsonify({"error": str(exc)}), 400
         ConfigRepo(db).set(
             key=key, value=value,
-            category=payload.get("category"),
+            category=payload.get("category") or spec.group,
             description=payload.get("description"),
+            default_value=default_value_for(key),
         )
         db.commit()
-        return jsonify({"ok": True})
+        try:
+            apply_config_overrides(db)
+        except Exception:
+            logger.exception("config overlay after save failed")
+        return jsonify({
+            "ok": True,
+            "key": key,
+            "value": value,
+            "needs_restart": spec.needs_restart,
+            "pnl_rules": _pnl_rules_payload(),
+        })
+
+    @app.route("/api/config/<key>", methods=["DELETE"])
+    @_with_db
+    def api_config_reset(db: SQLServerConnection, key: str):
+        from database.config_overlay import apply_config_overrides, default_value_for, resolve_spec
+        try:
+            spec = resolve_spec(key)
+        except KeyError:
+            return jsonify({"error": f"Unknown config key: {key}"}), 400
+        existing = next(
+            (r for r in (ConfigRepo(db).get_all() or [])
+             if isinstance(r, dict) and r.get("config_key") == key),
+            None,
+        )
+        if existing and existing.get("is_locked"):
+            return jsonify({"error": f"Config key is locked: {key}"}), 403
+        ConfigRepo(db).delete(key)
+        db.commit()
+        try:
+            apply_config_overrides(db)
+        except Exception:
+            logger.exception("config overlay after reset failed")
+        return jsonify({
+            "ok": True,
+            "key": key,
+            "value": default_value_for(key),
+            "needs_restart": spec.needs_restart,
+            "pnl_rules": _pnl_rules_payload(),
+        })
 
     # ---------- Notifications ----------
     @app.route("/api/notifications")

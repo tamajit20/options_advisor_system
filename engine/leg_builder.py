@@ -20,6 +20,7 @@ from typing import List, Mapping, Optional, Sequence
 from contracts import SuggestionLeg
 from engine.iv_calculator import black_scholes_delta
 from config import STRATEGY_CONFIG
+from engine.pnl_targets import long_premium_target_multiple  # re-export
 
 
 # ---------------------------------------------------------------------------
@@ -703,34 +704,3 @@ def max_profit_loss(legs: Sequence[SuggestionLeg], strategy: str) -> tuple[float
         max_p = near_leg.suggested_price if near_leg else debit * 0.5
         return max_p, debit
     return 0.0, 0.0
-
-
-# ---------------------------------------------------------------------------
-# Profit target — DTE-aware multiple of debit paid (long-premium strategies)
-# ---------------------------------------------------------------------------
-def long_premium_target_multiple(dte: int) -> float:
-    """Return the profit-target multiple for a long-premium structure given DTE.
-
-    The historical UI used a flat ``2× debit`` target for long straddles /
-    strangles, which is unrealistic at short DTE: theta decay makes 2× a
-    low-probability outcome that encourages users to over-hold.
-
-    The new formula scales with time-to-expiry:
-
-        multiple = base + dte / dte_scale,   capped at max
-
-    With defaults (``base=0.50``, ``dte_scale=14``, ``max=1.50``):
-
-        DTE  =  3  →  0.71×   (71% of debit)
-        DTE  =  7  →  1.00×   (100% — was hard-coded 2×)
-        DTE  = 14  →  1.50×   (150% — capped)
-        DTE  = 30  →  1.50×   (capped)
-
-    All three knobs are configurable via ``STRATEGY_CONFIG``.
-    """
-    base      = STRATEGY_CONFIG.get("long_premium_target_base",      0.50)
-    dte_scale = STRATEGY_CONFIG.get("long_premium_target_dte_scale", 14.0)
-    cap       = STRATEGY_CONFIG.get("long_premium_target_max",       1.50)
-    if dte <= 0 or dte_scale <= 0:
-        return float(base)
-    return float(min(cap, base + dte / dte_scale))

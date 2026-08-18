@@ -15,7 +15,7 @@ Decision codes:
     EXIT_TOMORROW    — DTE ≤ 1, close at next open
     SL_HIT           — current loss ≥ SL level
     EXPIRE           — DTE = 0
-    TAKE_PROFIT      — current profit ≥ take_profit_fraction × max_profit (strategy-aware)
+    TAKE_PROFIT      — current profit ≥ engine.pnl_targets (Exit Plan / live TARGET_HIT)
     TIME_DECAY_DONE  — DTE ≤ time_decay_exit_dte for credit spread; theta extracted, gamma risk
     THESIS_FAIL      — long premium near expiry, still losing; catalyst window closed
 """
@@ -27,6 +27,7 @@ from typing import Mapping, Sequence
 
 from config import STRATEGY_CONFIG
 from contracts import ExitDecision
+from engine.pnl_targets import take_profit_hit
 from engine.sl_threshold import effective_sl_rs
 from utils import now_ist
 
@@ -82,15 +83,18 @@ def evaluate_exit(
     # entry_net_credit is positive for credit strategies; current_value is what we'd net if we closed.
     current_pnl = entry_net_credit + current_value
 
-    # Take profit — strategy-aware (Phase 2)
-    tp_overrides = STRATEGY_CONFIG.get("strategy_take_profit_fraction", {}) or {}
-    tp_fraction = float(tp_overrides.get(strategy, STRATEGY_CONFIG["take_profit_fraction"]))
-    if max_profit_rs > 0 and current_pnl >= tp_fraction * max_profit_rs:
+    # Take profit — same rupee target as Exit Plan / live TARGET_HIT.
+    tp_hit, tp_reason = take_profit_hit(
+        strategy=strategy,
+        dte=days_to_expiry,
+        current_pnl=current_pnl,
+        max_profit_rs=max_profit_rs,
+        entry_net_credit=entry_net_credit,
+    )
+    if tp_hit:
         return ExitDecision(
             trade_id=trade_id, decision="TAKE_PROFIT",
-            reason=f"Captured ≥{tp_fraction*100:.0f}% of max profit "
-                   f"(₹{current_pnl:.0f} of ₹{max_profit_rs:.0f})",
-            as_of=as_of,
+            reason=tp_reason, as_of=as_of,
         )
 
     # SL hit — per-strategy min(fraction × max_loss, absolute_cap_rs).

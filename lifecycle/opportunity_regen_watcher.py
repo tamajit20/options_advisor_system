@@ -121,21 +121,9 @@ class OpportunityRegenWatcher:
         self._notifier = notifier
         self._bus = event_bus
         self._clock = clock
-        self._vix_threshold = float(
-            vix_threshold_pct
-            if vix_threshold_pct is not None
-            else STRATEGY_CONFIG.get("regen_vix_pct_threshold", 5.0)
-        )
-        self._spot_threshold = float(
-            spot_threshold_pct
-            if spot_threshold_pct is not None
-            else STRATEGY_CONFIG.get("regen_spot_pct_threshold", 0.7)
-        )
-        self._iv_threshold = float(
-            iv_threshold_vol_points
-            if iv_threshold_vol_points is not None
-            else STRATEGY_CONFIG.get("regen_iv_pct_threshold", 5.0)
-        )
+        self._vix_override = vix_threshold_pct
+        self._spot_override = spot_threshold_pct
+        self._iv_override = iv_threshold_vol_points
         self._options_underlyings = options_underlyings()
         if self._vix_threshold <= 0 or self._spot_threshold <= 0:
             raise ValueError("thresholds must be positive percentages")
@@ -145,6 +133,24 @@ class OpportunityRegenWatcher:
         self._state = _Baselines()
         self._unsub: Optional[Callable[[], None]] = None
         self._started = False
+
+    @property
+    def _vix_threshold(self) -> float:
+        if self._vix_override is not None:
+            return float(self._vix_override)
+        return float(STRATEGY_CONFIG.get("regen_vix_pct_threshold", 5.0))
+
+    @property
+    def _spot_threshold(self) -> float:
+        if self._spot_override is not None:
+            return float(self._spot_override)
+        return float(STRATEGY_CONFIG.get("regen_spot_pct_threshold", 0.7))
+
+    @property
+    def _iv_threshold(self) -> float:
+        if self._iv_override is not None:
+            return float(self._iv_override)
+        return float(STRATEGY_CONFIG.get("regen_iv_pct_threshold", 5.0))
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -195,6 +201,7 @@ class OpportunityRegenWatcher:
     def _on_iv_locked(self, symbol: str, iv_pct: float) -> None:
         if not symbol or iv_pct <= 0:
             return
+        self._options_underlyings = options_underlyings()
         sym = str(symbol).upper()
         if sym not in self._options_underlyings:
             return
@@ -253,6 +260,7 @@ class OpportunityRegenWatcher:
         symbol = str(getattr(quote, "symbol", "") or "").upper()
         if not symbol:
             return
+        self._options_underlyings = options_underlyings()
         if symbol != _VIX_SYMBOL and symbol not in self._options_underlyings:
             return
 

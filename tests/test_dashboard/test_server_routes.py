@@ -34,6 +34,13 @@ class TestIndexRoute:
     def test_index_renders_html(self, client):
         resp = client.get("/")
         assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert "window.__PNL_RULES__" in html
+        assert "window.__CACHE_BUST__" in html
+        assert "long_premium_target_base" in html
+        assert "CALENDAR_SPREAD" in html
+        assert "strategy_guide.js" in html
+        assert 'data-tab="learn"' in html
 
 
 class TestHealth:
@@ -434,6 +441,18 @@ class TestConfigRoutes:
         mocker.patch("dashboard.server.ConfigRepo.get_all", return_value=[])
         resp = client.get("/api/config")
         assert resp.status_code == 200
+        body = resp.get_json()
+        assert "groups" in body
+        pnl = next(g for g in body["groups"] if g["id"] == "pnl")
+        keys = {i["key"] for i in pnl["items"]}
+        assert "long_premium_target_base" in keys
+        assert "strategy_sl_limits" in keys
+        assert "flags" in body
+        charges = next(g for g in body["groups"] if g["id"] == "charges")
+        charge_keys = {i["key"] for i in charges["items"]}
+        assert "zerodha_charges.gst_pct" in charge_keys
+        scheduler = next(g for g in body["groups"] if g["id"] == "scheduler")
+        assert any(i["key"] == "scheduler.jobs" for i in scheduler["items"])
 
     def test_get(self, client, mocker):
         mocker.patch("dashboard.server.ConfigRepo.get", return_value="x")
@@ -449,10 +468,41 @@ class TestConfigRoutes:
 
     def test_set_ok(self, client, mocker):
         mocker.patch("dashboard.server.ConfigRepo.set")
-        resp = client.put("/api/config/foo",
-                           data=json.dumps({"value": "bar"}),
+        mocker.patch("dashboard.server.ConfigRepo.get_all", return_value=[])
+        mocker.patch("database.config_overlay.apply_config_overrides")
+        resp = client.put("/api/config/take_profit_fraction",
+                           data=json.dumps({"value": 0.8}),
                            content_type="application/json")
         assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert body["key"] == "take_profit_fraction"
+
+    def test_set_namespaced_key(self, client, mocker):
+        mocker.patch("dashboard.server.ConfigRepo.set")
+        mocker.patch("dashboard.server.ConfigRepo.get_all", return_value=[])
+        mocker.patch("database.config_overlay.apply_config_overrides")
+        resp = client.put("/api/config/zerodha_charges.gst_pct",
+                           data=json.dumps({"value": 0.18}),
+                           content_type="application/json")
+        assert resp.status_code == 200
+        assert resp.get_json()["key"] == "zerodha_charges.gst_pct"
+
+    def test_set_locked_key(self, client, mocker):
+        mocker.patch("dashboard.server.ConfigRepo.get_all", return_value=[{
+            "config_key": "take_profit_fraction",
+            "is_locked": 1,
+        }])
+        resp = client.put("/api/config/take_profit_fraction",
+                           data=json.dumps({"value": 0.8}),
+                           content_type="application/json")
+        assert resp.status_code == 403
+
+    def test_set_unknown_key(self, client):
+        resp = client.put("/api/config/not_a_real_key",
+                           data=json.dumps({"value": 1}),
+                           content_type="application/json")
+        assert resp.status_code == 400
 
 
 class TestNotifications:

@@ -18,6 +18,7 @@ Boundary: this module imports ONLY from the standard library.
 
 from __future__ import annotations
 
+import copy
 import os
 from datetime import time as _time
 
@@ -506,6 +507,19 @@ STRATEGY_CONFIG = {
     "long_premium_target_base": 0.50,
     "long_premium_target_dte_scale": 14.0,
     "long_premium_target_max": 1.50,
+    # Strategies that use the DTE-aware debit multiple above (Exit Plan,
+    # EOD TAKE_PROFIT, and live TARGET_HIT all read this same list).
+    "long_premium_target_strategies": [
+        "LONG_STRADDLE", "LONG_STRANGLE", "LONG_CALL", "LONG_PUT",
+        "CALENDAR_SPREAD",
+    ],
+
+    # Defined-risk debit spreads: take profit at this fraction of debit paid
+    # (not of theoretical max profit). Same number in Exit Plan and alerts.
+    "debit_spread_target_fraction": 0.50,
+    "debit_spread_target_strategies": [
+        "BULL_CALL_SPREAD", "BEAR_PUT_SPREAD",
+    ],
 
     # FII net futures positioning (long − short contracts) threshold
     # FII position beyond this magnitude against the trend triggers a soft-fail.
@@ -761,13 +775,12 @@ STRATEGY_CONFIG = {
     # Legacy fallback only — prefer strategy_sl_limits above.
     "stop_loss_fraction": 0.50,
 
-    # Take-profit threshold for exit engine (fraction of max profit)
+    # Credit-spread take-profit (fraction of max profit ≈ fraction of credit
+    # captured). Used by Exit Plan, EOD TAKE_PROFIT, and live TARGET_HIT.
     "take_profit_fraction": 0.80,   # default fallback when strategy not in override map
 
-    # Strategy-aware take-profit overrides (Phase 2)
-    # IC / BPS / BCS — close at 50% credit captured (tastytrade convention; gamma risk dominates after).
-    # IRON_BUTTERFLY  — ATM short tends to give back profits fast; book at 75%.
-    # Debit / naked — keep default (0.80) so directional plays run.
+    # IC / BPS / BCS — close at 50% credit captured (tastytrade convention).
+    # IRON_BUTTERFLY  — ATM short gives back fast; book at 75% of credit.
     "strategy_take_profit_fraction": {
         "IRON_CONDOR":      0.50,
         "BULL_PUT_SPREAD":  0.50,
@@ -798,9 +811,10 @@ STRATEGY_CONFIG = {
     #   * LOSS_LIMIT_HIT — when current_pnl <= -effective_sl_rs(strategy, max_loss)
     #   * SHORT_LEG_STRESS — short leg premium >= intraday_sl_multiplier × entry
     #   * PROFIT_FLOOR_SET / PROFIT_FLOOR_HIT — trailing profit-lock steps
-    #   * TARGET_HIT  — when current_pnl > 0 and >= live_target_fraction × max_profit
-    # Stricter than EOD take-profit (0.5) because intraday wiggle can briefly
-    # cross 0.5 and reverse; 0.7 leaves room before alerting the user.
+    #   * TARGET_HIT  — same rupee target as Exit Plan / EOD TAKE_PROFIT
+    #     (see engine.pnl_targets; longs use DTE-aware debit multiple,
+    #     debit spreads use debit_spread_target_fraction, credits use
+    #     strategy_take_profit_fraction).
     # Re-fires every cooldown_minutes while the trade remains in breach so
     # the user keeps getting reminded; alerts stop the moment the trade
     # leaves ACTIVE status (user closed it).
@@ -821,11 +835,12 @@ STRATEGY_CONFIG = {
         # reaches this fraction of the effective SL threshold (not max loss).
         # e.g. 0.70 with ₹7.5k SL → warn at ~₹5.25k loss.
         "pre_breach_fraction": 0.70,
-        # DTE-aware target tightening: at low DTE we tighten the target so
-        # we don't sit through gamma; at high DTE we let theta run.
-        # Linear interpolation between the two endpoints (clamped).
-        "target_fraction_at_min_dte": 0.50,   # at DTE <= target_min_dte
-        "target_fraction_at_max_dte": 0.80,   # at DTE >= target_max_dte
+        # DTE interpolation used to overlay a second live target. TARGET_HIT
+        # now follows engine.pnl_targets (same number as Exit Plan / EOD).
+        # These knobs are kept so existing deployments don't error on unknown
+        # keys; they no longer change when TARGET_HIT fires.
+        "target_fraction_at_min_dte": 0.50,
+        "target_fraction_at_max_dte": 0.80,
         "target_min_dte": 3,
         "target_max_dte": 15,
         # Spot-based SL: when the underlying spot crosses
@@ -1241,3 +1256,17 @@ def _validate() -> None:
 
 
 _validate()
+
+# Frozen file defaults — DB overlays mutate the live dicts in place.
+STRATEGY_CONFIG_DEFAULTS = copy.deepcopy(STRATEGY_CONFIG)
+SCHEDULER_CONFIG_DEFAULTS = copy.deepcopy(SCHEDULER_CONFIG)
+ZERODHA_CONFIG_DEFAULTS = copy.deepcopy(ZERODHA_CONFIG)
+ZERODHA_EQUITY_INTRADAY_CONFIG_DEFAULTS = copy.deepcopy(ZERODHA_EQUITY_INTRADAY_CONFIG)
+SIMULATION_CONFIG_DEFAULTS = copy.deepcopy(SIMULATION_CONFIG)
+DASHBOARD_CONFIG_DEFAULTS = copy.deepcopy(DASHBOARD_CONFIG)
+ALERTS_CONFIG_DEFAULTS = copy.deepcopy(ALERTS_CONFIG)
+RETENTION_CONFIG_DEFAULTS = copy.deepcopy(RETENTION_CONFIG)
+LOGGING_CONFIG_DEFAULTS = copy.deepcopy(LOGGING_CONFIG)
+EVENTS_CONFIG_DEFAULTS = copy.deepcopy(EVENTS_CONFIG)
+PROVIDERS_CONFIG_DEFAULTS = copy.deepcopy(PROVIDERS_CONFIG)
+ZERODHA_API_CONFIG_DEFAULTS = copy.deepcopy(ZERODHA_API_CONFIG)

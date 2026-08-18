@@ -888,6 +888,86 @@ class TestApiMarkExecuted:
         assert mark.call_args.kwargs.get("skip_execution_gate") is True
 
 
+class TestTradeSignalKind:
+    def test_sl_hit_daily_status(self):
+        assert server._signal_kind_for_open_trade({"daily_status": "SL_HIT"}) == "sl"
+
+    def test_loss_limit_is_sl(self):
+        assert server._signal_kind_for_open_trade({"daily_status": "LOSS_LIMIT_HIT"}) == "sl"
+
+    def test_thesis_fail(self):
+        assert server._signal_kind_for_open_trade({"daily_status": "THESIS_FAIL"}) == "thesis"
+
+    def test_exit_instruction_sl_hit(self):
+        assert server._signal_kind_for_open_trade({
+            "daily_status": "OPEN",
+            "exit_instruction": "SL_HIT — close pending",
+        }) == "sl"
+
+    def test_take_profit_daily_status(self):
+        assert server._signal_kind_for_open_trade({"daily_status": "TAKE_PROFIT"}) == "profit"
+
+    def test_target_hit_beats_generic_close_pending(self):
+        assert server._signal_kind_for_open_trade({
+            "daily_status": "TAKE_PROFIT",
+            "exit_instruction": "TAKE_PROFIT — close pending",
+        }) == "profit"
+
+    def test_live_target_hit_risk_type(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "OPEN", "exit_instruction": None},
+            risk_type="TARGET_HIT",
+        ) == "profit"
+
+    def test_loss_beats_profit_when_both_present(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "TAKE_PROFIT"},
+            risk_type="LOSS_LIMIT_HIT",
+        ) == "sl"
+
+    def test_close_pending_without_sl(self):
+        assert server._signal_kind_for_open_trade({
+            "daily_status": "OPEN",
+            "exit_instruction": "Close pending — target locked",
+        }) == "exit"
+
+    def test_quiet_open_trade(self):
+        assert server._signal_kind_for_open_trade({
+            "daily_status": "OPEN",
+            "exit_instruction": None,
+        }) is None
+
+    def test_in_loss_when_mtm_negative_without_sl(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "OPEN", "exit_instruction": None},
+            mtm=-120.0,
+        ) == "in_loss"
+
+    def test_in_profit_when_mtm_positive_without_target(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "OPEN", "exit_instruction": None},
+            mtm=80.0,
+        ) == "in_profit"
+
+    def test_flat_mtm_stays_quiet(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "OPEN"},
+            mtm=0.2,
+        ) is None
+
+    def test_sl_beats_mtm_status(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "SL_HIT"},
+            mtm=-50.0,
+        ) == "sl"
+
+    def test_take_profit_beats_mtm_status(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "TAKE_PROFIT"},
+            mtm=400.0,
+        ) == "profit"
+
+
 class TestApiSystemStatus:
     def test_returns_status_keys(self, client, mocker):
         # Stub RuntimeFlagsRepo to avoid touching the DB
@@ -906,6 +986,107 @@ class TestApiSystemStatus:
         assert body["kill_switch"] is False
         assert body["trade_execution_enabled"] is True
         assert "scheduler_running" in body
+        assert "trade_signals" in body
+        assert body["trade_signals"] == []
+        assert "pnl_rules" in body
+        rules = body["pnl_rules"]
+        assert "strategy_sl_limits" in rules
+        assert "long_premium_target_base" in rules
+        assert rules["strategy_take_profit_fraction"]["IRON_BUTTERFLY"] == pytest.approx(0.75)
+
+    def test_trade_signals_follow_open_trade_state(self, client, mocker):
+        mocker.patch(
+            "database.runtime_flags.RuntimeFlagsRepo.get_bool",
+            return_value=False,
+        )
+        mocker.patch("dashboard.server._live_mtm_by_trade", return_value={})
+        mocker.patch(
+            "dashboard.server.TradeRepo.open_trades",
+            return_value=[
+                {
+                    "trade_id": "TRD-20260818-001",
+                    "trade_name": "NIFTY calendar",
+                    "daily_status": "SL_HIT",
+                    "exit_instruction": "SL_HIT — close pending",
+                },
+                {
+                    "trade_id": "TRD-20260818-002",
+                    "trade_name": "BANKNIFTY strangle",
+                    "daily_status": "THESIS_FAIL",
+                    "exit_instruction": None,
+                },
+                {
+                    "trade_id": "TRD-20260818-003",
+                    "trade_name": "Quiet",
+                    "daily_status": "OPEN",
+                    "exit_instruction": None,
+                },
+                {
+                    "trade_id": "TRD-20260818-004",
+                    "trade_name": "NIFTY iron condor",
+                    "daily_status": "TAKE_PROFIT",
+                    "exit_instruction": "Captured ≥50% of max profit — close pending",
+                },
+            ],
+        )
+        resp = client.get("/api/system-status")
+        assert resp.status_code == 200
+        signals = resp.get_json()["trade_signals"]
+        assert [s["kind"] for s in signals] == ["sl", "thesis", "profit"]
+        assert signals[0]["trade_id"] == "TRD-20260818-001"
+        assert signals[1]["trade_id"] == "TRD-20260818-002"
+        assert signals[2]["trade_id"] == "TRD-20260818-004"
+
+    def test_trade_signals_include_mtm_profit_and_loss(self, client, mocker):
+        mocker.patch(
+            "database.runtime_flags.RuntimeFlagsRepo.get_bool",
+            return_value=False,
+        )
+        mocker.patch(
+            "dashboard.server.TradeRepo.open_trades",
+            return_value=[
+                {
+                    "trade_id": "TRD-LOSS",
+                    "trade_name": "Underwater IC",
+                    "daily_status": "OPEN",
+                    "exit_instruction": None,
+                },
+                {
+                    "trade_id": "TRD-WIN",
+                    "trade_name": "Working calendar",
+                    "daily_status": "OPEN",
+                    "exit_instruction": None,
+                },
+                {
+                    "trade_id": "TRD-SL",
+                    "trade_name": "Already SL",
+                    "daily_status": "SL_HIT",
+                    "exit_instruction": None,
+                },
+            ],
+        )
+        mocker.patch("dashboard.server._live_mtm_by_trade", return_value={
+            "TRD-LOSS": {"mtm": -850.0, "trade_name": "Underwater IC"},
+            "TRD-WIN": {"mtm": 420.0, "trade_name": "Working calendar"},
+            "TRD-SL": {"mtm": -2000.0, "trade_name": "Already SL"},
+        })
+        resp = client.get("/api/system-status")
+        assert resp.status_code == 200
+        signals = resp.get_json()["trade_signals"]
+        assert [s["kind"] for s in signals] == ["in_loss", "in_profit", "sl"]
+
+    def test_trade_signals_fail_open_when_open_trades_raise(self, client, mocker):
+        mocker.patch(
+            "database.runtime_flags.RuntimeFlagsRepo.get_bool",
+            return_value=False,
+        )
+        mocker.patch(
+            "dashboard.server.TradeRepo.open_trades",
+            side_effect=RuntimeError("db down"),
+        )
+        resp = client.get("/api/system-status")
+        assert resp.status_code == 200
+        assert resp.get_json()["trade_signals"] == []
 
     def test_fail_open_when_runtime_flags_raise(self, client, mocker):
         mocker.patch(

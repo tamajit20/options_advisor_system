@@ -22,9 +22,8 @@ uses) and emits a notification when:
 * ``SHORT_LEG_STRESS`` — a SHORT leg's live LTP has risen above
   ``fill_price × short_leg_stress_multiplier`` (early per-leg warning).
   Suppressed when whole-trade MTM is already at or past the pre-breach zone.
-* ``TARGET_HIT`` — current PnL > 0 and >= ``live_target_fraction × max_profit``,
-  where ``live_target_fraction`` is interpolated by DTE (tighter at low DTE).
-  Uses the same whole-trade MTM logic as the EOD exit engine.
+* ``TARGET_HIT`` — ``evaluate_exit`` returned ``TAKE_PROFIT`` (same rupee
+  target as the dashboard Exit Plan; see ``engine.pnl_targets``).
 
 Alerts are dispatched through the existing ``Notifier`` (which inserts into
 ``options_notifications`` and respects the ``sl_alerts`` /
@@ -70,6 +69,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from config import STRATEGY_CONFIG
 from engine.exit_engine import evaluate_exit
 from engine.exit_pricing import format_leg_quote_key
+from engine.pnl_targets import profit_target_trade_rs
 from engine.sl_threshold import effective_sl_rs
 from providers.base import LiveQuote
 from providers.event_bus import (
@@ -401,50 +401,21 @@ class LiveRiskMonitor:
         mtm_snapshot_persister: Optional[Callable[[dict], None]] = None,
         level_event_persister: Optional[Callable[[dict], None]] = None,
         events_repo: Optional[object] = None,
+        config_reloader: Optional[Callable[[], None]] = None,
     ) -> None:
         self._notifier = notifier
         self._loader = snapshot_loader
         self._prime = prime_loader
         self._bus = event_bus or get_event_bus()
-        cfg = _safe_cfg(config if config is not None
-                        else STRATEGY_CONFIG.get("live_risk_monitor"))
-        self._enabled = cfg["enabled"]
-        self._cooldown = timedelta(minutes=cfg["cooldown_minutes"])
-        self._reload_interval = cfg["reload_interval_sec"]
-        self._session_start = _parse_hhmm(cfg["session_start"])
-        self._session_end = _parse_hhmm(cfg["session_end"])
-        self._stale_window = timedelta(seconds=cfg["stale_leg_seconds"])
-        self._pre_breach_fraction = cfg["pre_breach_fraction"]
-        self._event_eve_pre_breach = cfg["event_eve_pre_breach_fraction"]
-        self._event_eve_credit_only = bool(cfg.get("event_eve_credit_only", True))
-        self._event_eve_tighten_strats = frozenset(
-            STRATEGY_CONFIG.get("short_premium_strategies") or [
-                "IRON_CONDOR", "IRON_BUTTERFLY", "BULL_PUT_SPREAD",
-                "BEAR_CALL_SPREAD", "JADE_LIZARD",
-            ]
-        )
-        self._target_min_dte = cfg["target_min_dte"]
-        self._target_max_dte = cfg["target_max_dte"]
-        self._target_min = cfg["target_fraction_at_min_dte"]
-        self._target_max = cfg["target_fraction_at_max_dte"]
-        self._spot_sl_enabled = cfg["spot_sl_enabled"]
-        self._dashboard_url = cfg["dashboard_url"]
-        self._status_path    = cfg["status_path"]
-        self._mtm_state_path = cfg.get("mtm_state_path") or "data/live_mtm_state.json"
-        self._mtm_state: dict = {}   # trade_id → last payload written
-        self._status_interval = cfg["status_write_interval_sec"]
-        self._trailing_steps: List[Tuple[float, float]] = list(cfg["trailing_sl_steps"])
-        self._mtm_publish_interval = timedelta(
-            seconds=float(cfg["mtm_publish_interval_sec"] or 0))
-        self._mtm_snapshot_interval = timedelta(
-            seconds=float(cfg["mtm_snapshot_interval_sec"] or 900))
+        self._config_override = config
         self._trailing_persister = trailing_persister
         self._mtm_snapshot_persister = mtm_snapshot_persister
         self._level_event_persister = level_event_persister
         self._events_repo = events_repo
+        self._config_reloader = config_reloader
         self._clock = clock
-        self._short_leg_stress_enabled = bool(cfg["short_leg_stress_enabled"])
-        self._short_leg_stress_mult = float(cfg["short_leg_stress_multiplier"])
+        self._mtm_state: dict = {}   # trade_id → last payload written
+        self._bind_monitor_cfg()
 
         self._snapshot = _Snapshot()
         self._lock = threading.RLock()
@@ -487,10 +458,8 @@ class LiveRiskMonitor:
         self._reload_thread.start()
         logger.info(
             "LiveRiskMonitor started — %d ACTIVE trades watched, "
-            "target=%.0f-%.0f%% (DTE %d-%d), cooldown=%dm, stale=%ds",
+            "TARGET_HIT follows Exit Plan (engine.pnl_targets), cooldown=%dm, stale=%ds",
             len(self._snapshot.trades),
-            self._target_min * 100, self._target_max * 100,
-            self._target_min_dte, self._target_max_dte,
             int(self._cooldown.total_seconds() / 60),
             int(self._stale_window.total_seconds()),
         )
@@ -536,7 +505,53 @@ class LiveRiskMonitor:
         except Exception:
             logger.exception("LiveRiskMonitor: event-driven reload failed")
 
+    def _bind_monitor_cfg(self) -> None:
+        """Re-read live_risk_monitor knobs after a config overlay.
+
+        Tests that pass an explicit ``config=`` dict keep that snapshot; production
+        (config=None) always rebinds from ``STRATEGY_CONFIG``.
+        """
+        cfg = _safe_cfg(self._config_override if self._config_override is not None
+                        else STRATEGY_CONFIG.get("live_risk_monitor"))
+        self._enabled = cfg["enabled"]
+        self._cooldown = timedelta(minutes=cfg["cooldown_minutes"])
+        self._reload_interval = cfg["reload_interval_sec"]
+        self._session_start = _parse_hhmm(cfg["session_start"])
+        self._session_end = _parse_hhmm(cfg["session_end"])
+        self._stale_window = timedelta(seconds=cfg["stale_leg_seconds"])
+        self._pre_breach_fraction = cfg["pre_breach_fraction"]
+        self._event_eve_pre_breach = cfg["event_eve_pre_breach_fraction"]
+        self._event_eve_credit_only = bool(cfg.get("event_eve_credit_only", True))
+        self._event_eve_tighten_strats = frozenset(
+            STRATEGY_CONFIG.get("short_premium_strategies") or [
+                "IRON_CONDOR", "IRON_BUTTERFLY", "BULL_PUT_SPREAD",
+                "BEAR_CALL_SPREAD", "JADE_LIZARD",
+            ]
+        )
+        self._spot_sl_enabled = cfg["spot_sl_enabled"]
+        self._dashboard_url = cfg["dashboard_url"]
+        self._status_path    = cfg["status_path"]
+        self._mtm_state_path = cfg.get("mtm_state_path") or "data/live_mtm_state.json"
+        self._status_interval = cfg["status_write_interval_sec"]
+        self._trailing_steps = list(cfg["trailing_sl_steps"])
+        self._mtm_publish_interval = timedelta(
+            seconds=float(cfg["mtm_publish_interval_sec"] or 0))
+        self._mtm_snapshot_interval = timedelta(
+            seconds=float(cfg["mtm_snapshot_interval_sec"] or 900))
+        self._short_leg_stress_enabled = bool(cfg["short_leg_stress_enabled"])
+        self._short_leg_stress_mult = float(cfg["short_leg_stress_multiplier"])
+
     def _reload(self, *, prime: bool = False) -> None:
+        if self._config_reloader is not None:
+            try:
+                self._config_reloader()
+            except Exception:
+                logger.debug("LiveRiskMonitor: config overlay skipped", exc_info=True)
+            if self._config_override is None:
+                try:
+                    self._bind_monitor_cfg()
+                except Exception:
+                    logger.exception("LiveRiskMonitor: rebind config failed")
         new_snap = self._loader()
         with self._lock:
             self._counters["reloads"] += 1
@@ -591,6 +606,8 @@ class LiveRiskMonitor:
         logger.info("LiveRiskMonitor: primed %d/%d legs", primed, len(keys))
 
     def _on_tick(self, quote: LiveQuote) -> None:
+        if not self._enabled:
+            return
         with self._lock:
             self._counters["ticks_in"] += 1
             self._maybe_reset_for_new_day()
@@ -803,13 +820,14 @@ class LiveRiskMonitor:
         )
 
         current_pnl = self._current_pnl(state)
-        target_fraction = self._dte_target_fraction(dte)
         active_pre_breach = self._active_pre_breach_fraction(now, state.strategy)
         sl_threshold, sl_label = effective_sl_rs(
             strategy=state.strategy, max_loss_rs=state.max_loss)
-        target_rs = (
-            target_fraction * state.max_profit
-            if state.max_profit > 0 else None
+        target_rs, _, _ = profit_target_trade_rs(
+            strategy=state.strategy,
+            dte=dte,
+            max_profit_rs=state.max_profit,
+            entry_net_credit=state.entry_net_credit,
         )
 
         # Trailing SL ratchet (#4): when current_pnl crosses the next step's
@@ -959,18 +977,12 @@ class LiveRiskMonitor:
                 if stress is not None:
                     return stress, mtm_payload, trailing_persist, snapshot_payload
 
-        # 5. Target hit (DTE-aware fraction; whole-trade MTM must be positive).
-        if (decision.decision == "TAKE_PROFIT"
-                and current_pnl > 0
-                and state.max_profit > 0
-                and current_pnl >= target_fraction * state.max_profit):
+        # 5. Target hit — same TAKE_PROFIT rupee target as Exit Plan / EOD.
+        if decision.decision == "TAKE_PROFIT" and current_pnl > 0:
             return self._maybe_alert(
                 state, "TARGET_HIT", "INFO",
                 title=f"Target reached on {state.trade_name}",
-                body=self._format_pnl_body(
-                    state, current_pnl,
-                    f"{decision.reason} (live target {target_fraction*100:.0f}%)",
-                ),
+                body=self._format_pnl_body(state, current_pnl, decision.reason),
                 breach_key="TARGET", now=now,
                 threshold_rs=target_rs,
             ), mtm_payload, trailing_persist, snapshot_payload
@@ -1150,17 +1162,6 @@ class LiveRiskMonitor:
             sign = -1.0 if leg.action == "SELL" else 1.0
             total += sign * ltp * qty
         return total
-
-    def _dte_target_fraction(self, dte: int) -> float:
-        if dte <= self._target_min_dte:
-            return self._target_min
-        if dte >= self._target_max_dte:
-            return self._target_max
-        span = self._target_max_dte - self._target_min_dte
-        if span <= 0:
-            return self._target_max
-        f = (dte - self._target_min_dte) / span
-        return self._target_min + f * (self._target_max - self._target_min)
 
     def _active_pre_breach_fraction(self, now: datetime, strategy: str = "") -> float:
         """Returns the pre-breach loss fraction to use right now.

@@ -82,6 +82,14 @@ class TestConstruction:
         assert w._vix_threshold > 0
         assert w._spot_threshold > 0
 
+    def test_thresholds_follow_live_strategy_config(self, monkeypatch):
+        from config import STRATEGY_CONFIG
+        monkeypatch.setitem(STRATEGY_CONFIG, "regen_vix_pct_threshold", 9.5)
+        w = OpportunityRegenWatcher(_StubNotifier())
+        assert w._vix_threshold == pytest.approx(9.5)
+        monkeypatch.setitem(STRATEGY_CONFIG, "regen_vix_pct_threshold", 2.25)
+        assert w._vix_threshold == pytest.approx(2.25)
+
 
 # ---------------------------------------------------------------------------
 # Baseline
