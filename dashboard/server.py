@@ -1153,6 +1153,9 @@ def create_app() -> Flask:
             )
         except Exception:
             pass
+        from engine.market_regime import regime_from_sit_out_row, summarize_market_sit_out
+        from engine.regime_pair import decode_regime_pair_trigger_reason
+
         out = []
         for r in rows:
             r_out = _row(r)
@@ -1189,18 +1192,29 @@ def create_app() -> Flask:
                 "reason": gate.reason(),
                 "label": _execution_gate_label(gate, r),
             }
-            from engine.regime_pair import decode_regime_pair_trigger_reason
             r_out.update(decode_regime_pair_trigger_reason(r.get("trigger_reason")))
             out.append(r_out)
-        from engine.market_regime import regime_from_sit_out_row, summarize_market_sit_out
 
-        pending_underlyings = {r.get("underlying") for r in out if r.get("underlying")}
+        pending_groups = {
+            r.get("regime_pair_group") for r in out if r.get("regime_pair_group")
+        }
+        pending_underlyings = {
+            r.get("underlying") for r in out
+            if r.get("underlying") and (r.get("status") or "").upper() == "PENDING"
+        }
         sit_out_raw = sug.active_sit_out_today()
         sit_out: list = []
         for r in sit_out_raw:
+            r_out = _row(r)
+            r_out.update(decode_regime_pair_trigger_reason(r.get("trigger_reason")))
+            gid = r_out.get("regime_pair_group")
+            if gid and gid in pending_groups:
+                r_out["confidence_display"] = _confidence_display(r)
+                r_out["market_regime"] = regime_from_sit_out_row(r_out)
+                out.append(r_out)
+                continue
             if r.get("underlying") in pending_underlyings:
                 continue
-            r_out = _row(r)
             r_out["confidence_display"] = _confidence_display(r)
             r_out["market_regime"] = regime_from_sit_out_row(r_out)
             sit_out.append(r_out)
@@ -1232,12 +1246,14 @@ def create_app() -> Flask:
         spot_at_exec = payload.get("spot_at_execution")
         adj_sl = payload.get("actual_stop_loss_level")
         execute_at_suggested = bool(payload.get("execute_at_suggested"))
+        skip_execution_gate = bool(payload.get("skip_execution_gate"))
         try:
             trade_id = mark_executed(
                 db, sid, fills,
                 spot_at_execution=float(spot_at_exec) if spot_at_exec is not None else None,
                 actual_stop_loss_level=float(adj_sl) if adj_sl is not None else None,
                 execute_at_suggested=execute_at_suggested,
+                skip_execution_gate=skip_execution_gate,
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400

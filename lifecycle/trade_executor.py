@@ -58,6 +58,17 @@ def _fills_from_suggested(legs: Sequence[dict]) -> list[TradeLegFill]:
     return out
 
 
+def _circuit_breaker_on(db: SQLServerConnection) -> bool:
+    try:
+        return RuntimeFlagsRepo(db).get_bool(
+            FLAG_CIRCUIT_BREAKER_ACTIVE, default=False,
+        )
+    except Exception:
+        logger.debug("trade_executor: circuit_breaker flag read failed",
+                     exc_info=True)
+        return False
+
+
 def mark_executed(
     db: SQLServerConnection,
     suggestion_id: str,
@@ -66,6 +77,7 @@ def mark_executed(
     actual_stop_loss_level: Optional[float] = None,
     *,
     execute_at_suggested: bool = False,
+    skip_execution_gate: bool = False,
 ) -> Optional[str]:
     sug = SuggestionRepo(db)
     trd = TradeRepo(db)
@@ -82,7 +94,7 @@ def mark_executed(
     )
 
     # User clicked Ignore (no fills) — dismiss without execution gates.
-    if not has_executed_fills and not execute_at_suggested:
+    if not has_executed_fills and not execute_at_suggested and not skip_execution_gate:
         status = (suggestion.get("status") or "").upper()
         if status != "PENDING":
             raise ValueError(f"Cannot ignore suggestion with status {status}")
@@ -96,15 +108,7 @@ def mark_executed(
         raise ValueError(f"Cannot execute suggestion with status {status}")
 
     if execute_at_suggested:
-        cb_active = False
-        try:
-            cb_active = RuntimeFlagsRepo(db).get_bool(
-                FLAG_CIRCUIT_BREAKER_ACTIVE, default=False,
-            )
-        except Exception:
-            logger.debug("trade_executor: circuit_breaker flag read failed",
-                         exc_info=True)
-        if cb_active:
+        if _circuit_breaker_on(db):
             raise ValueError(
                 "Execution blocked: daily P&L circuit breaker is active"
             )
@@ -118,6 +122,18 @@ def mark_executed(
         if actual_stop_loss_level is None:
             actual_stop_loss_level = suggestion.get("stop_loss_level")
         gate_passed = False
+    elif skip_execution_gate:
+        if _circuit_breaker_on(db):
+            raise ValueError(
+                "Execution blocked: daily P&L circuit breaker is active"
+            )
+        if not has_executed_fills:
+            raise ValueError("Enter a fill price for at least one leg before Execute")
+        if spot_at_execution is None and suggestion.get("spot_at_generation") is not None:
+            spot_at_execution = float(suggestion["spot_at_generation"])
+        if actual_stop_loss_level is None:
+            actual_stop_loss_level = suggestion.get("stop_loss_level")
+        gate_passed = False
     else:
         if not has_executed_fills:
             sug.update_status(suggestion_id, "IGNORED")
@@ -125,16 +141,7 @@ def mark_executed(
             logger.info("Suggestion %s marked IGNORED — no fills", suggestion_id)
             return None
 
-        # Read circuit-breaker flag (best-effort — fail-open if the table is
-        # not migrated yet so existing tests / fresh installs still work).
-        cb_active = False
-        try:
-            cb_active = RuntimeFlagsRepo(db).get_bool(
-                FLAG_CIRCUIT_BREAKER_ACTIVE, default=False,
-            )
-        except Exception:
-            logger.debug("trade_executor: circuit_breaker flag read failed",
-                         exc_info=True)
+        cb_active = _circuit_breaker_on(db)
 
         # Centralized pre-execution gate. ValueError lets the dashboard
         # route surface a 400 with the exact veto reasons.
@@ -147,6 +154,11 @@ def mark_executed(
             )
             raise ValueError(f"Execution blocked: {gate.reason()}")
         gate_passed = True
+
+    executed_on = now_ist()
+    for f in fills:
+        if f.executed and f.fill_price is not None:
+            f.fill_time = executed_on
 
     fills_by_order = {f.leg_order: f for f in fills}
 
@@ -199,7 +211,7 @@ def mark_executed(
         "trade_id":        trade_id,
         "suggestion_id":   suggestion_id,
         "trade_name":      suggestion.get("trade_name"),
-        "executed_on":     now_ist(),
+        "executed_on":     executed_on,
         "position_type":   position_type,
         "net_credit_actual": actual_net_credit,
         "actual_max_profit":      suggestion.get("max_profit"),

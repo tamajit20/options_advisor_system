@@ -261,6 +261,102 @@ class TestRunSuggestionEngine:
         ins.assert_not_called()
 
 
+def _paired_calendar(underlying: str, suggestion_id: str, group: str):
+    from contracts import (Suggestion, SuggestionEconomics,
+                           ConfidenceResult, ChargeBreakdown)
+    conf = ConfidenceResult(checks=[], failed_reasons=[], score=7, total=7,
+                            all_passed=True)
+    sug = Suggestion(
+        suggestion_id=suggestion_id,
+        trade_name=f"{underlying}-CAL",
+        generated_on=datetime(2026, 8, 18, 18, 0),
+        strategy="CALENDAR_SPREAD",
+        strategy_type="BUYING",
+        underlying=underlying,
+        expiry_date=date(2026, 8, 27),
+        expiry_type="Weekly",
+        dte=8,
+        spot_at_generation=55000.0,
+        confidence=conf,
+        legs=[],
+        economics=SuggestionEconomics(
+            net_credit=-80.0, max_profit=4000.0, max_loss=8000.0,
+            upper_breakeven=None, lower_breakeven=None,
+            stop_loss_level=None, probability_of_profit=55.0,
+            estimated_charges=ChargeBreakdown(0, 0, 0, 0, 0, 0, 0),
+            estimated_net_pnl=3500.0,
+        ),
+        execution_window="x",
+        plain_english="x",
+        regime_pair_group=group,
+        regime_pair_type="range",
+        regime_pair_preferred=True,
+    )
+    return sug
+
+
+class TestPersistRegimePair:
+    def _patch_persist(self, mocker):
+        mocker.patch("lifecycle.suggestion_engine.now_ist",
+                     return_value=datetime(2026, 8, 18, 18, 0))
+        mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.expire_stale_pending",
+                     return_value=0)
+        mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.has_suggestion_for",
+                     return_value=False)
+        mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.insert_legs")
+        mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.write_provenance")
+        mocker.patch("lifecycle.suggestion_engine.NotificationRepo.insert")
+        mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.next_suggestion_id",
+                     return_value="SUG-20260818-099")
+
+    def test_paired_same_strategy_not_collapsed_across_underlyings(self, mock_db, mocker):
+        self._patch_persist(mocker)
+        ins = mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.insert")
+        nifty = _paired_calendar("NIFTY", "SUG-1", "NIFTY:Weekly:2026-08-19")
+        bn = _paired_calendar("BANKNIFTY", "SUG-2", "BANKNIFTY:Weekly:2026-08-19")
+        n = se._persist_and_notify(
+            mock_db, [nifty, bn], [],
+            trade_date=date(2026, 8, 18),
+            entry_day=date(2026, 8, 19),
+        )
+        assert n == 2
+        assert ins.call_count == 2
+
+    def test_persists_trigger_reason_on_paired_no_suggestion(self, mock_db, mocker):
+        from contracts import NoSuggestion, ConfidenceResult
+        self._patch_persist(mocker)
+        mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.insert")
+        ins_ns = mocker.patch(
+            "lifecycle.suggestion_engine.SuggestionRepo.insert_no_suggestion",
+        )
+        range_sug = _paired_calendar(
+            "BANKNIFTY", "SUG-3", "BANKNIFTY:Weekly:2026-08-19",
+        )
+        conf = ConfidenceResult(checks=[], failed_reasons=[], score=7, total=7,
+                                all_passed=True)
+        ns = NoSuggestion(
+            generated_on=datetime(2026, 8, 18, 18, 0),
+            underlying="BANKNIFTY",
+            confidence=conf,
+            reason="Sideways breakout scenario blocked: LONG_STRADDLE veto",
+            regime_pair_group="BANKNIFTY:Weekly:2026-08-19",
+            regime_pair_type="breakout",
+            regime_pair_preferred=False,
+        )
+        n = se._persist_and_notify(
+            mock_db, [range_sug], [ns],
+            trade_date=date(2026, 8, 18),
+            entry_day=date(2026, 8, 19),
+        )
+        assert n == 1
+        ins_ns.assert_called_once()
+        kwargs = ins_ns.call_args.kwargs
+        raw = kwargs.get("trigger_reason") or ins_ns.call_args[1].get("trigger_reason")
+        assert raw
+        assert "BANKNIFTY:Weekly:2026-08-19" in raw
+        assert "breakout" in raw
+
+
 # ---------------------------------------------------------------------------
 class TestEvaluateUnderlying:
     def test_returns_empty_when_no_spot(self, mock_db, mocker):

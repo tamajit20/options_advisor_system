@@ -298,6 +298,51 @@ class TestCircuitBreakerBlocks:
         prov.assert_called_once()
         assert prov.call_args.kwargs.get("gate_passed") is False
 
+    def test_skip_gate_records_manual_fill_prices(
+        self, mock_db, mocker, fake_legs,
+    ):
+        stale_sug = {
+            "trade_name": "N-IC-1",
+            "max_profit": 6000.0, "max_loss": 14000.0,
+            "upper_breakeven": 23300.0, "lower_breakeven": 22700.0,
+            "stop_loss_level": 23250.0,
+            "status": "PENDING",
+            "spot_at_generation": 23000.0,
+            "validator_status": None,
+            "data_as_of": datetime(2026, 5, 4, 8, 0),
+            "entry_date": None,
+            "data_source": "LIVE",
+            "trigger_type": "LIVE_RUN",
+            "generated_on": datetime(2026, 5, 4, 8, 0),
+        }
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=stale_sug)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.update_status")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.next_trade_id",
+                     return_value="TRD-MANUAL")
+        ins = mocker.patch("lifecycle.trade_executor.TradeRepo.insert")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.insert_legs")
+        mocker.patch(
+            "lifecycle.trade_executor.RuntimeFlagsRepo.get_bool",
+            return_value=False,
+        )
+        mocker.patch(
+            "lifecycle.trade_executor.TradeRepo.write_execution_provenance",
+        )
+        fills = [
+            TradeLegFill(leg_order=i, executed=True, fill_price=12.5 * i, fill_time=None)
+            for i in range(1, 5)
+        ]
+        tid = te.mark_executed(
+            mock_db, "SUG-X", fills, skip_execution_gate=True,
+        )
+        assert tid == "TRD-MANUAL"
+        call_arg = ins.call_args[0][0]
+        assert call_arg["net_credit_actual"] != 0
+        assert all(f.fill_time is not None for f in fills)
+
 
 class TestActualNetCreditComputation:
     """net_credit_actual must reflect actual fill prices, not suggestion prices."""

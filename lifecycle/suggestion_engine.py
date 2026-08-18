@@ -56,7 +56,8 @@ from engine.iv_calculator import implied_vol
 from engine.iv_rank import iv_rank as compute_iv_rank, pick_atm_iv
 from engine.strategy_selector import assemble_suggestion, select_strategy
 from engine.regime_pair import (
-    apply_regime_pair_metadata,
+    complete_regime_pair,
+    encode_regime_pair_trigger_reason,
     regime_pair_group_id,
     resolve_regime_pair_strategies,
 )
@@ -715,10 +716,12 @@ def _evaluate_underlying(
                 has_long_vol_catalyst=_has_lv_catalyst,
             )
             pair_specs: list[tuple[str, str]] = [("range", range_strat)]
-            if breakout_strat:
+            pairing = breakout_strat is not None
+            if pairing:
                 pair_specs.append(("breakout", breakout_strat))
 
             built_pair: list[tuple[Suggestion, str]] = []
+            missing_reasons: dict[str, str] = {}
             for ptype, strat in pair_specs:
                 strat_kw = dict(_assemble_kw)
                 strat_kw["calendar_legs"] = None
@@ -736,6 +739,9 @@ def _evaluate_underlying(
                         live_today=live_today,
                     )
                     if strat_calendar is None:
+                        missing_reasons[ptype] = (
+                            f"{strat}: near/far calendar legs unavailable"
+                        )
                         logger.debug(
                             "Regime pair: calendar legs unavailable for %s %s",
                             symbol, expiry_type,
@@ -772,6 +778,11 @@ def _evaluate_underlying(
                             events_calendar_row_count=events_total,
                         )
                         if not strat_confidence.all_passed:
+                            missing_reasons[ptype] = (
+                                f"{strat} confidence "
+                                f"{strat_confidence.score}/{strat_confidence.total}: "
+                                + "; ".join(strat_confidence.failed_reasons)
+                            )
                             continue
                     strat_kw.update(
                         expiry=strat_expiry,
@@ -794,22 +805,34 @@ def _evaluate_underlying(
                     built_pair.append((sug, ptype))
                     existing_names.append(sug.trade_name)
                 except StrategyVeto as veto:
+                    missing_reasons[ptype] = f"{strat} veto: {veto}"
                     logger.debug(
                         "Regime pair %s (%s) veto for %s %s: %s",
                         ptype, strat, symbol, expiry_type, veto,
                     )
 
-            if built_pair:
+            if pairing:
                 group = regime_pair_group_id(
                     underlying=symbol,
                     expiry_type=expiry_type,
                     entry_date=entry_day,
                 )
-                apply_regime_pair_metadata(
+                pair_sugs, pair_ns = complete_regime_pair(
                     built_pair,
+                    missing_reasons=missing_reasons,
                     group_id=group,
                     iv_rank=float(iv_rank or 0.0),
+                    underlying=symbol,
+                    confidence=use_confidence,
+                    generated_on=now_ist(),
                 )
+                suggestions.extend(pair_sugs)
+                no_suggestions.extend(pair_ns)
+                continue
+
+            # High-IV writing-only: no breakout thesis — persist range as a
+            # normal single card (not a lonely "pick the scenario" pair).
+            if built_pair:
                 for sug, _ptype in built_pair:
                     suggestions.append(sug)
                 continue
@@ -922,8 +945,18 @@ def _persist_and_notify(
     # confidence score; on a tie, fall back to higher edge_score (issue #10).
     # This is strictly within one (expiry_type, strategy) bucket so it cannot
     # bias one strategy class against another (strategy isolation).
-    best_by_expiry_type: dict[str, Suggestion] = {}
+    # Sideways regime-pair members are exempt — dropping one leg would leave
+    # the other underlying with a lonely "pick the scenario" card.
+    unpaired_candidates: list[Suggestion] = []
+    paired_candidates: list[Suggestion] = []
     for sug in all_candidates:
+        if sug.regime_pair_group:
+            paired_candidates.append(sug)
+        else:
+            unpaired_candidates.append(sug)
+
+    best_by_expiry_type: dict[str, Suggestion] = {}
+    for sug in unpaired_candidates:
         key = f"{sug.expiry_type}:{sug.strategy}"
         existing = best_by_expiry_type.get(key)
         if existing is None:
@@ -974,7 +1007,7 @@ def _persist_and_notify(
             return "BEARISH"
         return "NEUTRAL"
 
-    survivors: list[Suggestion] = list(best_by_expiry_type.values())
+    survivors: list[Suggestion] = list(best_by_expiry_type.values()) + paired_candidates
     bull_kept: Optional[Suggestion] = None
     bear_kept: Optional[Suggestion] = None
     concentration_dropped: list[Suggestion] = []
@@ -1012,15 +1045,11 @@ def _persist_and_notify(
             ),
         ))
 
-    best_by_expiry_type = {
-        f"{s.expiry_type}:{s.strategy}": s
-        for s in survivors
-        if s not in concentration_dropped
-    }
+    persist_queue = [s for s in survivors if s not in concentration_dropped]
 
     persisted: List[Suggestion] = []
 
-    for sug in best_by_expiry_type.values():
+    for sug in persist_queue:
         if force_replace:
             # Live mode: retire even same-entry-date PENDING suggestions so
             # the dashboard shows the freshest data.
@@ -1108,6 +1137,7 @@ def _persist_and_notify(
                 confidence_score=ns.confidence.score,
                 conditions_json=_json.dumps(conditions),
                 reason=ns.reason,
+                trigger_reason=encode_regime_pair_trigger_reason(ns),
             )
         except Exception:
             logger.exception("Failed to persist NoSuggestion for %s", ns.underlying)

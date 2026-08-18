@@ -260,6 +260,61 @@ class TestApiSuggestionToday:
         assert "execution_gate" in s
         assert s["execution_gate"]["ok"] is True
 
+    def test_merges_paired_sit_out_into_suggestions(self, client, mocker):
+        """Failed breakout partner stays visible next to the range PENDING card."""
+        import json as _json
+        group = "BANKNIFTY:Weekly:2026-08-19"
+        sug_row = {
+            "suggestion_id": "SUG-20260818-003",
+            "underlying": "BANKNIFTY",
+            "strategy": "CALENDAR_SPREAD",
+            "status": "PENDING",
+            "generated_on": datetime(2026, 8, 18, 9, 0),
+            "expiry_date": date(2026, 8, 27),
+            "net_credit_suggested": -80.0,
+            "trigger_reason": _json.dumps({
+                "regime_pair_group": group,
+                "regime_pair_type": "range",
+                "regime_pair_preferred": True,
+                "regime_pair_preference_reason": "System prefers the range trade",
+            }),
+        }
+        ns_row = {
+            "suggestion_id": "SUG-20260818-004",
+            "underlying": "BANKNIFTY",
+            "strategy": "NONE",
+            "status": "NO_SUGGESTION",
+            "generated_on": datetime(2026, 8, 18, 9, 1),
+            "confidence_score": 7,
+            "no_suggestion_reason": "Sideways breakout scenario blocked: LONG_STRADDLE veto",
+            "trigger_reason": _json.dumps({
+                "regime_pair_group": group,
+                "regime_pair_type": "breakout",
+                "regime_pair_preferred": False,
+            }),
+        }
+        mocker.patch("dashboard.server.SuggestionRepo.active_pending",
+                     return_value=[sug_row])
+        mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today",
+                     return_value=[ns_row])
+        mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[{
+            "leg_order": 1, "strike": 55000.0, "option_type": "CE",
+            "action": "SELL", "lots": 1, "lot_size": 35,
+            "suggested_price": 120.0,
+        }])
+        resp = client.get("/api/suggestion/today")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data["suggestions"]) == 2
+        types = {s["regime_pair_type"] for s in data["suggestions"]}
+        assert types == {"range", "breakout"}
+        groups = {s["regime_pair_group"] for s in data["suggestions"]}
+        assert groups == {group}
+        preferred = [s for s in data["suggestions"] if s.get("regime_pair_preferred")]
+        assert len(preferred) == 1
+        assert preferred[0]["status"] == "PENDING"
+        assert data["sit_out"] == []
+
     def test_includes_blocked_pending_with_execution_gate(self, client, mocker):
         from datetime import timedelta
         from utils import now_ist
@@ -592,6 +647,19 @@ class TestApiMarkExecuted:
         assert resp.status_code == 200
         mark.assert_called_once()
         assert mark.call_args.kwargs.get("execute_at_suggested") is True
+
+    def test_skip_execution_gate_flag_forwarded(self, client, mocker):
+        mark = mocker.patch("dashboard.server.mark_executed", return_value="TRD-003")
+        resp = client.post(
+            "/api/suggestion/SUG-3/mark-executed",
+            data=json.dumps({
+                "skip_execution_gate": True,
+                "fills": [{"leg_order": 1, "executed": True, "fill_price": 18.5}],
+            }),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        assert mark.call_args.kwargs.get("skip_execution_gate") is True
 
 
 class TestApiSystemStatus:

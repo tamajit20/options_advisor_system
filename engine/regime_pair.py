@@ -6,15 +6,24 @@ Sideways-market regime pairs: one range trade + one breakout trade.
 
 The dashboard shows both so the operator can pick a thesis. ``pick_regime_pair_preferred``
 marks which leg has better estimated success (PoP + edge) for the current data.
+``complete_regime_pair`` always emits two tagged partners — a failed leg becomes a
+``NoSuggestion`` in the same group rather than leaving the survivor alone.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+import json
+from typing import Mapping, Optional, Sequence, Tuple, Union
 
 from config import STRATEGY_CONFIG
 
-from contracts import Suggestion
+from contracts import ConfidenceResult, NoSuggestion, Suggestion
+
+# Matches options_suggestions.trigger_reason NVARCHAR(500) in database/schema.py
+_TRIGGER_REASON_MAX_CHARS = 500
+
+_PAIR_TYPES: Tuple[str, ...] = ("range", "breakout")
+RegimePairMember = Union[Suggestion, NoSuggestion]
 
 _RANGE_STRATEGIES = frozenset({
     "IRON_CONDOR", "IRON_BUTTERFLY", "CALENDAR_SPREAD",
@@ -118,50 +127,125 @@ def pick_regime_pair_preferred(
 
 
 def apply_regime_pair_metadata(
-    suggestions: list[tuple[Suggestion, str]],
+    suggestions: list[tuple[RegimePairMember, str]],
     *,
     group_id: str,
     iv_rank: float,
 ) -> None:
-    """Mutate suggestions in-place with pair grouping + preferred flag."""
-    if len(suggestions) == 1:
-        sug, ptype = suggestions[0]
-        sug.regime_pair_group = group_id
-        sug.regime_pair_type = ptype
-        sug.regime_pair_preferred = True
-        sug.regime_pair_preference_reason = (
-            "Only one sideways scenario passed today's risk checks."
-        )
+    """Mutate pair members in-place with grouping + preferred flag.
+
+    A loner is left untagged — pairing requires both partners so the UI never
+    shows a single "pick the scenario" card.
+    """
+    if len(suggestions) < 2:
         return
 
-    by_type = {ptype: sug for sug, ptype in suggestions}
-    preferred, reason = pick_regime_pair_preferred(
-        by_type["range"], by_type["breakout"], iv_rank=iv_rank,
-    )
-    for sug, ptype in suggestions:
-        sug.regime_pair_group = group_id
-        sug.regime_pair_type = ptype
-        sug.regime_pair_preferred = ptype == preferred
-        sug.regime_pair_preference_reason = reason if ptype == preferred else None
+    live = {
+        ptype: item
+        for item, ptype in suggestions
+        if isinstance(item, Suggestion)
+    }
+    if len(live) >= 2 and "range" in live and "breakout" in live:
+        preferred, reason = pick_regime_pair_preferred(
+            live["range"], live["breakout"], iv_rank=iv_rank,
+        )
+    elif len(live) == 1:
+        preferred = next(iter(live))
+        blocked_item = next(
+            (item for item, ptype in suggestions if ptype != preferred),
+            None,
+        )
+        blocked_reason = ""
+        if isinstance(blocked_item, NoSuggestion) and blocked_item.reason:
+            blocked_reason = blocked_item.reason
+        if blocked_reason:
+            reason = (
+                f"System prefers the {preferred} trade — {blocked_reason}"
+            )
+        else:
+            blocked_type = "breakout" if preferred == "range" else "range"
+            reason = (
+                f"System prefers the {preferred} trade — the {blocked_type} "
+                f"scenario did not pass today's gates."
+            )
+    else:
+        preferred = None
+        reason = "Neither sideways scenario passed today's gates."
+
+    for item, ptype in suggestions:
+        item.regime_pair_group = group_id
+        item.regime_pair_type = ptype
+        item.regime_pair_preferred = bool(preferred) and ptype == preferred
+        item.regime_pair_preference_reason = reason if ptype == preferred else None
 
 
-def encode_regime_pair_trigger_reason(s: Suggestion) -> Optional[str]:
+def complete_regime_pair(
+    built: Sequence[tuple[Suggestion, str]],
+    *,
+    missing_reasons: Mapping[str, str],
+    group_id: str,
+    iv_rank: float,
+    underlying: str,
+    confidence: ConfidenceResult,
+    generated_on,
+    intended_types: Sequence[str] = _PAIR_TYPES,
+) -> tuple[list[Suggestion], list[NoSuggestion]]:
+    """Always return two tagged partners for a sideways range+breakout pair.
+
+    Legs that assembled become PENDING suggestions. Legs that failed gates
+    become ``NoSuggestion`` rows in the same ``regime_pair_group``.
+    """
+    by_type = {ptype: sug for sug, ptype in built}
+    members: list[tuple[RegimePairMember, str]] = []
+    suggestions: list[Suggestion] = []
+    no_suggestions: list[NoSuggestion] = []
+
+    for ptype in intended_types:
+        if ptype in by_type:
+            members.append((by_type[ptype], ptype))
+            suggestions.append(by_type[ptype])
+            continue
+        cause = missing_reasons.get(ptype) or "did not pass today's strategy gates"
+        thesis = (
+            "range (flat/stay-in-range) "
+            if ptype == "range"
+            else "breakout (sharp up or down) "
+        )
+        ns = NoSuggestion(
+            generated_on=generated_on,
+            underlying=underlying,
+            confidence=confidence,
+            reason=f"Sideways {thesis}scenario blocked: {cause}",
+        )
+        members.append((ns, ptype))
+        no_suggestions.append(ns)
+
+    apply_regime_pair_metadata(members, group_id=group_id, iv_rank=iv_rank)
+    return suggestions, no_suggestions
+
+
+def encode_regime_pair_trigger_reason(s: RegimePairMember) -> Optional[str]:
     """Serialize pair metadata for ``options_suggestions.trigger_reason``."""
-    if not s.regime_pair_group:
+    if not getattr(s, "regime_pair_group", None):
         return None
-    import json
-    return json.dumps({
+    payload = {
         "regime_pair_group": s.regime_pair_group,
         "regime_pair_type": s.regime_pair_type,
-        "regime_pair_preferred": s.regime_pair_preferred,
-        "regime_pair_preference_reason": s.regime_pair_preference_reason,
-    })
+        "regime_pair_preferred": bool(getattr(s, "regime_pair_preferred", False)),
+        "regime_pair_preference_reason": getattr(
+            s, "regime_pair_preference_reason", None,
+        ),
+    }
+    raw = json.dumps(payload)
+    if len(raw) > _TRIGGER_REASON_MAX_CHARS:
+        payload["regime_pair_preference_reason"] = None
+        raw = json.dumps(payload)
+    return raw[:_TRIGGER_REASON_MAX_CHARS]
 
 
 def decode_regime_pair_trigger_reason(raw: Optional[str]) -> dict:
     if not raw:
         return {}
-    import json
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, TypeError):

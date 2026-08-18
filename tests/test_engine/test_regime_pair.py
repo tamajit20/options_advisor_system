@@ -7,9 +7,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from contracts import ChargeBreakdown, ConfidenceResult, Suggestion, SuggestionEconomics
+from contracts import ChargeBreakdown, ConfidenceResult, NoSuggestion, Suggestion, SuggestionEconomics
 from engine.regime_pair import (
     apply_regime_pair_metadata,
+    complete_regime_pair,
     decode_regime_pair_trigger_reason,
     encode_regime_pair_trigger_reason,
     pick_regime_pair_preferred,
@@ -80,6 +81,84 @@ def test_apply_metadata_marks_preferred():
     assert range_sug.regime_pair_group == "NIFTY:Weekly:2026-07-30"
 
 
+def test_apply_metadata_does_not_tag_loner():
+    """A single survivor must not become a lonely 'pick the scenario' card."""
+    range_sug = _sug("CALENDAR_SPREAD", pop=55.0)
+    apply_regime_pair_metadata(
+        [(range_sug, "range")],
+        group_id="BANKNIFTY:Weekly:2026-08-19",
+        iv_rank=22.0,
+    )
+    assert range_sug.regime_pair_group is None
+    assert range_sug.regime_pair_type is None
+    assert range_sug.regime_pair_preferred is False
+
+
+def test_complete_pair_both_pass_tags_preferred():
+    range_sug = _sug("CALENDAR_SPREAD", pop=55.0, edge=40.0)
+    breakout_sug = _sug("LONG_STRADDLE", pop=35.0, edge=45.0)
+    conf = range_sug.confidence
+    sugs, ns = complete_regime_pair(
+        [(range_sug, "range"), (breakout_sug, "breakout")],
+        missing_reasons={},
+        group_id="NIFTY:Weekly:2026-08-19",
+        iv_rank=22.0,
+        underlying="NIFTY",
+        confidence=conf,
+        generated_on=datetime.now(),
+    )
+    assert len(sugs) == 2
+    assert ns == []
+    assert {s.regime_pair_type for s in sugs} == {"range", "breakout"}
+    assert sum(1 for s in sugs if s.regime_pair_preferred) == 1
+    assert all(s.regime_pair_group == "NIFTY:Weekly:2026-08-19" for s in sugs)
+    preferred = next(s for s in sugs if s.regime_pair_preferred)
+    assert preferred.regime_pair_type == "range"
+
+
+def test_complete_pair_breakout_vetoed_still_two_rows():
+    range_sug = _sug("CALENDAR_SPREAD", pop=55.0)
+    sugs, ns = complete_regime_pair(
+        [(range_sug, "range")],
+        missing_reasons={"breakout": "LONG_STRADDLE veto: IV/HV exceeds long-vol ceiling"},
+        group_id="BANKNIFTY:Weekly:2026-08-19",
+        iv_rank=22.0,
+        underlying="BANKNIFTY",
+        confidence=range_sug.confidence,
+        generated_on=datetime.now(),
+    )
+    assert len(sugs) == 1
+    assert len(ns) == 1
+    assert sugs[0].regime_pair_group == ns[0].regime_pair_group == "BANKNIFTY:Weekly:2026-08-19"
+    assert sugs[0].regime_pair_type == "range"
+    assert ns[0].regime_pair_type == "breakout"
+    assert sugs[0].regime_pair_preferred is True
+    assert ns[0].regime_pair_preferred is False
+    assert "blocked" in ns[0].reason.lower()
+    assert "long-vol" in ns[0].reason.lower()
+
+
+def test_complete_pair_both_fail_two_no_suggestions():
+    conf = ConfidenceResult(score=7, total=7, all_passed=True, checks=[])
+    sugs, ns = complete_regime_pair(
+        [],
+        missing_reasons={
+            "range": "CALENDAR_SPREAD veto: empty chain",
+            "breakout": "LONG_STRADDLE veto: max loss cap",
+        },
+        group_id="NIFTY:Weekly:2026-08-19",
+        iv_rank=22.0,
+        underlying="NIFTY",
+        confidence=conf,
+        generated_on=datetime.now(),
+    )
+    assert sugs == []
+    assert len(ns) == 2
+    assert {n.regime_pair_type for n in ns} == {"range", "breakout"}
+    assert all(n.regime_pair_group == "NIFTY:Weekly:2026-08-19" for n in ns)
+    assert all(n.regime_pair_preferred is False for n in ns)
+
+
 def test_trigger_reason_roundtrip():
     sug = _sug("IRON_CONDOR", pop=60.0)
     sug.regime_pair_group = "G1"
@@ -91,3 +170,21 @@ def test_trigger_reason_roundtrip():
     decoded = decode_regime_pair_trigger_reason(raw)
     assert decoded["regime_pair_group"] == "G1"
     assert decoded["regime_pair_preferred"] is True
+
+
+def test_trigger_reason_roundtrip_no_suggestion():
+    conf = ConfidenceResult(score=7, total=7, all_passed=True, checks=[])
+    ns = NoSuggestion(
+        generated_on=datetime.now(),
+        underlying="BANKNIFTY",
+        confidence=conf,
+        reason="breakout blocked",
+        regime_pair_group="G1",
+        regime_pair_type="breakout",
+        regime_pair_preferred=False,
+    )
+    raw = encode_regime_pair_trigger_reason(ns)
+    decoded = decode_regime_pair_trigger_reason(raw)
+    assert decoded["regime_pair_group"] == "G1"
+    assert decoded["regime_pair_type"] == "breakout"
+    assert decoded["regime_pair_preferred"] is False

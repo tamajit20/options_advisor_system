@@ -653,15 +653,20 @@ class SuggestionRepo:
         confidence_score: int,
         conditions_json: str,
         reason: str,
+        trigger_reason: Optional[str] = None,
     ) -> None:
         self.db.execute(
             """
             INSERT INTO options_suggestions
               (suggestion_id, generated_on, strategy, strategy_type, underlying,
-               confidence_score, conditions_json, status, no_suggestion_reason)
-            VALUES (?, ?, 'NONE', 'NONE', ?, ?, ?, 'NO_SUGGESTION', ?)
+               confidence_score, conditions_json, status, no_suggestion_reason,
+               trigger_reason)
+            VALUES (?, ?, 'NONE', 'NONE', ?, ?, ?, 'NO_SUGGESTION', ?, ?)
             """,
-            [suggestion_id, generated_on, underlying, confidence_score, conditions_json, reason],
+            [
+                suggestion_id, generated_on, underlying, confidence_score,
+                conditions_json, reason, trigger_reason,
+            ],
         ).close()
 
     def next_suggestion_id(self, today: date) -> str:

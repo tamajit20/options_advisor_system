@@ -961,18 +961,26 @@ function renderMarketSitOutSummary(summary) {
 
 function renderSitOutCard(s) {
   const regime = s.market_regime || {};
-  const regimeTitle = regime.title ? escapeHtml(regime.title) : 'Sitting out';
+  const pairBlocked = s.regime_pair_type === 'range' || s.regime_pair_type === 'breakout';
+  const regimeTitle = regime.title ? escapeHtml(regime.title) : (pairBlocked ? 'Scenario blocked' : 'Sitting out');
   const reason = s.no_suggestion_reason || s.reason || '';
   const confLabel = s.confidence_display || formatConfidence(s) || `${s.confidence_score || '—'} passed`;
+  const heading = pairBlocked
+    ? `${escapeHtml(s.underlying)} — this scenario is blocked`
+    : `${escapeHtml(s.underlying)} — No trade today`;
+  const tag = pairBlocked ? 'SCENARIO BLOCKED' : 'SITTING OUT';
+  const hint = pairBlocked
+    ? 'This partner did not pass today\u2019s gates. Take the other scenario if you believe that thesis, or sit out.'
+    : 'Gates unchanged \u2014 the engine waits for a high-edge setup rather than forcing a marginal trade.';
   return `<div class="card sit-out-card">
     <div class="card-head">
-      <h3>${escapeHtml(s.underlying)} — No trade today</h3>
-      <span class="tag tag-warn">SITTING OUT</span>
+      <h3>${heading}</h3>
+      <span class="tag tag-warn">${tag}</span>
     </div>
     <p class="sit-out-regime"><strong>${regimeTitle}</strong></p>
     <p class="muted sit-out-reason">${escapeHtml(reason)}</p>
     <p class="muted sit-out-conf" style="font-size:.85rem">Confidence: ${escapeHtml(confLabel)}</p>
-    <p class="muted sit-out-hint" style="font-size:.82rem">Gates unchanged — the engine waits for a high-edge setup rather than forcing a marginal trade.</p>
+    <p class="muted sit-out-hint" style="font-size:.82rem">${hint}</p>
   </div>`;
 }
 
@@ -984,6 +992,22 @@ function regimePairTitle(s) {
     return 'If market moves sharply up or down';
   }
   return '';
+}
+
+function regimePairChip(s, { withGroup = false } = {}) {
+  const ptype = s?.regime_pair_type;
+  if (ptype !== 'range' && ptype !== 'breakout') return '';
+  const label = ptype === 'range' ? 'Range' : 'Breakout';
+  const cls = ptype === 'range' ? 'ctx-chip ctx-regime-range' : 'ctx-chip ctx-regime-breakout';
+  const gid = s.regime_pair_group || '';
+  const tip = ptype === 'range'
+    ? 'Wins if the index stays in a range (calendar / condor / butterfly)'
+    : 'Wins if the index makes a sharp move (straddle / strangle)';
+  const title = gid ? `${tip}. Pair ${gid}` : tip;
+  const groupBit = withGroup && gid
+    ? ` · ${escapeHtml(gid)}`
+    : '';
+  return `<span class="${cls}" title="${escapeHtml(title)}">${label}${groupBit}</span>`;
 }
 
 function groupRegimePairSuggestions(list) {
@@ -1000,7 +1024,18 @@ function groupRegimePairSuggestions(list) {
     }
     groups.get(gid).items.push(s);
   }
-  const out = [...groups.values(), ...singles];
+  const out = [];
+  for (const g of groups.values()) {
+    if ((g.items || []).length >= 2) {
+      out.push(g);
+    } else {
+      // Incomplete pair (legacy loner) — render as a normal card, no pair header.
+      for (const item of g.items || []) {
+        singles.push({ type: 'single', item });
+      }
+    }
+  }
+  out.push(...singles);
   out.sort((a, b) => {
     const au = (a.items && a.items[0]?.underlying) || a.item?.underlying || '';
     const bu = (b.items && b.items[0]?.underlying) || b.item?.underlying || '';
@@ -1043,13 +1078,19 @@ function renderRegimePairGroup(group, startCardIdx = 0) {
     || items[0]?.regime_pair_preference_reason
     || '';
   const underlying = items[0]?.underlying || '';
+  const groupId = group.group || items[0]?.regime_pair_group || '';
+  const pairChip = groupId
+    ? `<span class="ctx-chip ctx-regime-pair" title="Shared regime_pair_group id">Pair · ${escapeHtml(groupId)}</span>`
+    : '';
+  // Caller only passes complete pairs (group size >= 2). Never use ONE SCENARIO.
   const header = `<div class="regime-pair-header">
     <div class="regime-pair-headline">
       <span class="tag tag-info">TWO SCENARIOS</span>
+      ${pairChip}
       <strong>${escapeHtml(underlying)} — pick the scenario you believe in</strong>
     </div>
     ${reason ? `<p class="regime-pair-pref muted">${escapeHtml(reason)}</p>` : ''}
-    <p class="regime-pair-hint muted">Take only one of these — they bet on opposite outcomes.</p>
+    <p class="regime-pair-hint muted">Take only one of these — they bet on opposite outcomes. Range vs Breakout chips mark which card is which.</p>
   </div>`;
   const cards = items.map((s, i) => {
     const prefBadge = s.regime_pair_preferred
@@ -1058,6 +1099,7 @@ function renderRegimePairGroup(group, startCardIdx = 0) {
     const scenario = regimePairTitle(s);
     return `<div class="regime-pair-card${s.regime_pair_preferred ? ' regime-pair-preferred' : ''}">
       <div class="regime-pair-scenario">
+        ${regimePairChip(s)}
         <strong>${escapeHtml(scenario)}</strong>
         ${prefBadge}
       </div>
@@ -1081,6 +1123,18 @@ function renderSuggestionList(list) {
   }).join('');
 }
 
+function suggestionIsPending(s) {
+  return (s.status || '').toUpperCase() === 'PENDING';
+}
+
+function suggestionIsActionable(s) {
+  return suggestionIsPending(s) && s.execution_gate && s.execution_gate.ok;
+}
+
+function suggestionIsGateBlocked(s) {
+  return suggestionIsPending(s) && s.execution_gate && !s.execution_gate.ok;
+}
+
 async function loadSuggestion() {
   const c = $('#suggestion-container');
   c.className = 'loading'; c.textContent = 'Loading…';
@@ -1091,19 +1145,40 @@ async function loadSuggestion() {
     const data = await API('/api/suggestion/today');
     const list = data.suggestions || [];
     const sitOut = data.sit_out || [];
-    const pending = list.filter(s => (s.status || '').toUpperCase() === 'PENDING');
-    const actionable = pending.filter(s => s.execution_gate && s.execution_gate.ok);
-    const blocked = pending.filter(s => s.execution_gate && !s.execution_gate.ok);
+    const grouped = groupRegimePairSuggestions(list);
+    const mainHtml = [];
+    const blockedHtml = [];
+    let cardIdx = 0;
+    for (const entry of grouped) {
+      if (entry.type === 'pair') {
+        const items = entry.items || [];
+        const anyActionable = items.some(suggestionIsActionable);
+        const anyGateBlocked = items.some(suggestionIsGateBlocked);
+        const html = renderRegimePairGroup(entry, cardIdx);
+        cardIdx += items.length;
+        if (anyActionable) mainHtml.push(html);
+        else if (anyGateBlocked) blockedHtml.push(html);
+        continue;
+      }
+      const s = entry.item;
+      if (suggestionIsActionable(s)) {
+        mainHtml.push(renderSuggestion(s, false, list, false, cardIdx === 0));
+        cardIdx += 1;
+      } else if (suggestionIsGateBlocked(s)) {
+        blockedHtml.push(renderSuggestion(s, false, list, false, false));
+        cardIdx += 1;
+      }
+    }
     const parts = [];
-    if (data.market_summary && (sitOut.length || !actionable.length)) {
+    if (data.market_summary && (sitOut.length || !mainHtml.length)) {
       parts.push(renderMarketSitOutSummary(data.market_summary));
     }
-    if (actionable.length) {
-      parts.push(renderSuggestionList(actionable));
+    if (mainHtml.length) {
+      parts.push(mainHtml.join(''));
     }
-    if (blocked.length) {
+    if (blockedHtml.length) {
       parts.push(`<div class="suggestion-blocked-intro muted">These suggestions failed live execution checks (stale data, strike distance, etc.) — use <strong>Mark Executed at suggested prices</strong> on each card to record the trade as originally suggested.</div>`);
-      parts.push(renderSuggestionList(blocked));
+      parts.push(blockedHtml.join(''));
     }
     if (sitOut.length) {
       parts.push(sitOut.map(s => renderSitOutCard(s)).join(''));
@@ -2064,6 +2139,9 @@ function renderPlainEnglishStructured(s) {
     const eFmt = new Date(ed + 'T00:00:00').toLocaleDateString('en-IN',
       { weekday:'short', day:'2-digit', month:'short', year:'2-digit' });
     chips.push(`<span class="ctx-chip ctx-entry-date" title="Intended execution date">Execute \u2192 ${escapeHtml(eFmt)}</span>`);
+  }
+  if (s.regime_pair_type === 'range' || s.regime_pair_type === 'breakout') {
+    chips.push(regimePairChip(s, { withGroup: true }));
   }
   // Review item #10: expected-move calibration warning. Server-computed
   // when realised/expected median for (underlying, dte_band) deviates >25%
@@ -3033,7 +3111,7 @@ function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
       <strong>Live checks failed</strong>
     </div>
     ${detail ? `<p class="suggestion-gate-detail">${escapeHtml(detail)}</p>` : ''}
-    <p class="suggestion-gate-hint muted">You can still <strong>Mark Executed at suggested prices</strong> below to record the trade exactly as suggested, or dismiss this card.</p>
+    <p class="suggestion-gate-hint muted">Record the trade as suggested, or enter your fill prices below and click <strong>Execute</strong>.</p>
   </div>`;
 }
 
@@ -3143,6 +3221,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
+        ${regimePairChip(s)}
         ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn" title="Live checks failed — use Mark Executed at suggested prices">${escapeHtml(gateLabel)}</span>` : ''}
         ${sugStatus === 'IGNORED' ? '<span class="tag tag-warn">Retired</span>' : ''}
         ${s.is_stale && sugStatus === 'PENDING' && !gateLabel ? '<span class="tag tag-warn">Stale</span>' : ''}
@@ -3240,15 +3319,26 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           <span class="muted exec-adj-note" style="font-size:.72rem">${escapeHtml(slExitPlanText(s.strategy, econ.ml))}</span>
         </div>`}
       </div>
-    </div>` : `
-    <p class="muted exec-suggested-note" style="margin-top:10px;font-size:.85rem">
-      Records each leg at the <strong>suggested price</strong> shown above (live freshness / strike checks skipped).
-      Spot at generation: <strong>₹${fmt(s.spot_at_generation)}</strong>.
-    </p>`}
-    <div class="btn-row" style="margin-top:12px">
-      <button class="btn btn-accent btn-mark-exec"${canExecuteAtSuggested ? ' data-at-suggested="1"' : ''}>${canExecuteAtSuggested ? 'Mark Executed at suggested prices' : 'Mark Executed'}</button>
-      <button class="btn btn-ghost btn-ignore">Ignore</button>
-    </div>` : '')}`;
+    </div>` : ''}
+    <div class="exec-action-bar">
+      <button type="button" class="btn btn-ghost btn-mark-exec" data-at-suggested="1">Mark Executed at suggested prices</button>
+      <div class="exec-fill-cluster">
+        ${(s.legs || []).map(l => `
+          <label class="exec-fill-leg">
+            <span>${escapeHtml(l.action)} ${l.strike} ${escapeHtml(l.option_type)}</span>
+            <input type="number" step="0.05" min="0.05" class="exec-fill-price"
+                   data-leg-order="${l.leg_order}"
+                   value="${l.suggested_price}"
+                   title="Your fill for this leg">
+          </label>`).join('')}
+        <button type="button" class="btn btn-accent btn-exec-manual"${canExecuteAtSuggested ? ' data-skip-gate="1"' : ''}>Execute</button>
+      </div>
+      <button type="button" class="btn btn-ghost btn-ignore">Ignore</button>
+    </div>
+    <p class="muted exec-suggested-note" style="margin-top:8px;font-size:.82rem">
+      <strong>Mark Executed at suggested prices</strong> records today’s trade at the suggested ₹ shown on each leg.
+      Enter your actual fills and click <strong>Execute</strong> to use those prices instead.
+    </p>` : '')}`;
 
   if (readOnly) {
     const detailsCls = inlineHeader
@@ -3458,88 +3548,7 @@ function bindSuggestionActions() {
     if (btn.disabled) return;
     const card = btn.closest('.card');
     const sid  = card.dataset.sugId;
-    const atSuggested = btn.dataset.atSuggested === '1';
 
-    if (!atSuggested) {
-    // ── Lot-count parity validation ──────────────────────────────────────────
-    const execLots = $$('.leg-row', card)
-      .filter(row => row.querySelector('.leg-exec')?.checked)
-      .map(row => parseInt(row.querySelector('.leg-lots')?.value || 1))
-      .filter(n => !isNaN(n));
-    const uniqueLots = [...new Set(execLots)];
-    if (uniqueLots.length > 1) {
-      toast(`All legs must use the same lot count — found ${uniqueLots.join(' & ')} lots. Fix before proceeding.`, 'err');
-      return;
-    }
-    const numLots = uniqueLots[0] || 1;
-
-    // ── Nifty spot at execution — required ───────────────────────────────────
-    const spotInput = card.querySelector('.exec-spot-input');
-    const spotRaw   = spotInput?.value.trim();
-    const spotVal   = spotRaw ? parseFloat(spotRaw) : null;
-    if (!spotVal || isNaN(spotVal) || spotVal <= 0) {
-      if (spotInput) { spotInput.classList.add('input-error'); spotInput.focus(); }
-      toast('Enter the Nifty spot price at execution before proceeding.', 'err');
-      return;
-    }
-    if (spotInput) spotInput.classList.remove('input-error');
-
-    // ── 2-step confirm ────────────────────────────────────────────────────────
-    if (!btn.dataset.confirmed) {
-      btn.dataset.confirmed = '1';
-      btn.textContent = `Confirm execution · ${numLots} lot${numLots !== 1 ? 's' : ''}?`;
-      btn.classList.add('btn-confirm-pending');
-      const cancelBtn = document.createElement('button');
-      cancelBtn.className = 'btn btn-ghost btn-confirm-cancel';
-      cancelBtn.textContent = 'Cancel';
-      cancelBtn.addEventListener('click', () => {
-        btn.dataset.confirmed = '';
-        btn.textContent = 'Mark Executed';
-        btn.classList.remove('btn-confirm-pending');
-        cancelBtn.remove();
-      });
-      btn.insertAdjacentElement('afterend', cancelBtn);
-      return;
-    }
-    // Clear confirm state before submitting
-    btn.dataset.confirmed = '';
-    btn.textContent = 'Mark Executed';
-    btn.classList.remove('btn-confirm-pending');
-    btn.nextElementSibling?.classList.contains('btn-confirm-cancel') && btn.nextElementSibling.remove();
-
-    const fills = $$('.leg-row', card).map(row => {
-      const lotsInput = row.querySelector('.leg-lots');
-      const lo = row.querySelector('.leg-exec').dataset.leg;
-      const exec = row.querySelector('.leg-exec').checked;
-      const price = parseFloat(row.querySelector('input[type="number"][data-leg-price]').value);
-      const lotsOverride = lotsInput ? parseInt(lotsInput.value) : null;
-      return {leg_order: parseInt(lo), executed: exec,
-              fill_price: exec ? price : null,
-              fill_time: new Date().toISOString(),
-              lots_override: lotsOverride};
-    });
-    const sugSl   = parseFloat(card.dataset.baseSl)    || 0;
-    const sugSpot = parseFloat(card.dataset.spotAtGen) || 0;
-    const spotSlStrategy = usesSpotStopLoss(card.dataset.strategy, sugSl);
-    const adjSl = (spotSlStrategy && spotVal != null && !isNaN(spotVal) && spotVal > 0 && sugSl > 0)
-      ? sugSl + (spotVal - sugSpot) : null;
-    try {
-      const r = await API(`/api/suggestion/${sid}/mark-executed`, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          fills,
-          spot_at_execution: spotVal,
-          actual_stop_loss_level: adjSl,
-        }),
-      });
-      toast(r.trade_id ? `Trade created: ${r.trade_id}` : 'Suggestion ignored', 'info');
-      loadSuggestion(); loadTrades();
-    } catch (err) { toast(err.message, 'err'); }
-    return;
-    }
-
-    // ── At-suggested path (stale / strike checks failed) ─────────────────────
     if (!btn.dataset.confirmed) {
       btn.dataset.confirmed = '1';
       btn.textContent = 'Confirm at suggested prices?';
@@ -3573,6 +3582,104 @@ function bindSuggestionActions() {
         }),
       });
       toast(r.trade_id ? `Trade created at suggested prices: ${r.trade_id}` : 'Suggestion ignored', 'info');
+      loadSuggestion(); loadTrades();
+    } catch (err) { toast(err.message, 'err'); }
+  }));
+
+  $$('.btn-exec-manual').forEach(b => b.addEventListener('click', async (e) => {
+    const btn  = e.currentTarget;
+    if (btn.disabled) return;
+    const card = btn.closest('.card');
+    const sid  = card.dataset.sugId;
+    const skipGate = btn.dataset.skipGate === '1';
+
+    const fillInputs = $$('.exec-fill-price', card);
+    const prices = fillInputs.map(inp => parseFloat(inp.value));
+    if (prices.some(p => !p || isNaN(p) || p <= 0)) {
+      toast('Enter a fill price for every leg before Execute.', 'err');
+      fillInputs.find(inp => {
+        const p = parseFloat(inp.value);
+        return !p || isNaN(p) || p <= 0;
+      })?.focus();
+      return;
+    }
+
+    const execLots = $$('.leg-row', card)
+      .filter(row => row.querySelector('.leg-exec')?.checked !== false)
+      .map(row => parseInt(row.querySelector('.leg-lots')?.value || 1))
+      .filter(n => !isNaN(n));
+    const uniqueLots = [...new Set(execLots)];
+    if (uniqueLots.length > 1) {
+      toast(`All legs must use the same lot count — found ${uniqueLots.join(' & ')} lots. Fix before proceeding.`, 'err');
+      return;
+    }
+    const numLots = uniqueLots[0] || 1;
+
+    const spotInput = card.querySelector('.exec-spot-input');
+    const spotRaw   = spotInput?.value.trim();
+    let spotVal     = spotRaw ? parseFloat(spotRaw) : null;
+    if (!skipGate) {
+      if (!spotVal || isNaN(spotVal) || spotVal <= 0) {
+        if (spotInput) { spotInput.classList.add('input-error'); spotInput.focus(); }
+        toast('Enter the Nifty spot price at execution before proceeding.', 'err');
+        return;
+      }
+      if (spotInput) spotInput.classList.remove('input-error');
+    } else if (!spotVal || isNaN(spotVal) || spotVal <= 0) {
+      spotVal = parseFloat(card.dataset.spotAtGen) || null;
+    }
+
+    if (!btn.dataset.confirmed) {
+      btn.dataset.confirmed = '1';
+      btn.textContent = `Confirm Execute · ${numLots} lot${numLots !== 1 ? 's' : ''}?`;
+      btn.classList.add('btn-confirm-pending');
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn btn-ghost btn-confirm-cancel';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.addEventListener('click', () => {
+        btn.dataset.confirmed = '';
+        btn.textContent = 'Execute';
+        btn.classList.remove('btn-confirm-pending');
+        cancelBtn.remove();
+      });
+      btn.insertAdjacentElement('afterend', cancelBtn);
+      return;
+    }
+    btn.dataset.confirmed = '';
+    btn.textContent = 'Execute';
+    btn.classList.remove('btn-confirm-pending');
+    btn.nextElementSibling?.classList.contains('btn-confirm-cancel') && btn.nextElementSibling.remove();
+
+    const fills = fillInputs.map(inp => {
+      const order = parseInt(inp.dataset.legOrder, 10);
+      const row = card.querySelector(`.leg-row .leg-exec[data-leg="${order}"]`)?.closest('.leg-row');
+      const lotsInput = row?.querySelector('.leg-lots');
+      const checked = row?.querySelector('.leg-exec')?.checked !== false;
+      const lotsOverride = lotsInput ? parseInt(lotsInput.value) : null;
+      return {
+        leg_order: order,
+        executed: checked,
+        fill_price: checked ? parseFloat(inp.value) : null,
+        lots_override: lotsOverride,
+      };
+    });
+    const sugSl   = parseFloat(card.dataset.baseSl)    || 0;
+    const sugSpot = parseFloat(card.dataset.spotAtGen) || 0;
+    const spotSlStrategy = usesSpotStopLoss(card.dataset.strategy, sugSl);
+    const adjSl = (spotSlStrategy && spotVal != null && !isNaN(spotVal) && spotVal > 0 && sugSl > 0)
+      ? sugSl + (spotVal - sugSpot) : null;
+    try {
+      const r = await API(`/api/suggestion/${sid}/mark-executed`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          fills,
+          spot_at_execution: spotVal,
+          actual_stop_loss_level: adjSl,
+          skip_execution_gate: skipGate,
+        }),
+      });
+      toast(r.trade_id ? `Trade created: ${r.trade_id}` : 'Suggestion ignored', 'info');
       loadSuggestion(); loadTrades();
     } catch (err) { toast(err.message, 'err'); }
   }));

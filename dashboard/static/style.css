@@ -352,6 +352,36 @@ table.dt {
 .btn-confirm-pending:hover { background: #b45309 !important; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
+.exec-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
+.exec-fill-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px;
+  background: rgba(255,255,255,.03);
+}
+.exec-fill-leg {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: .7rem;
+  color: var(--text-dim);
+}
+.exec-fill-leg input {
+  width: 88px;
+  min-height: 36px;
+  padding: 4px 8px;
+}
+
 /* ---------- Supplement panel (Complete Trade) ---------- */
 .supplement-panel {
   margin-top: 2px;
@@ -1003,6 +1033,27 @@ input:focus, select:focus, textarea:focus {
   font-size: .95rem;
 }
 .regime-pair-pref-badge { font-size: .72rem; }
+.regime-pair-card .sit-out-card {
+  margin: 0;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  padding: 4px 0 0;
+}
+.ctx-chip.ctx-regime-range {
+  color: #22d3ee;
+  border-color: rgba(34, 211, 238, .4);
+  font-weight: 700;
+}
+.ctx-chip.ctx-regime-breakout {
+  color: #fb7185;
+  border-color: rgba(251, 113, 133, .4);
+  font-weight: 700;
+}
+.ctx-chip.ctx-regime-pair {
+  color: #a78bfa;
+  border-color: rgba(167, 139, 250, .4);
+}
 
 .hist-legs  { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .hist-leg   { display: flex; align-items: center; gap: 6px; font-size: .8rem; }

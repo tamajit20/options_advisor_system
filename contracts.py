@@ -292,6 +292,11 @@ class NoSuggestion:
     underlying:       str
     confidence:       ConfidenceResult
     reason:           str             # human summary, e.g., "IV Rank 35 (not >50 or <30)"
+    # Sideways regime pair (range vs breakout) — persisted via trigger_reason JSON.
+    regime_pair_group:              Optional[str] = None
+    regime_pair_type:               Optional[str] = None   # "range" | "breakout"
+    regime_pair_preferred:          bool = False
+    regime_pair_preference_reason:  Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
