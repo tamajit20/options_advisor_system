@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from database.runtime_flags import (
-    FLAG_ARB_APP_ENABLED,
     FLAG_OPTIONS_ADVISOR_ENABLED,
     FLAG_SCOUT_APP_ENABLED,
 )
@@ -28,7 +27,6 @@ def test_app_controller_starts_and_stops_scout(mocker):
     repo.get_bool.side_effect = lambda key, default=False: {
         FLAG_OPTIONS_ADVISOR_ENABLED: True,
         FLAG_SCOUT_APP_ENABLED: True,
-        FLAG_ARB_APP_ENABLED: True,
     }.get(key, default)
 
     scout = _FakeComponent()
@@ -40,7 +38,6 @@ def test_app_controller_starts_and_stops_scout(mocker):
     repo.get_bool.side_effect = lambda key, default=False: {
         FLAG_OPTIONS_ADVISOR_ENABLED: True,
         FLAG_SCOUT_APP_ENABLED: False,
-        FLAG_ARB_APP_ENABLED: True,
     }.get(key, default)
     ctrl.apply()
     assert scout.started is False

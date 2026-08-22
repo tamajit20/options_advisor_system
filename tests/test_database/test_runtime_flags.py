@@ -20,8 +20,6 @@ import pytest
 
 from database.runtime_flags import (
     DEFAULT_FLAGS,
-    FLAG_ARB_APP_ENABLED,
-    FLAG_BASIS_APP_ENABLED,
     FLAG_CIRCUIT_BREAKER_ACTIVE,
     FLAG_CLOSURE_ALERTS,
     FLAG_KILL_SWITCH,
@@ -108,8 +106,6 @@ def test_default_flag_inventory_complete():
         FLAG_CIRCUIT_BREAKER_ACTIVE,
         FLAG_OPTIONS_ADVISOR_ENABLED,
         FLAG_SCOUT_APP_ENABLED,
-        FLAG_ARB_APP_ENABLED,
-        FLAG_BASIS_APP_ENABLED,
     }
 
 

@@ -37,10 +37,6 @@ Flag inventory
                                                    aggregator, intraday monitors.
 - `scout_app_enabled`       (bool, default True)  — Scout equity ticks, signal
                                                    engine, auto-trader poll.
-- `arb_app_enabled`         (bool, default True)  — Arb NSE/BSE ticks and gap
-                                                   engine.
-- `basis_app_enabled`       (bool, default True)  — Basis NSE spot + NFO fut
-                                                   ticks and basis engine.
 """
 
 from __future__ import annotations
@@ -70,8 +66,6 @@ FLAG_TRADE_EXECUTION_ENABLED = "trade_execution_enabled"
 FLAG_CIRCUIT_BREAKER_ACTIVE = "circuit_breaker_active"
 FLAG_OPTIONS_ADVISOR_ENABLED = "options_advisor_enabled"
 FLAG_SCOUT_APP_ENABLED = "scout_app_enabled"
-FLAG_ARB_APP_ENABLED = "arb_app_enabled"
-FLAG_BASIS_APP_ENABLED = "basis_app_enabled"
 
 
 # ---------------------------------------------------------------------------
@@ -150,23 +144,6 @@ DEFAULT_FLAGS: List[_FlagSpec] = [
         description=(
             "Scout app — equity watchlist WS subscriptions, push signal engine, "
             "and auto-trader poll loop."
-        ),
-    ),
-    _FlagSpec(
-        key=FLAG_ARB_APP_ENABLED,
-        default="true",
-        type="bool",
-        description=(
-            "Arb Monitor app — dual-listed NSE/BSE WS subscriptions and gap engine."
-        ),
-    ),
-    _FlagSpec(
-        key=FLAG_BASIS_APP_ENABLED,
-        default="true",
-        type="bool",
-        description=(
-            "Basis Monitor app — NSE spot + NFO near-month fut WS subscriptions "
-            "and cash-futures basis engine."
         ),
     ),
 ]

@@ -143,7 +143,7 @@ class TokenMeta:
     strike: Optional[float] = None
     option_type: Optional[str] = None
     is_index: bool = False
-    # options_index | options_leg | scout_equity | arb_nse | arb_bse
+    # options_index | options_leg | scout_equity
     product: Optional[str] = None
     exchange: Optional[str] = None
 

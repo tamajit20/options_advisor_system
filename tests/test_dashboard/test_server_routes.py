@@ -41,6 +41,10 @@ class TestIndexRoute:
         assert "CALENDAR_SPREAD" in html
         assert "strategy_guide.js" in html
         assert 'data-tab="learn"' in html
+        assert "arb.js" not in html
+        assert "basis.js" not in html
+        assert "Arb Monitor" not in html
+        assert "Basis Monitor" not in html
 
 
 class TestHealth:

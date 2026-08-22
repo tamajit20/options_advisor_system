@@ -6,7 +6,6 @@ from providers.tick_routing import (
     PRODUCT_OPTIONS_INDEX,
     PRODUCT_OPTIONS_LEG,
     PRODUCT_SCOUT_EQUITY,
-    TOPIC_TICK_ARB,
     TOPIC_TICK_INDEX,
     TOPIC_TICK_OPTIONS,
     TOPIC_TICK_SCOUT,
@@ -14,6 +13,7 @@ from providers.tick_routing import (
     options_underlyings,
     resolve_product,
     topic_for_meta,
+    topic_for_product,
 )
 from providers.zerodha.ws_runner import TokenMeta
 
@@ -52,24 +52,6 @@ def test_resolve_product_null_meta_defaults_scout_equity():
 
 
 def test_topic_for_product_maps_all_products():
-    from providers.tick_routing import (
-        PRODUCT_ARB_BSE,
-        PRODUCT_ARB_NSE,
-        TOPIC_TICK_ARB,
-        topic_for_product,
-    )
-
     assert topic_for_product(PRODUCT_OPTIONS_LEG) == TOPIC_TICK_OPTIONS
     assert topic_for_product(PRODUCT_OPTIONS_INDEX) == TOPIC_TICK_INDEX
     assert topic_for_product(PRODUCT_SCOUT_EQUITY) == TOPIC_TICK_SCOUT
-    assert topic_for_product(PRODUCT_ARB_NSE) == TOPIC_TICK_ARB
-    assert topic_for_product(PRODUCT_ARB_BSE) == TOPIC_TICK_ARB
-
-
-def test_resolve_product_arb_legs():
-    from providers.tick_routing import PRODUCT_ARB_NSE, PRODUCT_ARB_BSE
-
-    meta_nse = TokenMeta(symbol="RELIANCE", product=PRODUCT_ARB_NSE, exchange="NSE")
-    meta_bse = TokenMeta(symbol="RELIANCE", product=PRODUCT_ARB_BSE, exchange="BSE")
-    assert topic_for_meta(meta_nse) == TOPIC_TICK_ARB
-    assert topic_for_meta(meta_bse) == TOPIC_TICK_ARB

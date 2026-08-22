@@ -46,8 +46,6 @@ from providers.event_bus import (
     TOPIC_TICK_INDEX,
     TOPIC_TICK_OPTIONS,
     TOPIC_TICK_SCOUT,
-    TOPIC_TICK_ARB,
-    TOPIC_TICK_BASIS,
     TOPIC_TOKEN_EXPIRED,
     get_event_bus,
 )
@@ -148,7 +146,7 @@ class WSMonitor:
             return
         bus = self._bus or get_event_bus()
         self._bus = bus
-        for topic in (TOPIC_TICK_OPTIONS, TOPIC_TICK_INDEX, TOPIC_TICK_SCOUT, TOPIC_TICK_ARB, TOPIC_TICK_BASIS):
+        for topic in (TOPIC_TICK_OPTIONS, TOPIC_TICK_INDEX, TOPIC_TICK_SCOUT):
             self._unsubs.append(
                 bus.subscribe(topic, lambda q, t=topic: self._on_tick(q, t))
             )

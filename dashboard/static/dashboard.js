@@ -702,9 +702,7 @@ function switchTab(name) {
     const tab = b.dataset.tab;
     const isBottomNav = b.classList.contains('bnav-item');
     const active = tab === name
-      || (isBottomNav && tab === 'scout-signals' && name.startsWith('scout-'))
-      || (isBottomNav && tab === 'arb-live' && name.startsWith('arb-'))
-      || (isBottomNav && tab === 'basis-live' && name.startsWith('basis-'));
+      || (isBottomNav && tab === 'scout-signals' && name.startsWith('scout-'));
     b.classList.toggle('active', active);
   });
   if (name === 'suggestion')    loadSuggestion();
@@ -721,12 +719,6 @@ function switchTab(name) {
   if (TAB_LOADERS[name])        TAB_LOADERS[name]();
   if (name.startsWith('scout-')) {
     const sec = document.getElementById('nav-section-scout');
-    if (sec) sec.open = true;
-  } else if (name.startsWith('arb-')) {
-    const sec = document.getElementById('nav-section-arb');
-    if (sec) sec.open = true;
-  } else if (name.startsWith('basis-')) {
-    const sec = document.getElementById('nav-section-basis');
     if (sec) sec.open = true;
   } else if (TABS.includes(name)) {
     const sec = document.getElementById('nav-section-options');
@@ -759,8 +751,6 @@ function _restoreActiveTab() {
   if (hash === 'scout') initial = 'scout-signals';
   else if (hash === 'learn' || hash.startsWith('learn/')) initial = 'learn';
   else if (hash && hash.startsWith('scout-')) initial = hash;
-  else if (hash && hash.startsWith('arb-')) initial = hash;
-  else if (hash && hash.startsWith('basis-')) initial = hash;
   else if (hash && TABS.includes(hash)) initial = hash;
   if (!initial) {
     try {
@@ -768,8 +758,6 @@ function _restoreActiveTab() {
       if (saved === 'scout') initial = 'scout-signals';
       else if (saved === 'learn' || (saved && saved.startsWith('learn/'))) initial = 'learn';
       else if (saved && saved.startsWith('scout-')) initial = saved;
-      else if (saved && saved.startsWith('arb-')) initial = saved;
-      else if (saved && saved.startsWith('basis-')) initial = saved;
       else if (saved && TABS.includes(saved)) initial = saved;
     } catch (_) {}
   }

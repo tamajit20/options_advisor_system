@@ -213,55 +213,6 @@ NIFTY_BANK_SYMBOLS: tuple[str, ...] = (
     "PNB", "SBIN",
 )
 
-# ---------------------------------------------------------------------------
-# Arb Monitor (separate module — arb_* tables, /api/arb/*)
-# ---------------------------------------------------------------------------
-ARB_CONFIG: dict = {
-    "enabled": True,
-    # Universe for pair building: nifty50_dual | all_matched
-    "universe": "nifty50_dual",
-    # Max age (seconds) for pairing NSE+BSE legs on the same tick cycle.
-    "tick_staleness_sec": 3,
-    # Close open episode when either leg is older than this (seconds).
-    "leg_stale_close_sec": 5,
-    # Background DB writer flush interval (seconds).
-    "db_flush_interval_sec": 1,
-    # Shared snapshot for dashboard SSE (written by ws_runner gap engine).
-    "live_state_path": "data/arb_live_state.json",
-    # Server-side watch interval for /api/arb/live/stream (seconds).
-    "live_stream_poll_sec": 0.5,
-    # Persist to arb_gaps only when |gap_pct| >= this (0 = store all episodes).
-    # Live SSE still shows sub-threshold gaps; History/DB holds filtered rows only.
-    "min_gap_store_pct": 0.0,
-    # On close, skip DB if episode lasted fewer seconds (0 = no duration gate).
-    "min_duration_store_sec": 0,
-}
-
-# ---------------------------------------------------------------------------
-# Cash-Futures Basis Monitor (separate module — basis_* tables, /api/basis/*)
-# ---------------------------------------------------------------------------
-BASIS_CONFIG: dict = {
-    "enabled": True,
-    # Universe for pair building: nifty50_fo | all_nse_fo
-    "universe": "nifty50_fo",
-    # Max age (seconds) for pairing spot+fut legs on the same tick cycle.
-    "tick_staleness_sec": 3,
-    # Close open episode when either leg is older than this (seconds).
-    "leg_stale_close_sec": 5,
-    # Background DB writer flush interval (seconds).
-    "db_flush_interval_sec": 1,
-    # Shared snapshot for dashboard SSE (written by ws_runner basis engine).
-    "live_state_path": "data/basis_live_state.json",
-    # Server-side watch interval for /api/basis/live/stream (seconds).
-    "live_stream_poll_sec": 0.5,
-    # Persist to basis_episodes only when |basis_pct| >= this (0 = no % gate).
-    "min_basis_store_pct": 0.0,
-    # Persist only when the episode lasted at least this many seconds.
-    # Live tab still shows every open gap; History/DB is filtered.
-    # 60 = must stay ≥ 1 minute. 0 = store regardless of duration.
-    "min_duration_store_sec": 60,
-}
-
 SCOUT_CONFIG: dict = {
     "enabled": True,
     # Default watchlist until user saves via UI (subset of NIFTY_50_SYMBOLS)

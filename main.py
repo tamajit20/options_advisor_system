@@ -231,16 +231,6 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
     from providers.ws_watchdog import WSWatchdog
     from scout.push_engine import ScoutPushEngine
     from scout.subscription import make_scout_equity_loader
-    from arb.gap_engine import ArbGapEngine
-    from arb.subscription import make_arb_pair_loader
-    from arb.instruments import refresh_pairs_to_db
-    from config import ARB_CONFIG
-    from database.arb_models import ArbPairRepo
-    from basis.basis_engine import BasisEngine
-    from basis.subscription import make_basis_pair_loader
-    from basis.instruments import refresh_pairs_to_db as refresh_basis_pairs_to_db
-    from config import BASIS_CONFIG
-    from database.basis_models import BasisPairRepo
 
     cache = TTLCache(default_ttl_seconds=PROVIDERS_CONFIG.get("live_cache_ttl_seconds", 5))
 
@@ -259,38 +249,6 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
 
     flags_repo = RuntimeFlagsRepo(db)
     app_flags = make_app_flag_checkers(flags_repo)
-
-    if ARB_CONFIG.get("enabled", True) and ArbPairRepo(db).count_active() == 0:
-        try:
-            refresh_pairs_to_db(
-                db, master,
-                universe=ARB_CONFIG.get("universe", "nifty50_dual"),
-            )
-            db.commit()
-            logger.info("Arb pairs auto-refreshed on WS startup")
-        except Exception:
-            logger.exception("Arb pair auto-refresh failed (non-fatal)")
-
-    if BASIS_CONFIG.get("enabled", True) and BasisPairRepo(db).count_active() == 0:
-        try:
-            refresh_basis_pairs_to_db(
-                db, master,
-                universe=BASIS_CONFIG.get("universe", "nifty50_fo"),
-            )
-            db.commit()
-            logger.info("Basis pairs auto-refreshed on WS startup")
-        except Exception:
-            logger.exception("Basis pair auto-refresh failed (non-fatal)")
-
-    isin_by_symbol = {
-        str(r["symbol"]).upper(): r.get("isin")
-        for r in ArbPairRepo(db).list_active()
-    }
-
-    expiry_by_symbol = {
-        str(r["symbol"]).upper(): r.get("fut_expiry")
-        for r in BasisPairRepo(db).list_active()
-    }
 
     sub_manager = SubscriptionManager(
         runner=runner,
@@ -311,13 +269,9 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
             PROVIDERS_CONFIG.get("ws_subscription_interval_seconds", 60)
         ),
         equity_loader=make_scout_equity_loader(db),
-        arb_pair_loader=make_arb_pair_loader(db),
-        basis_pair_loader=make_basis_pair_loader(db),
         kill_switch_fn=lambda: flags_repo.get_bool(FLAG_KILL_SWITCH, default=False),
         options_enabled_fn=app_flags["options"],
         scout_enabled_fn=app_flags["scout"],
-        arb_enabled_fn=app_flags["arb"],
-        basis_enabled_fn=app_flags["basis"],
     )
 
     app_controller = AppRuntimeController(
@@ -340,23 +294,6 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
         db=db,
         spot_lookup=lambda s: index_spots.get(s) or scout_spots.get(s),
         event_bus=bus,
-    )
-
-    arb_gap = ArbGapEngine(
-        db=db,
-        event_bus=bus,
-        isin_lookup=lambda s: isin_by_symbol.get(str(s).upper()),
-    )
-
-    from basis.basis_engine import _coerce_date
-
-    def _basis_expiry_lookup(sym: str):
-        return _coerce_date(expiry_by_symbol.get(str(sym).upper()))
-
-    basis_engine = BasisEngine(
-        db=db,
-        event_bus=bus,
-        expiry_lookup=_basis_expiry_lookup,
     )
 
     def _prime_legs(keys):
@@ -462,8 +399,6 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
     ws_watchdog.start()
     app_controller.register_options(chain_aggregator, monitor, regen_watcher, live_risk_monitor)
     app_controller.register_scout(scout_push)
-    app_controller.register_arb(arb_gap)
-    app_controller.register_basis(basis_engine)
     app_controller.apply()
     app_controller.start_polling()
 
@@ -481,8 +416,6 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
     finally:
         app_controller.stop_polling()
         live_risk_monitor.stop()
-        arb_gap.stop()
-        basis_engine.stop()
         scout_push.stop()
         chain_aggregator.stop()
         ws_watchdog.stop()

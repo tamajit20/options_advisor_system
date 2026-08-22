@@ -17,6 +17,7 @@ Design rules:
 from __future__ import annotations
 
 import logging
+import re
 from typing import List
 
 import pyodbc
@@ -912,12 +913,59 @@ def create_all_tables(db: SQLServerConnection) -> None:
         cur = db.execute(sql)
         cur.close()
     from database.scout_schema import create_scout_tables
-    from database.arb_schema import create_arb_tables
-    from database.basis_schema import create_basis_tables
     create_scout_tables(db)
-    create_arb_tables(db)
-    create_basis_tables(db)
-    logger.info("All tables ensured (%d options DDL + scout + arb + basis).", len(_TABLE_DDL))
+    drop_removed_monitor_tables(db)
+    logger.info("All tables ensured (%d options DDL + scout; arb/basis dropped if present).", len(_TABLE_DDL))
+
+
+# Strict whitelist — never drop options_* or scout_* tables.
+_REMOVED_MONITOR_TABLES = (
+    "arb_gaps",
+    "arb_pairs",
+    "arb_config",
+    "basis_episodes",
+    "basis_pairs",
+    "basis_config",
+)
+_REMOVED_MONITOR_FLAG_KEYS = (
+    "arb_app_enabled",
+    "basis_app_enabled",
+)
+_REMOVED_MONITOR_NAME_RE = re.compile(r"^(arb|basis)_[a-z0-9_]+$")
+
+
+def drop_removed_monitor_tables(db: SQLServerConnection) -> None:
+    """Drop Arb/Basis monitor tables only.
+
+    Refuses any name that is not in the whitelist or that looks like an
+    Options Advisor / Scout table. Also deletes the two runtime-flag *rows*
+    (shared ``options_runtime_flags`` table is not dropped).
+    """
+    allowed = frozenset(_REMOVED_MONITOR_TABLES)
+    for name in _REMOVED_MONITOR_TABLES:
+        if name not in allowed or _REMOVED_MONITOR_NAME_RE.fullmatch(name) is None:
+            raise RuntimeError(f"refusing to drop unexpected table name: {name!r}")
+        if name.startswith("options_") or name.startswith("scout_"):
+            raise RuntimeError(f"refusing to drop protected table: {name!r}")
+        sql = (
+            f"IF OBJECT_ID(N'dbo.{name}', N'U') IS NOT NULL "
+            f"DROP TABLE dbo.[{name}]"
+        )
+        cur = db.execute(sql)
+        cur.close()
+        logger.info("Dropped removed monitor table if it existed: %s", name)
+
+    for key in _REMOVED_MONITOR_FLAG_KEYS:
+        if not re.fullmatch(r"[a-z_]+", key):
+            raise RuntimeError(f"refusing to delete unexpected flag key: {key!r}")
+    keys_sql = ", ".join("'" + k + "'" for k in _REMOVED_MONITOR_FLAG_KEYS)
+    flag_sql = (
+        "IF OBJECT_ID(N'dbo.options_runtime_flags', N'U') IS NOT NULL "
+        f"DELETE FROM options_runtime_flags WHERE flag_key IN ({keys_sql})"
+    )
+    cur = db.execute(flag_sql)
+    cur.close()
+    logger.info("Removed arb/basis runtime flag rows if present")
 
 
 def list_tables() -> List[str]:

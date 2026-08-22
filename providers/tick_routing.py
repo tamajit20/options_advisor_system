@@ -10,8 +10,6 @@ Products
 * ``options_index`` — NIFTY / BANKNIFTY / FINNIFTY / VIX (indices for options)
 * ``options_leg``   — subscribed option contracts (trades + chain watchlist)
 * ``scout_equity``  — Scout watchlist NSE equities only
-* ``arb_nse`` / ``arb_bse`` — Arb Monitor dual-listed pair legs
-* ``basis_spot`` / ``basis_fut`` — Basis Monitor NSE spot + NFO near-month fut
 
 The WS runner publishes each tick to a scoped event-bus topic; handlers subscribe
 only to the topics they own.
@@ -30,17 +28,11 @@ if TYPE_CHECKING:
 PRODUCT_OPTIONS_INDEX = "options_index"
 PRODUCT_OPTIONS_LEG = "options_leg"
 PRODUCT_SCOUT_EQUITY = "scout_equity"
-PRODUCT_ARB_NSE = "arb_nse"
-PRODUCT_ARB_BSE = "arb_bse"
-PRODUCT_BASIS_SPOT = "basis_spot"
-PRODUCT_BASIS_FUT = "basis_fut"
 
 # Scoped event-bus topics (see providers/event_bus.py).
 TOPIC_TICK_OPTIONS = "tick.options"
 TOPIC_TICK_INDEX = "tick.index"
 TOPIC_TICK_SCOUT = "tick.scout"
-TOPIC_TICK_ARB = "tick.arb"
-TOPIC_TICK_BASIS = "tick.basis"
 
 _VIX = "VIX"
 
@@ -75,10 +67,6 @@ def topic_for_product(product: str) -> str:
         return TOPIC_TICK_OPTIONS
     if product == PRODUCT_OPTIONS_INDEX:
         return TOPIC_TICK_INDEX
-    if product in (PRODUCT_ARB_NSE, PRODUCT_ARB_BSE):
-        return TOPIC_TICK_ARB
-    if product in (PRODUCT_BASIS_SPOT, PRODUCT_BASIS_FUT):
-        return TOPIC_TICK_BASIS
     return TOPIC_TICK_SCOUT
 
 
