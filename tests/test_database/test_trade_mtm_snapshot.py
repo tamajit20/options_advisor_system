@@ -34,6 +34,22 @@ def test_upsert_hourly_deletes_then_inserts():
     assert insert_args[3] == "15min"
 
 
+def test_latest_by_trade_indexes_newest_row():
+    db = MagicMock()
+    db.fetch_all.return_value = [
+        {"trade_id": "T1", "mtm": -100.0, "snapshot_at": datetime(2026, 8, 21, 15, 15)},
+    ]
+    out = TradeMtmSnapshotRepo(db).latest_by_trade()
+    assert out["T1"]["mtm"] == -100.0
+    assert "MAX(snapshot_at)" in db.fetch_all.call_args[0][0]
+
+
+def test_latest_by_trade_skips_non_list_fetch():
+    db = MagicMock()
+    db.fetch_all.return_value = MagicMock()  # not a list — must not iterate
+    assert TradeMtmSnapshotRepo(db).latest_by_trade() == {}
+
+
 def test_archive_trade_moves_rows():
     db = MagicMock()
     db.fetch_all.return_value = [{

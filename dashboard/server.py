@@ -48,6 +48,7 @@ from database.models import (
     SimulationRepo,
     SpotEodRepo,
     SuggestionRepo,
+    TradeMtmSnapshotRepo,
     TradeRepo,
     VixRepo,
 )
@@ -347,6 +348,36 @@ def _parse_history_date_window(
 
 # Closed-trade history filters on close date (fallback to executed_on when unset).
 _CLOSED_TRADE_DATE_EXPR = "COALESCE(t.closed_on, t.executed_on)"
+
+
+def _optional_closed_date_filters(
+    from_date: Optional[str],
+    to_date: Optional[str],
+    *,
+    date_expr: str = _CLOSED_TRADE_DATE_EXPR,
+) -> tuple[list[str], list]:
+    """Inclusive YYYY-MM-DD filters. Invalid or empty values are skipped (all-time)."""
+    filters: list[str] = []
+    params: list = []
+    fd = (from_date or "").strip()
+    td = (to_date or "").strip()
+
+    def _valid(s: str) -> bool:
+        try:
+            datetime.strptime(s, "%Y-%m-%d")
+            return True
+        except ValueError:
+            return False
+
+    if fd and td and _valid(fd) and _valid(td) and fd > td:
+        fd, td = td, fd
+    if fd and _valid(fd):
+        filters.append(f"CONVERT(date, {date_expr}) >= ?")
+        params.append(fd)
+    if td and _valid(td):
+        filters.append(f"CONVERT(date, {date_expr}) <= ?")
+        params.append(td)
+    return filters, params
 
 _INDEX_LABELS: Dict[str, str] = {
     "NIFTY": "Nifty",
@@ -833,21 +864,29 @@ _EXIT_RISK_TYPES = frozenset({"PROFIT_FLOOR_HIT"})
 _MTM_FLAT_RS = 0.5
 
 
-def _live_mtm_by_trade() -> Dict[str, Dict[str, Any]]:
-    """Latest live MTM snapshot written by LiveRiskMonitor. Fail-open."""
+def _read_live_mtm_state() -> Dict[str, Any]:
+    """Raw live_mtm_state.json ({as_of, trades}). Fail-open."""
     try:
         from config import STRATEGY_CONFIG
         path = (
             (STRATEGY_CONFIG.get("live_risk_monitor") or {}).get("mtm_state_path")
             or "data/live_mtm_state.json"
         )
-        import json as _json
         import os as _os
         if not _os.path.exists(path):
             return {}
         with open(path, encoding="utf-8") as fh:
-            state = _json.load(fh) or {}
-        trades = state.get("trades") or {}
+            state = json.load(fh) or {}
+        return state if isinstance(state, dict) else {}
+    except Exception:
+        logger.debug("live MTM state file read failed", exc_info=True)
+        return {}
+
+
+def _live_mtm_by_trade() -> Dict[str, Dict[str, Any]]:
+    """Latest live MTM snapshot written by LiveRiskMonitor. Fail-open."""
+    try:
+        trades = _read_live_mtm_state().get("trades") or {}
         if not isinstance(trades, dict):
             return {}
         out: Dict[str, Dict[str, Any]] = {}
@@ -868,6 +907,59 @@ def _live_mtm_by_trade() -> Dict[str, Dict[str, Any]]:
     except Exception:
         logger.debug("system-status: live MTM snapshot read failed", exc_info=True)
         return {}
+
+
+def _stored_mtm_payloads(db: Optional[SQLServerConnection] = None) -> Dict[str, Dict[str, Any]]:
+    """Last persisted MTM per trade (options_trade_mtm_snapshot). Fail-open."""
+    owned = False
+    if db is None:
+        try:
+            db = SQLServerConnection()
+            db.connect()
+            owned = True
+        except Exception:
+            return {}
+    try:
+        latest = TradeMtmSnapshotRepo(db).latest_by_trade()
+        out: Dict[str, Dict[str, Any]] = {}
+        for tid, row in (latest or {}).items():
+            mtm = row.get("mtm")
+            if mtm is None:
+                continue
+            legs: Any = {}
+            raw = row.get("leg_ltps_json")
+            if raw:
+                try:
+                    legs = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                except Exception:
+                    legs = {}
+            if not isinstance(legs, dict):
+                legs = {}
+            try:
+                mtm_f = float(mtm)
+            except (TypeError, ValueError):
+                continue
+            out[str(tid)] = {
+                "trade_id": str(tid),
+                "trade_name": row.get("trade_name"),
+                "mtm": mtm_f,
+                "as_of": _ist_iso(row.get("snapshot_at")),
+                "max_profit": row.get("max_profit"),
+                "max_loss": row.get("max_loss"),
+                "dte": row.get("dte"),
+                "leg_ltps": legs,
+                "feed_source": "snapshot",
+            }
+        return out
+    except Exception:
+        logger.debug("stored MTM snapshot read failed", exc_info=True)
+        return {}
+    finally:
+        if owned and db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 def _signal_kind_for_open_trade(
@@ -1467,10 +1559,14 @@ def create_app() -> Flask:
         sug = SuggestionRepo(db)
         notif = NotificationRepo(db)
         rows = trd.open_trades()
+        stored_mtm = _stored_mtm_payloads(db)
         out = []
         for r in rows:
             r_out = _row(r)
             r_out["legs"] = [_row(l) for l in trd.legs_with_suggestion_info(r["trade_id"])]
+            snap = stored_mtm.get(str(r["trade_id"])) or {}
+            r_out["last_mtm"] = snap.get("mtm")
+            r_out["last_mtm_at"] = snap.get("as_of")
             # Live risk alert (TARGET_HIT / LOSS_LIMIT_HIT / PROFIT_FLOOR_HIT /
             # PRE_BREACH_WARNING / PROFIT_FLOOR_SET) so the card can render a prominent badge instead
             # of relying solely on the notification bar.
@@ -1764,13 +1860,10 @@ def create_app() -> Flask:
 
         filters = ["t.status IN ('CLOSED', 'EXPIRED')", "t.net_pnl IS NOT NULL",
                    "t.closed_on IS NOT NULL"]
-        params: list = []
-        if from_date:
-            filters.append("CONVERT(date, t.closed_on) >= ?")
-            params.append(from_date)
-        if to_date:
-            filters.append("CONVERT(date, t.closed_on) <= ?")
-            params.append(to_date)
+        date_filters, params = _optional_closed_date_filters(
+            from_date, to_date, date_expr="t.closed_on",
+        )
+        filters.extend(date_filters)
 
         where = " AND ".join(filters)
         rows = db.fetch_all(
@@ -1833,7 +1926,15 @@ def create_app() -> Flask:
 
         Returns per-strategy: trade count, wins, losses, win rate, avg/total
         net P&L, avg hold days, best/worst trade, and an overall summary row.
+        Optional query params: from_date, to_date (YYYY-MM-DD, close date).
         """
+        date_filters, params = _optional_closed_date_filters(
+            request.args.get("from_date"),
+            request.args.get("to_date"),
+        )
+        where = "t.status IN ('CLOSED', 'EXPIRED') AND t.net_pnl IS NOT NULL"
+        if date_filters:
+            where += " AND " + " AND ".join(date_filters)
         rows = db.fetch_all(
             "SELECT t.trade_id, t.net_pnl, t.gross_pnl, t.total_charges, "
             "       t.executed_on, t.closed_on, t.net_credit_actual, "
@@ -1842,9 +1943,9 @@ def create_app() -> Flask:
             "       COALESCE(s.underlying, t.trade_name) AS underlying "
             "FROM options_trades t "
             "LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
-            "WHERE t.status IN ('CLOSED', 'EXPIRED') "
-            "  AND t.net_pnl IS NOT NULL "
-            "ORDER BY t.executed_on DESC"
+            f"WHERE {where} "
+            "ORDER BY t.executed_on DESC",
+            params,
         )
 
         from collections import defaultdict
@@ -2817,18 +2918,19 @@ def create_app() -> Flask:
     # dashboard can show a live MTM ticker without polling.
     # Falls back to the in-process EventBus for single-container deployments.
     @app.route("/api/live/mtm/snapshot")
-    def api_live_mtm_snapshot():
-        """Return current per-trade MTM state written by ws_runner."""
-        import json as _json
-        import os as _os
-        path = "data/live_mtm_state.json"
-        if not _os.path.exists(path):
-            return jsonify({"as_of": None, "trades": {}})
-        try:
-            with open(path, encoding="utf-8") as fh:
-                return jsonify(_json.load(fh))
-        except Exception:
-            return jsonify({"as_of": None, "trades": {}})
+    @_with_db
+    def api_live_mtm_snapshot(db: SQLServerConnection):
+        """Return current per-trade MTM: live file wins, else last DB snapshot."""
+        state = _read_live_mtm_state()
+        live = state.get("trades") or {}
+        if not isinstance(live, dict):
+            live = {}
+        stored = _stored_mtm_payloads(db)
+        merged = dict(stored)
+        for tid, payload in live.items():
+            if isinstance(payload, dict) and payload.get("mtm") is not None:
+                merged[str(tid)] = payload
+        return jsonify({"as_of": state.get("as_of"), "trades": merged})
 
     @app.route("/api/live/mtm")
     def api_live_mtm():

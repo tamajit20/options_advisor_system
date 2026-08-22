@@ -37,6 +37,26 @@ class TestHistoryAndStatsRoutes:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["trades"] == []
+        sql, params = conn.fetch_all.call_args[0]
+        assert "CONVERT(date" not in sql
+        assert params == []
+
+    def test_pnl_timeline_applies_date_filters(self, client_with_db):
+        client, conn = client_with_db
+        conn.fetch_all.return_value = []
+        resp = client.get("/api/stats/pnl-timeline?from_date=2026-08-01&to_date=2026-08-15")
+        assert resp.status_code == 200
+        sql, params = conn.fetch_all.call_args[0]
+        assert "CONVERT(date, t.closed_on) >= ?" in sql
+        assert "CONVERT(date, t.closed_on) <= ?" in sql
+        assert params == ["2026-08-01", "2026-08-15"]
+
+    def test_pnl_timeline_swaps_inverted_dates(self, client_with_db):
+        client, conn = client_with_db
+        conn.fetch_all.return_value = []
+        client.get("/api/stats/pnl-timeline?from_date=2026-08-20&to_date=2026-08-01")
+        _sql, params = conn.fetch_all.call_args[0]
+        assert params == ["2026-08-01", "2026-08-20"]
 
     def test_strategy_performance_empty(self, client_with_db):
         client, conn = client_with_db
@@ -46,6 +66,15 @@ class TestHistoryAndStatsRoutes:
         data = resp.get_json()
         assert data["strategies"] == []
         assert data["overall"]["total"] == 0
+
+    def test_strategy_performance_applies_date_filters(self, client_with_db):
+        client, conn = client_with_db
+        conn.fetch_all.return_value = []
+        resp = client.get("/api/stats/strategy-performance?from_date=2026-07-01&to_date=2026-07-31")
+        assert resp.status_code == 200
+        sql, params = conn.fetch_all.call_args[0]
+        assert "CONVERT(date, COALESCE(t.closed_on, t.executed_on)) >= ?" in sql
+        assert params == ["2026-07-01", "2026-07-31"]
 
 
 class TestRuntimeFlagsRoutes:

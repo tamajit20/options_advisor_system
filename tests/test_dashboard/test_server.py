@@ -706,11 +706,49 @@ class TestApiTradesOpen:
         mocker.patch("dashboard.server.NotificationRepo.latest_risk_alert_for_trade", return_value=None)
         mocker.patch("dashboard.server.SuggestionRepo.get", return_value=sug_row)
         mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[])
+        mocker.patch("dashboard.server._stored_mtm_payloads", return_value={
+            "TRD-1": {"mtm": -176.25, "as_of": "2026-08-21 15:29:00"},
+        })
         resp = client.get("/api/trades/open")
         assert resp.status_code == 200
         trade = resp.get_json()["trades"][0]
         assert trade["entry_quality_score"] == 71
         assert trade["suggestion"]["entry_quality_score"] == 71
+        assert trade["last_mtm"] == -176.25
+        assert trade["last_mtm_at"] == "2026-08-21 15:29:00"
+
+
+class TestLiveMTMSnapshot:
+    def test_empty_when_no_live_or_stored(self, client, mocker):
+        mocker.patch("dashboard.server._read_live_mtm_state", return_value={})
+        mocker.patch("dashboard.server._stored_mtm_payloads", return_value={})
+        resp = client.get("/api/live/mtm/snapshot")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["trades"] == {}
+
+    def test_stored_used_when_live_empty(self, client, mocker):
+        mocker.patch("dashboard.server._read_live_mtm_state", return_value={})
+        mocker.patch(
+            "dashboard.server._stored_mtm_payloads",
+            return_value={"T-DB": {"trade_id": "T-DB", "mtm": -176.25, "dte": 12}},
+        )
+        resp = client.get("/api/live/mtm/snapshot")
+        assert resp.status_code == 200
+        assert resp.get_json()["trades"]["T-DB"]["mtm"] == -176.25
+
+    def test_live_overrides_stored(self, client, mocker):
+        mocker.patch("dashboard.server._read_live_mtm_state", return_value={
+            "as_of": "2026-08-22T10:00:00",
+            "trades": {"T-001": {"trade_id": "T-001", "mtm": 1234.0}},
+        })
+        mocker.patch(
+            "dashboard.server._stored_mtm_payloads",
+            return_value={"T-001": {"trade_id": "T-001", "mtm": -10.0}},
+        )
+        data = client.get("/api/live/mtm/snapshot").get_json()
+        assert data["trades"]["T-001"]["mtm"] == 1234.0
+        assert data["as_of"] == "2026-08-22T10:00:00"
 
 
 class TestApiHistorySuggestions:
@@ -1237,3 +1275,8 @@ class TestJsRegimePairContracts:
         assert "parts.length === 4" in js
         assert "matches.length === 1" in js
         assert "_lookupLegLtp" in js
+        assert "renderTrade(t, false)" in js
+        assert "className: 'hist-card'" in js
+        assert "_chartAllTime" in js
+        assert "_perfAllTime" in js
+        assert "_dateRangeQuery" in js

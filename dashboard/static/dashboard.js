@@ -198,7 +198,16 @@ function _buildMtmPayload(trade, snapTrade) {
 function _bootstrapLiveLevelsForTrades(trades, snap) {
   const byId = (snap && snap.trades) || {};
   (trades || []).forEach(t => {
-    const payload = _buildMtmPayload(t, byId[t.trade_id]);
+    const st = byId[t.trade_id] || {};
+    const payload = _buildMtmPayload(t, {
+      ...st,
+      mtm: st.mtm != null ? st.mtm : t.last_mtm,
+      as_of: st.as_of || t.last_mtm_at,
+      max_profit: st.max_profit,
+      max_loss: st.max_loss,
+      dte: st.dte,
+      trailing_pnl_floor: st.trailing_pnl_floor,
+    });
     if (payload.mtm != null) {
       _updateCurrentPnlBadge(t.trade_id, payload.mtm, payload.as_of, false);
     }
@@ -1347,7 +1356,7 @@ function renderRegimePairGroup(group, startCardIdx = 0) {
         <strong>${escapeHtml(scenario)}</strong>
         ${prefBadge}
       </div>
-      ${renderSuggestion(s, false, items, false, startCardIdx + i === 0)}
+      ${renderSuggestion(s, false, items, false, false)}
     </div>`;
   }).join('');
   return `<div class="regime-pair-group">${header}<div class="regime-pair-cards">${cards}</div></div>`;
@@ -1361,7 +1370,7 @@ function renderSuggestionList(list) {
       cardIdx += (entry.items || []).length;
       return html;
     }
-    const html = renderSuggestion(entry.item, false, list, false, cardIdx === 0);
+    const html = renderSuggestion(entry.item, false, list, false, false);
     cardIdx += 1;
     return html;
   }).join('');
@@ -1406,7 +1415,7 @@ async function loadSuggestion() {
       }
       const s = entry.item;
       if (suggestionIsActionable(s)) {
-        mainHtml.push(renderSuggestion(s, false, list, false, cardIdx === 0));
+        mainHtml.push(renderSuggestion(s, false, list, false, false));
         cardIdx += 1;
       } else if (suggestionIsGateBlocked(s)) {
         blockedHtml.push(renderSuggestion(s, false, list, false, false));
@@ -3449,7 +3458,7 @@ function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
   </div>`;
 }
 
-function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader = false, expanded = true) {
+function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader = false, expanded = false) {
   const isNoSug = s.strategy === 'NONE' || s.status === 'NO_SUGGESTION';
   const hasLegs = Array.isArray(s.legs) && s.legs.length > 0;
   const isPairMember = s.regime_pair_type === 'range' || s.regime_pair_type === 'breakout';
@@ -4067,7 +4076,7 @@ async function loadTrades() {
       c.className=''; c.innerHTML = '<div class="empty">No open trades.</div>';
       return;
     }
-    c.className=''; c.innerHTML = data.trades.map((t, i) => renderTrade(t, i === 0)).join('');
+    c.className=''; c.innerHTML = data.trades.map(t => renderTrade(t, false)).join('');
     try {
       const snap = await API('/api/live/mtm/snapshot');
       _bootstrapLiveLevelsForTrades(data.trades, snap);
@@ -4392,6 +4401,9 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       const rows = [...content.querySelectorAll('.cf-live-leg')];
       const result = _calcPnl(rows, row => row.querySelector('.cf-live-price')?.dataset.ltp);
       _renderPnl(content.querySelector('.live-pnl-preview'), result);
+      if (result && (_lastMtmByTrade[tradeId] == null || _lastMtmByTrade[tradeId].mtm == null)) {
+        _updateCurrentPnlBadge(tradeId, result.gross, !_inMarketHours() ? 'last EOD' : null, false);
+      }
     }
 
     // RIGHT panel: recalc from user fill inputs
@@ -4622,7 +4634,7 @@ function bindGapReplayPanels() {
   });
 }
 
-function renderTrade(t, expanded = true) {
+function renderTrade(t, expanded = false) {
   const broken = t.broken_state_json ? JSON.parse(t.broken_state_json) : null;
   const brokenHtml = broken && broken.options && broken.options.length ? `
     <div style="margin-top:10px">
@@ -5021,6 +5033,7 @@ function loadHistory() {
     if (summaryEl) summaryEl.textContent = _histFilterSummary(data.count, 'trade');
     c.className='';
     c.innerHTML = data.trades.map(renderHistoryTrade).join('');
+    bindCollapsibleCardInteractions(c);
   }).catch(e => {
     if (summaryEl) summaryEl.textContent = '';
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
@@ -5250,6 +5263,33 @@ function _buildBarChart(trades, strategies, W = 700, H = 220) {
   return `<div class="chart-title">Total P&L by strategy</div>${svg}`;
 }
 
+function _fillDefaultDateRange(fromEl, toEl, days = 30) {
+  if (!fromEl || !toEl) return;
+  if (!fromEl.value) {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    fromEl.value = _localDateStr(d);
+  }
+  if (!toEl.value) toEl.value = _localDateStr();
+  if (fromEl.value && toEl.value && fromEl.value > toEl.value) {
+    const tmp = fromEl.value;
+    fromEl.value = toEl.value;
+    toEl.value = tmp;
+  }
+}
+
+function _dateRangeQuery(fromEl, toEl, { allTime = false, defaultDays = 30 } = {}) {
+  const qs = new URLSearchParams();
+  if (allTime) return qs;
+  _fillDefaultDateRange(fromEl, toEl, defaultDays);
+  if (fromEl && fromEl.value) qs.set('from_date', fromEl.value);
+  if (toEl && toEl.value) qs.set('to_date', toEl.value);
+  return qs;
+}
+
+let _chartAllTime = false;
+let _perfAllTime = false;
+
 async function loadPnlCharts() {
   const cumEl  = $('#chart-cumulative');
   const barEl  = $('#chart-strategy-bar');
@@ -5259,12 +5299,7 @@ async function loadPnlCharts() {
   barEl.className = 'chart-wrap loading'; barEl.textContent = '';
 
   const fromEl = $('#chart-from'), toEl = $('#chart-to');
-  if (!fromEl.value) { const d = new Date(); d.setFullYear(d.getFullYear() - 1); fromEl.value = _localDateStr(d); }
-  if (!toEl.value)   { toEl.value = _localDateStr(); }
-
-  const qs = new URLSearchParams();
-  if (fromEl.value) qs.set('from_date', fromEl.value);
-  if (toEl.value)   qs.set('to_date',   toEl.value);
+  const qs = _dateRangeQuery(fromEl, toEl, { allTime: _chartAllTime, defaultDays: 30 });
 
   try {
     const data = await API('/api/stats/pnl-timeline?' + qs);
@@ -5309,20 +5344,24 @@ async function loadPnlCharts() {
   }
 }
 
-$('#chart-refresh')?.addEventListener('click', loadPnlCharts);
+$('#chart-refresh')?.addEventListener('click', () => { _chartAllTime = false; loadPnlCharts(); });
 $('#chart-reset')?.addEventListener('click', () => {
+  _chartAllTime = true;
   $('#chart-from').value = '';
   $('#chart-to').value   = '';
   loadPnlCharts();
 });
+$('#chart-from')?.addEventListener('change', () => { _chartAllTime = false; loadPnlCharts(); });
+$('#chart-to')?.addEventListener('change', () => { _chartAllTime = false; loadPnlCharts(); });
 
 // ---------------- Performance sub-tab ----------------
 async function loadStrategyPerformance() {
   const c = $('#perf-container');
   if (!c) return;
   c.className = 'loading'; c.textContent = 'Loading…';
+  const qs = _dateRangeQuery($('#perf-from'), $('#perf-to'), { allTime: _perfAllTime, defaultDays: 30 });
   try {
-    const data = await API('/api/stats/strategy-performance');
+    const data = await API('/api/stats/strategy-performance?' + qs);
     if (!data.strategies.length) {
       c.className = ''; c.innerHTML = '<div class="empty">No closed trades found. Close some trades first.</div>'; return;
     }
@@ -5333,7 +5372,16 @@ async function loadStrategyPerformance() {
   }
 }
 
-$('#perf-refresh')?.addEventListener('click', loadStrategyPerformance);
+$('#perf-refresh')?.addEventListener('click', () => { _perfAllTime = false; loadStrategyPerformance(); });
+$('#perf-reset')?.addEventListener('click', () => {
+  _perfAllTime = true;
+  const fromEl = $('#perf-from'), toEl = $('#perf-to');
+  if (fromEl) fromEl.value = '';
+  if (toEl) toEl.value = '';
+  loadStrategyPerformance();
+});
+$('#perf-from')?.addEventListener('change', () => { _perfAllTime = false; loadStrategyPerformance(); });
+$('#perf-to')?.addEventListener('change', () => { _perfAllTime = false; loadStrategyPerformance(); });
 
 function _perfColor(v) {
   if (v == null) return '';
@@ -5498,9 +5546,8 @@ function renderHistoryTrade(t) {
     </tr>`;
   }).join('');
 
-  return `
-  <div class="hist-card">
-    <div class="hist-card-head">
+  return wrapCollapsibleCard(`
+    <div class="hist-card-head collapsible-card-head">
       <div class="hist-card-title">
         <strong class="hist-instr">${escapeHtml(s.underlying || t.trade_id)}</strong>
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
@@ -5510,7 +5557,13 @@ function renderHistoryTrade(t) {
         ${t.position_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(t.position_type)}</span>` : ''}
       </div>
       <div class="hist-card-pnl ${pnlClass}">${pnl != null ? formatPnlWithPct(pnl, premium) : '—'}</div>
+      <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
+    <div class="collapsible-preview">
+      <span>${escapeHtml(t.trade_name || t.trade_id)}</span>
+      <span>Executed ${fmtDt(t.executed_on)}</span>
+      ${t.closed_on ? `<span>Closed ${fmtDt(t.closed_on)}</span>` : ''}
+    </div>`, `
     <div class="hist-card-meta muted">
       ${escapeHtml(t.trade_name || t.trade_id)}
       &nbsp;·&nbsp;Executed: ${fmtDt(t.executed_on)}
@@ -5553,7 +5606,7 @@ function renderHistoryTrade(t) {
         </table>
       </div>
     </div>` : ''}
-  </div>`;
+  `, { open: false, className: 'hist-card' });
 }
 
 // ---------------- Tab 4: Logs ----------------

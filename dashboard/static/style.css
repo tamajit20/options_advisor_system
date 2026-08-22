@@ -1384,6 +1384,15 @@ input:focus, select:focus, textarea:focus {
   padding: 16px;
   margin-bottom: 16px;
 }
+details.collapsible-card.hist-card {
+  border-left: 4px solid var(--primary);
+  margin-bottom: 16px;
+}
+details.collapsible-card.hist-card > .collapsible-summary .hist-card-head {
+  position: relative;
+  padding-right: 22px;
+  width: 100%;
+}
 .hist-card-head {
   display: flex; align-items: flex-start; justify-content: space-between;
   gap: 12px; margin-bottom: 4px; flex-wrap: wrap;

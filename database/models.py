@@ -1768,6 +1768,29 @@ class TradeMtmSnapshotRepo:
             ],
         ).close()
 
+    def latest_by_trade(self) -> Dict[str, dict]:
+        """Newest hot snapshot per trade_id. Empty dict if the table is unused."""
+        rows = self.db.fetch_all(
+            "SELECT s.trade_id, s.trade_name, s.snapshot_at, s.mtm, "
+            "       s.max_profit, s.max_loss, s.dte, s.leg_ltps_json "
+            "FROM options_trade_mtm_snapshot s "
+            "INNER JOIN ("
+            "  SELECT trade_id, MAX(snapshot_at) AS snapshot_at "
+            "  FROM options_trade_mtm_snapshot GROUP BY trade_id"
+            ") latest ON latest.trade_id = s.trade_id "
+            " AND latest.snapshot_at = s.snapshot_at"
+        )
+        if not isinstance(rows, (list, tuple)):
+            return {}
+        out: Dict[str, dict] = {}
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            tid = str(r.get("trade_id") or "")
+            if tid:
+                out[tid] = r
+        return out
+
     def list_for_trade(self, trade_id: str, *, limit: int = 500) -> List[dict]:
         hot = self.db.fetch_all(
             "SELECT TOP (?) *, 'hot' AS store FROM options_trade_mtm_snapshot "

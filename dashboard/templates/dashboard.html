@@ -229,9 +229,15 @@
 
       <!-- Performance sub-tab -->
       <div id="hist-pane-performance" hidden>
-        <div class="perf-toolbar">
-          <span class="muted" style="font-size:.82rem">All closed &amp; expired trades, all time</span>
-          <button class="btn btn-ghost" id="perf-refresh">Refresh</button>
+        <div class="chart-toolbar">
+          <label class="hist-filter-label">From
+            <input type="date" id="perf-from" class="hist-date-input">
+          </label>
+          <label class="hist-filter-label">To
+            <input type="date" id="perf-to" class="hist-date-input">
+          </label>
+          <button class="btn" id="perf-refresh">Apply</button>
+          <button class="btn btn-ghost" id="perf-reset">All time</button>
         </div>
         <div id="perf-container" class="loading">Loading…</div>
       </div>
