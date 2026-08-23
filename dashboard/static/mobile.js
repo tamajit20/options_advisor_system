@@ -148,12 +148,74 @@
     window.switchTab.__mobilePatched = true;
   }
 
+  const TOUCH_POPOVER_MQ = window.matchMedia('(hover: none), (max-width: 1024px)');
+
+  function usesTouchPopovers() {
+    return TOUCH_POPOVER_MQ.matches;
+  }
+
+  /** Hover-only tooltips → tap-to-open bottom sheets on touch devices. */
+  function closeTouchPopovers() {
+    document.querySelectorAll('.touch-popover-open').forEach(el => {
+      el.classList.remove('touch-popover-open');
+    });
+    document.querySelectorAll('.touch-popover-backdrop').forEach(el => el.remove());
+  }
+
+  function openTouchPopover(host) {
+    closeTouchPopovers();
+    host.classList.add('touch-popover-open');
+    const backdrop = document.createElement('div');
+    backdrop.className = 'touch-popover-backdrop';
+    backdrop.setAttribute('aria-hidden', 'true');
+    backdrop.addEventListener('click', closeTouchPopovers);
+    document.body.appendChild(backdrop);
+  }
+
+  function bindTouchPopovers() {
+    if (document.body.dataset.touchPopoversBound === '1') return;
+    document.body.dataset.touchPopoversBound = '1';
+
+    document.addEventListener('click', ev => {
+      if (!usesTouchPopovers()) return;
+
+      const confHost = ev.target.closest('.conf-logic-info');
+      if (confHost) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (confHost.classList.contains('touch-popover-open')) closeTouchPopovers();
+        else openTouchPopover(confHost);
+        return;
+      }
+
+      const legendBtn = ev.target.closest('.tap-legend-btn');
+      const legendHost = ev.target.closest('.tap-legend-wrap');
+      if (legendBtn && legendHost) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (legendHost.classList.contains('touch-popover-open')) closeTouchPopovers();
+        else openTouchPopover(legendHost);
+        return;
+      }
+
+      if (!ev.target.closest('.conf-logic-popup') && !ev.target.closest('.tap-legend-popover')) {
+        closeTouchPopovers();
+      }
+    });
+
+    document.addEventListener('keydown', ev => {
+      if (ev.key === 'Escape') closeTouchPopovers();
+    });
+  }
+
   function init() {
     bindMoreDrawer();
     bindBottomNav();
     bindTradeMobileBar();
+    bindTouchPopovers();
     patchSwitchTab();
     MOBILE_MQ.addEventListener('change', updateTradeMobileBar);
+    TOUCH_POPOVER_MQ.addEventListener('change', () => closeTouchPopovers());
 
     document.addEventListener('trade-mtm-updated', () => updateTradeMobileBar());
 

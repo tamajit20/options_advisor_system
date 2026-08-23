@@ -306,3 +306,101 @@
     min-height: 48px;
   }
 }
+
+/* ========================================================================
+   Touch devices — no hover: use tap, :active, and tap-to-open popovers
+   ======================================================================== */
+
+/* Press feedback (replaces hover highlight on touch) */
+@media (hover: none), (max-width: 1024px) {
+  .btn:active { filter: brightness(0.92); }
+  .bnav-item:active,
+  .more-drawer-item:active,
+  .nav-item:active,
+  .scout-subtab:active,
+  .hist-subtab:active,
+  .nf-chip:active,
+  .nf-card:active,
+  .strategy-guide-btn:active,
+  .tap-legend-btn:active,
+  .conf-logic-info:active {
+    filter: brightness(1.12);
+  }
+}
+
+/* Undo sticky :hover left behind after a tap (iOS / some Android browsers) */
+@media (hover: none) {
+  .btn:hover { background: var(--primary); }
+  .btn-warn:hover { background: rgba(245, 158, 11, 0.15); }
+  .btn-confirm-pending:hover { background: #d97706 !important; }
+  .icon-btn:hover { background: transparent; }
+  .nf-chip:hover,
+  .nf-card:hover,
+  .hcmp-row:hover,
+  .scout-wl-item:hover,
+  .scout-hist-grid tbody tr:hover { background: transparent; }
+}
+
+/* Info / legend triggers — larger tap targets on phone */
+@media (max-width: 1024px) {
+  .conf-logic-info {
+    cursor: pointer;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 4px;
+    opacity: 1;
+  }
+  .tap-legend-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 0.78rem;
+  }
+  .strategy-guide-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+}
+
+/* Tap-open popovers (conf gate logic, trade-action legend) */
+@media (hover: none), (max-width: 1024px) {
+  .touch-popover-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 84;
+    background: rgba(2, 6, 23, 0.5);
+    animation: fade-in 0.15s ease-out;
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .conf-logic-info.touch-popover-open .conf-logic-popup,
+  .tap-legend-wrap.touch-popover-open .tap-legend-popover {
+    display: block;
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0) + 12px);
+    top: auto;
+    transform: none;
+    width: auto;
+    max-width: none;
+    max-height: min(50vh, 360px);
+    overflow-y: auto;
+    z-index: 85;
+    pointer-events: auto;
+    font-size: 0.82rem;
+    line-height: 1.55;
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.5);
+    animation: sheet-up 0.2s ease-out;
+  }
+  .conf-logic-info.touch-popover-open .conf-logic-popup::after {
+    display: none;
+  }
+  body.trade-mobile-bar-visible .conf-logic-info.touch-popover-open .conf-logic-popup,
+  body.trade-mobile-bar-visible .tap-legend-wrap.touch-popover-open .tap-legend-popover {
+    bottom: calc(var(--bottom-nav-h) + var(--mobile-bar-h) + env(safe-area-inset-bottom, 0) + 12px);
+  }
+}
