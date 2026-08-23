@@ -7,6 +7,10 @@
 <title>Trading Dashboard</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ cache_bust }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='scout.css') }}?v={{ cache_bust }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='mobile.css') }}?v={{ cache_bust }}">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="data:,">
 <style>
   /* Inject theme tokens from server */
@@ -762,21 +766,40 @@
   </section>
 </main>
 
-<!-- Bottom nav (mobile) -->
+<!-- Bottom nav (mobile — 5 primary tabs + More drawer) -->
 <nav class="bottom-nav" aria-label="Primary mobile">
-  <button class="bnav-item active" data-tab="suggestion"><span>💡</span><span>Sug</span></button>
-  <button class="bnav-item" data-tab="trades"><span>📊</span><span>Trades</span></button>
-  <button class="bnav-item" data-tab="learn"><span>📘</span><span>Learn</span></button>
-  <button class="bnav-item" data-tab="history"><span>📜</span><span>Hist</span></button>
-  <button class="bnav-item" data-tab="logs"><span>🪵</span><span>Logs</span></button>
-  <button class="bnav-item" data-tab="jobs"><span>🔧</span><span>Jobs</span></button>
-  <button class="bnav-item" data-tab="wsmon"><span>📡</span><span>WS</span></button>
-  <button class="bnav-item" data-tab="notifications">
-    <span>🔔</span><span>Alerts</span>
-  </button>
-  <button class="bnav-item" data-tab="scout-signals"><span>🔍</span><span>Scout</span></button>
-  <button class="bnav-item" data-tab="config"><span>⚙️</span><span>Cfg</span></button>
+  <button type="button" class="bnav-item active" data-tab="suggestion"><span>💡</span><span>Home</span></button>
+  <button type="button" class="bnav-item" data-tab="trades"><span>📊</span><span>Trades</span></button>
+  <button type="button" class="bnav-item" data-bnav-scout="1" data-tab="scout-signals"><span>🔍</span><span>Scout</span></button>
+  <button type="button" class="bnav-item" data-tab="notifications"><span>🔔</span><span>Alerts</span></button>
+  <button type="button" class="bnav-item bnav-more" id="bnav-more-btn" aria-label="More pages"><span>☰</span><span>More</span></button>
 </nav>
+
+<div id="more-drawer" class="more-drawer" hidden>
+  <div class="more-drawer-backdrop" aria-hidden="true"></div>
+  <div class="more-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="more-drawer-title">
+    <div class="more-drawer-handle"></div>
+    <h3 class="more-drawer-title" id="more-drawer-title">More</h3>
+    <div class="more-drawer-grid">
+      <button type="button" class="more-drawer-item" data-tab="learn"><span class="more-drawer-icon">📘</span>Learning</button>
+      <button type="button" class="more-drawer-item" data-tab="history"><span class="more-drawer-icon">📜</span>History</button>
+      <button type="button" class="more-drawer-item" data-tab="logs"><span class="more-drawer-icon">🪵</span>Logs</button>
+      <button type="button" class="more-drawer-item" data-tab="jobs"><span class="more-drawer-icon">🔧</span>Jobs</button>
+      <button type="button" class="more-drawer-item" data-tab="wsmon"><span class="more-drawer-icon">📡</span>WS Monitor</button>
+      <button type="button" class="more-drawer-item" data-tab="config"><span class="more-drawer-icon">⚙️</span>Config</button>
+      <button type="button" class="more-drawer-item" data-tab="scout-trades"><span class="more-drawer-icon">⚡</span>Scout Exec</button>
+      <button type="button" class="more-drawer-item" data-tab="scout-watchlist"><span class="more-drawer-icon">📋</span>Watchlist</button>
+    </div>
+    <p class="more-drawer-note">Config, Jobs, and WS Monitor are best on a larger screen. Scout Signals uses the Scout tab; subtabs appear at the top.</p>
+    <button type="button" class="btn btn-ghost" data-more-close style="width:100%;margin-top:10px">Close</button>
+  </div>
+</div>
+
+<div id="trade-mobile-bar" class="trade-mobile-bar" hidden>
+  <span class="trade-mobile-name">—</span>
+  <span class="trade-mobile-pnl">—</span>
+  <button type="button" class="btn btn-warn btn-trade-mobile-close">Close trade</button>
+</div>
 
 
 <div id="toast-container" aria-live="polite"></div>
@@ -785,5 +808,6 @@
 <script src="{{ url_for('static', filename='dashboard.js') }}?v={{ cache_bust }}"></script>
 <script src="{{ url_for('static', filename='strategy_guide.js') }}?v={{ cache_bust }}"></script>
 <script src="{{ url_for('static', filename='scout.js') }}?v={{ cache_bust }}"></script>
+<script src="{{ url_for('static', filename='mobile.js') }}?v={{ cache_bust }}"></script>
 </body>
 </html>

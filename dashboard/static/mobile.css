@@ -1,0 +1,308 @@
+/* ========================================================================
+   Mobile UX — bottom nav, more drawer, bottom sheets, touch targets
+   ======================================================================== */
+
+:root {
+  --bottom-nav-h: 64px;
+  --mobile-bar-h: 52px;
+}
+
+/* ---------- Touch targets (mobile / tablet) ---------- */
+@media (max-width: 1024px) {
+  .btn,
+  .bnav-item,
+  .more-drawer-item,
+  .scout-subtab,
+  .nav-item,
+  .hist-subtab,
+  input[type="number"],
+  input[type="text"],
+  input[type="date"],
+  select {
+    min-height: 44px;
+  }
+  .btn-sm { min-height: 40px; }
+  .card-head-btn { min-height: 40px; padding: 8px 12px; }
+}
+
+/* ---------- Bottom nav (5 items) ---------- */
+@media (max-width: 1024px) {
+  .bottom-nav {
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    min-height: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0));
+    justify-content: space-around;
+    overflow-x: hidden;
+  }
+  .bnav-item {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+    font-size: 10px;
+    gap: 2px;
+    padding: 4px 2px;
+  }
+  .bnav-item span:first-child { font-size: 20px; }
+  .bnav-item.bnav-more { color: var(--text-dim); }
+  .bnav-item.bnav-more.active { color: var(--accent); }
+
+  .app-main {
+    padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0) + 8px);
+  }
+  .tab-panels { padding: 12px 10px; }
+}
+
+/* ---------- More drawer ---------- */
+.more-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.more-drawer[hidden] { display: none !important; }
+.more-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.55);
+}
+.more-drawer-panel {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  max-height: min(78vh, 520px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid #2a3744;
+  border-radius: 16px 16px 0 0;
+  padding: 12px 12px calc(16px + env(safe-area-inset-bottom, 0));
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.45);
+  animation: sheet-up 0.22s ease-out;
+}
+.more-drawer-handle {
+  width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  margin: 0 auto 12px;
+}
+.more-drawer-title {
+  margin: 0 0 8px;
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 0 4px;
+}
+.more-drawer-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.more-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #2a3744;
+  border-radius: 10px;
+  background: var(--surface-alt);
+  color: var(--text);
+  font-size: 0.92rem;
+  cursor: pointer;
+  text-align: left;
+}
+.more-drawer-item:active { background: rgba(255, 255, 255, 0.06); }
+.more-drawer-icon { font-size: 1.25rem; flex-shrink: 0; }
+.more-drawer-note {
+  margin: 12px 4px 0;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+@keyframes sheet-up {
+  from { transform: translateY(100%); opacity: 0.6; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* ---------- Bottom sheet modals (strategy guide, etc.) ---------- */
+@media (max-width: 1024px) {
+  .sg-modal {
+    align-items: flex-end;
+    justify-content: center;
+  }
+  .sg-modal-panel {
+    margin: 0;
+    width: 100%;
+    max-width: 100%;
+    max-height: min(88vh, 720px);
+    border-radius: 16px 16px 0 0;
+    padding-top: 22px;
+    animation: sheet-up 0.22s ease-out;
+  }
+  .sg-modal-panel::before {
+    content: '';
+    display: block;
+    width: 40px;
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.2);
+    margin: -10px auto 14px;
+  }
+  .close-trade-section.sheet-open .close-trade-content {
+    max-height: min(70vh, 520px);
+    overflow-y: auto;
+  }
+}
+
+/* ---------- Single-column layouts ---------- */
+@media (max-width: 1024px) {
+  .kv-grid,
+  .kv-grid-trade { grid-template-columns: 1fr !important; }
+  .perf-cards { grid-template-columns: 1fr !important; }
+  .pe-grid,
+  .sug-context-row { grid-template-columns: 1fr !important; }
+  .chart-wrap { overflow-x: auto; }
+  .jobs-grid { grid-template-columns: 1fr !important; }
+  .scout-exec-list { grid-template-columns: 1fr !important; }
+  .scout-signal-list { grid-template-columns: 1fr !important; }
+
+  .card-head-tags {
+    width: 100%;
+    justify-content: flex-start;
+    margin-top: 4px;
+  }
+  .card-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .card-head .card-head-tags { margin-left: 0; }
+
+  /* Suggestion / trade cards: hide dense blocks when collapsed on phone */
+  .collapsible-card.mobile-compact:not([open]) .collapsible-body .sug-context,
+  .collapsible-card.mobile-compact:not([open]) .collapsible-body .conf-checks-panel,
+  .collapsible-card.mobile-compact:not([open]) .collapsible-body .legs-grid,
+  .collapsible-card.mobile-compact:not([open]) .collapsible-body .trade-legs-section,
+  .collapsible-card.mobile-compact:not([open]) .collapsible-body .risk-levels-pair,
+  .collapsible-card.mobile-compact:not([open]) .collapsible-body .sl-monitor-section,
+  .collapsible-card.mobile-compact:not([open]) .collapsible-body .close-trade-section {
+    display: none;
+  }
+  .collapsible-card.mobile-compact:not([open]) .collapsible-body .trade-action-panel {
+    display: none;
+  }
+}
+
+/* ---------- Confidence checks: stacked rows ---------- */
+@media (max-width: 1024px) {
+  .conf-checks-table thead { display: none; }
+  .conf-checks-table,
+  .conf-checks-table tbody,
+  .conf-checks-table tr,
+  .conf-checks-table td { display: block; width: 100%; }
+  .conf-checks-table tr {
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .conf-checks-table tr:last-child { border-bottom: 0; }
+  .conf-checks-table .conf-icon {
+    display: inline-block;
+    margin-right: 6px;
+    font-weight: 700;
+  }
+  .conf-checks-table .conf-label {
+    display: inline;
+    font-weight: 600;
+    font-size: 0.88rem;
+  }
+  .conf-checks-table .conf-detail {
+    margin-top: 4px;
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    padding-left: 1.5rem;
+  }
+}
+
+/* ---------- WS monitor events stacked ---------- */
+@media (max-width: 1024px) {
+  .wsmon-ev {
+    grid-template-columns: 1fr !important;
+    gap: 2px !important;
+    padding: 8px !important;
+  }
+}
+
+/* ---------- Scout subtabs: horizontal scroll ---------- */
+@media (max-width: 1024px) {
+  .scout-subtabs {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 6px;
+    padding-bottom: 4px;
+    margin-bottom: 10px;
+  }
+  .scout-subtab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 8px 14px;
+    font-size: 0.82rem;
+  }
+  .panel-title { font-size: 1rem; }
+}
+
+/* ---------- Sticky mobile trade action bar ---------- */
+.trade-mobile-bar {
+  display: none;
+}
+@media (max-width: 1024px) {
+  .trade-mobile-bar {
+    display: flex;
+    gap: 8px;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0));
+    z-index: 35;
+    padding: 8px 10px;
+    background: rgba(15, 23, 42, 0.96);
+    border-top: 1px solid #2a3744;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.35);
+  }
+  .trade-mobile-bar[hidden] { display: none !important; }
+  .trade-mobile-bar .trade-mobile-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    align-self: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .trade-mobile-bar .trade-mobile-pnl {
+    font-size: 0.82rem;
+    font-weight: 700;
+    align-self: center;
+    white-space: nowrap;
+  }
+  .trade-mobile-bar .btn {
+    flex: 0 0 auto;
+    min-width: 100px;
+  }
+  body.trade-mobile-bar-visible .app-main {
+    padding-bottom: calc(var(--bottom-nav-h) + var(--mobile-bar-h) + env(safe-area-inset-bottom, 0) + 8px);
+  }
+}
+
+/* ---------- Close trade: full-width on phone ---------- */
+@media (max-width: 1024px) {
+  .close-two-col { grid-template-columns: 1fr !important; }
+  .leg-exit-input input { width: 100%; min-height: 44px; font-size: 16px; }
+  .close-col-fills .btn-close-submit {
+    width: 100%;
+    min-height: 48px;
+  }
+}

@@ -425,6 +425,9 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
   _updateFeedTag(tradeId);
   _syncCardSignal(tradeId);
   _refreshPnlSignalRail();
+  try {
+    document.dispatchEvent(new CustomEvent('trade-mtm-updated', { detail: { tradeId, mtm } }));
+  } catch (_) { /* ignore */ }
 }
 
 function _refreshAllFeedTags() {
@@ -708,9 +711,12 @@ function switchTab(name) {
     panel.setAttribute('aria-hidden', t !== name);
   });
   $$('.nav-item, .bnav-item').forEach(b => {
+    if (b.classList.contains('bnav-more')) return;
     const tab = b.dataset.tab;
     const isBottomNav = b.classList.contains('bnav-item');
+    const scoutHub = b.dataset.bnavScout === '1';
     const active = tab === name
+      || (scoutHub && name.startsWith('scout-'))
       || (isBottomNav && tab === 'scout-signals' && name.startsWith('scout-'));
     b.classList.toggle('active', active);
   });
@@ -747,9 +753,10 @@ function switchTab(name) {
 }
 window.switchTab = switchTab;
 
-$$('.nav-item, .bnav-item').forEach(b =>
-  b.addEventListener('click', () => switchTab(b.dataset.tab))
-);
+$$('.nav-item, .bnav-item').forEach(b => {
+  if (b.classList.contains('bnav-more')) return;
+  b.addEventListener('click', () => switchTab(b.dataset.tab));
+});
 // Restore last active tab on page load (URL hash takes precedence over localStorage).
 // MUST defer until after the whole script parses, otherwise switchTab() touches
 // `let` bindings (_histActiveSubtab, _jobsSource) declared further
@@ -1445,6 +1452,7 @@ async function loadSuggestion() {
     c.innerHTML = parts.join('');
     bindSuggestionActions();
     bindCollapsibleCardInteractions(c);
+    c.querySelectorAll('.collapsible-card').forEach(card => card.classList.add('mobile-compact'));
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -4111,6 +4119,8 @@ async function loadTrades() {
     bindGapReplayPanels();
     bindCollapsibleCardInteractions(c);
     _focusPendingTradeCard();
+    if (typeof window.updateTradeMobileBar === 'function') window.updateTradeMobileBar();
+    c.querySelectorAll('.collapsible-card').forEach(card => card.classList.add('mobile-compact'));
   } catch (e) {
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
