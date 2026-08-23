@@ -233,6 +233,14 @@ function _updateLiveRiskStrip(tradeId, state) {
       if (staticRa) staticRa.hidden = true;
       return;
     }
+    if (state.milestoneHit) {
+      el.className = 'tag tag-warn live-risk-live';
+      el.textContent = '\u26a0\ufe0f LOSS MILESTONE HIT';
+      el.title = 'Configured loss milestone reached — consider closing';
+      el.hidden = false;
+      if (staticRa) staticRa.hidden = true;
+      return;
+    }
     if (state.floorBreach) {
       el.className = 'tag tag-warn live-risk-live';
       el.textContent = '\u26a0\ufe0f PROFIT FLOOR BREACHED';
@@ -276,8 +284,9 @@ function _resolveLiveLevelThresholds(section, payload) {
     floor = parseFloat(section.dataset.trailingFloor);
   }
   if (floor != null && isNaN(floor)) floor = null;
-  if (targetRs == null && lossRs == null && floor == null) return null;
-  return { targetRs, lossRs, floor };
+  const milestoneRs = lossMilestoneRs(ml);
+  if (targetRs == null && lossRs == null && floor == null && milestoneRs == null) return null;
+  return { targetRs, lossRs, floor, milestoneRs };
 }
 
 function _setLiveLevelRowStatus(row, statusEl, active, label, variant) {
@@ -311,6 +320,11 @@ function _clearLiveLevelLabels(section) {
   _setLiveLevelRowStatus(
     section.querySelector('.lpl-loss-row'),
     section.querySelector('.lpl-status-loss'),
+    false, '', 'breach',
+  );
+  _setLiveLevelRowStatus(
+    section.querySelector('.lpl-milestone-row'),
+    section.querySelector('.lpl-status-milestone'),
     false, '', 'breach',
   );
 }
@@ -347,10 +361,11 @@ function _updateLiveProfitLevels(tradeId, payload) {
       return;
     }
 
-    const { targetRs, lossRs, floor: armedFloor } = thresholds;
+    const { targetRs, lossRs, floor: armedFloor, milestoneRs } = thresholds;
     const targetRow = section.querySelector('.lpl-target-row');
     const floorRow = section.querySelector('.lpl-floor-row');
     const lossRow = section.querySelector('.lpl-loss-row');
+    const milestoneRow = section.querySelector('.lpl-milestone-row');
 
     _setLiveLevelRowStatus(
       targetRow,
@@ -367,6 +382,13 @@ function _updateLiveProfitLevels(tradeId, payload) {
       'breach',
     );
     _setLiveLevelRowStatus(
+      milestoneRow,
+      section.querySelector('.lpl-status-milestone'),
+      milestoneRs != null && liveMtm <= -milestoneRs,
+      'HIT',
+      'breach',
+    );
+    _setLiveLevelRowStatus(
       lossRow,
       section.querySelector('.lpl-status-loss'),
       lossRs != null && liveMtm <= -lossRs,
@@ -377,8 +399,11 @@ function _updateLiveProfitLevels(tradeId, payload) {
     stripState = {
       liveMtm,
       lossHit: lossRs != null && liveMtm <= -lossRs,
+      milestoneHit: milestoneRs != null && liveMtm <= -milestoneRs,
       floorBreach: armedFloor != null && liveMtm < armedFloor,
       targetHit: targetRs != null && liveMtm >= targetRs,
+      milestoneRs,
+      lossRs,
     };
     _lastMtmByTrade[tradeId] = {
       ...(_lastMtmByTrade[tradeId] || {}),
@@ -913,6 +938,7 @@ function stopIndexSpotStream() {
 
 const _SIGNAL_LABELS = {
   sl: 'Stop-loss — close now',
+  milestone: 'Loss milestone — consider exit',
   thesis: 'Thesis failed — close now',
   profit: 'Take profit — target hit',
   exit: 'Close pending',
@@ -949,6 +975,8 @@ function _signalKindFromFields({ dailyStatus, exitInstruction, riskNotif, live }
       || risk === 'PROFIT_FLOOR_HIT') {
     return 'exit';
   }
+  if (live && live.milestoneHit) return 'milestone';
+  if (risk === 'LOSS_MILESTONE_HIT') return 'milestone';
   const mtm = live && live.liveMtm != null ? Number(live.liveMtm) : NaN;
   if (!isNaN(mtm) && mtm < -_MTM_FLAT_RS) return 'in_loss';
   if (!isNaN(mtm) && mtm > _MTM_FLAT_RS) return 'in_profit';
@@ -1012,7 +1040,7 @@ function _mergePnlRailSignals(actionSignals) {
   });
   Object.entries(_lastMtmByTrade).forEach(([tid, rec]) => {
     if (!tid || actionIds.has(tid)) return;
-    if (rec.lossHit || rec.targetHit || rec.floorBreach) return;
+    if (rec.lossHit || rec.targetHit || rec.floorBreach || rec.milestoneHit) return;
     const kind = _pnlStatusFromMtm(rec && rec.mtm);
     if (!kind) return;
     byId[tid] = {
@@ -1031,6 +1059,7 @@ function _renderSignalRail(st) {
   else st = _lastStatusForRail || {};
   const signals = Array.isArray(st && st.trade_signals) ? st.trade_signals : [];
   const sl = signals.filter(s => s.kind === 'sl');
+  const milestone = signals.filter(s => s.kind === 'milestone');
   const thesis = signals.filter(s => s.kind === 'thesis');
   const profit = signals.filter(s => s.kind === 'profit');
   const exitSig = signals.filter(s => s.kind === 'exit');
@@ -1041,6 +1070,7 @@ function _renderSignalRail(st) {
     breaker: !!(st && st.circuit_breaker_active),
     kill: !!(st && st.kill_switch),
     sl: sl.map(s => s.trade_id),
+    milestone: milestone.map(s => s.trade_id),
     thesis: thesis.map(s => s.trade_id),
     profit: profit.map(s => s.trade_id),
     exit: exitSig.map(s => s.trade_id),
@@ -1059,6 +1089,10 @@ function _renderSignalRail(st) {
   if (sl.length) {
     const names = sl.map(s => s.trade_name || s.trade_id).join(', ');
     tiles.push(_signalTile('sl', sl.length, `Stop-loss — close ${names}`, sl[0].trade_id));
+  }
+  if (milestone.length) {
+    const names = milestone.map(s => s.trade_name || s.trade_id).join(', ');
+    tiles.push(_signalTile('milestone', milestone.length, `Loss milestone — consider exit ${names}`, milestone[0].trade_id));
   }
   if (thesis.length) {
     const names = thesis.map(s => s.trade_name || s.trade_id).join(', ');
@@ -1478,6 +1512,10 @@ const PNL_RULES = {
     trailing_sl_steps: [[0.50, 0.0], [0.80, 0.40]],
     pre_breach_fraction: 0.70,
   },
+  loss_milestone_alert: {
+    enabled: false,
+    pct_of_max_loss: 25.0,
+  },
 };
 
 function applyPnlRules(rules) {
@@ -1514,6 +1552,12 @@ function applyPnlRules(rules) {
       ...rules.live_risk_monitor,
     };
   }
+  if (rules.loss_milestone_alert && typeof rules.loss_milestone_alert === 'object') {
+    PNL_RULES.loss_milestone_alert = {
+      ...PNL_RULES.loss_milestone_alert,
+      ...rules.loss_milestone_alert,
+    };
+  }
 }
 applyPnlRules(typeof window !== 'undefined' ? window.__PNL_RULES__ : null);
 
@@ -1536,6 +1580,54 @@ function effectiveSlRs(strategy, maxLossRs) {
   return pct;
 }
 
+/** Effective SL as % of max loss (accounts for absolute cap). */
+function effectiveSlPctOfMaxLoss(strategy, maxLossRs) {
+  if (maxLossRs == null || maxLossRs <= 0) return null;
+  const slRs = effectiveSlRs(strategy, maxLossRs);
+  if (slRs == null) return null;
+  return Math.round((slRs / maxLossRs) * 100);
+}
+
+function slLossPctSuffix(strategy, maxLossRs) {
+  const pct = effectiveSlPctOfMaxLoss(strategy, maxLossRs);
+  return pct != null ? ` (${pct}%)` : '';
+}
+
+function slLossPctHint(strategy, maxLossRs) {
+  const s = slLossPctSuffix(strategy, maxLossRs);
+  return s ? `<span class="pct-hint">${s}</span>` : '';
+}
+
+function lossMilestoneConfig() {
+  return PNL_RULES.loss_milestone_alert || { enabled: false, pct_of_max_loss: 25 };
+}
+
+function lossMilestoneEnabled() {
+  return !!lossMilestoneConfig().enabled;
+}
+
+function lossMilestonePct() {
+  const pct = parseFloat(lossMilestoneConfig().pct_of_max_loss);
+  return (!isNaN(pct) && pct > 0) ? pct : null;
+}
+
+function lossMilestoneRs(maxLossRs) {
+  if (!lossMilestoneEnabled() || maxLossRs == null || maxLossRs <= 0) return null;
+  const pct = lossMilestonePct();
+  if (pct == null) return null;
+  return maxLossRs * (pct / 100);
+}
+
+function lossMilestonePctSuffix() {
+  const pct = lossMilestonePct();
+  return pct != null ? ` (${Math.round(pct)}%)` : '';
+}
+
+function lossMilestonePctHint() {
+  const s = lossMilestonePctSuffix();
+  return s ? `<span class="pct-hint">${s}</span>` : '';
+}
+
 function slExitPlanText(strategy, maxLossRs) {
   const cfg = strategySlConfig(strategy);
   const slRs = effectiveSlRs(strategy, maxLossRs);
@@ -1547,7 +1639,8 @@ function slExitPlanText(strategy, maxLossRs) {
       : `₹${fmt(cfg.absolute_cap_rs)} cap`;
   }
   if (slRs == null) return `exit on MTM loss (${pctLabel} of max loss, ${capDesc})`;
-  return `exit if MTM loss reaches ₹${fmt(slRs)} (${pctLabel} of max loss; ${capDesc})`;
+  const capSuffix = capDesc !== 'no cap' ? `; ${capDesc}` : '';
+  return `exit if MTM loss reaches ₹${fmt(slRs)}${slLossPctSuffix(strategy, maxLossRs)} of max loss${capSuffix}`;
 }
 
 function liveRiskMonitor() {
@@ -1663,6 +1756,7 @@ function renderLiveProfitLevels(t) {
               : (sug.max_loss != null ? sug.max_loss : null);
   const ml = mlRaw != null ? parseFloat(mlRaw) : null;
   const lossRs = effectiveSlRs(strat, ml);
+  const milestoneRs = lossMilestoneRs(ml);
   const stepIdx = parseInt(t.trailing_step_idx || 0, 10);
   const floor = t.trailing_pnl_floor != null ? parseFloat(t.trailing_pnl_floor) : null;
   const steps = liveRiskMonitor().trailing_sl_steps || [];
@@ -1708,6 +1802,15 @@ function renderLiveProfitLevels(t) {
       <div class="lpl-grid">
         ${currentRow}
         ${targetHtml}
+        ${milestoneRs != null ? `
+        <div class="lpl-row lpl-milestone-row">
+          <span class="lpl-label">Loss milestone</span>
+          <span class="lpl-val-line">
+            <span class="lpl-val lpl-milestone">\u20b9${fmt(milestoneRs)} loss${lossMilestonePctHint()}</span>
+            <span class="lpl-status lpl-status-milestone" hidden></span>
+          </span>
+          <span class="muted lpl-note">Optional early exit at ${Math.round(lossMilestonePct())}% of max loss — separate from hard SL</span>
+        </div>` : ''}
         <div class="lpl-row lpl-floor-row">
           <span class="lpl-label">Profit floor</span>
           <span class="lpl-val-line">
@@ -1719,7 +1822,7 @@ function renderLiveProfitLevels(t) {
         <div class="lpl-row lpl-loss-row">
           <span class="lpl-label">Loss limit</span>
           <span class="lpl-val-line">
-            <span class="lpl-val lpl-loss">${lossRs != null ? `\u20b9${fmt(lossRs)} loss` : '\u2014'}</span>
+            <span class="lpl-val lpl-loss">${lossRs != null ? `\u20b9${fmt(lossRs)} loss${slLossPctHint(strat, ml)}` : '\u2014'}</span>
             <span class="lpl-status lpl-status-loss" hidden></span>
           </span>
           <span class="muted lpl-note">${lossRs != null ? slExitPlanText(strat, ml) : 'Set max loss on trade'}</span>
@@ -1738,8 +1841,8 @@ function _fmtMtmSigned(v, premiumInfo) {
 
 function _computeTradeActionInstruction(opts) {
   const {
-    liveMtm, lossHit, floorBreach, targetHit, preBreachNear,
-    lossRs, targetRs, floor, strategy,
+    liveMtm, lossHit, milestoneHit, floorBreach, targetHit, preBreachNear,
+    lossRs, milestoneRs, targetRs, floor, strategy,
     dailyStatus, exitInstruction, riskNotif,
     premiumInfo,
   } = opts;
@@ -1797,6 +1900,22 @@ function _computeTradeActionInstruction(opts) {
         ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · one short leg is blowing up`
         : 'Short-leg stress alert is active.',
       cta: 'Review MTM and decide whether to reduce or exit.',
+    };
+  }
+  if (milestoneHit || rn === 'LOSS_MILESTONE_HIT') {
+    const pct = lossMilestonePct();
+    return {
+      tone: 'warn',
+      verb: 'CONSIDER EXIT',
+      title: 'Loss milestone hit — consider closing',
+      instruction: pct != null
+        ? `Configured loss milestone (${Math.round(pct)}% of max loss) reached. `
+          + 'You may close now to limit further loss. Hard stop-loss is separate and still applies.'
+        : 'Configured loss milestone reached. You may close now — hard stop-loss still applies.',
+      why: liveMtm != null && milestoneRs != null
+        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · milestone −₹${fmt(milestoneRs)}`
+        : 'Loss milestone alert is active.',
+      cta: 'Use Close Trade below if you want to exit.',
     };
   }
   if (floorBreach || rn === 'PROFIT_FLOOR_HIT') {
@@ -2059,10 +2178,12 @@ function _updateTradeActionPanel(tradeId, payload, stripState) {
     const instr = _computeTradeActionInstruction({
       liveMtm,
       lossHit: stripState && stripState.lossHit,
+      milestoneHit: stripState && stripState.milestoneHit,
       floorBreach: stripState && stripState.floorBreach,
       targetHit: stripState && stripState.targetHit,
       preBreachNear,
       lossRs,
+      milestoneRs: (stripState && stripState.milestoneRs) || (thresholds && thresholds.milestoneRs),
       targetRs: thresholds && thresholds.targetRs,
       floor: thresholds && thresholds.floor,
       strategy: panel.dataset.strategy || '',
@@ -2161,31 +2282,36 @@ function renderExitPlan(s) {
 
   if (twoSided && scLeg && spLeg) {
     // sl_level is the call-side SL (above short call). Derive put-side symmetrically.
+    const maxLossRs = s.max_loss != null ? parseFloat(s.max_loss) : null;
+    const slPctS = slLossPctSuffix(strategy, maxLossRs);
     if (slLevel != null) {
       const buf = Math.round(slLevel - scLeg.strike);
-      rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above ${fmt(slLevel)} (${buf} pts above short call ${fmt(scLeg.strike)})` });
+      rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above ${fmt(slLevel)}${slPctS} (${buf} pts above short call ${fmt(scLeg.strike)})` });
       const putSl = Math.round(spLeg.strike - buf);
-      rows.push({ label: 'Put-side SL',  val: `exit put spread if ${und} falls below ${fmt(putSl)} (${buf} pts below short put ${fmt(spLeg.strike)})` });
+      rows.push({ label: 'Put-side SL',  val: `exit put spread if ${und} falls below ${fmt(putSl)}${slPctS} (${buf} pts below short put ${fmt(spLeg.strike)})` });
     } else {
       rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above short call ${fmt(scLeg.strike)}` });
       rows.push({ label: 'Put-side SL',  val: `exit put spread if ${und} falls below short put ${fmt(spLeg.strike)}` });
     }
-    const maxLossRs = s.max_loss != null ? parseFloat(s.max_loss) : null;
     rows.push({ label: 'MTM stop loss', val: slExitPlanText(strategy, maxLossRs), key: true });
   } else if (callCreditOnly && scLeg) {
+    const callMl = s.max_loss != null ? parseFloat(s.max_loss) : null;
+    const slPctS = slLossPctSuffix(strategy, callMl);
     if (slLevel != null) {
       const buf = Math.round(slLevel - scLeg.strike);
       const bufStr = buf > 0 ? ` (${buf} pts above short call ${fmt(scLeg.strike)})` : '';
-      rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above ${fmt(slLevel)}${bufStr}` });
+      rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above ${fmt(slLevel)}${slPctS}${bufStr}` });
     } else {
       rows.push({ label: 'Call-side SL', val: `exit call spread if ${und} rises above short call ${fmt(scLeg.strike)}` });
     }
     rows.push({ label: 'MTM stop loss', val: slExitPlanText(strategy, s.max_loss != null ? parseFloat(s.max_loss) : null), key: true });
   } else if (putCreditOnly && spLeg) {
+    const putMl = s.max_loss != null ? parseFloat(s.max_loss) : null;
+    const slPctS = slLossPctSuffix(strategy, putMl);
     if (slLevel != null) {
       const buf = Math.round(spLeg.strike - slLevel);
       const bufStr = buf > 0 ? ` (${buf} pts below short put ${fmt(spLeg.strike)})` : '';
-      rows.push({ label: 'Put-side SL', val: `exit put spread if ${und} falls below ${fmt(slLevel)}${bufStr}` });
+      rows.push({ label: 'Put-side SL', val: `exit put spread if ${und} falls below ${fmt(slLevel)}${slPctS}${bufStr}` });
     } else {
       rows.push({ label: 'Put-side SL', val: `exit put spread if ${und} falls below short put ${fmt(spLeg.strike)}` });
     }
@@ -3618,10 +3744,10 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           const mtmNote = isDebitStrategy(s.strategy)
             ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">Spot SL not used — ${slExitPlanText(s.strategy, econ.ml)}</span>`
             : '';
-          return `<div><span class="k">Stop loss</span><br><span class="v">MTM-based${mtmNote}</span></div>`;
+          return `<div><span class="k">Stop loss</span><br><span class="v">MTM-based${slLossPctHint(s.strategy, econ.ml)}${mtmNote}</span></div>`;
         }
         if (!twoSided) {
-          return `<div><span class="k">Stop loss</span><br><span class="v">₹${fmt(econ.sl)}${spotDist(econ.sl, s.spot_at_generation)}</span></div>`;
+          return `<div><span class="k">Stop loss</span><br><span class="v">₹${fmt(econ.sl)}${slLossPctHint(s.strategy, econ.ml)}${spotDist(econ.sl, s.spot_at_generation)}</span></div>`;
         }
         const shortCallLeg = (s.legs || []).find(l => l.action === 'SELL' && l.option_type === 'CE');
         const shortPutLeg  = (s.legs || []).find(l => l.action === 'SELL' && l.option_type === 'PE');
@@ -3634,18 +3760,18 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
             <div class="sl-two-rows">
               <div class="sl-trigger-row">
                 <span class="sl-dir-badge sl-dir-up">▲ Nifty rises above</span>
-                <span class="v">₹${fmt(upperSl)}${spotDist(upperSl, s.spot_at_generation)}</span>
+                <span class="v">₹${fmt(upperSl)}${slLossPctHint(s.strategy, econ.ml)}${spotDist(upperSl, s.spot_at_generation)}</span>
                 <span class="sl-action-hint">→ close call spread (legs ${shortCallLeg ? shortCallLeg.leg_order : '?'}+${shortCallLeg ? shortCallLeg.leg_order + 1 : '?'})</span>
               </div>
               <div class="sl-trigger-row">
                 <span class="sl-dir-badge sl-dir-dn">▼ Nifty falls below</span>
-                <span class="v">₹${fmt(lowerSl)}${spotDist(lowerSl, s.spot_at_generation)}</span>
+                <span class="v">₹${fmt(lowerSl)}${slLossPctHint(s.strategy, econ.ml)}${spotDist(lowerSl, s.spot_at_generation)}</span>
                 <span class="sl-action-hint">→ close put spread (legs ${shortPutLeg ? shortPutLeg.leg_order : '?'}+${shortPutLeg ? shortPutLeg.leg_order + 1 : '?'})</span>
               </div>
             </div>
           </div>`;
       })()}
-      <div><span class="k">Premium SL <span class="muted" style="font-size:.72rem">(1.5× credit)</span></span><br><span class="v econ-psl">₹${fmt((econ.np||0) * baseQty * 1.5)}</span></div>
+      <div><span class="k">Premium SL <span class="muted" style="font-size:.72rem">(1.5× credit)</span></span><br><span class="v econ-psl">₹${fmt((econ.np||0) * baseQty * 1.5)}<span class="pct-hint"> (150%)</span></span></div>
       <div><span class="k">Est. charges</span><br><span class="v econ-chg">₹${fmt(econ.chg)}</span></div>
       <div><span class="k">Est. net P&amp;L</span><br><span class="v econ-npnl">${formatPnlWithPct(econ.npnl, sugPremium, { useGrossSign: false })}</span></div>
       <div><span class="k">DTE</span><br><span class="v">${s.dte ?? '—'}</span></div>
@@ -3666,7 +3792,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
         ${usesSpotStopLoss(s.strategy, econ.sl) ? `
         <div class="sl-field">
           <label class="sl-label">Adjusted SL level</label>
-          <span class="sl-prem-val exec-adj-sl">₹${fmt(econ.sl)}</span>
+          <span class="sl-prem-val exec-adj-sl">₹${fmt(econ.sl)}${slLossPctHint(s.strategy, econ.ml)}</span>
           <span class="muted exec-adj-note" style="font-size:.72rem">(suggested, fill spot to adjust)</span>
         </div>` : `
         <div class="sl-field">
@@ -3885,14 +4011,16 @@ function bindSuggestionActions() {
         const adjSlEl  = card.querySelector('.exec-adj-sl');
         const noteEl   = card.querySelector('.exec-adj-note');
         if (!adjSlEl || !noteEl) return;
+        const ml = parseFloat(card.dataset.baseMl) || null;
+        const pctHint = slLossPctHint(card.dataset.strategy, ml);
         if (!isNaN(spot) && spot > 0 && sugSl > 0) {
           const delta = spot - sugSpot;
-          adjSlEl.textContent = `\u20b9${fmt(sugSl + delta)}`;
+          adjSlEl.innerHTML = `\u20b9${fmt(sugSl + delta)}${pctHint}`;
           noteEl.textContent = delta === 0
             ? '(no change)'
             : `(${delta > 0 ? '+' : ''}${fmt(delta)} from AI level)`;
         } else {
-          adjSlEl.textContent = `\u20b9${fmt(sugSl)}`;
+          adjSlEl.innerHTML = `\u20b9${fmt(sugSl)}${pctHint}`;
           noteEl.textContent = '(suggested, fill spot to adjust)';
         }
       }
@@ -4551,6 +4679,7 @@ function renderGapReplayBody(data, premiumInfo) {
   if (!data || data.error) {
     return `<div class="muted" style="font-size:.8rem">${escapeHtml(data?.error || 'Replay unavailable')}</div>`;
   }
+  const slPctSuffix = data.sl_pct != null ? ` (${data.sl_pct}%)` : '';
   if (!data.has_gap || !data.days || !data.days.length) {
     const last = data.monitor_last_seen
       ? `Last monitor snapshot: ${escapeHtml(data.monitor_last_seen)}.`
@@ -4564,7 +4693,7 @@ function renderGapReplayBody(data, premiumInfo) {
     alertHtml = `<div class="gap-replay-alert">
       Would have triggered <strong>${escapeHtml(_gapReplayDecisionLabel(fa.decision))}</strong>
       at EOD on <strong>${escapeHtml(fa.date)}</strong>
-      (MTM ${formatPnlWithPct(fa.mtm, premiumInfo)} vs SL \u2212\u20b9${fmt(data.sl_threshold_rs)}).
+      (MTM ${formatPnlWithPct(fa.mtm, premiumInfo)} vs SL \u2212\u20b9${fmt(data.sl_threshold_rs)}${slPctSuffix}).
     </div>`;
   } else if (fa && fa.decision === 'TAKE_PROFIT') {
     alertHtml = `<div class="gap-replay-alert ok">
@@ -4584,7 +4713,7 @@ function renderGapReplayBody(data, premiumInfo) {
       <td>${escapeHtml(d.date)}</td>
       <td>${d.dte}</td>
       <td class="${mtmCls}">${formatPnlWithPct(d.mtm, premiumInfo)}</td>
-      <td>\u2212\u20b9${fmt(d.sl_threshold_rs)}</td>
+      <td>\u2212\u20b9${fmt(d.sl_threshold_rs)}${slPctSuffix}</td>
       <td>${escapeHtml(_gapReplayDecisionLabel(d.decision))}</td>
       <td>${_gapReplayFlagTags(d.flags)}</td>
     </tr>`;
@@ -4593,7 +4722,7 @@ function renderGapReplayBody(data, premiumInfo) {
   const meta = [
     data.monitor_last_seen ? `Monitor last seen ${escapeHtml(data.monitor_last_seen)}` : null,
     data.replay_from ? `Replay ${escapeHtml(data.replay_from)} \u2192 ${escapeHtml(data.replay_through)}` : null,
-    data.sl_label ? `SL: ${escapeHtml(data.sl_label)} (\u2212\u20b9${fmt(data.sl_threshold_rs)})` : null,
+    data.sl_label ? `SL: ${escapeHtml(data.sl_label)} (\u2212\u20b9${fmt(data.sl_threshold_rs)}${slPctSuffix})` : null,
   ].filter(Boolean).join(' \u00b7 ');
 
   return `${alertHtml}
@@ -4825,6 +4954,7 @@ function renderTrade(t, expanded = false) {
             ra.notif_type === 'PROFIT_FLOOR_SET'   ? 'tag tag-ok'   :
             ra.notif_type === 'PROFIT_FLOOR_HIT'   ? 'tag tag-warn' :
             ra.notif_type === 'LOSS_LIMIT_HIT'     ? 'tag tag-err'  :
+            ra.notif_type === 'LOSS_MILESTONE_HIT' ? 'tag tag-warn' :
             ra.notif_type === 'THESIS_FAIL'        ? 'tag tag-err'  :
             ra.notif_type === 'SL_TRIGGER'         ? 'tag tag-err'  :
             ra.notif_type === 'SHORT_LEG_STRESS'   ? 'tag tag-warn' :
@@ -4835,6 +4965,7 @@ function renderTrade(t, expanded = false) {
             ra.notif_type === 'PROFIT_FLOOR_SET'   ? '\ud83d\udd12 ' :
             ra.notif_type === 'PROFIT_FLOOR_HIT'   ? '\u26a0\ufe0f ' :
             ra.notif_type === 'LOSS_LIMIT_HIT'     ? '\ud83d\uded1 ' :
+            ra.notif_type === 'LOSS_MILESTONE_HIT' ? '\u26a0\ufe0f ' :
             ra.notif_type === 'THESIS_FAIL'        ? '\ud83d\uded1 ' :
             ra.notif_type === 'SL_TRIGGER'         ? '\ud83d\uded1 ' :
             ra.notif_type === 'SHORT_LEG_STRESS'   ? '\u26a0\ufe0f ' :
@@ -4879,17 +5010,21 @@ function renderTrade(t, expanded = false) {
             const upperSl = t.actual_stop_loss_level;
             const slBuffer = shortCallLeg ? upperSl - shortCallLeg.strike : 0;
             const lowerSl  = shortPutLeg  ? shortPutLeg.strike - slBuffer : null;
+            const slStrat = t.suggestion.strategy || '';
+            const slMl = t.actual_max_loss != null ? parseFloat(t.actual_max_loss)
+                       : (t.suggestion.max_loss != null ? parseFloat(t.suggestion.max_loss) : null);
+            const slPctHint = slLossPctHint(slStrat, slMl);
             return `<div class="sl-field sl-two-sided" style="grid-column:1/-1">
               <label class="sl-label">SL triggers <span class="muted" style="font-size:.7rem">(independent — close only the breached spread)</span></label>
               <div class="sl-two-rows" style="margin-top:6px">
                 <div class="sl-trigger-row">
                   <span class="sl-dir-badge sl-dir-up">▲ rises above</span>
-                  <span class="sl-prem-val">₹${fmt(upperSl)}</span>
+                  <span class="sl-prem-val">₹${fmt(upperSl)}${slPctHint}</span>
                   <span class="sl-action-hint">→ close call spread (legs ${shortCallLeg ? shortCallLeg.leg_order : '?'}+${shortCallLeg ? shortCallLeg.leg_order + 1 : '?'})</span>
                 </div>
                 <div class="sl-trigger-row">
                   <span class="sl-dir-badge sl-dir-dn">▼ falls below</span>
-                  <span class="sl-prem-val">₹${fmt(lowerSl)}</span>
+                  <span class="sl-prem-val">₹${fmt(lowerSl)}${slPctHint}</span>
                   <span class="sl-action-hint">→ close put spread (legs ${shortPutLeg ? shortPutLeg.leg_order : '?'}+${shortPutLeg ? shortPutLeg.leg_order + 1 : '?'})</span>
                 </div>
               </div>
@@ -4898,22 +5033,23 @@ function renderTrade(t, expanded = false) {
           const debitSpreadSl = ['BULL_CALL_SPREAD', 'BEAR_PUT_SPREAD'].includes(
             (t.suggestion && t.suggestion.strategy) || ''
           );
-          if (debitSpreadSl) {
-            const ml = t.actual_max_loss != null ? parseFloat(t.actual_max_loss)
+          const slStrat = (t.suggestion && t.suggestion.strategy) || '';
+          const slMl = t.actual_max_loss != null ? parseFloat(t.actual_max_loss)
                      : (t.suggestion && t.suggestion.max_loss != null ? parseFloat(t.suggestion.max_loss) : null);
-            const mtmSl = ml != null ? ml * 0.5 : null;
-            const dir = (t.suggestion && t.suggestion.strategy) === 'BEAR_PUT_SPREAD'
+          if (debitSpreadSl) {
+            const mtmSl = slMl != null ? effectiveSlRs(slStrat, slMl) : null;
+            const dir = slStrat === 'BEAR_PUT_SPREAD'
               ? 'rally hurts this bear put'
               : 'decline hurts this bull call';
             return `<div class="sl-field" style="grid-column:1/-1">
               <label class="sl-label">Stop loss (MTM)</label>
-              <span class="sl-prem-val">${mtmSl != null ? `\u20b9${fmt(mtmSl)} loss` : '50% of max debit'}</span>
+              <span class="sl-prem-val">${mtmSl != null ? `\u20b9${fmt(mtmSl)} loss${slLossPctHint(slStrat, slMl)}` : `${Math.round((strategySlConfig(slStrat).loss_fraction || 0.5) * 100)}% of max debit`}</span>
               <span class="muted sl-prem-note">No Nifty spot trigger \u2014 ${dir}. Ignore legacy spot level if shown in old trades.</span>
             </div>`;
           }
           return `<div class="sl-field">
             <label class="sl-label">Nifty SL level</label>
-            <span class="sl-prem-val">${t.actual_stop_loss_level != null ? `\u20b9${fmt(t.actual_stop_loss_level)}` : '\u2014 not set'}</span>
+            <span class="sl-prem-val">${t.actual_stop_loss_level != null ? `\u20b9${fmt(t.actual_stop_loss_level)}${slLossPctHint(slStrat, slMl)}` : '\u2014 not set'}</span>
           </div>`;
         })()}
         <div class="sl-field">
@@ -5513,7 +5649,7 @@ function renderHistorySuggestion(s) {
       <div class="hcmp-row"><span class="hcmp-key">Net credit</span><span class="hcmp-sug">₹${fmt(s.net_credit_suggested)}</span></div>
       ${s.max_profit != null ? `<div class="hcmp-row"><span class="hcmp-key">Max profit</span><span class="hcmp-sug">₹${fmt(s.max_profit)}</span></div>` : ''}
       ${s.max_loss != null ? `<div class="hcmp-row"><span class="hcmp-key">Max loss</span><span class="hcmp-sug">₹${fmt(s.max_loss)}</span></div>` : ''}
-      ${s.stop_loss_level != null ? `<div class="hcmp-row"><span class="hcmp-key">Stop loss</span><span class="hcmp-sug">${fmt(s.stop_loss_level)}</span></div>` : ''}
+      ${s.stop_loss_level != null ? `<div class="hcmp-row"><span class="hcmp-key">Stop loss</span><span class="hcmp-sug">${fmt(s.stop_loss_level)}${escapeHtml(slLossPctSuffix(s.strategy, s.max_loss != null ? parseFloat(s.max_loss) : null))}</span></div>` : ''}
     </div>` : ''}
     ${s.plain_english ? `<div class="hist-card-meta muted" style="margin-top:8px;white-space:pre-line">${escapeHtml(s.plain_english)}</div>` : ''}
   </div>`;
@@ -5597,7 +5733,9 @@ function renderHistoryTrade(t) {
       ${cmp('Spot at entry',     s.spot != null ? fmt(s.spot) : '—',  t.spot_at_execution != null ? fmt(t.spot_at_execution) : '—')}
       ${cmp('Upper breakeven',   s.upper_be != null ? fmt(s.upper_be) : '—',  t.actual_upper_be != null ? fmt(t.actual_upper_be) : '—')}
       ${cmp('Lower breakeven',   s.lower_be != null ? fmt(s.lower_be) : '—',  t.actual_lower_be != null ? fmt(t.actual_lower_be) : '—')}
-      ${cmp('Stop loss level',   s.stop_loss != null ? fmt(s.stop_loss) : '—',  t.actual_stop_loss != null ? fmt(t.actual_stop_loss) : '—')}
+      ${cmp('Stop loss level',
+        s.stop_loss != null ? fmt(s.stop_loss) + slLossPctSuffix(s.strategy, s.max_loss != null ? parseFloat(s.max_loss) : null) : '—',
+        t.actual_stop_loss != null ? fmt(t.actual_stop_loss) + slLossPctSuffix(s.strategy, t.actual_max_loss != null ? parseFloat(t.actual_max_loss) : (s.max_loss != null ? parseFloat(s.max_loss) : null)) : '—')}
       ${s.pop != null ? cmp('Prob. of profit', fmtPct(s.pop), '—') : ''}
       ${s.confidence != null ? cmp('Confidence', formatConfidence({ confidence_score: s.confidence }) || `${s.confidence} passed`, '—') : ''}
       ${t.exit_instruction ? cmp('Exit reason', '—', `<span class="muted">${escapeHtml(t.exit_instruction)}</span>`) : ''}
@@ -6556,7 +6694,7 @@ const _NF_CAT_LABELS = {
 
 const _NF_TYPE_CAT = {
   SL_TRIGGER: 'sl', SL_HIT: 'sl', PRE_BREACH_WARNING: 'sl',
-  LOSS_LIMIT_HIT: 'sl', THESIS_FAIL: 'sl', PROFIT_FLOOR_HIT: 'sl', SHORT_LEG_STRESS: 'sl',
+  LOSS_MILESTONE_HIT: 'sl', LOSS_LIMIT_HIT: 'sl', THESIS_FAIL: 'sl', PROFIT_FLOOR_HIT: 'sl', SHORT_LEG_STRESS: 'sl',
   TARGET_HIT: 'profit', TAKE_PROFIT: 'profit', TARGET_LOCKED: 'profit',
   PROFIT_FLOOR_SET: 'profit',
   EXIT_TOMORROW: 'exit', TIME_DECAY_DONE: 'exit', EXPIRE: 'exit', AUTO_SETTLED: 'exit',

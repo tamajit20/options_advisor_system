@@ -859,6 +859,7 @@ _SL_SIGNAL_STATUSES = frozenset({"SL_HIT", "LOSS_LIMIT_HIT"})
 _THESIS_SIGNAL_STATUSES = frozenset({"THESIS_FAIL"})
 _PROFIT_SIGNAL_STATUSES = frozenset({"TAKE_PROFIT", "TARGET_HIT", "TARGET_LOCKED"})
 _SL_RISK_TYPES = frozenset({"LOSS_LIMIT_HIT", "SL_TRIGGER"})
+_MILESTONE_RISK_TYPES = frozenset({"LOSS_MILESTONE_HIT"})
 _PROFIT_RISK_TYPES = frozenset({"TARGET_HIT", "TARGET_LOCKED"})
 _EXIT_RISK_TYPES = frozenset({"PROFIT_FLOOR_HIT"})
 _MTM_FLAT_RS = 0.5
@@ -997,6 +998,8 @@ def _signal_kind_for_open_trade(
         or risk in _EXIT_RISK_TYPES
     ):
         return "exit"
+    if risk in _MILESTONE_RISK_TYPES:
+        return "milestone"
     if mtm is None:
         return None
     try:
@@ -1071,6 +1074,7 @@ def _today_risk_type_by_trade(
               AND notif_type IN (
                     'TARGET_HIT', 'TARGET_LOCKED',
                     'LOSS_LIMIT_HIT', 'SL_TRIGGER',
+                    'LOSS_MILESTONE_HIT',
                     'PROFIT_FLOOR_HIT'
               )
             ORDER BY created_at DESC

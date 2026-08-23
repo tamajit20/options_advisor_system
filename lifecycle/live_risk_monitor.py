@@ -15,6 +15,9 @@ uses) and emits a notification when:
 * ``PROFIT_FLOOR_SET`` — a trailing profit-lock step arms and raises the
   trade's ``trailing_pnl_floor``.
 * ``PROFIT_FLOOR_HIT`` — live MTM drops below the armed profit floor.
+* ``LOSS_MILESTONE_HIT`` — optional user-configured ``pct_of_max_loss`` of
+  max loss (see ``loss_milestone_alert``). Separate from hard SL; suggests
+  considering an exit when the milestone is crossed.
 * ``LOSS_LIMIT_HIT`` — current PnL crosses the strategy effective loss limit
   (``effective_sl_rs``).
 * ``SL_TRIGGER`` — underlying spot crosses ``actual_stop_loss_level`` (when
@@ -70,7 +73,7 @@ from config import STRATEGY_CONFIG
 from engine.exit_engine import evaluate_exit
 from engine.exit_pricing import format_leg_quote_key
 from engine.pnl_targets import profit_target_trade_rs
-from engine.sl_threshold import effective_sl_rs
+from engine.sl_threshold import effective_sl_rs, loss_milestone_config, loss_milestone_rs
 from providers.base import LiveQuote
 from providers.event_bus import (
     EventBus,
@@ -540,6 +543,17 @@ class LiveRiskMonitor:
             seconds=float(cfg["mtm_snapshot_interval_sec"] or 900))
         self._short_leg_stress_enabled = bool(cfg["short_leg_stress_enabled"])
         self._short_leg_stress_mult = float(cfg["short_leg_stress_multiplier"])
+        self._bind_loss_milestone_cfg()
+
+    def _bind_loss_milestone_cfg(self) -> None:
+        """Re-read loss_milestone_alert from STRATEGY_CONFIG."""
+        lmc = loss_milestone_config()
+        self._loss_milestone_enabled = lmc["enabled"]
+        self._loss_milestone_pct = lmc["pct_of_max_loss"]
+        cd = lmc.get("cooldown_minutes")
+        self._loss_milestone_cooldown = (
+            timedelta(minutes=int(cd)) if cd is not None else None
+        )
 
     def _reload(self, *, prime: bool = False) -> None:
         if self._config_reloader is not None:
@@ -944,7 +958,28 @@ class LiveRiskMonitor:
             )
             return alert, mtm_payload, trailing_persist, snapshot_payload
 
-        # 2. Soft pre-breach warning. Event-eve uses tighter fraction.
+        # 2. Loss milestone — user % of max loss (independent of strategy SL).
+        milestone_rs, milestone_pct = loss_milestone_rs(max_loss_rs=state.max_loss)
+        if (self._loss_milestone_enabled
+                and milestone_rs > 0
+                and decision.decision != "SL_HIT"
+                and current_pnl <= -milestone_rs):
+            reason = (
+                f"Loss milestone ({milestone_pct:.0f}% of max loss ₹"
+                f"{state.max_loss:,.0f} = ₹{milestone_rs:,.0f}): "
+                f"MTM ₹{current_pnl:,.0f}. Consider closing — hard SL unchanged."
+            )
+            alert = self._maybe_alert(
+                state, "LOSS_MILESTONE_HIT", "WARNING",
+                title=f"Loss milestone hit on {state.trade_name}",
+                body=self._format_pnl_body(state, current_pnl, reason),
+                breach_key="LOSS_MILESTONE", now=now,
+                threshold_rs=milestone_rs,
+                cooldown=self._loss_milestone_cooldown,
+            )
+            return alert, mtm_payload, trailing_persist, snapshot_payload
+
+        # 3. Soft pre-breach warning. Event-eve uses tighter fraction.
         pre_breach_rs = active_pre_breach * sl_threshold
         if (sl_threshold > 0
                 and current_pnl <= -pre_breach_rs
@@ -991,6 +1026,9 @@ class LiveRiskMonitor:
         if decision.decision != "SL_HIT":
             self._clear_level_breach(
                 state, "LOSS_LIMIT", now, current_pnl, sl_threshold)
+        if milestone_rs > 0:
+            self._clear_level_breach(
+                state, "LOSS_MILESTONE", now, current_pnl, milestone_rs)
         if not trailing_breach:
             self._clear_level_breach(
                 state, "PROFIT_FLOOR", now, current_pnl,
@@ -1041,10 +1079,12 @@ class LiveRiskMonitor:
         self, state: _TradeState, notif_type: str, severity: str,
         *, title: str, body: str, breach_key: str, now: datetime,
         threshold_rs: Optional[float] = None,
+        cooldown: Optional[timedelta] = None,
     ) -> Optional["_PendingAlert"]:
         was = state.in_breach.get(breach_key, False)
         last = state.last_alert_at.get(breach_key)
-        in_cooldown = (last is not None and (now - last) < self._cooldown)
+        cd = cooldown if cooldown is not None else self._cooldown
+        in_cooldown = (last is not None and (now - last) < cd)
         # Suppress if still in cooldown AND we were already in breach
         # (i.e. this isn't a re-entry after recovery).
         if was and in_cooldown:

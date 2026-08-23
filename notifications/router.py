@@ -51,6 +51,7 @@ _TYPE_TO_FLAG = {
     "LOSS_LIMIT_HIT":         "sl_alerts",
     "PROFIT_FLOOR_HIT":       "sl_alerts",
     "PRE_BREACH_WARNING":     "sl_alerts",
+    "LOSS_MILESTONE_HIT":     "sl_alerts",
     "TARGET_HIT":             "closure_alerts",
     "PERFECT_ENTRY":          "opportunity_alerts",
     "OPPORTUNITY_REGEN_HINT": "opportunity_alerts",

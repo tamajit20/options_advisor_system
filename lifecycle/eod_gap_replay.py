@@ -169,6 +169,11 @@ def replay_gap_for_trade(
     entry_net_credit = float(trade.get("net_credit_actual") or 0.0)
     max_profit_rs = float(trade.get("actual_max_profit") or 0.0)
     max_loss_rs = float(trade.get("actual_max_loss") or 0.0)
+    sl_pct = (
+        round(sl_threshold / max_loss_rs * 100)
+        if max_loss_rs > 0 and sl_threshold > 0
+        else None
+    )
 
     days_out: List[dict] = []
     first_actionable: Optional[dict] = None
@@ -243,6 +248,7 @@ def replay_gap_for_trade(
         "replay_through": end.isoformat(),
         "sl_threshold_rs": round(sl_threshold, 2),
         "sl_label": sl_label,
+        "sl_pct": sl_pct,
         "pre_breach_fraction": pre_breach_fraction,
         "days": days_out,
         "first_actionable": first_actionable,

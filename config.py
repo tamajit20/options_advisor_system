@@ -834,6 +834,15 @@ STRATEGY_CONFIG = {
         "event_eve_credit_only": True,
     },
 
+    # Loss milestone — optional early exit when MTM loss reaches a user-set
+    # percentage of max loss. Independent of strategy SL (loss_fraction) and
+    # pre_breach_fraction (% of SL threshold). When enabled, fires LOSS_MILESTONE_HIT.
+    "loss_milestone_alert": {
+        "enabled": False,
+        "pct_of_max_loss": 25.0,
+        "cooldown_minutes": None,
+    },
+
     # Suggestion freshness (Phase 3 — #2).
     # A PENDING suggestion older than this many minutes is considered STALE.
     # The execution validator (and dashboard badge) gates executions of stale

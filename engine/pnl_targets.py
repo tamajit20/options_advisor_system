@@ -200,4 +200,10 @@ def pnl_rules_public() -> Dict[str, Any]:
             "trailing_sl_steps": list(lrm.get("trailing_sl_steps") or []),
             "pre_breach_fraction": float(lrm.get("pre_breach_fraction", 0.70)),
         },
+        "loss_milestone_alert": dict(
+            STRATEGY_CONFIG.get("loss_milestone_alert") or {
+                "enabled": False,
+                "pct_of_max_loss": 25.0,
+            }
+        ),
     }

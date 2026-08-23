@@ -90,7 +90,7 @@
     const priority = card => {
       const notif = (card.dataset.riskNotif || '').toUpperCase();
       if (['LOSS_LIMIT_HIT', 'THESIS_FAIL', 'SL_TRIGGER'].includes(notif)) return 0;
-      if (['PROFIT_FLOOR_HIT', 'SHORT_LEG_STRESS', 'PRE_BREACH_WARNING'].includes(notif)) return 1;
+      if (['LOSS_MILESTONE_HIT', 'PROFIT_FLOOR_HIT', 'SHORT_LEG_STRESS', 'PRE_BREACH_WARNING'].includes(notif)) return 1;
       if ((card.dataset.dailyStatus || '').toUpperCase().includes('EXIT')) return 2;
       return 3;
     };

@@ -963,6 +963,19 @@ class TestTradeSignalKind:
             risk_type="LOSS_LIMIT_HIT",
         ) == "sl"
 
+    def test_loss_milestone_risk_type(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "OPEN", "exit_instruction": None},
+            risk_type="LOSS_MILESTONE_HIT",
+        ) == "milestone"
+
+    def test_sl_beats_milestone_when_both_present(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "OPEN"},
+            risk_type="LOSS_LIMIT_HIT",
+            mtm=-8000.0,
+        ) == "sl"
+
     def test_close_pending_without_sl(self):
         assert server._signal_kind_for_open_trade({
             "daily_status": "OPEN",

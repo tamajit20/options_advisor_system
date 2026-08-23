@@ -68,3 +68,35 @@ def effective_sl_rs(*, strategy: str, max_loss_rs: float) -> Tuple[float, str]:
         return cap, f"₹{cap:,.0f} cap"
 
     return pct_rs, f"{frac * 100:.0f}% of max loss"
+
+
+def loss_milestone_config() -> Dict[str, Any]:
+    """Resolved loss-milestone knobs from STRATEGY_CONFIG."""
+    raw = STRATEGY_CONFIG.get("loss_milestone_alert") or {}
+    enabled = bool(raw.get("enabled", False))
+    try:
+        pct = float(raw.get("pct_of_max_loss", 25.0))
+    except (TypeError, ValueError):
+        pct = 25.0
+    pct = max(0.0, min(100.0, pct))
+    cd = raw.get("cooldown_minutes")
+    cooldown_minutes: Optional[int] = None
+    if cd is not None:
+        try:
+            cooldown_minutes = max(0, int(cd))
+        except (TypeError, ValueError):
+            cooldown_minutes = None
+    return {
+        "enabled": enabled,
+        "pct_of_max_loss": pct,
+        "cooldown_minutes": cooldown_minutes,
+    }
+
+
+def loss_milestone_rs(*, max_loss_rs: float) -> Tuple[float, float]:
+    """Return (milestone_rs, pct_of_max_loss) when enabled; else (0.0, 0.0)."""
+    cfg = loss_milestone_config()
+    if not cfg["enabled"] or max_loss_rs <= 0 or cfg["pct_of_max_loss"] <= 0:
+        return 0.0, cfg["pct_of_max_loss"]
+    pct = cfg["pct_of_max_loss"]
+    return max_loss_rs * (pct / 100.0), pct

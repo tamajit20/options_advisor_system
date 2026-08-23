@@ -86,6 +86,16 @@ a { color: var(--accent); text-decoration: none; }
   background: #dc2626;
   clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
 }
+.signal-tile--milestone .signal-shape {
+  background: #d97706;
+  clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
+  filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 8px rgba(217, 119, 6, .95));
+}
+.signal-tile--milestone .signal-mark {
+  width: 3px;
+  height: 12px;
+  border-radius: 1px;
+}
 .signal-tile--thesis .signal-shape {
   background: #ea580c;
   clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);

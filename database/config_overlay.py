@@ -66,6 +66,7 @@ _PNL_KEYS = frozenset({
     "time_decay_exit_dte", "time_decay_exit_strategies",
     "long_premium_thesis_exit", "intraday_sl_multiplier",
     "live_risk_monitor", "adverse_move_warning_pct",
+    "loss_milestone_alert",
 })
 
 _GROUP_META: Sequence[Tuple[str, str]] = (
@@ -122,6 +123,9 @@ _DESCRIPTIONS: Dict[str, str] = {
         "Per-strategy take-profit (fraction of max profit ≈ credit captured).",
     "strategy_sl_limits":
         "Per-strategy MTM stop (loss_fraction + ₹ cap). Exit Plan and LOSS_LIMIT_HIT.",
+    "loss_milestone_alert":
+        "Optional early exit when MTM loss hits pct_of_max_loss % of max loss. "
+        "Separate from strategy SL. JSON: {enabled, pct_of_max_loss, cooldown_minutes}.",
     "live_risk_monitor":
         "Live alert engine (session, cooldown, trailing floor, pre-breach). Nested JSON.",
     "trading_capital_rs": "Notional capital for circuit-breaker and sizing.",

@@ -406,6 +406,62 @@ class TestPreBreachWarning:
         assert types.count("PRE_BREACH_WARNING") == 1
 
 
+class TestLossMilestoneHit:
+    def test_loss_milestone_fires_at_configured_pct(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {"enabled": True, "pct_of_max_loss": 25.0}},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
+        )
+        monitor._bind_loss_milestone_cfg()
+        # SELL @100 → loss at close 130 → pnl -3000 = 30% of max loss (> 25% milestone).
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 130.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 130.0))
+        assert notifier.notify.call_count == 1
+        kwargs = notifier.notify.call_args.kwargs
+        assert kwargs["notif_type"] == "LOSS_MILESTONE_HIT"
+        assert kwargs["severity"] == "WARNING"
+
+    def test_hard_sl_still_fires_when_milestone_enabled(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {"enabled": True, "pct_of_max_loss": 25.0}},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
+        )
+        monitor._bind_loss_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 250.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 250.0))
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "LOSS_LIMIT_HIT"
+
+    def test_loss_milestone_disabled_skips_alert(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {"enabled": False, "pct_of_max_loss": 25.0}},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
+        )
+        monitor._bind_loss_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 130.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 130.0))
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "LOSS_MILESTONE_HIT" not in types
+
+
 class TestDTEAwareTarget:
     def test_credit_target_follows_strategy_fraction_at_low_dte(self):
         """IC take-profit is 50% of max profit — same at DTE 1 as at DTE 15."""
