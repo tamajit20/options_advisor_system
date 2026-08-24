@@ -12,6 +12,7 @@
   .btn,
   .bnav-item,
   .more-drawer-item,
+  .options-subtab,
   .scout-subtab,
   .nav-item,
   .hist-subtab,
@@ -25,7 +26,52 @@
   .card-head-btn { min-height: 40px; padding: 8px 12px; }
 }
 
-/* ---------- Bottom nav (5 items) ---------- */
+/* ---------- Options Advisor subtabs (mobile, mirrors Scout) ---------- */
+.options-subtabs {
+  display: none;
+}
+
+@media (max-width: 1024px) {
+  .options-subtabs:not([hidden]) {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 6px;
+    padding-bottom: 4px;
+    margin: 0 0 10px;
+  }
+  .options-subtab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 8px 14px;
+    font-size: 0.82rem;
+    border: 1px solid #2a3744;
+    border-radius: 8px;
+    background: var(--surface-alt);
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .options-subtab.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(56, 189, 248, 0.08);
+  }
+}
+
+/* ---------- More drawer sections ---------- */
+.more-drawer-section { margin-bottom: 4px; }
+.more-drawer-section-label {
+  margin: 0 0 8px;
+  padding: 0 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* ---------- Bottom nav (4 items — two apps) ---------- */
 @media (max-width: 1024px) {
   .bottom-nav {
     padding-bottom: env(safe-area-inset-bottom, 0);
@@ -316,6 +362,7 @@
   .btn:active { filter: brightness(0.92); }
   .bnav-item:active,
   .more-drawer-item:active,
+  .options-subtab:active,
   .nav-item:active,
   .scout-subtab:active,
   .hist-subtab:active,

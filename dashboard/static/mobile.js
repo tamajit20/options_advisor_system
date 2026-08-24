@@ -1,13 +1,37 @@
 /**
- * Mobile UX — More drawer, sticky trade bar, bottom-nav wiring.
+ * Mobile UX — app switcher, options subtabs, menu drawer, sticky trade bar.
  */
 (function () {
   'use strict';
 
   const MOBILE_MQ = window.matchMedia('(max-width: 1024px)');
+  const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'config'];
+  const SYSTEM_TABS = ['logs', 'jobs', 'wsmon'];
 
   function isMobile() {
     return MOBILE_MQ.matches;
+  }
+
+  function getActiveTab() {
+    if (typeof window.TABS === 'object' && Array.isArray(window.TABS)) {
+      const found = window.TABS.find(t => {
+        const panel = document.getElementById(`panel-${t}`);
+        return panel && panel.classList.contains('active');
+      });
+      if (found) return found;
+    }
+    const panel = document.querySelector('.tab-panels > .panel.active');
+    if (panel && panel.id.startsWith('panel-')) return panel.id.slice('panel-'.length);
+    return null;
+  }
+
+  function syncMenuButtonActive() {
+    const moreBtn = document.getElementById('bnav-more-btn');
+    const drawer = document.getElementById('more-drawer');
+    if (!moreBtn) return;
+    const drawerOpen = drawer && !drawer.hidden;
+    const onSystem = SYSTEM_TABS.includes(getActiveTab());
+    moreBtn.classList.toggle('active', drawerOpen || onSystem);
   }
 
   function openMoreDrawer() {
@@ -15,8 +39,7 @@
     if (!drawer) return;
     drawer.hidden = false;
     document.body.classList.add('more-drawer-open');
-    const moreBtn = document.getElementById('bnav-more-btn');
-    if (moreBtn) moreBtn.classList.add('active');
+    syncMenuButtonActive();
   }
 
   function closeMoreDrawer() {
@@ -24,8 +47,7 @@
     if (!drawer) return;
     drawer.hidden = true;
     document.body.classList.remove('more-drawer-open');
-    const moreBtn = document.getElementById('bnav-more-btn');
-    if (moreBtn) moreBtn.classList.remove('active');
+    syncMenuButtonActive();
   }
 
   function bindMoreDrawer() {
@@ -46,6 +68,31 @@
 
     document.addEventListener('keydown', ev => {
       if (ev.key === 'Escape' && !drawer.hidden) closeMoreDrawer();
+    });
+  }
+
+  function bindAppSwitcher() {
+    document.querySelectorAll('[data-bnav-app]').forEach(btn => {
+      if (btn.dataset.bound === '1') return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', () => {
+        const app = btn.dataset.bnavApp;
+        if (app === 'options') {
+          let tab = 'suggestion';
+          try {
+            const saved = localStorage.getItem('activeTab');
+            if (saved && OPTIONS_TABS.includes(saved)) tab = saved;
+          } catch (_) {}
+          if (typeof window.switchTab === 'function') window.switchTab(tab);
+        } else if (app === 'scout') {
+          let tab = 'scout-signals';
+          try {
+            const saved = localStorage.getItem('activeTab');
+            if (saved && saved.startsWith('scout-')) tab = saved;
+          } catch (_) {}
+          if (typeof window.switchTab === 'function') window.switchTab(tab);
+        }
+      });
     });
   }
 
@@ -142,6 +189,7 @@
     window.switchTab = function (name) {
       closeMoreDrawer();
       const out = orig(name);
+      syncMenuButtonActive();
       setTimeout(updateTradeMobileBar, 80);
       return out;
     };
@@ -210,6 +258,7 @@
 
   function init() {
     bindMoreDrawer();
+    bindAppSwitcher();
     bindBottomNav();
     bindTradeMobileBar();
     bindTouchPopovers();

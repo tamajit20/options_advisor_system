@@ -712,8 +712,18 @@ window.toast = toast;
 
 // ---------------- Tab switching ----------------
 const TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
+window.TABS = TABS;
+const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'config'];
+const SYSTEM_TABS = ['logs', 'jobs', 'wsmon'];
 const TAB_LOADERS = {};
 const TAB_LEAVE = {};
+
+function isOptionsTab(name) {
+  return OPTIONS_TABS.includes(name);
+}
+function isScoutTab(name) {
+  return String(name || '').startsWith('scout-');
+}
 
 /** Extension point for separate modules (e.g. Intraday Scout). */
 function registerDashboardTab(name, onEnter, onLeave) {
@@ -736,15 +746,27 @@ function switchTab(name) {
     panel.setAttribute('aria-hidden', t !== name);
   });
   $$('.nav-item, .bnav-item').forEach(b => {
-    if (b.classList.contains('bnav-more')) return;
+    if (b.classList.contains('bnav-more')) {
+      b.classList.toggle('active', SYSTEM_TABS.includes(name));
+      return;
+    }
     const tab = b.dataset.tab;
-    const isBottomNav = b.classList.contains('bnav-item');
-    const scoutHub = b.dataset.bnavScout === '1';
-    const active = tab === name
-      || (scoutHub && name.startsWith('scout-'))
-      || (isBottomNav && tab === 'scout-signals' && name.startsWith('scout-'));
+    const app = b.dataset.bnavApp;
+    let active = false;
+    if (app === 'options') active = isOptionsTab(name);
+    else if (app === 'scout') active = isScoutTab(name);
+    else if (tab) active = tab === name;
     b.classList.toggle('active', active);
   });
+  $$('.options-subtab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === name);
+  });
+  document.body.classList.remove('mobile-app-options', 'mobile-app-scout', 'mobile-app-alerts');
+  if (name === 'notifications') document.body.classList.add('mobile-app-alerts');
+  else if (isScoutTab(name)) document.body.classList.add('mobile-app-scout');
+  else if (isOptionsTab(name)) document.body.classList.add('mobile-app-options');
+  const optBar = document.getElementById('options-subtabs-bar');
+  if (optBar) optBar.hidden = !isOptionsTab(name);
   if (name === 'suggestion')    loadSuggestion();
   if (name === 'trades')        loadTrades();
   if (name === 'learn') {
@@ -778,8 +800,9 @@ function switchTab(name) {
 }
 window.switchTab = switchTab;
 
-$$('.nav-item, .bnav-item').forEach(b => {
+$$('.nav-item, .bnav-item, .options-subtab').forEach(b => {
   if (b.classList.contains('bnav-more')) return;
+  if (b.dataset.bnavApp) return;
   b.addEventListener('click', () => switchTab(b.dataset.tab));
 });
 // Restore last active tab on page load (URL hash takes precedence over localStorage).

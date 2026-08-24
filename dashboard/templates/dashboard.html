@@ -116,6 +116,14 @@
   </nav>
 
   <section class="tab-panels">
+    <nav class="options-subtabs" id="options-subtabs-bar" role="tablist" aria-label="Options Advisor sections" hidden>
+      <button type="button" class="options-subtab active" data-tab="suggestion">Suggestion</button>
+      <button type="button" class="options-subtab" data-tab="trades">Trades</button>
+      <button type="button" class="options-subtab" data-tab="learn">Learning</button>
+      <button type="button" class="options-subtab" data-tab="history">History</button>
+      <button type="button" class="options-subtab" data-tab="config">Config</button>
+    </nav>
+
     <article class="panel active" id="panel-suggestion" aria-hidden="false">
       <h2 class="panel-title">Today's Suggestion</h2>
       <div id="suggestion-container" class="loading">Loading…</div>
@@ -766,31 +774,28 @@
   </section>
 </main>
 
-<!-- Bottom nav (mobile — 5 primary tabs + More drawer) -->
+<!-- Bottom nav (mobile — two apps + shared alerts + menu) -->
 <nav class="bottom-nav" aria-label="Primary mobile">
-  <button type="button" class="bnav-item active" data-tab="suggestion"><span>💡</span><span>Home</span></button>
-  <button type="button" class="bnav-item" data-tab="trades"><span>📊</span><span>Trades</span></button>
-  <button type="button" class="bnav-item" data-bnav-scout="1" data-tab="scout-signals"><span>🔍</span><span>Scout</span></button>
+  <button type="button" class="bnav-item active" data-bnav-app="options"><span>💡</span><span>Advisor</span></button>
+  <button type="button" class="bnav-item" data-bnav-app="scout"><span>🔍</span><span>Scout</span></button>
   <button type="button" class="bnav-item" data-tab="notifications"><span>🔔</span><span>Alerts</span></button>
-  <button type="button" class="bnav-item bnav-more" id="bnav-more-btn" aria-label="More pages"><span>☰</span><span>More</span></button>
+  <button type="button" class="bnav-item bnav-more" id="bnav-more-btn" aria-label="Menu"><span>☰</span><span>Menu</span></button>
 </nav>
 
 <div id="more-drawer" class="more-drawer" hidden>
   <div class="more-drawer-backdrop" aria-hidden="true"></div>
   <div class="more-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="more-drawer-title">
     <div class="more-drawer-handle"></div>
-    <h3 class="more-drawer-title" id="more-drawer-title">More</h3>
-    <div class="more-drawer-grid">
-      <button type="button" class="more-drawer-item" data-tab="learn"><span class="more-drawer-icon">📘</span>Learning</button>
-      <button type="button" class="more-drawer-item" data-tab="history"><span class="more-drawer-icon">📜</span>History</button>
-      <button type="button" class="more-drawer-item" data-tab="logs"><span class="more-drawer-icon">🪵</span>Logs</button>
-      <button type="button" class="more-drawer-item" data-tab="jobs"><span class="more-drawer-icon">🔧</span>Jobs</button>
-      <button type="button" class="more-drawer-item" data-tab="wsmon"><span class="more-drawer-icon">📡</span>WS Monitor</button>
-      <button type="button" class="more-drawer-item" data-tab="config"><span class="more-drawer-icon">⚙️</span>Config</button>
-      <button type="button" class="more-drawer-item" data-tab="scout-trades"><span class="more-drawer-icon">⚡</span>Scout Exec</button>
-      <button type="button" class="more-drawer-item" data-tab="scout-watchlist"><span class="more-drawer-icon">📋</span>Watchlist</button>
+    <h3 class="more-drawer-title" id="more-drawer-title">Menu</h3>
+    <div class="more-drawer-section">
+      <p class="more-drawer-section-label">Options Advisor — tools</p>
+      <div class="more-drawer-grid">
+        <button type="button" class="more-drawer-item" data-tab="logs"><span class="more-drawer-icon">🪵</span>Logs</button>
+        <button type="button" class="more-drawer-item" data-tab="jobs"><span class="more-drawer-icon">🔧</span>Jobs</button>
+        <button type="button" class="more-drawer-item" data-tab="wsmon"><span class="more-drawer-icon">📡</span>WS Monitor</button>
+      </div>
     </div>
-    <p class="more-drawer-note">Config, Jobs, and WS Monitor are best on a larger screen. Scout Signals uses the Scout tab; subtabs appear at the top.</p>
+    <p class="more-drawer-note">Suggestion, Trades, Learning, History, and Config live under <strong>Advisor</strong> (top tabs). Scout sections are under the <strong>Scout</strong> tab.</p>
     <button type="button" class="btn btn-ghost" data-more-close style="width:100%;margin-top:10px">Close</button>
   </div>
 </div>
