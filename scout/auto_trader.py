@@ -8,7 +8,7 @@ from typing import Callable, List, Optional
 from config import SCOUT_CONFIG
 from database.connection import SQLServerConnection
 from database.scout_models import ScoutSignalRepo, ScoutTradeRepo
-from scout.config_loader import get_scout_settings
+from scout.config_loader import reload_scout_settings
 from scout.execution_engine import (
     execute_entry,
     execution_mode_label,
@@ -89,7 +89,7 @@ def try_auto_execute_signal(
     spot_lookup: Callable[[str], Optional[float]],
 ) -> Optional[dict]:
     """Auto-enter via 3-step execution engine (paper or Zerodha)."""
-    settings = get_scout_settings(db)
+    settings = reload_scout_settings(db)
     if not scout_trading_enabled(settings):
         return None
     if not settings.get("auto_execute_signals"):
@@ -223,7 +223,7 @@ def try_auto_close_trades(
     spot_lookup: Callable[[str], Optional[float]],
 ) -> List[dict]:
     """Step 3 — manage open trades (paper LTP or live Zerodha)."""
-    settings = get_scout_settings(db)
+    settings = reload_scout_settings(db)
     if not scout_trading_enabled(settings):
         return []
     if not settings.get("auto_close_trades"):
@@ -295,7 +295,7 @@ def try_auto_enter_pending_signals(
     spot_lookup: Callable[[str], Optional[float]],
 ) -> List[dict]:
     """Retry auto-enter on recent signals that never got a trade row."""
-    settings = get_scout_settings(db)
+    settings = reload_scout_settings(db)
     if not scout_trading_enabled(settings):
         return []
     if not settings.get("auto_execute_signals"):
@@ -322,7 +322,7 @@ def run_execution_poll(
     spot_lookup: Callable[[str], Optional[float]],
 ) -> dict:
     """Single poll tick: pending entries, auto-enter retry, auto-close."""
-    settings = get_scout_settings(db)
+    settings = reload_scout_settings(db)
     out = {
         "pending_filled": [],
         "protection_retried": [],
@@ -351,7 +351,7 @@ def on_signals_committed(
     """Run auto-enter for freshly committed signal rows."""
     if not signal_ids:
         return
-    settings = get_scout_settings(db)
+    settings = reload_scout_settings(db)
     if not scout_trading_enabled(settings):
         return
     if not settings.get("auto_execute_signals"):

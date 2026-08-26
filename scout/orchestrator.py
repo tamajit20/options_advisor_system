@@ -41,11 +41,13 @@ def run_scout_scan(db: SQLServerConnection) -> int:
     signals_found = 0
     symbols_scanned = 0
     err_msg = None
+    inserted_ids: list[int] = []
+    ltp_by_symbol: dict[str, float] = {}
     try:
         mkt = ScoutMarketData()
         rows, symbols_scanned = scan_watchlist(mkt, db)
         triggered = now_ist()
-        settings = merge_scout_settings(get_scout_settings(db))
+        settings = merge_scout_settings(get_scout_settings(db, use_cache=False))
         dedupe_mins = int(settings.get("push_dedupe_minutes", 60))
         dedupe_per_symbol = bool(settings.get("dedupe_per_symbol", False))
         since_at = triggered - timedelta(minutes=dedupe_mins)
@@ -60,14 +62,16 @@ def run_scout_scan(db: SQLServerConnection) -> int:
             ):
                 continue
             try:
-                sig_repo.insert(
+                row_ltp = float(row["ltp"])
+                ltp_by_symbol[sym] = row_ltp
+                signal_id = sig_repo.insert(
                     scan_id=scan_id,
                     symbol=sym,
                     exchange="NSE",
                     action=row["action"],
                     signal_type=stype,
                     reason=row["reason"],
-                    ltp=float(row["ltp"]),
+                    ltp=row_ltp,
                     invalidation=row.get("invalidation"),
                     strength=row.get("strength") or "WEAK",
                     triggered_at=triggered,
@@ -84,9 +88,27 @@ def run_scout_scan(db: SQLServerConnection) -> int:
                 )
                 db.commit()
                 signals_found += 1
+                inserted_ids.append(int(signal_id))
             except Exception:
                 db.rollback()
                 logger.exception("Scout scan insert failed for %s", sym)
+        if inserted_ids:
+            from scout.auto_trader import on_signals_committed
+            from scout.live_quotes import fresh_equity_ltp
+
+            def spot_lookup(symbol: str):
+                sym_u = str(symbol or "").upper()
+                live = fresh_equity_ltp(sym_u)
+                if live is not None and live > 0:
+                    return live
+                return ltp_by_symbol.get(sym_u)
+
+            try:
+                on_signals_committed(db, inserted_ids, spot_lookup)
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception("Scout scan auto-enter hook failed")
         log_repo.finish(
             scan_id,
             status="SUCCESS",

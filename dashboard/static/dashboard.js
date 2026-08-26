@@ -101,7 +101,7 @@ function _liveFeedInfo(tradeId, opts = {}) {
     if (!_zerodhaHasSession || !_zerodhaValid) {
       return {
         mode: 'login',
-        label: 'Login required',
+        label: 'No login',
         tip: 'Zerodha session missing or expired — log in to receive live prices and P&L.',
         cls: 'tag-err',
         banner: 'No live feed — Zerodha login required',
@@ -120,7 +120,7 @@ function _liveFeedInfo(tradeId, opts = {}) {
     if (rec) {
       return {
         mode: 'stale',
-        label: 'Stale feed',
+        label: 'Stale',
         tip: `No fresh ticks — last P&L${rec.as_of ? ' at ' + rec.as_of + ' IST' : ''}.`,
         cls: 'tag-warn',
         banner: 'No live feed — showing last known prices (may be outdated)',
@@ -128,7 +128,7 @@ function _liveFeedInfo(tradeId, opts = {}) {
     }
     return {
       mode: 'none',
-      label: 'No live feed',
+      label: 'No feed',
       tip: 'Market is open but no live ticks received yet.',
       cls: 'tag-warn',
       banner: 'No live feed — waiting for Zerodha ticks',
@@ -137,7 +137,7 @@ function _liveFeedInfo(tradeId, opts = {}) {
   if (forCloseForm && usingEod) {
     return {
       mode: 'eod',
-      label: 'Last EOD',
+      label: 'EOD',
       tip: 'Market closed — prices from last available bhavcopy.',
       cls: 'tag-warn',
       banner: 'Off market — showing last EOD prices',
@@ -146,7 +146,7 @@ function _liveFeedInfo(tradeId, opts = {}) {
   if (rec) {
     return {
       mode: 'stale',
-      label: 'Last session',
+      label: 'Last',
       tip: `Off market — P&L from last live session${rec.as_of ? ' (' + rec.as_of + ' IST)' : ''}.`,
       cls: 'tag-warn',
       banner: 'Off market — P&L from last live session (not current)',
@@ -154,7 +154,7 @@ function _liveFeedInfo(tradeId, opts = {}) {
   }
   return {
     mode: 'off',
-    label: 'Off market',
+    label: 'Closed',
     tip: 'Market is closed — no live prices.',
     cls: 'tag-warn',
     banner: 'Off market — no live prices available',
@@ -435,9 +435,9 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
       ? (mtm >= 0 ? '+' : '\u2212') + '\u20b9' + fmt(Math.abs(mtm))
       : '\u2014';
     if (valEl) valEl.textContent = txt;
-    if (pctEl) pctEl.innerHTML = (mtm != null && premInfo) ? pnlPctBracket(mtm, premInfo) : '';
+    if (pctEl) pctEl.innerHTML = (mtm != null && premInfo) ? pnlBracketHtml(mtm, premInfo, el) : '';
     else if (valEl && mtm != null && premInfo) {
-      valEl.insertAdjacentHTML('afterend', pnlPctBracket(mtm, premInfo));
+      valEl.insertAdjacentHTML('afterend', pnlBracketHtml(mtm, premInfo, el));
     }
     el.classList.toggle('mtm-pos', mtm > 0);
     el.classList.toggle('mtm-neg', mtm < 0);
@@ -635,6 +635,21 @@ function pnlPctBracket(pnl, premiumInfo, { aggregate = false } = {}) {
   const sign = pct >= 0 ? '+' : '';
   const kindLabel = _premiumLabel(premiumInfo.kind, aggregate);
   return `<span class="pnl-pct-bracket"> (${sign}${pct.toFixed(1)}% · ${kindLabel} \u20b9${fmt(premiumInfo.rs)})</span>`;
+}
+
+/** Compact bracket for tight headers — percentage only (premium is in preview/tooltip). */
+function pnlPctBracketCompact(pnl, premiumInfo) {
+  if (pnl == null || isNaN(pnl) || !premiumInfo || !premiumInfo.rs) return '';
+  const pct = (pnl / premiumInfo.rs) * 100;
+  const sign = pct >= 0 ? '+' : '';
+  return `<span class="cpnl-pct-bracket"> (${sign}${pct.toFixed(1)}%)</span>`;
+}
+
+function pnlBracketHtml(pnl, premiumInfo, el) {
+  if (pnl == null || isNaN(pnl) || !premiumInfo || !premiumInfo.rs) return '';
+  return el.classList.contains('tag-current-pnl')
+    ? pnlPctBracketCompact(pnl, premiumInfo)
+    : pnlPctBracket(pnl, premiumInfo);
 }
 
 function formatPnlPctText(pnl, premiumInfo, { aggregate = false } = {}) {
@@ -1172,6 +1187,7 @@ function _focusPendingTradeCard() {
   if (!card) return;
   _pendingTradeFocus = null;
   if (card.matches && card.matches('details')) card.open = true;
+  _loadTradeCloseForm(tid, parseFloat(card.dataset.netCreditActual || '0') || 0);
   card.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
@@ -4225,6 +4241,35 @@ function bindConfChips() {
   });
 }
 
+function _isMobileLayout() {
+  return window.matchMedia('(max-width: 1024px)').matches;
+}
+
+function _closeFormLoaded(section) {
+  return !!(section && section.querySelector('.close-trade-content .close-two-col'));
+}
+
+function _loadTradeCloseForm(tradeId, netCreditActual) {
+  const section = document.getElementById(`close-${tradeId}`);
+  if (!section || _closeFormLoaded(section)) return;
+  openCloseForm(tradeId, netCreditActual);
+}
+
+function bindMobileCloseOnExpand(root) {
+  if (!_isMobileLayout()) return;
+  (root || document).querySelectorAll('.collapsible-card[data-trade-id]').forEach(card => {
+    if (card.dataset.closeExpandBound === '1') return;
+    card.dataset.closeExpandBound = '1';
+    card.addEventListener('toggle', () => {
+      if (!card.open) return;
+      const tid = card.dataset.tradeId;
+      if (!tid) return;
+      const netCr = parseFloat(card.dataset.netCreditActual || '0') || 0;
+      _loadTradeCloseForm(tid, netCr);
+    });
+  });
+}
+
 // ---------------- Tab 2: My Trades ----------------
 async function loadTrades() {
   const c = $('#trades-container');
@@ -4252,7 +4297,7 @@ async function loadTrades() {
     data.trades.forEach(t => {
       const legs = t.legs || [];
       const hasExecutedLegs = legs.some(l => l.executed);
-      if (hasExecutedLegs) {
+      if (hasExecutedLegs && !_isMobileLayout()) {
         openCloseForm(t.trade_id, parseFloat(t.net_credit_actual) || 0);
       }
     });
@@ -4269,9 +4314,17 @@ async function loadTrades() {
     }));
     bindGapReplayPanels();
     bindCollapsibleCardInteractions(c);
+    bindMobileCloseOnExpand(c);
     _focusPendingTradeCard();
-    if (typeof window.updateTradeMobileBar === 'function') window.updateTradeMobileBar();
-    c.querySelectorAll('.collapsible-card').forEach(card => card.classList.add('mobile-compact'));
+    c.querySelectorAll('.collapsible-card').forEach(card => {
+      card.classList.add('mobile-compact');
+      if (card.open && card.dataset.tradeId) {
+        _loadTradeCloseForm(
+          card.dataset.tradeId,
+          parseFloat(card.dataset.netCreditActual || '0') || 0,
+        );
+      }
+    });
   } catch (e) {
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -5002,7 +5055,8 @@ function renderTrade(t, expanded = false) {
         <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
         <span class="tag tag-current-pnl live-mtm" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs} title="Current profit/loss">
-          <span class="cpnl-label">Current P&amp;L</span> <strong class="cpnl-val">\u2014</strong><span class="cpnl-pct-bracket muted"></span>
+          <span class="cpnl-label">Current P&amp;L</span>
+          <span class="cpnl-metrics"><strong class="cpnl-val">\u2014</strong><span class="cpnl-pct-bracket muted"></span></span>
         </span>
         <span class="tag tag-warn live-feed-tag" data-trade-id="${escapeHtml(t.trade_id)}" title="Checking feed\u2026">\u2026</span>
         ${_entryQualBadge}
@@ -5113,7 +5167,7 @@ function renderTrade(t, expanded = false) {
     ${isPartial ? `<div class="supplement-panel" id="supp-${escapeHtml(t.trade_id)}" hidden></div>` : ''}`;
   return wrapCollapsibleCard(summaryHtml, bodyHtml, {
     open: expanded,
-    attrs: `id="trade-card-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}" data-daily-status="${escapeHtml(t.daily_status || '')}" data-exit-instruction="${escapeHtml(t.exit_instruction || '')}" data-risk-notif="${escapeHtml((t.risk_alert && t.risk_alert.notif_type) || '')}"`,
+    attrs: `id="trade-card-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}" data-net-credit-actual="${t.net_credit_actual != null ? escapeHtml(String(t.net_credit_actual)) : ''}" data-daily-status="${escapeHtml(t.daily_status || '')}" data-exit-instruction="${escapeHtml(t.exit_instruction || '')}" data-risk-notif="${escapeHtml((t.risk_alert && t.risk_alert.notif_type) || '')}"`,
   });
 }
 

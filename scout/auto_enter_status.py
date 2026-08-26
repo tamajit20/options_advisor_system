@@ -107,6 +107,31 @@ def evaluate_auto_enter_status(
 
     entry_px = entry_limit_price(enriched, signal, live_ltp if live_ltp > 0 else None)
     qty = compute_trade_quantity(settings, entry_px if entry_px > 0 else live_ltp) if live_ltp > 0 else 0
+
+    meta = signal.get("meta") or {}
+    if isinstance(meta, str):
+        try:
+            import json
+            meta = json.loads(meta) if meta else {}
+        except (TypeError, ValueError):
+            meta = {}
+    from scout.regime import index_trend_allows, pdh_pdl_allows
+    from scout.settings_schema import effective_pattern_config
+
+    cfg = effective_pattern_config(settings)
+    try:
+        bench_pct = float(meta.get("nifty_pct_from_open") or 0)
+    except (TypeError, ValueError):
+        bench_pct = 0.0
+    regime_ok, regime_msg = index_trend_allows(action, bench_pct, cfg)
+    pdh_ok, pdh_msg = pdh_pdl_allows(
+        action,
+        entry_px if entry_px > 0 else live_ltp,
+        meta.get("pdh"),
+        meta.get("pdl"),
+        cfg,
+    )
+
     profit_detail = ""
     profit_ok = True
     if entry_px > 0 and qty > 0:
@@ -191,6 +216,10 @@ def evaluate_auto_enter_status(
         _check("pattern", "Pattern allowed", pattern_ok, detail=(
             f"{signal_type} · allowed: {allowed_patterns}"
         )),
+        _check("index_regime", "Index trend filter", regime_ok, detail=regime_msg or (
+            f"Nifty {bench_pct:+.2f}% from open" if bench_pct else "—"
+        )),
+        _check("pdh_pdl", "Prior day level filter", pdh_ok, detail=pdh_msg or "clear"),
         _check("profit", "Min net profit", profit_ok, detail=profit_detail),
         _check(
             "wallet",
@@ -231,6 +260,8 @@ def evaluate_auto_enter_status(
         and window_ok
         and strength_ok
         and pattern_ok
+        and regime_ok
+        and pdh_ok
         and profit_ok
         and wallet_ok
         and daily_ok

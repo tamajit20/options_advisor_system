@@ -174,10 +174,10 @@ class ScoutPushEngine:
             try:
                 from database.thread_db import dedicated_connection
                 from scout.auto_trader import run_execution_poll
-                from scout.config_loader import get_scout_settings
+                from scout.config_loader import reload_scout_settings
 
                 with dedicated_connection() as db:
-                    settings = get_scout_settings(db)
+                    settings = reload_scout_settings(db)
                     run_execution_poll(db, spot_lookup=self._spot_lookup)
                     poll = max(5, int(settings.get("auto_close_poll_seconds", 10)))
             except Exception:

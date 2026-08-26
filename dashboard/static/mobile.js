@@ -1,5 +1,5 @@
 /**
- * Mobile UX — app switcher, options subtabs, menu drawer, sticky trade bar.
+ * Mobile UX — app switcher, options subtabs, menu drawer, touch popovers.
  */
 (function () {
   'use strict';
@@ -7,10 +7,6 @@
   const MOBILE_MQ = window.matchMedia('(max-width: 1024px)');
   const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'config'];
   const SYSTEM_TABS = ['logs', 'jobs', 'wsmon'];
-
-  function isMobile() {
-    return MOBILE_MQ.matches;
-  }
 
   function getActiveTab() {
     if (typeof window.TABS === 'object' && Array.isArray(window.TABS)) {
@@ -110,79 +106,6 @@
     }
   }
 
-  /** Sticky bar above bottom nav for the most urgent open trade. */
-  function updateTradeMobileBar() {
-    const bar = document.getElementById('trade-mobile-bar');
-    if (!bar) return;
-    if (!isMobile()) {
-      bar.hidden = true;
-      document.body.classList.remove('trade-mobile-bar-visible');
-      return;
-    }
-
-    const panel = document.getElementById('panel-trades');
-    if (!panel || !panel.classList.contains('active')) {
-      bar.hidden = true;
-      document.body.classList.remove('trade-mobile-bar-visible');
-      return;
-    }
-
-    const cards = Array.from(document.querySelectorAll('#trades-container .collapsible-card[data-trade-id]'));
-    if (!cards.length) {
-      bar.hidden = true;
-      document.body.classList.remove('trade-mobile-bar-visible');
-      return;
-    }
-
-    const priority = card => {
-      const notif = (card.dataset.riskNotif || '').toUpperCase();
-      if (['LOSS_LIMIT_HIT', 'THESIS_FAIL', 'SL_TRIGGER'].includes(notif)) return 0;
-      if (['LOSS_MILESTONE_HIT', 'PROFIT_FLOOR_HIT', 'SHORT_LEG_STRESS', 'PRE_BREACH_WARNING'].includes(notif)) return 1;
-      if ((card.dataset.dailyStatus || '').toUpperCase().includes('EXIT')) return 2;
-      return 3;
-    };
-    cards.sort((a, b) => priority(a) - priority(b));
-    const pick = cards[0];
-    const tid = pick.dataset.tradeId;
-    const nameEl = pick.querySelector('h3');
-    const name = nameEl ? nameEl.textContent.trim() : tid;
-    const pnlEl = pick.querySelector(`.tag-current-pnl[data-trade-id="${CSS.escape(tid)}"] .cpnl-val`);
-    const pnlText = pnlEl ? pnlEl.textContent.trim() : '—';
-
-    bar.hidden = false;
-    document.body.classList.add('trade-mobile-bar-visible');
-    bar.dataset.tradeId = tid;
-    const nameSpan = bar.querySelector('.trade-mobile-name');
-    const pnlSpan = bar.querySelector('.trade-mobile-pnl');
-    if (nameSpan) nameSpan.textContent = name;
-    if (pnlSpan) pnlSpan.textContent = pnlText;
-
-    const closeBtn = bar.querySelector('.btn-trade-mobile-close');
-    if (closeBtn && closeBtn.dataset.tradeId !== tid) {
-      closeBtn.dataset.tradeId = tid;
-    }
-  }
-
-  function scrollToTradeClose(tradeId) {
-    const card = document.getElementById(`trade-card-${tradeId}`);
-    if (card && !card.open) card.open = true;
-    const section = document.getElementById(`close-${tradeId}`);
-    if (section) {
-      section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      section.classList.add('sheet-open');
-    }
-  }
-
-  function bindTradeMobileBar() {
-    const bar = document.getElementById('trade-mobile-bar');
-    if (!bar || bar.dataset.bound === '1') return;
-    bar.dataset.bound = '1';
-    bar.querySelector('.btn-trade-mobile-close')?.addEventListener('click', () => {
-      const tid = bar.dataset.tradeId;
-      if (tid) scrollToTradeClose(tid);
-    });
-  }
-
   function patchSwitchTab() {
     if (typeof window.switchTab !== 'function' || window.switchTab.__mobilePatched) return;
     const orig = window.switchTab;
@@ -190,7 +113,6 @@
       closeMoreDrawer();
       const out = orig(name);
       syncMenuButtonActive();
-      setTimeout(updateTradeMobileBar, 80);
       return out;
     };
     window.switchTab.__mobilePatched = true;
@@ -260,15 +182,9 @@
     bindMoreDrawer();
     bindAppSwitcher();
     bindBottomNav();
-    bindTradeMobileBar();
     bindTouchPopovers();
     patchSwitchTab();
-    MOBILE_MQ.addEventListener('change', updateTradeMobileBar);
     TOUCH_POPOVER_MQ.addEventListener('change', () => closeTouchPopovers());
-
-    document.addEventListener('trade-mtm-updated', () => updateTradeMobileBar());
-
-    setTimeout(updateTradeMobileBar, 500);
   }
 
   if (document.readyState === 'loading') {
@@ -278,5 +194,4 @@
   }
 
   window.closeMoreDrawer = closeMoreDrawer;
-  window.updateTradeMobileBar = updateTradeMobileBar;
 })();

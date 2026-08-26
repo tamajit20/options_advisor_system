@@ -40,7 +40,7 @@ def test_push_engine_nifty_index_tick_seeds_open(mocker):
 def test_on_signals_committed_invokes_auto_execute(mocker):
     db = MagicMock()
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value={"auto_execute_signals": True},
     )
     mock_exec = mocker.patch("scout.auto_trader.try_auto_execute_signal", return_value={"trade_id": 1})
@@ -53,7 +53,7 @@ def test_try_auto_close_stop_hit(mocker):
         "auto_close_trades": True,
         "auto_execute_signals": False,
     }
-    mocker.patch("scout.auto_trader.get_scout_settings", return_value=settings)
+    mocker.patch("scout.auto_trader.reload_scout_settings", return_value=settings)
     mocker.patch("scout.auto_trader.SCOUT_CONFIG", {"enabled": True})
     mocker.patch("scout.auto_trader.is_market_open", return_value=True)
     trade_repo = MagicMock()
@@ -89,7 +89,7 @@ def test_try_auto_close_stop_hit(mocker):
 def test_try_auto_execute_skipped_when_market_closed(mocker):
     db = MagicMock()
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value={"auto_execute_signals": True},
     )
     mocker.patch("scout.auto_trader.is_market_open", return_value=False)
@@ -99,7 +99,7 @@ def test_try_auto_execute_skipped_when_market_closed(mocker):
 def test_try_auto_execute_skipped_when_scout_disabled(mocker):
     db = MagicMock()
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value={"auto_execute_signals": True},
     )
     mocker.patch("scout.auto_trader.is_market_open", return_value=True)

@@ -10,7 +10,7 @@ from scout.auto_trader import try_auto_enter_pending_signals
 def test_try_auto_enter_pending_signals(mocker):
     db = MagicMock()
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value={"auto_execute_signals": True},
     )
     mocker.patch("scout.auto_trader.is_market_open", return_value=True)

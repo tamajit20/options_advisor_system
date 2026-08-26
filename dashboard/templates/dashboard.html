@@ -611,7 +611,7 @@
           <div class="scout-config-grid">
             <label class="scout-config-check">
               <input type="checkbox" name="auto_execute_signals" id="cfg-auto-execute">
-              <span>Auto-enter signals (paper or Zerodha per config flag)</span>
+              <span>Auto-enter signals (paper when Zerodha orders off)</span>
             </label>
             <label class="scout-config-check">
               <input type="checkbox" name="auto_close_trades" id="cfg-auto-close">
@@ -622,7 +622,7 @@
               <input type="number" name="auto_close_poll_seconds" id="cfg-auto-poll" min="5" max="120" step="1" value="10">
             </label>
           </div>
-          <p class="muted scout-config-hint">How often Scout retries untaken signals and manages open trades (pending fills, stops, exits). Applies on the next poll after save — no restart needed.</p>
+          <p class="muted scout-config-hint">Paper auto-enter needs <strong>Scout trading enabled</strong>, <strong>ws_runner</strong> running, and signals matching your strength/pattern/window filters (defaults: HIGH strength, OR breaks only, 09:45–14:00). Zerodha live orders can stay off. Settings apply on the next poll (~10s) — no restart.</p>
         </section>
         <section class="scout-config-section">
           <h3 class="scout-config-heading">Position sizing</h3>
@@ -798,12 +798,6 @@
     <p class="more-drawer-note">Suggestion, Trades, Learning, History, and Config live under <strong>Advisor</strong> (top tabs). Scout sections are under the <strong>Scout</strong> tab.</p>
     <button type="button" class="btn btn-ghost" data-more-close style="width:100%;margin-top:10px">Close</button>
   </div>
-</div>
-
-<div id="trade-mobile-bar" class="trade-mobile-bar" hidden>
-  <span class="trade-mobile-name">—</span>
-  <span class="trade-mobile-pnl">—</span>
-  <button type="button" class="btn btn-warn btn-trade-mobile-close">Close trade</button>
 </div>
 
 

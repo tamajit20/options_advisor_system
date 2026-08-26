@@ -260,6 +260,15 @@ a { color: var(--accent); text-decoration: none; }
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
+  min-height: 28px;
+}
+.card-head-tags .live-feed-tag {
+  flex-shrink: 0;
+  min-width: 3.25rem;
+  text-align: center;
+}
+.card-head-tags .card-head-btn {
+  flex-shrink: 0;
 }
 .card-head-btn {
   font-size: .72rem;
@@ -486,11 +495,37 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
 .tag-ok    { background: rgba(16,185,129,.15); color: var(--ok); }
 .tag-warn  { background: rgba(245,158,11,.15); color: var(--warn); }
 .tag-err   { background: rgba(239,68,68,.15);  color: var(--err); }
-.tag-current-pnl { display:inline-flex; align-items:center; gap:4px; font-size:.78rem; flex-wrap:wrap; max-width:100%; }
-.tag-current-pnl .cpnl-label { color:var(--text-dim); font-weight:500; }
-.tag-current-pnl .cpnl-val { font-weight:700; }
+.tag-current-pnl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: .78rem;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 100%;
+}
+.tag-current-pnl .cpnl-label { color:var(--text-dim); font-weight:500; flex-shrink: 0; }
+.tag-current-pnl .cpnl-metrics {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.tag-current-pnl .cpnl-val {
+  font-weight: 700;
+  display: inline-block;
+  min-width: 9ch;
+  text-align: right;
+}
+.tag-current-pnl .cpnl-pct-bracket {
+  display: inline-block;
+  min-width: 4.8ch;
+  text-align: left;
+}
 .tag-current-pnl .cpnl-pct-bracket,
-.pnl-pct-bracket { font-size:.68rem; font-weight:500; color:var(--text-dim); white-space:normal; }
+.pnl-pct-bracket { font-size:.68rem; font-weight:500; color:var(--text-dim); white-space:nowrap; }
 .tag-current-pnl.mtm-pos .cpnl-val { color:var(--ok); }
 .tag-current-pnl.mtm-neg .cpnl-val { color:var(--err); }
 .tag-current-pnl.mtm-pos .cpnl-pct-bracket { color:var(--ok); opacity:.85; }

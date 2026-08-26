@@ -53,7 +53,7 @@ def _scout_settings(**overrides):
 
 def test_try_auto_execute_skipped_when_disabled(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_scout_settings(auto_execute_signals=False),
     )
     assert try_auto_execute_signal(db, signal_id=1, spot_lookup=lambda s: 100.0) is None
@@ -61,7 +61,7 @@ def test_try_auto_execute_skipped_when_disabled(db, mocker):
 
 def test_try_auto_execute_marks_taken(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_scout_settings(auto_execute_signals=True, auto_trade_quantity=2),
     )
     mocker.patch("scout.auto_trader.is_market_open", return_value=True)
@@ -104,7 +104,7 @@ def test_try_auto_execute_marks_taken(db, mocker):
 
 def test_try_auto_execute_skipped_outside_window(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_scout_settings(
             auto_execute_signals=True,
             trade_window_start="09:45",
@@ -129,7 +129,7 @@ def test_try_auto_execute_skipped_outside_window(db, mocker):
 
 def test_try_auto_execute_investment_sizing(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_scout_settings(
             auto_execute_signals=True,
             use_investment_sizing=True,
@@ -169,7 +169,7 @@ def test_try_auto_execute_investment_sizing(db, mocker):
 
 def test_try_auto_close_skipped_when_disabled(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_scout_settings(auto_close_trades=False),
     )
     assert try_auto_close_trades(db, spot_lookup=lambda s: 100.0) == []
@@ -177,7 +177,7 @@ def test_try_auto_close_skipped_when_disabled(db, mocker):
 
 def test_try_auto_close_on_target_hit(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_scout_settings(auto_close_trades=True),
     )
     mocker.patch("scout.auto_trader.SCOUT_CONFIG", {"enabled": True})
@@ -215,7 +215,7 @@ def test_try_auto_close_on_target_hit(db, mocker):
 
 def test_on_signals_committed_respects_toggle(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_scout_settings(auto_execute_signals=False),
     )
     mock_exec = mocker.patch("scout.auto_trader.try_auto_execute_signal")
@@ -350,7 +350,7 @@ def test_auto_enter_block_reason_open_trade_same_symbol():
 
 def test_try_auto_execute_skipped_at_daily_cap(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_block_settings(max_trades_per_day=3),
     )
     _, trade_repo = _setup_signal_mocks(mocker)
@@ -360,7 +360,7 @@ def test_try_auto_execute_skipped_at_daily_cap(db, mocker):
 
 def test_try_auto_execute_skipped_symbol_already_traded_today(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_block_settings(one_trade_per_symbol_per_day=True),
     )
     _, trade_repo = _setup_signal_mocks(mocker)
@@ -370,7 +370,7 @@ def test_try_auto_execute_skipped_symbol_already_traded_today(db, mocker):
 
 def test_try_auto_execute_skipped_weak_strength(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_block_settings(auto_enter_strengths=["MEDIUM", "HIGH"]),
     )
     _setup_signal_mocks(mocker, strength="WEAK")
@@ -379,7 +379,7 @@ def test_try_auto_execute_skipped_weak_strength(db, mocker):
 
 def test_try_auto_execute_skipped_open_trade_same_symbol(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_block_settings(),
     )
     _, trade_repo = _setup_signal_mocks(mocker)
@@ -391,7 +391,7 @@ def test_try_auto_execute_skipped_open_trade_same_symbol(db, mocker):
 
 def test_try_auto_execute_skipped_non_active_signal(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_block_settings(),
     )
     _setup_signal_mocks(mocker)
@@ -404,7 +404,7 @@ def test_try_auto_execute_skipped_non_active_signal(db, mocker):
 
 def test_try_auto_execute_skipped_weak_index(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_block_settings(),
     )
     _setup_signal_mocks(mocker)
@@ -420,7 +420,7 @@ def test_try_auto_execute_skipped_weak_index(db, mocker):
 
 def test_try_auto_execute_skipped_pdh_block(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_block_settings(),
     )
     sig_repo, _ = _setup_signal_mocks(mocker)
@@ -439,7 +439,7 @@ def test_try_auto_execute_skipped_pdh_block(db, mocker):
 def test_try_auto_execute_skipped_failed_breakout_status(db, mocker):
     """Real enrich_signal marks FAILED_BREAKOUT before regime re-check."""
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_block_settings(),
     )
     mocker.patch("scout.auto_trader.is_market_open", return_value=True)
@@ -469,7 +469,7 @@ def test_try_auto_execute_skipped_failed_breakout_status(db, mocker):
 
 def test_try_auto_execute_passes_regime_when_clear(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_block_settings(auto_trade_quantity=1),
     )
     sig_repo, _ = _setup_signal_mocks(mocker, ltp=101.0)
@@ -489,7 +489,7 @@ def test_try_auto_execute_passes_regime_when_clear(db, mocker):
 
 def test_try_auto_execute_skipped_when_trading_paused(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_scout_settings(trading_enabled=False, auto_execute_signals=True),
     )
     mock_enter = mocker.patch("scout.auto_trader.execute_entry")
@@ -499,7 +499,7 @@ def test_try_auto_execute_skipped_when_trading_paused(db, mocker):
 
 def test_run_execution_poll_noop_when_trading_paused(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_scout_settings(trading_enabled=False, auto_execute_signals=True, auto_close_trades=True),
     )
     mock_pending = mocker.patch("scout.auto_trader.process_pending_entries")
@@ -514,7 +514,7 @@ def test_run_execution_poll_noop_when_trading_paused(db, mocker):
 
 def test_on_signals_committed_skipped_when_trading_paused(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_scout_settings(trading_enabled=False, auto_execute_signals=True),
     )
     mock_exec = mocker.patch("scout.auto_trader.try_auto_execute_signal")
@@ -524,7 +524,7 @@ def test_on_signals_committed_skipped_when_trading_paused(db, mocker):
 
 def test_try_auto_close_skipped_when_trading_paused(db, mocker):
     mocker.patch(
-        "scout.auto_trader.get_scout_settings",
+        "scout.auto_trader.reload_scout_settings",
         return_value=_scout_settings(trading_enabled=False, auto_close_trades=True),
     )
     mocker.patch("scout.auto_trader.is_market_open", return_value=True)

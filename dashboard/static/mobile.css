@@ -4,7 +4,6 @@
 
 :root {
   --bottom-nav-h: 64px;
-  --mobile-bar-h: 52px;
 }
 
 /* ---------- Touch targets (mobile / tablet) ---------- */
@@ -195,10 +194,6 @@
     background: rgba(255, 255, 255, 0.2);
     margin: -10px auto 14px;
   }
-  .close-trade-section.sheet-open .close-trade-content {
-    max-height: min(70vh, 520px);
-    overflow-y: auto;
-  }
 }
 
 /* ---------- Single-column layouts ---------- */
@@ -217,6 +212,16 @@
     width: 100%;
     justify-content: flex-start;
     margin-top: 4px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .card-head-tags::-webkit-scrollbar { display: none; }
+  .card-head-tags > .tag,
+  .card-head-tags > .card-head-btn {
+    flex-shrink: 0;
   }
   .card-head {
     flex-direction: column;
@@ -296,51 +301,6 @@
     font-size: 0.82rem;
   }
   .panel-title { font-size: 1rem; }
-}
-
-/* ---------- Sticky mobile trade action bar ---------- */
-.trade-mobile-bar {
-  display: none;
-}
-@media (max-width: 1024px) {
-  .trade-mobile-bar {
-    display: flex;
-    gap: 8px;
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0));
-    z-index: 35;
-    padding: 8px 10px;
-    background: rgba(15, 23, 42, 0.96);
-    border-top: 1px solid #2a3744;
-    backdrop-filter: blur(8px);
-    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.35);
-  }
-  .trade-mobile-bar[hidden] { display: none !important; }
-  .trade-mobile-bar .trade-mobile-name {
-    flex: 1;
-    min-width: 0;
-    font-size: 0.78rem;
-    color: var(--text-dim);
-    align-self: center;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .trade-mobile-bar .trade-mobile-pnl {
-    font-size: 0.82rem;
-    font-weight: 700;
-    align-self: center;
-    white-space: nowrap;
-  }
-  .trade-mobile-bar .btn {
-    flex: 0 0 auto;
-    min-width: 100px;
-  }
-  body.trade-mobile-bar-visible .app-main {
-    padding-bottom: calc(var(--bottom-nav-h) + var(--mobile-bar-h) + env(safe-area-inset-bottom, 0) + 8px);
-  }
 }
 
 /* ---------- Close trade: full-width on phone ---------- */
@@ -445,9 +405,5 @@
   }
   .conf-logic-info.touch-popover-open .conf-logic-popup::after {
     display: none;
-  }
-  body.trade-mobile-bar-visible .conf-logic-info.touch-popover-open .conf-logic-popup,
-  body.trade-mobile-bar-visible .tap-legend-wrap.touch-popover-open .tap-legend-popover {
-    bottom: calc(var(--bottom-nav-h) + var(--mobile-bar-h) + env(safe-area-inset-bottom, 0) + 12px);
   }
 }
