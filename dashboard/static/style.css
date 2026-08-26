@@ -262,6 +262,10 @@ a { color: var(--accent); text-decoration: none; }
   justify-content: flex-end;
   min-height: 28px;
 }
+.card-head-badges,
+.card-head-pnl-row {
+  display: contents;
+}
 .card-head-tags .live-feed-tag {
   flex-shrink: 0;
   min-width: 3.25rem;

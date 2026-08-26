@@ -5021,6 +5021,7 @@ function renderTrade(t, expanded = false) {
         ${strategyGuideInfoBtn((t.suggestion && t.suggestion.strategy) || t.strategy)}
       </div>
       <div class="card-head-tags">
+        <div class="card-head-badges">
         ${(() => {
           const ra = t.risk_alert;
           if (!ra || !ra.notif_type) return '';
@@ -5054,12 +5055,15 @@ function renderTrade(t, expanded = false) {
         ${hasPendingClose ? `<span class="tag tag-warn" title="Record exit prices to compute P&L">CLOSE PENDING</span>` : ''}
         <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
+        <span class="tag tag-warn live-feed-tag" data-trade-id="${escapeHtml(t.trade_id)}" title="Checking feed\u2026">\u2026</span>
+        ${_entryQualBadge}
+        </div>
+        <div class="card-head-pnl-row">
         <span class="tag tag-current-pnl live-mtm" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs} title="Current profit/loss">
           <span class="cpnl-label">Current P&amp;L</span>
           <span class="cpnl-metrics"><strong class="cpnl-val">\u2014</strong><span class="cpnl-pct-bracket muted"></span></span>
         </span>
-        <span class="tag tag-warn live-feed-tag" data-trade-id="${escapeHtml(t.trade_id)}" title="Checking feed\u2026">\u2026</span>
-        ${_entryQualBadge}
+        </div>
         <button type="button" class="btn btn-danger btn-void-trade card-head-btn" data-trade-id="${escapeHtml(t.trade_id)}">
           Void Trade</button>
       </div>
