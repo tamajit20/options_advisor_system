@@ -2,14 +2,13 @@
 providers/tick_routing.py
 =========================
 
-Classify WebSocket ticks by product so Options Advisor and Intraday Scout
-can share one Kite connection without cross-handler noise.
+Classify WebSocket ticks by product so Options Advisor handlers only see
+index and option-leg ticks.
 
 Products
 --------
 * ``options_index`` — NIFTY / BANKNIFTY / FINNIFTY / VIX (indices for options)
 * ``options_leg``   — subscribed option contracts (trades + chain watchlist)
-* ``scout_equity``  — Scout watchlist NSE equities only
 
 The WS runner publishes each tick to a scoped event-bus topic; handlers subscribe
 only to the topics they own.
@@ -27,12 +26,10 @@ if TYPE_CHECKING:
 # TokenMeta.product values (set in subscription_manager reconcile).
 PRODUCT_OPTIONS_INDEX = "options_index"
 PRODUCT_OPTIONS_LEG = "options_leg"
-PRODUCT_SCOUT_EQUITY = "scout_equity"
 
 # Scoped event-bus topics (see providers/event_bus.py).
 TOPIC_TICK_OPTIONS = "tick.options"
 TOPIC_TICK_INDEX = "tick.index"
-TOPIC_TICK_SCOUT = "tick.scout"
 
 _VIX = "VIX"
 
@@ -44,14 +41,14 @@ def options_underlyings() -> frozenset[str]:
 
 
 def options_index_symbols() -> frozenset[str]:
-    """Index + VIX spots streamed for Options (and NIFTY benchmark for Scout)."""
+    """Index + VIX spots streamed for Options Advisor."""
     return options_underlyings() | {_VIX}
 
 
 def resolve_product(meta: Optional["TokenMeta"]) -> str:
     """Infer product from subscription metadata."""
     if meta is None:
-        return PRODUCT_SCOUT_EQUITY
+        return PRODUCT_OPTIONS_INDEX
     explicit = getattr(meta, "product", None)
     if explicit:
         return str(explicit)
@@ -59,15 +56,13 @@ def resolve_product(meta: Optional["TokenMeta"]) -> str:
         return PRODUCT_OPTIONS_LEG
     if meta.is_index or str(meta.symbol or "").upper() in options_index_symbols():
         return PRODUCT_OPTIONS_INDEX
-    return PRODUCT_SCOUT_EQUITY
+    return PRODUCT_OPTIONS_INDEX
 
 
 def topic_for_product(product: str) -> str:
     if product == PRODUCT_OPTIONS_LEG:
         return TOPIC_TICK_OPTIONS
-    if product == PRODUCT_OPTIONS_INDEX:
-        return TOPIC_TICK_INDEX
-    return TOPIC_TICK_SCOUT
+    return TOPIC_TICK_INDEX
 
 
 def topic_for_meta(meta: Optional["TokenMeta"]) -> str:

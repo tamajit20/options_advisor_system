@@ -8,7 +8,6 @@ from typing import Callable, List, Optional, Protocol
 
 from database.runtime_flags import (
     FLAG_OPTIONS_ADVISOR_ENABLED,
-    FLAG_SCOUT_APP_ENABLED,
     RuntimeFlagsRepo,
 )
 
@@ -32,28 +31,19 @@ class AppRuntimeController:
         self._flags = flags_repo
         self._poll_interval = max(5.0, float(poll_interval_sec))
         self._options: List[_Stoppable] = []
-        self._scout: List[_Stoppable] = []
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_options: Optional[bool] = None
-        self._last_scout: Optional[bool] = None
 
     def register_options(self, *components: _Stoppable) -> None:
         self._options.extend(components)
 
-    def register_scout(self, *components: _Stoppable) -> None:
-        self._scout.extend(components)
-
     def options_enabled(self) -> bool:
         return self._flags.get_bool(FLAG_OPTIONS_ADVISOR_ENABLED, default=True)
-
-    def scout_enabled(self) -> bool:
-        return self._flags.get_bool(FLAG_SCOUT_APP_ENABLED, default=True)
 
     def apply(self) -> None:
         """Sync component lifecycle to current flags."""
         self._sync_group("options_advisor", self.options_enabled(), self._options, "_last_options")
-        self._sync_group("scout", self.scout_enabled(), self._scout, "_last_scout")
 
     def start_polling(self) -> None:
         if self._thread is not None:
@@ -97,5 +87,4 @@ def make_app_flag_checkers(flags_repo: RuntimeFlagsRepo) -> dict[str, Callable[[
     """Callables for SubscriptionManager — same flags, shared cache TTL."""
     return {
         "options": lambda: flags_repo.get_bool(FLAG_OPTIONS_ADVISOR_ENABLED, default=True),
-        "scout": lambda: flags_repo.get_bool(FLAG_SCOUT_APP_ENABLED, default=True),
     }

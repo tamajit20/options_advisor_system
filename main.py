@@ -197,7 +197,7 @@ def _cmd_zerodha_logout() -> int:
     return 0
 
 
-def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots: dict) -> str:
+def _run_ws_runner_once(session, stop_event, bus, index_spots: dict) -> str:
     """Run one WS session until logout, token rotation, or WS disconnect.
 
     Returns a reason string: ``logout``, ``token_rotated``, ``process_restart``,
@@ -229,8 +229,6 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
     from providers.zerodha.ws_runner import KiteWSRunner, _ProcessRestartRequired
     from providers.ws_monitor import WSMonitor, default_snapshot_path
     from providers.ws_watchdog import WSWatchdog
-    from scout.push_engine import ScoutPushEngine
-    from scout.subscription import make_scout_equity_loader
 
     cache = TTLCache(default_ttl_seconds=PROVIDERS_CONFIG.get("live_cache_ttl_seconds", 5))
 
@@ -268,10 +266,8 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
         interval_seconds=float(
             PROVIDERS_CONFIG.get("ws_subscription_interval_seconds", 60)
         ),
-        equity_loader=make_scout_equity_loader(db),
         kill_switch_fn=lambda: flags_repo.get_bool(FLAG_KILL_SWITCH, default=False),
         options_enabled_fn=app_flags["options"],
-        scout_enabled_fn=app_flags["scout"],
     )
 
     app_controller = AppRuntimeController(
@@ -287,12 +283,6 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
     chain_aggregator = ChainTickAggregator(
         db=db,
         expiry_provider=_expiries_for,
-        event_bus=bus,
-    )
-
-    scout_push = ScoutPushEngine(
-        db=db,
-        spot_lookup=lambda s: index_spots.get(s) or scout_spots.get(s),
         event_bus=bus,
     )
 
@@ -398,7 +388,6 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
     ws_monitor.start()
     ws_watchdog.start()
     app_controller.register_options(chain_aggregator, monitor, regen_watcher, live_risk_monitor)
-    app_controller.register_scout(scout_push)
     app_controller.apply()
     app_controller.start_polling()
 
@@ -416,7 +405,6 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict, scout_spots
     finally:
         app_controller.stop_polling()
         live_risk_monitor.stop()
-        scout_push.stop()
         chain_aggregator.stop()
         ws_watchdog.stop()
         ws_monitor.stop()
@@ -476,11 +464,10 @@ def _cmd_ws_runner() -> int:
 
     _ensure_schema_on_startup()
 
-    from providers.event_bus import TOPIC_TICK_INDEX, TOPIC_TICK_SCOUT
+    from providers.event_bus import TOPIC_TICK_INDEX
 
     bus = get_event_bus()
     index_spots: dict = {}
-    scout_spots: dict = {}
 
     def _capture_index(quote) -> None:
         if quote is None or quote.option_type is not None:
@@ -490,16 +477,7 @@ def _cmd_ws_runner() -> int:
         except (TypeError, ValueError):
             pass
 
-    def _capture_scout_equity(quote) -> None:
-        if quote is None or quote.option_type is not None:
-            return
-        try:
-            scout_spots[quote.symbol] = float(quote.last_price)
-        except (TypeError, ValueError):
-            pass
-
     bus.subscribe(TOPIC_TICK_INDEX, _capture_index)
-    bus.subscribe(TOPIC_TICK_SCOUT, _capture_scout_equity)
     snapshot_path = default_snapshot_path()
 
     while not stop_event.is_set():
@@ -517,7 +495,7 @@ def _cmd_ws_runner() -> int:
                 return 0
             continue
 
-        reason = _run_ws_runner_once(session, stop_event, bus, index_spots, scout_spots)
+        reason = _run_ws_runner_once(session, stop_event, bus, index_spots)
         if stop_event.is_set() or reason == "stopped":
             return 0
         if reason in ("logout", "token_rotated", "process_restart", "token_expired"):
@@ -564,7 +542,7 @@ def _ensure_schema_on_startup() -> None:
         try:
             create_all_tables(db)
             db.commit()
-            logger.info("Startup schema ensure completed (options + scout tables + migrations).")
+            logger.info("Startup schema ensure completed (options tables + migrations).")
         finally:
             db.close()
     except Exception:

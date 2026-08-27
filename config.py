@@ -152,10 +152,6 @@ SCHEDULER_CONFIG = {
         "weekly_cleanup":     {"day_of_week": "fri", "hour": 9, "minute": 30, "enabled": True},
         # Events calendar sync — Mon market window (VM on from 08:55)
         "events_seed":        {"day_of_week": "mon", "hour": 9,  "minute":  0, "enabled": True},
-        # Nifty 50 constituents from NSE (before market open; fallback = NIFTY_50_SYMBOLS).
-        "scout_index_constituents": {
-            "day_of_week": "mon-fri", "hour": 9, "minute": 5, "enabled": True,
-        },
     },
     # Each job also gets a max wallclock budget (seconds) — enforced by
     # `_run_job` via a watchdog thread that closes the DB connection on
@@ -174,7 +170,6 @@ SCHEDULER_CONFIG = {
         "simulation_update":  600,
         "exit_engine":        300,
         "events_seed":        300,
-        "scout_index_constituents": 120,
         "event_eve_review":   180,
         "weekly_cleanup":     1800,
         "intraday_close_snapshot": 300,
@@ -185,82 +180,6 @@ SCHEDULER_CONFIG = {
     },
     # Default for jobs not listed above.
     "default_job_timeout_seconds": 600,
-}
-
-
-# ---------------------------------------------------------------------------
-# Intraday Scout (separate module — scout_* tables, /api/scout/*)
-# ---------------------------------------------------------------------------
-# Fallback Nifty 50 list when NSE sync is unavailable (scout/index_constituents.py).
-# Live membership is refreshed daily from NSE and cached in data/scout_index_constituents.json.
-NIFTY_50_SYMBOLS: tuple[str, ...] = (
-    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
-    "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL", "BHARTIARTL",
-    "BPCL", "BRITANNIA", "CIPLA", "COALINDIA", "DRREDDY",
-    "EICHERMOT", "GRASIM", "HCLTECH", "HDFCBANK", "HDFCLIFE",
-    "HEROMOTOCO", "HINDALCO", "HINDUNILVR", "ICICIBANK", "INDUSINDBK",
-    "INFY", "ITC", "JSWSTEEL", "KOTAKBANK", "LT",
-    "M&M", "MARUTI", "NESTLEIND", "NTPC", "ONGC",
-    "POWERGRID", "RELIANCE", "SBILIFE", "SBIN", "SHRIRAMFIN",
-    "SUNPHARMA", "TATACONSUM", "TMPV", "TATASTEEL", "TCS",
-    "TECHM", "TITAN", "TRENT", "ULTRACEMCO", "WIPRO",
-)
-
-# Nifty Bank index constituents (for watchlist grouping / badges).
-NIFTY_BANK_SYMBOLS: tuple[str, ...] = (
-    "AXISBANK", "AUBANK", "BANKBARODA", "BANDHANBNK", "FEDERALBNK",
-    "HDFCBANK", "ICICIBANK", "IDFCFIRSTB", "INDUSINDBK", "KOTAKBANK",
-    "PNB", "SBIN",
-)
-
-SCOUT_CONFIG: dict = {
-    "enabled": True,
-    # Default watchlist until user saves via UI (subset of NIFTY_50_SYMBOLS)
-    "watchlist": [
-        "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "SBIN",
-        "BHARTIARTL", "LT", "AXISBANK", "KOTAKBANK", "TATASTEEL", "SUNPHARMA",
-        "MARUTI", "BAJFINANCE", "HINDUNILVR", "WIPRO", "NTPC", "POWERGRID",
-        "ONGC",
-    ],
-    "market_open": (9, 15),
-    "market_close": (15, 30),
-    "max_move_from_open_pct": 1.2,
-    "late_spike_from_extreme_pct": 0.8,
-    "compression_bars": 10,
-    "compression_range_pct": 0.35,
-    "or_minutes": 15,
-    "min_candles": 12,
-    "rs_margin_pct": 0.15,
-    "signal_display_minutes": 120,
-    # Actionable buy window after trigger (shown in UI; expired signals are hidden).
-    "signal_valid_minutes": 30,
-    # Entry band around signal LTP (± pct for long; asymmetric for chase limit).
-    "entry_slippage_pct": 0.20,
-    # Dashboard poll interval for signals + open trades (seconds).
-    "signals_poll_seconds": 10,
-    # Live LTP refresh on Signals tab (seconds) — updates price without full card rebuild.
-    "signals_live_poll_seconds": 3,
-    # Exit plan for open trades: target = entry ± (risk × R-multiple); risk = |entry − stop|.
-    "target_r_multiple": 2.0,
-    "target_max_r_multiple": 2.5,
-    # Kite order defaults (code-level; execution on/off is in persisted scout settings).
-    "zerodha_exchange": "NSE",
-    "zerodha_product": "MIS",
-    "zerodha_entry_order_type": "LIMIT",
-    "zerodha_stop_order_type": "SL-M",
-    "zerodha_exit_order_type": "MARKET",
-    # Automation (persisted in scout_config; defaults here).
-    "auto_execute_signals": False,
-    "auto_close_trades": False,
-    "auto_trade_quantity": 1,
-    "auto_close_poll_seconds": 10,
-    # Live WS push (ws_runner): evaluate patterns on each 1m bar close from ticks.
-    "push_enabled": True,
-    "push_dedupe_minutes": 30,
-    # Server-side watch intervals for scout SSE streams (seconds).
-    "live_stream_poll_sec": 0.5,
-    "signals_stream_poll_sec": 10,
-    "flow_stream_poll_sec": 10,
 }
 
 
@@ -282,10 +201,6 @@ NSE_CONFIG = {
     "fii_oi_url":      "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_{ddmmyyyy}.csv",
     # Live option chain JSON (intraday) — Phase 3 #8 failsafe provider
     "option_chain_url": "https://www.nseindia.com/api/option-chain-indices?symbol={symbol}",
-    # Index constituents (Nifty 50, etc.) — used by Scout watchlist grouping
-    "index_constituents_url": (
-        "https://www.nseindia.com/api/equity-stockIndices?index={index}"
-    ),
     # Warm-up endpoint to obtain cookies before downloading archives
     "warmup_url":      "https://www.nseindia.com",
     "request_timeout": 30,

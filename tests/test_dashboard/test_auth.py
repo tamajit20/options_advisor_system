@@ -19,8 +19,6 @@ def authed_app(mocker):
     fake_conn.fetch_one.return_value = None
     fake_conn.fetch_all.return_value = []
     mocker.patch("dashboard.server.SQLServerConnection", return_value=fake_conn)
-    mocker.patch("scout.routes.SQLServerConnection", return_value=fake_conn)
-    mocker.patch("database.scout_models.ScoutSignalRepo.last_signal", return_value=None)
     app = server.create_app()
     app.config["TESTING"] = True
     return app
@@ -28,13 +26,13 @@ def authed_app(mocker):
 
 def test_api_blocked_without_key(authed_app):
     client = authed_app.test_client()
-    rv = client.get("/api/scout/status")
+    rv = client.get("/api/runtime-flags")
     assert rv.status_code == 401
 
 
 def test_api_allowed_with_header(authed_app):
     client = authed_app.test_client()
-    rv = client.get("/api/scout/status", headers={"X-API-Key": "test-secret-key"})
+    rv = client.get("/api/runtime-flags", headers={"X-API-Key": "test-secret-key"})
     assert rv.status_code == 200
 
 

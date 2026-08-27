@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from database.runtime_flags import (
-    FLAG_OPTIONS_ADVISOR_ENABLED,
-    FLAG_SCOUT_APP_ENABLED,
-)
+from database.runtime_flags import FLAG_OPTIONS_ADVISOR_ENABLED
 from runtime.app_controller import AppRuntimeController
 
 
@@ -22,34 +19,32 @@ class _FakeComponent:
         self.started = False
 
 
-def test_app_controller_starts_and_stops_scout(mocker):
+def test_app_controller_starts_and_stops_options(mocker):
     repo = MagicMock()
     repo.get_bool.side_effect = lambda key, default=False: {
         FLAG_OPTIONS_ADVISOR_ENABLED: True,
-        FLAG_SCOUT_APP_ENABLED: True,
     }.get(key, default)
 
-    scout = _FakeComponent()
+    options = _FakeComponent()
     ctrl = AppRuntimeController(repo, poll_interval_sec=60)
-    ctrl.register_scout(scout)
+    ctrl.register_options(options)
     ctrl.apply()
-    assert scout.started is True
+    assert options.started is True
 
     repo.get_bool.side_effect = lambda key, default=False: {
-        FLAG_OPTIONS_ADVISOR_ENABLED: True,
-        FLAG_SCOUT_APP_ENABLED: False,
+        FLAG_OPTIONS_ADVISOR_ENABLED: False,
     }.get(key, default)
     ctrl.apply()
-    assert scout.started is False
+    assert options.started is False
 
 
 def test_app_controller_skips_redundant_apply(mocker):
     repo = MagicMock()
     repo.get_bool.return_value = True
-    scout = _FakeComponent()
+    options = _FakeComponent()
     ctrl = AppRuntimeController(repo, poll_interval_sec=60)
-    ctrl.register_scout(scout)
+    ctrl.register_options(options)
     ctrl.apply()
-    scout.start = MagicMock(wraps=scout.start)
+    options.start = MagicMock(wraps=options.start)
     ctrl.apply()
-    scout.start.assert_not_called()
+    options.start.assert_not_called()

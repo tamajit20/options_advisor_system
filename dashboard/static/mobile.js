@@ -80,13 +80,6 @@
             if (saved && OPTIONS_TABS.includes(saved)) tab = saved;
           } catch (_) {}
           if (typeof window.switchTab === 'function') window.switchTab(tab);
-        } else if (app === 'scout') {
-          let tab = 'scout-signals';
-          try {
-            const saved = localStorage.getItem('activeTab');
-            if (saved && saved.startsWith('scout-')) tab = saved;
-          } catch (_) {}
-          if (typeof window.switchTab === 'function') window.switchTab(tab);
         }
       });
     });

@@ -736,11 +736,8 @@ const TAB_LEAVE = {};
 function isOptionsTab(name) {
   return OPTIONS_TABS.includes(name);
 }
-function isScoutTab(name) {
-  return String(name || '').startsWith('scout-');
-}
 
-/** Extension point for separate modules (e.g. Intraday Scout). */
+/** Extension point for separate dashboard tab modules. */
 function registerDashboardTab(name, onEnter, onLeave) {
   if (!TABS.includes(name)) TABS.push(name);
   if (onEnter) TAB_LOADERS[name] = onEnter;
@@ -769,16 +766,14 @@ function switchTab(name) {
     const app = b.dataset.bnavApp;
     let active = false;
     if (app === 'options') active = isOptionsTab(name);
-    else if (app === 'scout') active = isScoutTab(name);
     else if (tab) active = tab === name;
     b.classList.toggle('active', active);
   });
   $$('.options-subtab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === name);
   });
-  document.body.classList.remove('mobile-app-options', 'mobile-app-scout', 'mobile-app-alerts');
+  document.body.classList.remove('mobile-app-options', 'mobile-app-alerts');
   if (name === 'notifications') document.body.classList.add('mobile-app-alerts');
-  else if (isScoutTab(name)) document.body.classList.add('mobile-app-scout');
   else if (isOptionsTab(name)) document.body.classList.add('mobile-app-options');
   const optBar = document.getElementById('options-subtabs-bar');
   if (optBar) optBar.hidden = !isOptionsTab(name);
@@ -794,13 +789,6 @@ function switchTab(name) {
   if (name === 'notifications') loadNotifications();
   if (name === 'config')        loadConfig();
   if (TAB_LOADERS[name])        TAB_LOADERS[name]();
-  if (name.startsWith('scout-')) {
-    const sec = document.getElementById('nav-section-scout');
-    if (sec) sec.open = true;
-  } else if (TABS.includes(name)) {
-    const sec = document.getElementById('nav-section-options');
-    if (sec) sec.open = true;
-  }
   // Stop jobs auto-refresh when leaving the tab
   if (name !== 'jobs')  stopJobsAutoRefresh();
   if (name !== 'wsmon') stopWsMonitorAutoRefresh();
@@ -827,16 +815,12 @@ $$('.nav-item, .bnav-item, .options-subtab').forEach(b => {
 function _restoreActiveTab() {
   let initial = null;
   const hash = (window.location.hash || '').replace(/^#/, '');
-  if (hash === 'scout') initial = 'scout-signals';
-  else if (hash === 'learn' || hash.startsWith('learn/')) initial = 'learn';
-  else if (hash && hash.startsWith('scout-')) initial = hash;
+  if (hash === 'learn' || hash.startsWith('learn/')) initial = 'learn';
   else if (hash && TABS.includes(hash)) initial = hash;
   if (!initial) {
     try {
       const saved = localStorage.getItem('activeTab');
-      if (saved === 'scout') initial = 'scout-signals';
-      else if (saved === 'learn' || (saved && saved.startsWith('learn/'))) initial = 'learn';
-      else if (saved && saved.startsWith('scout-')) initial = saved;
+      if (saved === 'learn' || (saved && saved.startsWith('learn/'))) initial = 'learn';
       else if (saved && TABS.includes(saved)) initial = saved;
     } catch (_) {}
   }
@@ -5981,7 +5965,7 @@ function renderConfigPage(data) {
 
   return `<div class="cfg-page">
     <input type="search" id="cfg-filter" class="cfg-filter" placeholder="Filter keys…">
-    <p class="muted cfg-intro">Every editable knob from <code>config.py</code> is listed here. Scout, Arb, and Basis keep their own settings tabs. Secrets (API keys, passwords, tokens) are not shown. Badges marked <em>restart</em> need the matching process restarted (scheduler, WS runner, or dashboard) after Save.</p>
+    <p class="muted cfg-intro">Every editable knob from <code>config.py</code> is listed here. Secrets (API keys, passwords, tokens) are not shown. Badges marked <em>restart</em> need the matching process restarted (scheduler, WS runner, or dashboard) after Save.</p>
     <section class="cfg-group cfg-flags">
       <h3>Runtime switches</h3>
       <p class="muted">Live kill / alert gates. Take effect without a restart.</p>
@@ -6582,14 +6566,14 @@ async function setAppsRuntimeFlag(key, enabled) {
     });
     if (notice) {
       notice.hidden = false;
-      notice.classList.add('scout-config-notice--ok');
+      notice.classList.add('apps-runtime-notice--ok');
       notice.textContent = 'Saved — WS subscriptions update within ~60s, engines within ~30s.';
     }
     refreshGlobalBanners();
   } catch (err) {
     if (notice) {
       notice.hidden = false;
-      notice.classList.remove('scout-config-notice--ok');
+      notice.classList.remove('apps-runtime-notice--ok');
       notice.textContent = 'Save failed: ' + String(err);
     }
     throw err;
@@ -7094,20 +7078,11 @@ async function _submitZerodhaRequestToken(rt) {
     });
     const d = await r.json();
     if (d.ok) {
-      let statusMsg = `✓ Logged in as ${d.user_id} at ${d.generated_at}`;
-      if (d.permission_check && !d.permission_check.overall_ok) {
-        statusMsg += ' — permission checks FAILED (see Scout → Errors)';
-      } else if (d.permission_check?.overall_ok) {
-        statusMsg += ' — all permission checks passed';
-      }
-      if (msg) { msg.textContent = statusMsg; msg.style.color = d.permission_check && !d.permission_check.overall_ok ? '#b45309' : '#0a0'; }
+      const statusMsg = `✓ Logged in as ${d.user_id} at ${d.generated_at}`;
+      if (msg) { msg.textContent = statusMsg; msg.style.color = '#0a0'; }
       if (inp) inp.value = '';
       loadZerodhaStatus();
-      toast(d.permission_check && !d.permission_check.overall_ok
-        ? 'Logged in but permission checks failed — see Scout Errors tab'
-        : 'Zerodha session saved — live feed should connect shortly.',
-        d.permission_check && !d.permission_check.overall_ok ? 'err' : 'ok');
-      if (typeof window.loadScoutErrors === 'function') window.loadScoutErrors();
+      toast('Zerodha session saved — live feed should connect shortly.', 'ok');
       return true;
     }
     if (msg) { msg.textContent = '✗ ' + (d.error || 'exchange failed'); msg.style.color = '#c00'; }

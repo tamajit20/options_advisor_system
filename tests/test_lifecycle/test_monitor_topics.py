@@ -7,7 +7,7 @@ from datetime import date, datetime
 from lifecycle.intraday_monitor import IntradayMonitor, _Snapshot
 from lifecycle.live_risk_monitor import LiveRiskMonitor, _Snapshot as RiskSnapshot
 from providers.base import LiveQuote
-from providers.event_bus import EventBus, TOPIC_TICK_INDEX, TOPIC_TICK_OPTIONS, TOPIC_TICK_SCOUT
+from providers.event_bus import EventBus, TOPIC_TICK_INDEX, TOPIC_TICK_OPTIONS
 
 
 def _option_quote(ltp=100.0):
@@ -36,11 +36,10 @@ class TestIntradayMonitorTopics:
         try:
             assert bus.subscriber_count(TOPIC_TICK_OPTIONS) >= 1
             assert bus.subscriber_count(TOPIC_TICK_INDEX) == 0
-            assert bus.subscriber_count(TOPIC_TICK_SCOUT) == 0
         finally:
             mon.stop()
 
-    def test_scout_equity_via_bus_ignored(self):
+    def test_index_spot_via_bus_ignored_by_intraday_monitor(self):
         from lifecycle.intraday_monitor import _SuggestionLegRef
 
         bus = EventBus()
@@ -61,7 +60,6 @@ class TestIntradayMonitorTopics:
         mon.start()
         try:
             mon._reload_locked()
-            bus.publish(TOPIC_TICK_SCOUT, _spot_quote("RELIANCE", 2500))
             bus.publish(TOPIC_TICK_INDEX, _spot_quote("NIFTY", 23000))
         finally:
             mon.stop()
@@ -69,7 +67,7 @@ class TestIntradayMonitorTopics:
 
 
 class TestLiveRiskMonitorTopics:
-    def test_start_subscribes_options_and_index_not_scout(self):
+    def test_start_subscribes_options_and_index(self):
         bus = EventBus()
         mon = LiveRiskMonitor(
             notifier=MagicMockStub(),
@@ -82,11 +80,10 @@ class TestLiveRiskMonitorTopics:
         try:
             assert bus.subscriber_count(TOPIC_TICK_OPTIONS) >= 1
             assert bus.subscriber_count(TOPIC_TICK_INDEX) >= 1
-            assert bus.subscriber_count(TOPIC_TICK_SCOUT) == 0
         finally:
             mon.stop()
 
-    def test_scout_equity_spot_tick_does_not_update_index_spot_index(self):
+    def test_non_index_spot_tick_does_not_update_index_spot_index(self):
         bus = EventBus()
         mon = LiveRiskMonitor(
             notifier=MagicMockStub(),

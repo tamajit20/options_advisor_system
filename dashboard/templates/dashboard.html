@@ -6,7 +6,6 @@
 <meta name="theme-color" content="{{ theme.primary }}">
 <title>Trading Dashboard</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ cache_bust }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='scout.css') }}?v={{ cache_bust }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='mobile.css') }}?v={{ cache_bust }}">
 <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -56,9 +55,6 @@
 <main class="app-main">
   <!-- Side nav (desktop) -->
   <nav class="side-nav" aria-label="Primary">
-    <details class="nav-section nav-section--options" id="nav-section-options" open>
-      <summary class="nav-section-summary">Options Advisor</summary>
-      <div class="nav-section-items">
         <button class="nav-item active" data-tab="suggestion">
           <span class="nav-icon">💡</span><span class="nav-label">Suggestion</span>
         </button>
@@ -88,31 +84,6 @@
         <button class="nav-item" data-tab="config">
           <span class="nav-icon">⚙️</span><span class="nav-label">Config</span>
         </button>
-      </div>
-    </details>
-    <details class="nav-section nav-section--scout" id="nav-section-scout" open>
-      <summary class="nav-section-summary">Intraday Scout</summary>
-      <div class="nav-section-items">
-        <button class="nav-item" data-tab="scout-signals">
-          <span class="nav-icon">🔍</span><span class="nav-label">Signals</span>
-        </button>
-        <button class="nav-item" data-tab="scout-trades">
-          <span class="nav-icon">📊</span><span class="nav-label">Execution</span>
-        </button>
-        <button class="nav-item" data-tab="scout-history">
-          <span class="nav-icon">📈</span><span class="nav-label">History</span>
-        </button>
-        <button class="nav-item" data-tab="scout-errors">
-          <span class="nav-icon">⚠️</span><span class="nav-label">Errors</span>
-        </button>
-        <button class="nav-item" data-tab="scout-watchlist">
-          <span class="nav-icon">📋</span><span class="nav-label">Watchlist</span>
-        </button>
-        <button class="nav-item" data-tab="scout-config">
-          <span class="nav-icon">⚙️</span><span class="nav-label">Scout Config</span>
-        </button>
-      </div>
-    </details>
   </nav>
 
   <section class="tab-panels">
@@ -302,13 +273,8 @@
             <span class="apps-runtime-desc muted">Index/option ticks, chain aggregator, risk monitors</span>
             <input type="checkbox" class="apps-runtime-toggle" data-app-flag="options_advisor_enabled" checked>
           </label>
-          <label class="apps-runtime-row">
-            <span class="apps-runtime-name">Scout</span>
-            <span class="apps-runtime-desc muted">Equity watchlist ticks, signal engine, auto-trader poll</span>
-            <input type="checkbox" class="apps-runtime-toggle" data-app-flag="scout_app_enabled" checked>
-          </label>
         </div>
-        <div id="apps-runtime-notice" class="scout-config-notice" hidden></div>
+        <div id="apps-runtime-notice" class="apps-runtime-notice" hidden></div>
       </div>
 
       <!-- Zerodha session / WS connection -->
@@ -432,340 +398,6 @@
       </div>
     </article>
 
-    <article class="panel" id="panel-scout-signals" aria-hidden="true">
-      <h2 class="panel-title">Intraday Scout — Signals</h2>
-      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
-        <button class="scout-subtab active" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab" data-stab="scout-trades">Execution</button>
-        <button class="scout-subtab" data-stab="scout-history">History</button>
-        <button class="scout-subtab" data-stab="scout-errors">Errors</button>
-        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
-        <button class="scout-subtab" data-stab="scout-config">Config</button>
-      </div>
-      <div class="scout-header-compact">
-        <div id="scout-alarm-banner" class="scout-alarm-banner" hidden></div>
-        <div id="scout-status-bar" class="scout-status-bar muted">Loading status…</div>
-        <div class="scout-toolbar">
-          <button type="button" class="btn btn-ghost btn-sm" id="scout-refresh">Refresh</button>
-        </div>
-      </div>
-      <div id="scout-signals-container" class="loading">Loading…</div>
-    </article>
-
-    <article class="panel" id="panel-scout-trades" aria-hidden="true">
-      <h2 class="panel-title">Intraday Scout — Execution</h2>
-      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
-        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab active" data-stab="scout-trades">Execution</button>
-        <button class="scout-subtab" data-stab="scout-history">History</button>
-        <button class="scout-subtab" data-stab="scout-errors">Errors</button>
-        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
-        <button class="scout-subtab" data-stab="scout-config">Config</button>
-      </div>
-      <p class="muted scout-intro">Live trade flow — Step 1 enter, Step 2 stop + target orders, Step 3 watch and adjust. Toggle live Zerodha orders in the <strong>Config</strong> tab.</p>
-      <div id="scout-trades-alarm-banner" class="scout-alarm-banner" hidden></div>
-      <div id="scout-trades-container" class="loading">Loading…</div>
-    </article>
-
-    <article class="panel" id="panel-scout-history" aria-hidden="true">
-      <h2 class="panel-title">Intraday Scout — History</h2>
-      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
-        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab" data-stab="scout-trades">Execution</button>
-        <button class="scout-subtab active" data-stab="scout-history">History</button>
-        <button class="scout-subtab" data-stab="scout-errors">Errors</button>
-        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
-        <button class="scout-subtab" data-stab="scout-config">Config</button>
-      </div>
-      <div class="filter-row hist-filter-bar scout-hist-filters">
-        <label class="hist-filter-label">From <input type="date" id="scout-hist-from" class="hist-date-input"></label>
-        <label class="hist-filter-label">To <input type="date" id="scout-hist-to" class="hist-date-input"></label>
-        <button type="button" class="btn btn-ghost" id="scout-hist-apply">Apply</button>
-      </div>
-      <div id="scout-history-panel" class="scout-history-panel loading">Loading…</div>
-    </article>
-
-    <article class="panel" id="panel-scout-errors" aria-hidden="true">
-      <h2 class="panel-title">Intraday Scout — Errors</h2>
-      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
-        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab" data-stab="scout-trades">Execution</button>
-        <button class="scout-subtab" data-stab="scout-history">History</button>
-        <button class="scout-subtab active" data-stab="scout-errors">Errors</button>
-        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
-        <button class="scout-subtab" data-stab="scout-config">Config</button>
-      </div>
-      <div class="scout-err-layout">
-        <details id="scout-err-checks-panel" class="scout-err-checks-panel">
-          <summary class="scout-err-checks-summary">
-            <span id="scout-err-checks-head">Permission checks</span>
-            <button type="button" class="btn btn-accent btn-sm scout-err-recheck-inline" id="scout-err-recheck">Re-run</button>
-          </summary>
-          <div id="scout-err-status" class="scout-err-status" hidden></div>
-        </details>
-        <div class="scout-err-log-section">
-          <div class="filter-row hist-filter-bar scout-hist-filters scout-err-filters">
-            <label class="hist-filter-label">From <input type="date" id="scout-err-from" class="hist-date-input"></label>
-            <label class="hist-filter-label">To <input type="date" id="scout-err-to" class="hist-date-input"></label>
-            <select id="scout-err-severity" class="hist-date-input" title="Filter severity">
-              <option value="" selected>All severities</option>
-              <option value="ERROR">ERROR</option>
-              <option value="WARNING">WARNING</option>
-              <option value="INFO">INFO</option>
-            </select>
-            <input type="search" id="scout-err-search" placeholder="Search…" class="scout-wl-search scout-err-search">
-            <button type="button" class="btn btn-ghost" id="scout-err-apply">Apply</button>
-          </div>
-          <div id="scout-errors-container" class="scout-err-log-scroll loading">Loading…</div>
-          <p id="scout-err-count" class="muted scout-err-count" hidden></p>
-        </div>
-      </div>
-    </article>
-
-    <article class="panel" id="panel-scout-watchlist" aria-hidden="true">
-      <h2 class="panel-title">Intraday Scout — Watchlist</h2>
-      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
-        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab" data-stab="scout-trades">Execution</button>
-        <button class="scout-subtab" data-stab="scout-history">History</button>
-        <button class="scout-subtab" data-stab="scout-errors">Errors</button>
-        <button class="scout-subtab active" data-stab="scout-watchlist">Watchlist</button>
-        <button class="scout-subtab" data-stab="scout-config">Config</button>
-      </div>
-      <p class="muted scout-intro">All NSE stocks from Zerodha&apos;s instrument master (refreshed daily — new IPOs appear after Zerodha lists them). Search, select, then Save.</p>
-      <div class="scout-watchlist-toolbar">
-        <input type="search" id="scout-wl-search" class="scout-wl-search" placeholder="Search symbol or name…" autocomplete="off">
-        <button type="button" class="btn btn-ghost" id="scout-wl-refresh-inst">Refresh list</button>
-        <button type="button" class="btn btn-ghost" id="scout-wl-select-shown">Select shown</button>
-        <button type="button" class="btn btn-ghost" id="scout-wl-select-n50">Select Nifty 50</button>
-        <button type="button" class="btn btn-ghost" id="scout-wl-select-nbank">Select Nifty Bank</button>
-        <button type="button" class="btn btn-ghost" id="scout-wl-clear">Clear all</button>
-        <button type="button" class="btn btn-accent" id="scout-wl-save">Save watchlist</button>
-      </div>
-      <div id="scout-wl-notice" class="scout-wl-notice" hidden></div>
-      <p class="muted scout-wl-legend">
-        <span class="scout-wl-badge scout-wl-badge--nifty50" id="scout-wl-legend-nifty50">50</span> Nifty 50
-        <span class="scout-wl-badge scout-wl-badge--nifty_bank">BN</span> Nifty Bank
-      </p>
-      <div id="scout-wl-meta" class="muted scout-wl-meta"></div>
-      <div id="scout-watchlist-container" class="loading">Loading…</div>
-      <div class="scout-wl-footer">
-        <button type="button" class="btn btn-ghost" id="scout-wl-more" hidden>Load more</button>
-        <span id="scout-wl-count" class="muted scout-wl-count"></span>
-      </div>
-    </article>
-
-    <article class="panel" id="panel-scout-config" aria-hidden="true">
-      <h2 class="panel-title">Intraday Scout — Config</h2>
-      <div class="scout-subtabs" role="tablist" aria-label="Scout sections">
-        <button class="scout-subtab" data-stab="scout-signals">Signals</button>
-        <button class="scout-subtab" data-stab="scout-trades">Execution</button>
-        <button class="scout-subtab" data-stab="scout-history">History</button>
-        <button class="scout-subtab" data-stab="scout-errors">Errors</button>
-        <button class="scout-subtab" data-stab="scout-watchlist">Watchlist</button>
-        <button class="scout-subtab active" data-stab="scout-config">Config</button>
-      </div>
-      <p class="muted scout-intro">Tune automation, position sizing, trade limits, and signal filters. Changes apply immediately to new signals and auto-enter.</p>
-      <div id="scout-config-notice" class="scout-config-notice" hidden></div>
-      <form id="scout-config-form" class="scout-config-form" autocomplete="off">
-        <section class="scout-config-section scout-config-section--stop">
-          <h3 class="scout-config-heading">Emergency stop</h3>
-          <p class="muted scout-config-hint">Uncheck to halt all Scout trading immediately after save — no new entries, auto-enter, auto-close, or pending-order processing. You can still close or void open positions manually.</p>
-          <div class="scout-config-grid">
-            <label class="scout-config-check scout-config-check--stop">
-              <input type="checkbox" name="trading_enabled" id="cfg-trading-enabled" checked>
-              <span>Scout trading enabled</span>
-            </label>
-          </div>
-        </section>
-        <section class="scout-config-section">
-          <h3 class="scout-config-heading">Zerodha execution</h3>
-          <p class="muted scout-config-hint">Saved in the database — survives redeploy. When live orders are off, Scout updates the DB only (safe for testing).</p>
-          <div class="scout-config-grid">
-            <label class="scout-config-check scout-config-check--warn">
-              <input type="checkbox" name="zerodha_execute_orders" id="cfg-zerodha-live">
-              <span>Place real Zerodha orders (MIS intraday)</span>
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Square-off time (IST)</span>
-              <input type="time" name="square_off_time" id="cfg-square-off" value="15:10">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Square-off warning (minutes before)</span>
-              <input type="number" name="square_off_warn_minutes" id="cfg-square-off-warn" min="1" max="30" step="1" value="5">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Max wallet utilization (%)</span>
-              <input type="number" name="wallet_utilization_pct" id="cfg-wallet-pct" min="50" max="100" step="1" value="90">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Wallet reserve (₹)</span>
-              <input type="number" name="wallet_reserve_inr" id="cfg-wallet-reserve" min="0" step="500" value="2000">
-            </label>
-          </div>
-          <p class="muted scout-config-hint">Example: ₹20,000 balance with 90% cap and ₹2,000 reserve → max ₹18,000 deployed. New entries block until a sell frees capital.</p>
-          <p class="muted scout-config-hint" id="cfg-zerodha-exec"></p>
-        </section>
-        <section class="scout-config-section">
-          <h3 class="scout-config-heading">Automation</h3>
-          <div class="scout-config-grid">
-            <label class="scout-config-check">
-              <input type="checkbox" name="auto_execute_signals" id="cfg-auto-execute">
-              <span>Auto-enter signals (paper when Zerodha orders off)</span>
-            </label>
-            <label class="scout-config-check">
-              <input type="checkbox" name="auto_close_trades" id="cfg-auto-close">
-              <span>Auto-close on target, stop, or square-off (15:10 IST)</span>
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Auto-enter retry interval (seconds)</span>
-              <input type="number" name="auto_close_poll_seconds" id="cfg-auto-poll" min="5" max="120" step="1" value="10">
-            </label>
-          </div>
-          <p class="muted scout-config-hint">Paper auto-enter needs <strong>Scout trading enabled</strong>, <strong>ws_runner</strong> running, and signals matching your strength/pattern/window filters (defaults: HIGH strength, OR breaks only, 09:45–14:00). Zerodha live orders can stay off. Settings apply on the next poll (~10s) — no restart.</p>
-        </section>
-        <section class="scout-config-section">
-          <h3 class="scout-config-heading">Position sizing</h3>
-          <div class="scout-config-grid">
-            <label class="scout-config-check">
-              <input type="checkbox" name="use_investment_sizing" id="cfg-use-investment">
-              <span>Use investment-based quantity</span>
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Investment per trade (₹)</span>
-              <input type="number" name="investment_per_trade_inr" id="cfg-investment" min="1000" step="1000" value="20000">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Fixed quantity (when investment sizing off)</span>
-              <input type="number" name="auto_trade_quantity" id="cfg-fixed-qty" min="1" step="1" value="1">
-            </label>
-          </div>
-        </section>
-        <section class="scout-config-section">
-          <h3 class="scout-config-heading">Trade limits</h3>
-          <div class="scout-config-grid">
-            <label class="scout-config-field">
-              <span class="scout-config-label">Max trades per day</span>
-              <input type="number" name="max_trades_per_day" id="cfg-max-trades" min="0" max="100" step="1" value="5">
-            </label>
-            <label class="scout-config-check">
-              <input type="checkbox" name="one_trade_per_symbol_per_day" id="cfg-one-per-symbol">
-              <span>One trade per symbol per day</span>
-            </label>
-            <p class="muted scout-config-hint" id="cfg-trades-today">Trades opened today: —</p>
-          </div>
-        </section>
-        <section class="scout-config-section">
-          <h3 class="scout-config-heading">Auto-enter strength</h3>
-          <div class="scout-config-strengths">
-            <label class="scout-config-check"><input type="checkbox" name="auto_enter_strengths" value="WEAK"> WEAK</label>
-            <label class="scout-config-check"><input type="checkbox" name="auto_enter_strengths" value="MEDIUM"> MEDIUM</label>
-            <label class="scout-config-check"><input type="checkbox" name="auto_enter_strengths" value="HIGH" checked> HIGH</label>
-          </div>
-        </section>
-        <section class="scout-config-section">
-          <h3 class="scout-config-heading">Auto-enter patterns</h3>
-          <div class="scout-config-strengths">
-            <label class="scout-config-check"><input type="checkbox" name="auto_enter_signal_types" value="OR_BREAK_UP" checked> OR break up</label>
-            <label class="scout-config-check"><input type="checkbox" name="auto_enter_signal_types" value="OR_BREAK_DOWN" checked> OR break down</label>
-            <label class="scout-config-check"><input type="checkbox" name="auto_enter_signal_types" value="RANGE_BREAK_UP"> Range break up</label>
-            <label class="scout-config-check"><input type="checkbox" name="auto_enter_signal_types" value="RANGE_BREAK_DOWN"> Range break down</label>
-            <label class="scout-config-check"><input type="checkbox" name="auto_enter_signal_types" value="PULLBACK_UP"> Pullback up</label>
-            <label class="scout-config-check"><input type="checkbox" name="auto_enter_signal_types" value="PULLBACK_DOWN"> Pullback down</label>
-          </div>
-        </section>
-        <section class="scout-config-section">
-          <h3 class="scout-config-heading">Profitability &amp; exits</h3>
-          <div class="scout-config-grid">
-            <label class="scout-config-field">
-              <span class="scout-config-label">Min net profit per trade (₹)</span>
-              <input type="number" name="min_net_profit_inr" min="0" max="50000" step="25" value="100">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Min target (R-multiple)</span>
-              <input type="number" name="min_target_r" min="1" max="5" step="0.5" value="2">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Breakeven stop at (R)</span>
-              <input type="number" name="breakeven_at_r" min="0.5" max="3" step="0.5" value="1">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Trail stop (× risk after BE)</span>
-              <input type="number" name="trail_stop_r_fraction" min="0" max="2" step="0.1" value="0.5">
-            </label>
-          </div>
-          <p class="muted scout-config-hint">Auto-enter skips trades where expected net at target is below min profit after Zerodha intraday charges.</p>
-        </section>
-        <section class="scout-config-section">
-          <h3 class="scout-config-heading">Trading window (IST)</h3>
-          <div class="scout-config-grid scout-config-grid--inline">
-            <label class="scout-config-field">
-              <span class="scout-config-label">Start</span>
-              <input type="time" name="trade_window_start" id="cfg-window-start" value="09:45">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">End</span>
-              <input type="time" name="trade_window_end" id="cfg-window-end" value="14:00">
-            </label>
-          </div>
-        </section>
-        <section class="scout-config-section">
-          <h3 class="scout-config-heading">Signal dedupe</h3>
-          <div class="scout-config-grid">
-            <label class="scout-config-field">
-              <span class="scout-config-label">Cooldown (minutes)</span>
-              <input type="number" name="push_dedupe_minutes" id="cfg-dedupe-mins" min="5" max="240" step="5" value="60">
-            </label>
-            <label class="scout-config-check">
-              <input type="checkbox" name="dedupe_per_symbol" id="cfg-dedupe-symbol">
-              <span>Dedupe per symbol (ignore pattern type)</span>
-            </label>
-          </div>
-        </section>
-        <section class="scout-config-section">
-          <h3 class="scout-config-heading">Signal filters</h3>
-          <div class="scout-config-grid">
-            <label class="scout-config-field">
-              <span class="scout-config-label">Signal valid (minutes)</span>
-              <input type="number" name="signal_valid_minutes" min="5" max="120" step="1" value="30">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Max move from open (%)</span>
-              <input type="number" name="max_move_from_open_pct" min="0.3" max="5" step="0.1" value="1.0">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">RS margin vs Nifty (%)</span>
-              <input type="number" name="rs_margin_pct" min="0" max="2" step="0.05" value="0.25">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Compression range (%)</span>
-              <input type="number" name="compression_range_pct" min="0.1" max="2" step="0.05" value="0.30">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Entry band slippage (%)</span>
-              <input type="number" name="entry_slippage_pct" min="0.05" max="1" step="0.05" value="0.20">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Min candles before signals</span>
-              <input type="number" name="min_candles" min="5" max="60" step="1" value="12">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Index trend min (% from open)</span>
-              <input type="number" name="index_trend_min_pct" min="-5" max="0" step="0.05" value="-0.20">
-            </label>
-            <label class="scout-config-field">
-              <span class="scout-config-label">Index trend max (% from open)</span>
-              <input type="number" name="index_trend_max_pct" min="0" max="5" step="0.05" value="0.05">
-            </label>
-          </div>
-        </section>
-        <div class="scout-config-actions">
-          <button type="submit" class="btn btn-accent" id="scout-config-save">Save settings</button>
-          <button type="button" class="btn btn-ghost" id="scout-config-reload">Reload</button>
-        </div>
-      </form>
-    </article>
-
     <article class="panel" id="panel-config" aria-hidden="true">
       <h2 class="panel-title">Configuration</h2>
       <p class="muted">Every strategy knob from <code>config.py</code>, plus runtime switches. Saves go to the database and take effect immediately in this dashboard; the live monitor picks them up within about a minute.</p>
@@ -774,10 +406,9 @@
   </section>
 </main>
 
-<!-- Bottom nav (mobile — two apps + shared alerts + menu) -->
+<!-- Bottom nav (mobile — advisor, alerts, menu) -->
 <nav class="bottom-nav" aria-label="Primary mobile">
   <button type="button" class="bnav-item active" data-bnav-app="options"><span>💡</span><span>Advisor</span></button>
-  <button type="button" class="bnav-item" data-bnav-app="scout"><span>🔍</span><span>Scout</span></button>
   <button type="button" class="bnav-item" data-tab="notifications"><span>🔔</span><span>Alerts</span></button>
   <button type="button" class="bnav-item bnav-more" id="bnav-more-btn" aria-label="Menu"><span>☰</span><span>Menu</span></button>
 </nav>
@@ -795,7 +426,7 @@
         <button type="button" class="more-drawer-item" data-tab="wsmon"><span class="more-drawer-icon">📡</span>WS Monitor</button>
       </div>
     </div>
-    <p class="more-drawer-note">Suggestion, Trades, Learning, History, and Config live under <strong>Advisor</strong> (top tabs). Scout sections are under the <strong>Scout</strong> tab.</p>
+    <p class="more-drawer-note">Suggestion, Trades, Learning, History, and Config live under <strong>Advisor</strong> (top tabs).</p>
     <button type="button" class="btn btn-ghost" data-more-close style="width:100%;margin-top:10px">Close</button>
   </div>
 </div>
@@ -806,7 +437,6 @@
 <script>window.__PNL_RULES__ = {{ pnl_rules | tojson }}; window.__CACHE_BUST__ = {{ cache_bust | tojson }};</script>
 <script src="{{ url_for('static', filename='dashboard.js') }}?v={{ cache_bust }}"></script>
 <script src="{{ url_for('static', filename='strategy_guide.js') }}?v={{ cache_bust }}"></script>
-<script src="{{ url_for('static', filename='scout.js') }}?v={{ cache_bust }}"></script>
 <script src="{{ url_for('static', filename='mobile.js') }}?v={{ cache_bust }}"></script>
 </body>
 </html>

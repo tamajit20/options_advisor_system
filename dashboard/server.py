@@ -660,7 +660,6 @@ _JOB_DISPLAY_GROUPS: tuple[tuple[str, str], ...] = (
     ("monday", "Monday & weekly"),
     ("open", "Market open (09:00–10:00)"),
     ("intraday", "Intraday (10:00–15:30)"),
-    ("scout", "Intraday Scout"),
     ("close", "Market close"),
     ("eod", "EOD pipeline (20:35+)"),
     ("maintenance", "Maintenance"),
@@ -1108,7 +1107,6 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
         FLAG_CIRCUIT_BREAKER_ACTIVE,
         FLAG_KILL_SWITCH,
         FLAG_OPTIONS_ADVISOR_ENABLED,
-        FLAG_SCOUT_APP_ENABLED,
         FLAG_TRADE_EXECUTION_ENABLED,
         RuntimeFlagsRepo,
     )
@@ -1116,7 +1114,6 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
     kill_switch = False
     trade_exec_enabled = True
     options_app_enabled = True
-    scout_app_enabled = True
     try:
         repo = RuntimeFlagsRepo(db, cache_ttl_seconds=0)
         cb_active = repo.get_bool(FLAG_CIRCUIT_BREAKER_ACTIVE, default=False)
@@ -1125,7 +1122,6 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
             FLAG_TRADE_EXECUTION_ENABLED, default=True,
         )
         options_app_enabled = repo.get_bool(FLAG_OPTIONS_ADVISOR_ENABLED, default=True)
-        scout_app_enabled = repo.get_bool(FLAG_SCOUT_APP_ENABLED, default=True)
     except Exception:
         logger.debug("system-status: runtime_flags read failed", exc_info=True)
     sch_running = False
@@ -1140,7 +1136,6 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
         "kill_switch":             kill_switch,
         "trade_execution_enabled": trade_exec_enabled,
         "options_advisor_enabled": options_app_enabled,
-        "scout_app_enabled":       scout_app_enabled,
         "scheduler_running":       sch_running,
         "trade_signals":           _active_trade_signals(db),
         "pnl_rules":               _pnl_rules_payload(),
@@ -1368,24 +1363,17 @@ def create_app() -> Flask:
         except Exception as exc:  # noqa: BLE001
             logger.exception("zerodha exchange failed")
             return jsonify({"ok": False, "error": str(exc)}), 500
-        ws_wake = {"ok": True, "action": "session_saved"}
+            ws_wake = {"ok": True, "action": "session_saved"}
         try:
             from providers.zerodha.ws_runner_control import ensure_ws_runner_running
             ws_wake = ensure_ws_runner_running()
         except Exception:
             logger.exception("ws_runner wake after exchange failed (non-fatal)")
-        perm = None
-        try:
-            from providers.zerodha.permission_check import last_permission_summary
-            perm = last_permission_summary()
-        except Exception:
-            pass
         return jsonify({
             "ok": True,
             "user_id": session.user_id,
             "generated_at": session.generated_at.isoformat(),
             "ws_runner": ws_wake,
-            "permission_check": perm,
         })
 
     @app.route("/api/zerodha/status")
@@ -2803,7 +2791,6 @@ def create_app() -> Flask:
                 FLAG_CIRCUIT_BREAKER_ACTIVE,
                 FLAG_KILL_SWITCH,
                 FLAG_OPTIONS_ADVISOR_ENABLED,
-                FLAG_SCOUT_APP_ENABLED,
                 FLAG_TRADE_EXECUTION_ENABLED,
                 RuntimeFlagsRepo,
             )
@@ -2813,7 +2800,6 @@ def create_app() -> Flask:
                 "kill_switch":             r.get_bool(FLAG_KILL_SWITCH, default=False),
                 "trade_execution_enabled": r.get_bool(FLAG_TRADE_EXECUTION_ENABLED, default=True),
                 "options_advisor_enabled": r.get_bool(FLAG_OPTIONS_ADVISOR_ENABLED, default=True),
-                "scout_app_enabled":       r.get_bool(FLAG_SCOUT_APP_ENABLED, default=True),
             }
         except Exception as exc:  # pragma: no cover
             out["runtime_flags"] = {"available": False, "reason": str(exc)}
@@ -2975,22 +2961,6 @@ def create_app() -> Flask:
         return Response(_gen(), mimetype="text/event-stream",
                         headers={"Cache-Control": "no-cache",
                                  "X-Accel-Buffering": "no"})
-
-    from scout.routes import register_scout
-    register_scout(app)
-
-    import threading as _threading
-
-    def _startup_zerodha_check() -> None:
-        import time as _time
-        _time.sleep(3)
-        try:
-            from providers.zerodha.permission_check import open_db_and_run_check
-            open_db_and_run_check(trigger="startup")
-        except Exception:
-            logger.exception("Startup Zerodha permission check failed")
-
-    _threading.Thread(target=_startup_zerodha_check, daemon=True).start()
 
     return app
 

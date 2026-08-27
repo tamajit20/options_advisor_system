@@ -177,7 +177,7 @@ class TestLoadTrajectory:
 
 
 class TestSplitTickHandlers:
-    def test_on_index_tick_ignores_scout_equity_symbol(self, mock_db):
+    def test_on_index_tick_ignores_non_index_symbol(self, mock_db):
         agg = ChainTickAggregator(
             db=mock_db,
             expiry_provider=lambda s: [],

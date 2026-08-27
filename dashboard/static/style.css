@@ -2487,6 +2487,17 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .apps-runtime-name { font-weight: 600; font-size: .92rem; }
 .apps-runtime-desc { grid-column: 1; font-size: .78rem; }
 .apps-runtime-toggle { grid-column: 2; grid-row: 1 / span 2; width: 18px; height: 18px; }
+.apps-runtime-notice {
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-top: 12px;
+  background: rgba(245,158,11,.12);
+  border: 1px solid rgba(245,158,11,.25);
+}
+.apps-runtime-notice--ok {
+  background: rgba(52,211,153,.1);
+  border-color: rgba(52,211,153,.25);
+}
 .wsmon-summary { margin-bottom: 8px; }
 .wsmon-cards {
   display: grid;

@@ -14,7 +14,6 @@ from providers.event_bus import (
     TOPIC_TICK,
     TOPIC_TICK_INDEX,
     TOPIC_TICK_OPTIONS,
-    TOPIC_TICK_SCOUT,
     get_event_bus,
     reset_event_bus,
 )
@@ -94,13 +93,13 @@ def test_singleton_get_event_bus_returns_same_instance():
 def test_scoped_topics_do_not_cross_deliver():
     bus = EventBus()
     options_seen: list = []
-    scout_seen: list = []
+    index_seen: list = []
     bus.subscribe(TOPIC_TICK_OPTIONS, options_seen.append)
-    bus.subscribe(TOPIC_TICK_SCOUT, scout_seen.append)
+    bus.subscribe(TOPIC_TICK_INDEX, index_seen.append)
     bus.publish(TOPIC_TICK_OPTIONS, {"symbol": "NIFTY"})
-    bus.publish(TOPIC_TICK_SCOUT, {"symbol": "BPCL"})
-    assert options_seen == [{"symbol": "NIFTY"}]
-    assert scout_seen == [{"symbol": "BPCL"}]
     bus.publish(TOPIC_TICK_INDEX, {"symbol": "VIX"})
     assert options_seen == [{"symbol": "NIFTY"}]
-    assert scout_seen == [{"symbol": "BPCL"}]
+    assert index_seen == [{"symbol": "VIX"}]
+    bus.publish(TOPIC_TICK_INDEX, {"symbol": "BANKNIFTY"})
+    assert options_seen == [{"symbol": "NIFTY"}]
+    assert index_seen == [{"symbol": "VIX"}, {"symbol": "BANKNIFTY"}]

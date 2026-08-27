@@ -19,8 +19,6 @@ What gets subscribed?
     3. The index spots configured in `STRATEGY_CONFIG["underlyings"]`
        (NIFTY 50 / NIFTY BANK / NIFTY FIN SERVICE) plus INDIA VIX — Options
        index ticks only (`product=options_index`).
-    4. Scout watchlist NSE equities via `equity_loader` — Scout only
-       (`product=scout_equity`). Never mixed into Options tick handlers.
 
 If the resulting set is empty the manager pushes an empty set, which causes
 the runner to unsubscribe everything. The runner remains connected; the
@@ -85,7 +83,6 @@ class IndexSpec:
 
 
 IndexLoader = Callable[[], Iterable[IndexSpec]]
-EquityLoader = Callable[[], Iterable[str]]
 
 
 # Default indexes streamed for opportunity regeneration. Tied to
@@ -129,9 +126,6 @@ class SubscriptionManager:
     index_loader:
         Zero-arg callable returning `IndexSpec` rows. Defaults to a
         constant supplier of `DEFAULT_INDEX_SPECS`.
-    equity_loader:
-        Zero-arg callable returning NSE equity tradingsymbols (e.g. scout
-        watchlist). Resolved to EQ tokens and merged into the WS set.
     interval_seconds:
         Poll cadence (default 60s).
     """
@@ -142,12 +136,10 @@ class SubscriptionManager:
         instrument_master: InstrumentMaster,
         leg_loader: LegLoader,
         index_loader: Optional[IndexLoader] = None,
-        equity_loader: Optional[EquityLoader] = None,
         *,
         interval_seconds: float = 60.0,
         kill_switch_fn: Optional[Callable[[], bool]] = None,
         options_enabled_fn: Optional[Callable[[], bool]] = None,
-        scout_enabled_fn: Optional[Callable[[], bool]] = None,
     ):
         if interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive")
@@ -157,14 +149,12 @@ class SubscriptionManager:
         self._index_loader: IndexLoader = (
             index_loader if index_loader is not None else (lambda: DEFAULT_INDEX_SPECS)
         )
-        self._equity_loader: EquityLoader = equity_loader or (lambda: [])
         self._interval = float(interval_seconds)
         # `kill_switch_fn()` returns True when live data is globally disabled.
         # When True, we apply an empty token set every cycle. The runner stays
         # connected (so flipping the switch back on resumes immediately).
         self._kill_switch_fn: Callable[[], bool] = kill_switch_fn or (lambda: False)
         self._options_enabled_fn: Callable[[], bool] = options_enabled_fn or (lambda: True)
-        self._scout_enabled_fn: Callable[[], bool] = scout_enabled_fn or (lambda: True)
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -226,7 +216,6 @@ class SubscriptionManager:
 
         legs = list(self._leg_loader()) if self._options_enabled_fn() else []
         indexes = list(self._index_loader()) if self._options_enabled_fn() else []
-        equities = list(self._equity_loader()) if self._scout_enabled_fn() else []
 
         tokens = set()
         unresolved = 0
@@ -277,21 +266,6 @@ class SubscriptionManager:
                     is_index=False,
                     product="options_leg",
                 ),
-            )
-
-        for tradingsymbol in equities:
-            sym = str(tradingsymbol).upper()
-            inst = self._master.get_by_tradingsymbol("NSE", sym)
-            if inst is None:
-                logger.warning(
-                    "subscription_manager: equity %s not in instrument master", sym,
-                )
-                unresolved += 1
-                continue
-            tokens.add(inst.instrument_token)
-            self._runner.set_token_meta(
-                inst.instrument_token,
-                TokenMeta(symbol=sym, is_index=False, product="scout_equity", exchange="NSE"),
             )
 
         current = self._runner.desired_tokens()

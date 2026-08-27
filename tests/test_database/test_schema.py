@@ -36,7 +36,7 @@ class TestCreateAllTables:
         db = MagicMock()
         cur = MagicMock()
         db.execute = MagicMock(return_value=cur)
-        scout_create = mocker.patch("database.scout_schema.create_scout_tables")
+        scout_create = mocker.patch.object(sc, "drop_scout_tables")
         drop_removed = mocker.patch.object(sc, "drop_removed_monitor_tables")
         sc.create_all_tables(db)
         assert db.execute.call_count == len(sc._TABLE_DDL)
@@ -62,6 +62,24 @@ class TestDropRemovedMonitorTables:
         assert len(delete_sqls) == 1
         assert "arb_app_enabled" in delete_sqls[0]
         assert "basis_app_enabled" in delete_sqls[0]
+
+
+class TestDropScoutTables:
+    def test_drops_whitelisted_scout_tables_and_flag(self):
+        db = MagicMock()
+        cur = MagicMock()
+        db.execute = MagicMock(return_value=cur)
+        sc.drop_scout_tables(db)
+        sqls = [c.args[0] for c in db.execute.call_args_list]
+        drop_sqls = [s for s in sqls if "DROP TABLE" in s.upper()]
+        assert len(drop_sqls) == len(sc._REMOVED_SCOUT_TABLES)
+        joined = "\n".join(sqls).lower()
+        for name in sc._REMOVED_SCOUT_TABLES:
+            assert name in joined
+        assert "options_" not in "\n".join(drop_sqls).lower()
+        delete_sqls = [s for s in sqls if "DELETE FROM options_runtime_flags" in s]
+        assert len(delete_sqls) == 1
+        assert "scout_app_enabled" in delete_sqls[0]
 
 
 class TestCreateDatabaseIfMissing:

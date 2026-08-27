@@ -1,7 +1,7 @@
 {
   "name": "Options Advisor Dashboard",
   "short_name": "Trading",
-  "description": "Options Advisor and Intraday Scout trading dashboard",
+  "description": "Options Advisor trading dashboard",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",

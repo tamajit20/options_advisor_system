@@ -1,15 +1,12 @@
-"""P3 tests — tick routing edge cases, index backfill, scout schema, trade greeks."""
+"""P3 tests — tick routing edge cases, index backfill, trade greeks."""
 
 from __future__ import annotations
 
 from datetime import date
 from unittest.mock import MagicMock
 
-import pytest
-
 from providers.tick_routing import (
     PRODUCT_OPTIONS_INDEX,
-    PRODUCT_SCOUT_EQUITY,
     resolve_product,
     topic_for_meta,
 )
@@ -21,10 +18,10 @@ def test_resolve_product_finnifty_index():
     assert resolve_product(meta) == PRODUCT_OPTIONS_INDEX
 
 
-def test_resolve_product_equity_not_in_index_set():
-    meta = TokenMeta(symbol="BPCL", product=PRODUCT_SCOUT_EQUITY)
-    assert resolve_product(meta) == PRODUCT_SCOUT_EQUITY
-    assert topic_for_meta(meta) == "tick.scout"
+def test_resolve_product_unknown_equity_defaults_index():
+    meta = TokenMeta(symbol="BPCL")
+    assert resolve_product(meta) == PRODUCT_OPTIONS_INDEX
+    assert topic_for_meta(meta) == "tick.index"
 
 
 def test_resolve_product_infers_index_from_symbol_name():
@@ -55,18 +52,6 @@ def test_index_spot_backfill_zerodha_path(mocker):
     total = run_index_spot_backfill(db, days=5, end_date=date(2026, 8, 12), use_nse=False)
     assert total == 5
     db.commit.assert_called()
-
-
-def test_scout_schema_sql_contains_core_tables():
-    from database.scout_schema import SCOUT_TABLE_DDL, scout_table_names
-
-    ddl = "\n".join(SCOUT_TABLE_DDL)
-    assert "scout_signals" in ddl
-    assert "scout_trades" in ddl
-    assert "scout_config" in ddl
-    assert "filled_quantity" in ddl
-    names = scout_table_names()
-    assert "scout_signals" in names
 
 
 def test_trade_greeks_update_no_open_trades(mocker):

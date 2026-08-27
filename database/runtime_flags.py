@@ -35,8 +35,6 @@ Flag inventory
 - `options_advisor_enabled` (bool, default True)  — Options Advisor WS load:
                                                    index/option ticks, chain
                                                    aggregator, intraday monitors.
-- `scout_app_enabled`       (bool, default True)  — Scout equity ticks, signal
-                                                   engine, auto-trader poll.
 """
 
 from __future__ import annotations
@@ -65,7 +63,6 @@ FLAG_OPPORTUNITY_ALERTS = "opportunity_alerts"
 FLAG_TRADE_EXECUTION_ENABLED = "trade_execution_enabled"
 FLAG_CIRCUIT_BREAKER_ACTIVE = "circuit_breaker_active"
 FLAG_OPTIONS_ADVISOR_ENABLED = "options_advisor_enabled"
-FLAG_SCOUT_APP_ENABLED = "scout_app_enabled"
 
 
 # ---------------------------------------------------------------------------
@@ -135,15 +132,6 @@ DEFAULT_FLAGS: List[_FlagSpec] = [
         description=(
             "Options Advisor app — index/option WS subscriptions, chain "
             "aggregator, live risk and intraday monitors. Off saves CPU/bandwidth."
-        ),
-    ),
-    _FlagSpec(
-        key=FLAG_SCOUT_APP_ENABLED,
-        default="true",
-        type="bool",
-        description=(
-            "Scout app — equity watchlist WS subscriptions, push signal engine, "
-            "and auto-trader poll loop."
         ),
     ),
 ]

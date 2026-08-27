@@ -8,7 +8,6 @@ Used by:
     - `providers/zerodha/ws_runner.py` (publisher) — emits scoped tick topics and
       connection events as ticks arrive over the WebSocket.
     - Options handlers → `tick.options` / `tick.index`
-    - Scout handlers → `tick.scout` / `tick.index` (NIFTY benchmark only)
     - `providers/ws_monitor.py` — subscribes to all tick topics for telemetry
 
 Design:
@@ -37,7 +36,6 @@ logger = logging.getLogger(__name__)
 TOPIC_TICK = "tick"                          # legacy; prefer scoped topics below
 TOPIC_TICK_OPTIONS = "tick.options"          # payload: LiveQuote (option legs)
 TOPIC_TICK_INDEX = "tick.index"              # payload: LiveQuote (index/VIX spots)
-TOPIC_TICK_SCOUT = "tick.scout"              # payload: LiveQuote (scout watchlist EQ)
 TOPIC_CONNECTION_STATE = "connection_state"  # payload: {"provider": str, "state": "connected"/"disconnected"/"degraded", "detail": str}
 TOPIC_TOKEN_EXPIRED = "token_expired"        # payload: {"provider": str}
 TOPIC_TRADE_OPENED = "trade_opened"          # payload: {"trade_id": str}

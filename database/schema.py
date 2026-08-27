@@ -912,13 +912,12 @@ def create_all_tables(db: SQLServerConnection) -> None:
         sql = _normalize_ddl(raw)
         cur = db.execute(sql)
         cur.close()
-    from database.scout_schema import create_scout_tables
-    create_scout_tables(db)
     drop_removed_monitor_tables(db)
-    logger.info("All tables ensured (%d options DDL + scout; arb/basis dropped if present).", len(_TABLE_DDL))
+    drop_scout_tables(db)
+    logger.info("All tables ensured (%d options DDL; arb/basis/scout dropped if present).", len(_TABLE_DDL))
 
 
-# Strict whitelist — never drop options_* or scout_* tables.
+# Strict whitelist — never drop options_* tables from this helper.
 _REMOVED_MONITOR_TABLES = (
     "arb_gaps",
     "arb_pairs",
@@ -938,7 +937,7 @@ def drop_removed_monitor_tables(db: SQLServerConnection) -> None:
     """Drop Arb/Basis monitor tables only.
 
     Refuses any name that is not in the whitelist or that looks like an
-    Options Advisor / Scout table. Also deletes the two runtime-flag *rows*
+    Options Advisor table. Also deletes the two runtime-flag *rows*
     (shared ``options_runtime_flags`` table is not dropped).
     """
     allowed = frozenset(_REMOVED_MONITOR_TABLES)
@@ -966,6 +965,49 @@ def drop_removed_monitor_tables(db: SQLServerConnection) -> None:
     cur = db.execute(flag_sql)
     cur.close()
     logger.info("Removed arb/basis runtime flag rows if present")
+
+
+# Intraday Scout was removed; drop leftover tables + the runtime flag row.
+_REMOVED_SCOUT_TABLES = (
+    "scout_trade_orders",
+    "scout_trades",
+    "scout_signals",
+    "scout_scan_log",
+    "scout_config",
+    "scout_zerodha_log",
+    "scout_paper_trades",
+)
+_REMOVED_SCOUT_FLAG_KEYS = ("scout_app_enabled",)
+_REMOVED_SCOUT_NAME_RE = re.compile(r"^scout_[a-z0-9_]+$")
+
+
+def drop_scout_tables(db: SQLServerConnection) -> None:
+    """Drop Intraday Scout tables and the scout_app_enabled runtime flag."""
+    allowed = frozenset(_REMOVED_SCOUT_TABLES)
+    for name in _REMOVED_SCOUT_TABLES:
+        if name not in allowed or _REMOVED_SCOUT_NAME_RE.fullmatch(name) is None:
+            raise RuntimeError(f"refusing to drop unexpected table name: {name!r}")
+        if name.startswith("options_"):
+            raise RuntimeError(f"refusing to drop protected table: {name!r}")
+        sql = (
+            f"IF OBJECT_ID(N'dbo.{name}', N'U') IS NOT NULL "
+            f"DROP TABLE dbo.[{name}]"
+        )
+        cur = db.execute(sql)
+        cur.close()
+        logger.info("Dropped removed scout table if it existed: %s", name)
+
+    for key in _REMOVED_SCOUT_FLAG_KEYS:
+        if not re.fullmatch(r"[a-z_]+", key):
+            raise RuntimeError(f"refusing to delete unexpected flag key: {key!r}")
+    keys_sql = ", ".join("'" + k + "'" for k in _REMOVED_SCOUT_FLAG_KEYS)
+    flag_sql = (
+        "IF OBJECT_ID(N'dbo.options_runtime_flags', N'U') IS NOT NULL "
+        f"DELETE FROM options_runtime_flags WHERE flag_key IN ({keys_sql})"
+    )
+    cur = db.execute(flag_sql)
+    cur.close()
+    logger.info("Removed scout runtime flag rows if present")
 
 
 def list_tables() -> List[str]:

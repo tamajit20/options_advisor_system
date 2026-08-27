@@ -116,18 +116,18 @@ class TestWsMonitorRoute:
             "connection_state": "connected",
             "recent_events": [
                 {"topic": "tick.options", "symbol": "NIFTY", "last_price": 150},
-                {"topic": "tick.scout", "symbol": "RELIANCE", "last_price": 2500},
+                {"topic": "tick.index", "symbol": "BANKNIFTY", "last_price": 48000},
                 {"topic": "tick.index", "symbol": "NIFTY", "last_price": 23000},
             ],
         }
         path = tmp_path / "ws_status.json"
         path.write_text(json.dumps(snap), encoding="utf-8")
         monkeypatch.setattr("providers.ws_monitor.default_snapshot_path", lambda: path)
-        resp = client.get("/api/ws/monitor?topic=tick.scout")
+        resp = client.get("/api/ws/monitor?topic=tick.options")
         assert resp.status_code == 200
         events = resp.get_json()["recent_events"]
         assert len(events) == 1
-        assert events[0]["symbol"] == "RELIANCE"
+        assert events[0]["symbol"] == "NIFTY"
 
     def test_ws_monitor_unavailable_when_no_file(self, client_with_db, tmp_path, monkeypatch):
         client, _ = client_with_db

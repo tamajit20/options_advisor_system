@@ -12,7 +12,6 @@
   .bnav-item,
   .more-drawer-item,
   .options-subtab,
-  .scout-subtab,
   .nav-item,
   .hist-subtab,
   input[type="number"],
@@ -25,7 +24,7 @@
   .card-head-btn { min-height: 40px; padding: 8px 12px; }
 }
 
-/* ---------- Options Advisor subtabs (mobile, mirrors Scout) ---------- */
+/* ---------- Options Advisor subtabs (mobile) ---------- */
 .options-subtabs {
   display: none;
 }
@@ -205,8 +204,6 @@
   .sug-context-row { grid-template-columns: 1fr !important; }
   .chart-wrap { overflow-x: auto; }
   .jobs-grid { grid-template-columns: 1fr !important; }
-  .scout-exec-list { grid-template-columns: 1fr !important; }
-  .scout-signal-list { grid-template-columns: 1fr !important; }
 
   .card-head-tags {
     width: 100%;
@@ -303,26 +300,6 @@
   }
 }
 
-/* ---------- Scout subtabs: horizontal scroll ---------- */
-@media (max-width: 1024px) {
-  .scout-subtabs {
-    display: flex;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    gap: 6px;
-    padding-bottom: 4px;
-    margin-bottom: 10px;
-  }
-  .scout-subtab {
-    flex: 0 0 auto;
-    white-space: nowrap;
-    padding: 8px 14px;
-    font-size: 0.82rem;
-  }
-  .panel-title { font-size: 1rem; }
-}
-
 /* ---------- Close trade: full-width on phone ---------- */
 @media (max-width: 1024px) {
   .close-two-col { grid-template-columns: 1fr !important; }
@@ -344,7 +321,6 @@
   .more-drawer-item:active,
   .options-subtab:active,
   .nav-item:active,
-  .scout-subtab:active,
   .hist-subtab:active,
   .nf-chip:active,
   .nf-card:active,
@@ -363,9 +339,7 @@
   .icon-btn:hover { background: transparent; }
   .nf-chip:hover,
   .nf-card:hover,
-  .hcmp-row:hover,
-  .scout-wl-item:hover,
-  .scout-hist-grid tbody tr:hover { background: transparent; }
+  .hcmp-row:hover { background: transparent; }
 }
 
 /* Info / legend triggers — larger tap targets on phone */

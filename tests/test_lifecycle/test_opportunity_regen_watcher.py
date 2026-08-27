@@ -15,7 +15,7 @@ import pytest
 
 from lifecycle.opportunity_regen_watcher import OpportunityRegenWatcher
 from providers.base import LiveQuote
-from providers.event_bus import EventBus, TOPIC_TICK_INDEX, TOPIC_TICK_OPTIONS, TOPIC_TICK_SCOUT
+from providers.event_bus import EventBus, TOPIC_TICK_INDEX, TOPIC_TICK_OPTIONS
 
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -147,8 +147,8 @@ class TestSpotTrigger:
         titles = " | ".join(e["title"] for e in notif.events)
         assert "NIFTY" in titles and "BANKNIFTY" in titles
 
-    def test_scout_equity_ticks_ignored(self):
-        """Scout watchlist stocks share the WS bus but are not options underlyings."""
+    def test_non_underlying_equity_ticks_ignored(self):
+        """Cash equities are not options underlyings and must not fire regen."""
         w, notif, _ = _make_watcher(spot=0.7)
         w.on_tick(_quote("BPCL", 312.55))
         w.on_tick(_quote("BPCL", 314.90))   # +0.75% — would fire if not filtered
@@ -260,23 +260,6 @@ class TestLifecycle:
         w.start()
         w.start()   # second call is a no-op, must not raise
         w.stop()
-
-    def test_scout_topic_publish_does_not_trigger_watcher(self):
-        bus = EventBus()
-        notif = _StubNotifier()
-        w = OpportunityRegenWatcher(
-            notif,
-            event_bus=bus,
-            spot_threshold_pct=0.7,
-            clock=lambda: datetime(2026, 5, 4, 10, 0, tzinfo=_IST),
-        )
-        w.start()
-        try:
-            bus.publish(TOPIC_TICK_SCOUT, _quote("BPCL", 312.0))
-            bus.publish(TOPIC_TICK_SCOUT, _quote("BPCL", 320.0))
-        finally:
-            w.stop()
-        assert notif.events == []
 
     def test_options_topic_publish_does_not_trigger_watcher(self):
         bus = EventBus()

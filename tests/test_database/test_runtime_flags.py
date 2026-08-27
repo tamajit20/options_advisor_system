@@ -25,7 +25,6 @@ from database.runtime_flags import (
     FLAG_KILL_SWITCH,
     FLAG_OPPORTUNITY_ALERTS,
     FLAG_OPTIONS_ADVISOR_ENABLED,
-    FLAG_SCOUT_APP_ENABLED,
     FLAG_SL_ALERTS,
     FLAG_TRADE_EXECUTION_ENABLED,
     FlagRow,
@@ -105,7 +104,6 @@ def test_default_flag_inventory_complete():
         FLAG_TRADE_EXECUTION_ENABLED,
         FLAG_CIRCUIT_BREAKER_ACTIVE,
         FLAG_OPTIONS_ADVISOR_ENABLED,
-        FLAG_SCOUT_APP_ENABLED,
     }
 
 

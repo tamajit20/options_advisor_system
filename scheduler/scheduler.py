@@ -39,7 +39,6 @@ from lifecycle.download_orchestrator import (
     run_fii, run_fo_bhav, run_spot_bhav, run_vix,
 )
 from lifecycle.events_seeder import run_events_seed
-from scout.index_constituents import run_scout_index_constituents
 from lifecycle.exit_orchestrator import run_exit_engine
 from lifecycle.iv_orchestrator import run_iv_calculation
 from lifecycle.event_eve_review import run_event_eve_review
@@ -441,7 +440,6 @@ def job_simulation(): _run_job("simulation_update",  run_simulation_update)
 def job_exit():       _run_job("exit_engine",        run_exit_engine)
 def job_trade_greeks(): _run_job("trade_greeks_update", run_trade_greeks_update)
 def job_events_seed(): _run_job("events_seed",       run_events_seed)
-def job_scout_index_constituents(): _run_job("scout_index_constituents", run_scout_index_constituents)
 def job_event_eve_review(): _run_job("event_eve_review", run_event_eve_review)
 
 
@@ -561,7 +559,6 @@ JOB_FUNCS = {
     "exit_engine":        job_exit,
     "trade_greeks_update": job_trade_greeks,
     "events_seed":        job_events_seed,
-    "scout_index_constituents": job_scout_index_constituents,
     "event_eve_review":   job_event_eve_review,
     "weekly_cleanup":     job_weekly_cleanup,
     "intraday_close_snapshot": job_intraday_close_snapshot,
