@@ -6,8 +6,11 @@ from unittest.mock import MagicMock
 
 from engine.live_expectation import (
     assess_direction_fit,
+    enrich_trade_outlook,
+    hold_vs_close_advice,
     live_trade_outlook,
     normalize_atm_iv,
+    parse_entry_regime,
     resolve_market_inputs,
 )
 
@@ -216,3 +219,39 @@ class TestLiveTradeOutlook:
         out = resolve_market_inputs(db, "NIFTY", date(2026, 5, 28))
         assert out["spot"] == 22950.0
         assert out["data_source"] == "eod"
+
+
+class TestEnrichTradeOutlook:
+    def test_be_distance_outside_upper(self):
+        base = live_trade_outlook(
+            legs=_ic_legs(), strategy="IRON_CONDOR",
+            underlying="NIFTY", expiry=date(2026, 5, 28),
+            spot=23300.0, dte=10, atm_iv=0.18,
+            max_profit=4500.0, max_loss=15500.0, entry_pop=65.0,
+        )
+        out = enrich_trade_outlook(
+            base, current_mtm=1200.0, max_profit=4500.0, max_loss=15500.0,
+            legs=_ic_legs(), strategy="IRON_CONDOR", underlying="NIFTY",
+            expiry=date(2026, 5, 28), dte=10, include_scenarios=True,
+        )
+        assert out["be_distance_text"]
+        assert out["entry_ev"] is not None
+        assert out["close_now_ev"] == 1200.0
+        assert len(out.get("scenarios") or []) == 3
+
+    def test_hold_vs_close_suggests_booking_when_mtm_beats_ev(self):
+        advice = hold_vs_close_advice(
+            current_mtm=6000.0, hold_ev=2000.0, direction_fit="against",
+        )
+        assert advice and "Closing now" in advice
+
+    def test_parse_entry_regime_from_conditions(self):
+        cond = [
+            {"label": "IV rank", "detail": "IV Rank 42.5 — elevated"},
+            {"label": "VIX regime", "detail": "VIX regime: NORMAL"},
+            {"label": "Trend", "detail": "Trend: SIDEWAYS"},
+        ]
+        reg = parse_entry_regime(cond)
+        assert reg["iv_rank"] == 42.5
+        assert reg["vix_regime"] == "NORMAL"
+        assert reg["trend"] == "SIDEWAYS"

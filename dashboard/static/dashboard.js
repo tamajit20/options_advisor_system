@@ -215,6 +215,9 @@ function _bootstrapLiveLevelsForTrades(trades, snap) {
     }
     _updateLiveProfitLevels(t.trade_id, payload);
     _updateLiveOutlook(t.trade_id, payload);
+    if (t.live_outlook && t.live_outlook.data_source_label) {
+      _updateOutlookFreshnessBadge(t.trade_id, t.live_outlook);
+    }
   });
   _refreshAllFeedTags();
 }
@@ -1861,7 +1864,17 @@ function renderLiveProfitLevels(t) {
 function renderLiveOutlook(t) {
   return `
     <div class="live-outlook" data-trade-id="${escapeHtml(t.trade_id)}">
-      <div class="sl-monitor-label">Live outlook</div>
+      <div class="lo-head">
+        <div class="sl-monitor-label">Live outlook</div>
+        <button type="button" class="lo-help-btn" aria-label="What do these numbers mean?">?</button>
+      </div>
+      <div class="lo-help-sheet" hidden>
+        <p><strong>Win chance</strong> — live PoP from spot, DTE, and ATM IV (or last EOD/intraday when the market is closed). Uses fill prices for breakevens; live leg marks when available.</p>
+        <p><strong>Expiry EV</strong> — expected rupee outcome at expiry: (win% × max profit) + ((1−win%) × −max loss). Not current MTM.</p>
+        <p><strong>Structural fit</strong> — whether spot meets this strategy's breakeven need. You can show MTM profit while structural fit is &ldquo;past breakeven&rdquo; (theta/IV).</p>
+        <p><strong>Close now vs hold</strong> — compares current MTM to hold-to-expiry EV when both are known.</p>
+      </div>
+      <div class="lo-entry-now muted"></div>
       <div class="lo-grid">
         <div class="lo-row">
           <span class="lpl-label">Win chance</span>
@@ -1877,15 +1890,35 @@ function renderLiveOutlook(t) {
           <span class="muted lpl-note lo-ev-note">If held to expiry at this win chance (max profit vs max loss)</span>
         </div>
         <div class="lo-row lo-row-direction">
-          <span class="lpl-label">Structural fit</span>
+          <span class="lpl-label">Structural fit<span class="lo-fit-help muted" title="Spot vs breakevens for this strategy — not the same as current P&amp;L"> \u2139</span></span>
           <span class="lpl-val-line"><strong class="lo-direction">\u2014</strong></span>
           <span class="muted lpl-note lo-direction-note">Spot vs breakevens for this strategy \u2014 not the same as current P&amp;L</span>
+        </div>
+        <div class="lo-row lo-row-be-dist" hidden>
+          <span class="lpl-label">Breakeven</span>
+          <span class="lpl-val-line"><span class="lo-be-dist">\u2014</span></span>
+          <span class="muted lpl-note lo-be-dist-note"></span>
         </div>
         <div class="lo-row">
           <span class="lpl-label">Market</span>
           <span class="lpl-val-line"><span class="lo-market">Loading market data\u2026</span></span>
           <span class="muted lpl-note lo-market-note"></span>
         </div>
+      </div>
+      <div class="lo-extra muted">
+        <span class="lo-hold-close"></span>
+        <span class="lo-regime"></span>
+        <span class="lo-em-warn"></span>
+        <span class="lo-live-marks-note"></span>
+      </div>
+      <div class="lo-scenarios" hidden>
+        <span class="lo-scen-label muted">Scenarios</span>
+        <div class="lo-scenario-chips"></div>
+        <div class="lo-scenario-detail muted"></div>
+      </div>
+      <div class="lo-sparkline-wrap" hidden>
+        <span class="lo-spark-label muted">Win chance (recent)</span>
+        <canvas class="lo-sparkline" width="280" height="44" aria-hidden="true"></canvas>
       </div>
     </div>`;
 }
@@ -1907,9 +1940,166 @@ function _fmtSignedRs(v) {
   return (n >= 0 ? '+\u20b9' : '\u2212\u20b9') + fmt(Math.abs(n));
 }
 
+const _outlookSparkCache = {};
+
+function _updateOutlookFreshnessBadge(tradeId, payload) {
+  const label = payload && (payload.data_source_label || _loDataSourceLabel(payload.data_source, payload.data_as_of));
+  document.querySelectorAll(`.lo-freshness-badge[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
+    if (!label) {
+      el.hidden = true;
+      return;
+    }
+    el.hidden = false;
+    el.textContent = label;
+    el.className = `tag lo-freshness-badge lo-fresh-${payload.data_source || 'none'}`;
+    el.title = payload.uses_live_marks
+      ? `${label} · PoP uses live leg marks`
+      : label;
+  });
+}
+
+function _renderLoEntryNow(el, payload) {
+  const strip = el && el.querySelector('.lo-entry-now');
+  if (!strip) return;
+  const entryPop = payload.entry_pop != null ? parseFloat(payload.entry_pop) : null;
+  const livePop = payload.live_pop != null ? parseFloat(payload.live_pop) : null;
+  const entryEv = payload.entry_ev != null ? parseFloat(payload.entry_ev) : null;
+  const liveEv = payload.live_ev != null ? parseFloat(payload.live_ev) : null;
+  if (entryPop == null && livePop == null) {
+    strip.textContent = '';
+    strip.hidden = true;
+    return;
+  }
+  strip.hidden = false;
+  const bits = [];
+  if (entryPop != null && !isNaN(entryPop)) {
+    bits.push(`Entry ${fmtPct(entryPop)}${entryEv != null && !isNaN(entryEv) ? ` · ${_fmtSignedRs(entryEv)} EV` : ''}`);
+  }
+  if (livePop != null && !isNaN(livePop)) {
+    bits.push(`Now ${fmtPct(livePop)}${liveEv != null && !isNaN(liveEv) ? ` · ${_fmtSignedRs(liveEv)} EV` : ''}`);
+  }
+  strip.textContent = bits.join('  \u2192  ');
+}
+
+function _renderLoScenarios(el, payload) {
+  const wrap = el && el.querySelector('.lo-scenarios');
+  const chipsHost = el && el.querySelector('.lo-scenario-chips');
+  const detail = el && el.querySelector('.lo-scenario-detail');
+  const scenarios = payload && payload.scenarios;
+  if (!wrap || !chipsHost) return;
+  if (!Array.isArray(scenarios) || !scenarios.length) {
+    wrap.hidden = true;
+    chipsHost.innerHTML = '';
+    if (detail) detail.textContent = '';
+    return;
+  }
+  wrap.hidden = false;
+  chipsHost.innerHTML = scenarios.map((s, i) => {
+    const pop = s.live_pop != null ? `${fmtPct(s.live_pop)}` : '\u2014';
+    return `<button type="button" class="lo-scen-chip" data-scen-idx="${i}" title="${escapeHtml(s.direction_label || '')}">${escapeHtml(s.label || '')} ${pop}</button>`;
+  }).join('');
+  chipsHost.querySelectorAll('.lo-scen-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.scenIdx, 10);
+      const s = scenarios[idx];
+      if (!s || !detail) return;
+      chipsHost.querySelectorAll('.lo-scen-chip').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      detail.textContent = [
+        s.label,
+        s.live_pop != null ? `PoP ${fmtPct(s.live_pop)}` : null,
+        s.live_ev != null ? `EV ${_fmtSignedRs(s.live_ev)}` : null,
+        s.direction_label || null,
+      ].filter(Boolean).join(' · ');
+    });
+  });
+  if (detail && scenarios[0]) {
+    detail.textContent = `Tap a chip — spot ${scenarios[0].spot != null ? '\u20b9' + fmt(scenarios[0].spot) : 'unchanged'} vs current.`;
+  }
+}
+
+function _drawOutlookSparkline(canvas, points) {
+  if (!canvas || !canvas.getContext) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  const vals = (points || [])
+    .map(p => (p.live_pop != null ? parseFloat(p.live_pop) : null))
+    .filter(v => v != null && !isNaN(v));
+  if (vals.length < 2) return;
+  const pad = 4;
+  const min = Math.max(0, Math.min(...vals) - 5);
+  const max = Math.min(100, Math.max(...vals) + 5);
+  const span = max - min || 1;
+  ctx.strokeStyle = 'rgba(14, 165, 233, .85)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  vals.forEach((v, i) => {
+    const x = pad + (i / (vals.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((v - min) / span) * (h - pad * 2);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(14, 165, 233, .12)';
+  ctx.lineTo(w - pad, h - pad);
+  ctx.lineTo(pad, h - pad);
+  ctx.closePath();
+  ctx.fill();
+}
+
+async function _loadOutlookSparkline(tradeId) {
+  const els = document.querySelectorAll(`.live-outlook[data-trade-id="${CSS.escape(tradeId)}"]`);
+  if (!els.length) return;
+  if (_outlookSparkCache[tradeId]) {
+    els.forEach(el => {
+      const wrap = el.querySelector('.lo-sparkline-wrap');
+      const canvas = el.querySelector('.lo-sparkline');
+      if (wrap && canvas && _outlookSparkCache[tradeId].length >= 2) {
+        wrap.hidden = false;
+        _drawOutlookSparkline(canvas, _outlookSparkCache[tradeId]);
+      }
+    });
+    return;
+  }
+  try {
+    const data = await API(`/api/trades/${encodeURIComponent(tradeId)}/outlook-history?limit=96`);
+    const points = (data && data.points) || [];
+    _outlookSparkCache[tradeId] = points;
+    els.forEach(el => {
+      const wrap = el.querySelector('.lo-sparkline-wrap');
+      const canvas = el.querySelector('.lo-sparkline');
+      if (!wrap || !canvas) return;
+      if (points.length >= 2) {
+        wrap.hidden = false;
+        _drawOutlookSparkline(canvas, points);
+      } else {
+        wrap.hidden = true;
+      }
+    });
+  } catch (_) { /* no history yet */ }
+}
+
+function _wireLiveOutlookHelp(el) {
+  if (!el || el.dataset.loHelpWired) return;
+  el.dataset.loHelpWired = '1';
+  const btn = el.querySelector('.lo-help-btn');
+  const sheet = el.querySelector('.lo-help-sheet');
+  if (!btn || !sheet) return;
+  btn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    sheet.hidden = !sheet.hidden;
+  });
+}
+
 function _updateLiveOutlook(tradeId, payload) {
   if (!payload) return;
+  _updateOutlookFreshnessBadge(tradeId, payload);
   document.querySelectorAll(`.live-outlook[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
+    _wireLiveOutlookHelp(el);
+    _renderLoEntryNow(el, payload);
+    _renderLoScenarios(el, payload);
     const popEl = el.querySelector('.lo-pop');
     const deltaEl = el.querySelector('.lo-pop-delta');
     const popNote = el.querySelector('.lo-pop-note');
@@ -1918,6 +2108,12 @@ function _updateLiveOutlook(tradeId, payload) {
     const dirNote = el.querySelector('.lo-direction-note');
     const marketEl = el.querySelector('.lo-market');
     const marketNote = el.querySelector('.lo-market-note');
+    const beDistRow = el.querySelector('.lo-row-be-dist');
+    const beDistEl = el.querySelector('.lo-be-dist');
+    const holdCloseEl = el.querySelector('.lo-hold-close');
+    const regimeEl = el.querySelector('.lo-regime');
+    const emWarnEl = el.querySelector('.lo-em-warn');
+    const marksNoteEl = el.querySelector('.lo-live-marks-note');
     const pop = payload.live_pop != null ? parseFloat(payload.live_pop) : null;
     const entryPop = payload.entry_pop != null ? parseFloat(payload.entry_pop) : null;
     const delta = payload.pop_delta != null ? parseFloat(payload.pop_delta) : null;
@@ -1927,24 +2123,28 @@ function _updateLiveOutlook(tradeId, payload) {
     if (popEl) {
       popEl.textContent = (pop != null && !isNaN(pop)) ? fmtPct(pop) : '\u2014';
       popEl.classList.remove('pnl-profit', 'pnl-loss');
-      if (stance === 'improving') popEl.classList.add('pnl-profit');
-      if (stance === 'weakening') popEl.classList.add('pnl-loss');
     }
     if (deltaEl) {
       if (delta != null && !isNaN(delta) && entryPop != null) {
         const arrow = delta > 0.05 ? '\u25b2 ' : (delta < -0.05 ? '\u25bc ' : '');
         const sign = delta > 0 ? '+' : '';
-        deltaEl.textContent = `${arrow}${sign}${delta.toFixed(1)} vs entry ${fmtPct(entryPop)}`;
+        deltaEl.textContent = `${arrow}${sign}${delta.toFixed(1)} pp vs entry`;
         deltaEl.classList.remove('pnl-profit', 'pnl-loss', 'muted');
         if (stance === 'improving') deltaEl.classList.add('pnl-profit');
         else if (stance === 'weakening') deltaEl.classList.add('pnl-loss');
         else deltaEl.classList.add('muted');
       } else {
         deltaEl.textContent = '';
+        deltaEl.classList.remove('pnl-profit', 'pnl-loss');
+        deltaEl.classList.add('muted');
       }
     }
     if (popNote) {
-      popNote.textContent = payload.summary || popNote.textContent;
+      let note = payload.summary || popNote.textContent;
+      if (payload.close_now_ev != null && payload.live_ev != null) {
+        note += ` · Close now ${_fmtSignedRs(payload.close_now_ev)} vs hold ${_fmtSignedRs(payload.live_ev)}`;
+      }
+      popNote.textContent = note;
     }
     if (evEl) {
       const ev = payload.live_ev != null ? parseFloat(payload.live_ev) : null;
@@ -1963,6 +2163,29 @@ function _updateLiveOutlook(tradeId, payload) {
     }
     if (dirNote && payload.direction_detail) {
       dirNote.textContent = payload.direction_detail;
+    }
+    if (beDistRow && beDistEl) {
+      if (payload.be_distance_text) {
+        beDistRow.hidden = false;
+        beDistEl.textContent = payload.be_distance_text;
+      } else {
+        beDistRow.hidden = true;
+      }
+    }
+    if (holdCloseEl) {
+      holdCloseEl.textContent = payload.hold_vs_close || '';
+    }
+    if (regimeEl) {
+      regimeEl.textContent = payload.regime_note || '';
+    }
+    if (emWarnEl) {
+      emWarnEl.textContent = payload.em_calibration_warning || '';
+      emWarnEl.classList.toggle('lo-em-warn-active', !!payload.em_calibration_warning);
+    }
+    if (marksNoteEl) {
+      marksNoteEl.textContent = payload.uses_live_marks
+        ? 'PoP breakevens use live leg marks.'
+        : '';
     }
     const marketBits = [];
     if (srcLabel) marketBits.push(srcLabel);
@@ -2001,9 +2224,8 @@ function _updateLiveOutlook(tradeId, payload) {
     const pop = payload.live_pop != null ? parseFloat(payload.live_pop) : null;
     v.textContent = (pop != null && !isNaN(pop)) ? fmtPct(pop) : '\u2014';
     v.classList.remove('pnl-profit', 'pnl-loss');
-    if (payload.stance === 'improving') v.classList.add('pnl-profit');
-    if (payload.stance === 'weakening') v.classList.add('pnl-loss');
   });
+  _loadOutlookSparkline(tradeId);
 }
 
 function _fmtMtmSigned(v, premiumInfo) {
@@ -2018,10 +2240,11 @@ function _computeTradeActionInstruction(opts) {
     liveMtm, lossHit, milestoneHit, floorBreach, targetHit, preBreachNear,
     lossRs, milestoneRs, targetRs, floor, strategy,
     dailyStatus, exitInstruction, riskNotif,
-    premiumInfo, outlookSummary,
+    premiumInfo, outlookSummary, outlook,
   } = opts;
   const ds = (dailyStatus || '').toUpperCase();
   const rn = (riskNotif || '').toUpperCase();
+  const ol = outlook || {};
 
   if (ds === 'EXIT_AT_OPEN' || ds === 'EXIT') {
     return {
@@ -2150,6 +2373,44 @@ function _computeTradeActionInstruction(opts) {
       instruction: exitInstruction,
       why: 'From the daily exit engine (not live tick).',
       cta: 'Compare with live levels below, then decide.',
+    };
+  }
+  if (rn === 'STRUCTURAL_FIT_FLIP') {
+    return {
+      tone: 'watch',
+      verb: 'REVIEW',
+      title: ol.direction_label || 'Structural fit changed',
+      instruction: ol.direction_detail
+        || 'Spot vs breakevens shifted — check structural fit in Live outlook.',
+      why: outlookSummary || 'Structural fit alert fired today.',
+      cta: 'No mandatory exit — compare MTM vs hold EV below.',
+    };
+  }
+  if (ol.hold_vs_close && /Closing now|beats hold EV/i.test(ol.hold_vs_close)) {
+    return {
+      tone: 'ok',
+      verb: 'CONSIDER EXIT',
+      title: 'MTM beats hold EV',
+      instruction: ol.hold_vs_close,
+      why: liveMtm != null
+        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · hold EV ${_fmtSignedRs(ol.live_ev)}`
+        : ol.hold_vs_close,
+      cta: 'Optional: Close Trade below to lock MTM.',
+    };
+  }
+  if (ol.direction_fit === 'against' && !lossHit && !milestoneHit && !floorBreach) {
+    return {
+      tone: 'watch',
+      verb: 'MONITOR',
+      title: ol.direction_label || 'Structure under pressure',
+      instruction: ol.direction_detail
+        || 'Spot is outside what this strategy needs — MTM can still be green from theta/IV.',
+      why: [
+        liveMtm != null ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)}` : null,
+        ol.live_pop != null ? `Win chance ${fmtPct(ol.live_pop)}` : null,
+        ol.be_distance_text || null,
+      ].filter(Boolean).join(' · ') || outlookSummary || '',
+      cta: 'Hold unless loss limit / floor / EOD rule fires.',
     };
   }
   return {
@@ -2287,6 +2548,8 @@ function renderTradeActionPanel(t) {
     exitInstruction: t.exit_instruction,
     riskNotif: ra.notif_type,
     premiumInfo: premium,
+    outlook: t.live_outlook || {},
+    outlookSummary: t.live_outlook && t.live_outlook.summary,
   });
   const origSugHtml = renderOriginalSuggestion(t.suggestion);
   const isHold = initial.tone === 'hold';
@@ -2367,6 +2630,7 @@ function _updateTradeActionPanel(tradeId, payload, stripState) {
       exitInstruction: panel.dataset.exitInstruction,
       riskNotif: panel.dataset.riskNotif,
       premiumInfo: _premiumFromDataset(panel),
+      outlook: payload || {},
       outlookSummary: payload && payload.summary,
     });
     const inner = panel.querySelector('.tap-inner');
@@ -5173,6 +5437,7 @@ function renderTrade(t, expanded = false) {
             ra.notif_type === 'THESIS_FAIL'        ? 'tag tag-err'  :
             ra.notif_type === 'SL_TRIGGER'         ? 'tag tag-err'  :
             ra.notif_type === 'SHORT_LEG_STRESS'   ? 'tag tag-warn' :
+            ra.notif_type === 'STRUCTURAL_FIT_FLIP' ? 'tag tag-warn' :
             ra.notif_type === 'PRE_BREACH_WARNING' ? 'tag tag-muted' : 'tag';
           const icon =
             ra.notif_type === 'TARGET_HIT'         ? '\u2705 '  :
@@ -5184,6 +5449,7 @@ function renderTrade(t, expanded = false) {
             ra.notif_type === 'THESIS_FAIL'        ? '\ud83d\uded1 ' :
             ra.notif_type === 'SL_TRIGGER'         ? '\ud83d\uded1 ' :
             ra.notif_type === 'SHORT_LEG_STRESS'   ? '\u26a0\ufe0f ' :
+            ra.notif_type === 'STRUCTURAL_FIT_FLIP' ? '\u21bb ' :
             ra.notif_type === 'PRE_BREACH_WARNING' ? '\u2139\ufe0f ' : '';
           const tip = (ra.title || ra.notif_type) +
                       (ra.body ? ` — ${ra.body}` : '');
@@ -5194,6 +5460,7 @@ function renderTrade(t, expanded = false) {
         <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
         <span class="tag tag-warn live-feed-tag" data-trade-id="${escapeHtml(t.trade_id)}" title="Checking feed\u2026">\u2026</span>
+        <span class="tag lo-freshness-badge" data-trade-id="${escapeHtml(t.trade_id)}" hidden title="Outlook data source"></span>
         ${_entryQualBadge}
         </div>
         <div class="card-head-pnl-row">

@@ -72,7 +72,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from config import STRATEGY_CONFIG
 from engine.exit_engine import evaluate_exit
 from engine.exit_pricing import format_leg_quote_key
-from engine.live_expectation import live_trade_outlook
+from engine.live_expectation import enrich_trade_outlook, live_trade_outlook
 from engine.pnl_targets import profit_target_trade_rs
 from engine.sl_threshold import effective_sl_rs, loss_milestone_config, loss_milestone_rs
 from providers.base import LiveQuote
@@ -165,6 +165,8 @@ class _TradeState:
     fallback_iv: Optional[float] = None
     market_data_source: Optional[str] = None
     market_as_of: Optional[str] = None
+    conditions_json: Any = None
+    last_direction_fit: Optional[str] = None
 
 
 @dataclass
@@ -205,7 +207,7 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
             trade_id = trade["trade_id"]
 
             sug = db.fetch_one(
-                "SELECT strategy, underlying, expiry_date, probability_of_profit "
+                "SELECT strategy, underlying, expiry_date, probability_of_profit, conditions_json "
                 "FROM options_suggestions WHERE suggestion_id = ?",
                 [trade["suggestion_id"]],
             )
@@ -306,6 +308,7 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                 fallback_iv=market.get("atm_iv"),
                 market_data_source=market.get("data_source"),
                 market_as_of=market.get("data_as_of"),
+                conditions_json=sug.get("conditions_json"),
             )
             snap.trades[trade_id] = state
             for leg in legs:
@@ -630,6 +633,7 @@ class LiveRiskMonitor:
                     new_state.last_mtm_publish_at = old.last_mtm_publish_at
                     if new_state.atm_iv is None and old.atm_iv is not None:
                         new_state.atm_iv = old.atm_iv
+                    new_state.last_direction_fit = old.last_direction_fit
                     # Trailing SL: prefer the in-memory state if it's
                     # ahead of what the loader returned (the DB row may
                     # be slightly stale vs ticks since the last UPDATE).
@@ -985,6 +989,11 @@ class LiveRiskMonitor:
             }
             mtm_payload.update(self._live_outlook_fields(state, dte))
 
+        structural_flip: Optional[_PendingAlert] = None
+        if mtm_payload:
+            structural_flip = self._maybe_structural_flip(
+                state, mtm_payload, now, current_pnl)
+
         snapshot_payload: Optional[dict] = None
         if (self._mtm_snapshot_persister is not None
                 and (state.last_mtm_snapshot_at is None
@@ -1001,6 +1010,13 @@ class LiveRiskMonitor:
                 "leg_ltps": self._leg_ltps_dict(state),
                 "feed_source": self._feed_source(state, now),
             }
+            if mtm_payload:
+                snapshot_payload["outlook_json"] = {
+                    k: mtm_payload[k] for k in (
+                        "live_pop", "live_ev", "direction_fit", "direction_label",
+                        "spot", "as_of",
+                    ) if k in mtm_payload
+                }
 
         trailing_breach = (
             state.trailing_pnl_floor is not None
@@ -1128,7 +1144,37 @@ class LiveRiskMonitor:
         # the lock confirmation. Otherwise return only the MTM payload.
         if trailing_lock_alert is not None:
             return trailing_lock_alert, mtm_payload, trailing_persist, snapshot_payload
+        if structural_flip is not None:
+            return structural_flip, mtm_payload, trailing_persist, snapshot_payload
         return None, mtm_payload, trailing_persist, snapshot_payload
+
+    def _maybe_structural_flip(
+        self,
+        state: _TradeState,
+        outlook: dict,
+        now: datetime,
+        current_pnl: float,
+    ) -> Optional["_PendingAlert"]:
+        new_fit = outlook.get("direction_fit")
+        if not new_fit or new_fit in ("unknown", "neutral"):
+            return None
+        prev = state.last_direction_fit
+        state.last_direction_fit = str(new_fit)
+        if prev not in ("aligned", "against") or new_fit == prev:
+            return None
+        label = outlook.get("direction_label") or new_fit
+        detail = (outlook.get("direction_detail") or "")[:240]
+        return _PendingAlert(
+            state=state,
+            notif_type="STRUCTURAL_FIT_FLIP",
+            severity="WARN",
+            title=f"Structural fit changed on {state.trade_name}",
+            body=self._format_pnl_body(
+                state, current_pnl,
+                f"{prev} → {new_fit}: {label}. {detail}",
+            ),
+            breach_key=f"STRUCT_{new_fit}",
+        )
 
     def _short_leg_stress_alert(
         self, state: _TradeState, now: datetime, current_pnl: float,
@@ -1265,8 +1311,9 @@ class LiveRiskMonitor:
         """Live win-chance / expiry EV from current spot — never raises."""
         now = now or self._clock()
         spot, iv, source, as_of = self._effective_market(state, now)
+        leg_ltps = self._leg_ltps_dict(state)
         try:
-            return live_trade_outlook(
+            base = live_trade_outlook(
                 legs=state.legs,
                 strategy=state.strategy,
                 underlying=state.underlying,
@@ -1280,6 +1327,27 @@ class LiveRiskMonitor:
                 entry_spot=state.entry_spot,
                 data_source=source,
                 data_as_of=as_of,
+                leg_ltps=leg_ltps if leg_ltps else None,
+            )
+            current_mtm = None
+            try:
+                current_mtm = self._current_pnl(state)
+            except Exception:
+                pass
+            return enrich_trade_outlook(
+                base,
+                current_mtm=current_mtm,
+                conditions_json=state.conditions_json,
+                include_scenarios=False,
+                legs=state.legs,
+                strategy=state.strategy,
+                underlying=state.underlying,
+                expiry=state.expiry,
+                dte=dte,
+                atm_iv=iv,
+                max_profit=state.max_profit,
+                max_loss=state.max_loss,
+                leg_ltps=leg_ltps if leg_ltps else None,
             )
         except Exception:
             logger.debug(

@@ -651,6 +651,13 @@ def breakevens(legs: Sequence[SuggestionLeg], strategy: str) -> tuple[Optional[f
         lower = short_put - np_
         return upper, lower
 
+    if strategy == "SHORT_STRANGLE":
+        short_call = next((l.strike for l in by_type["CE"] if l.action == "SELL"), None)
+        short_put  = next((l.strike for l in by_type["PE"] if l.action == "SELL"), None)
+        if short_call is None or short_put is None:
+            return None, None
+        return short_call + np_, short_put - np_
+
     if strategy == "CALENDAR_SPREAD":
         # Breakeven at near expiry ≈ ATM ± net debit (simplified; true BE depends on
         # far-leg vega at near expiry which is not modelled here).

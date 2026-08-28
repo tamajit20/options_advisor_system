@@ -850,6 +850,20 @@ _TABLE_DDL: List[str] = [
     )
     ALTER TABLE options_suggestions ADD em_calibration_warning NVARCHAR(500) NULL
     """,
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trade_mtm_snapshot') AND name = 'outlook_json'
+    )
+    ALTER TABLE options_trade_mtm_snapshot ADD outlook_json NVARCHAR(MAX) NULL
+    """,
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trade_mtm_snapshot_history') AND name = 'outlook_json'
+    )
+    ALTER TABLE options_trade_mtm_snapshot_history ADD outlook_json NVARCHAR(MAX) NULL
+    """,
 ]
 
 

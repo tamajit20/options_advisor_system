@@ -978,11 +978,19 @@ def _trade_live_outlook(db: SQLServerConnection, trade: Dict[str, Any]) -> Optio
             expiry = date.fromisoformat(expiry[:10])
         legs = trade.get("legs") or sug.get("legs") or []
         live_spot = live_iv = None
+        leg_ltps = None
+        current_mtm = None
         mtm_row = (_read_live_mtm_state().get("trades") or {}).get(str(trade["trade_id"])) or {}
-        if mtm_row.get("data_source") == "live" and mtm_row.get("spot") is not None:
+        if mtm_row.get("spot") is not None:
             live_spot = float(mtm_row["spot"])
             if mtm_row.get("atm_iv") is not None:
                 live_iv = float(mtm_row["atm_iv"])
+        if mtm_row.get("leg_ltps"):
+            leg_ltps = mtm_row["leg_ltps"]
+        if mtm_row.get("mtm") is not None:
+            current_mtm = float(mtm_row["mtm"])
+        elif trade.get("last_mtm") is not None:
+            current_mtm = float(trade["last_mtm"])
         entry_pop = sug.get("probability_of_profit")
         dte = max(days_between(now_ist().date(), expiry), 0)
         return compute_trade_outlook(
@@ -999,6 +1007,10 @@ def _trade_live_outlook(db: SQLServerConnection, trade: Dict[str, Any]) -> Optio
             if trade.get("spot_at_execution") is not None else None,
             live_spot=live_spot,
             live_iv=live_iv,
+            current_mtm=current_mtm,
+            leg_ltps=leg_ltps,
+            conditions_json=sug.get("conditions_json"),
+            include_scenarios=True,
         )
     except Exception:
         logger.debug("trade live outlook failed for %s", trade.get("trade_id"), exc_info=True)
@@ -1742,6 +1754,38 @@ def create_app() -> Flask:
         if err:
             return jsonify({"error": err.replace("_", " ")}), 400
         return jsonify(payload)
+
+    @app.route("/api/trades/<trade_id>/outlook-history")
+    @_with_db
+    def api_trade_outlook_history(db: SQLServerConnection, trade_id: str):
+        """Historical live_pop / live_ev points for outlook sparkline."""
+        import json as _json
+
+        trd = TradeRepo(db)
+        if trd.get(trade_id) is None:
+            return jsonify({"error": "Not found"}), 404
+        limit = min(int(request.args.get("limit", 96)), 500)
+        rows = TradeMtmSnapshotRepo(db).list_for_trade(trade_id, limit=limit)
+        points: list = []
+        for r in sorted(rows, key=lambda x: x.get("snapshot_at") or ""):
+            raw = r.get("outlook_json")
+            outlook = raw
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    outlook = _json.loads(raw)
+                except _json.JSONDecodeError:
+                    outlook = None
+            if not isinstance(outlook, dict):
+                continue
+            at = r.get("snapshot_at")
+            points.append({
+                "at": at.isoformat(timespec="seconds")
+                if hasattr(at, "isoformat") else str(at) if at else None,
+                "live_pop": outlook.get("live_pop"),
+                "live_ev": outlook.get("live_ev"),
+                "direction_fit": outlook.get("direction_fit"),
+            })
+        return jsonify({"trade_id": trade_id, "points": points})
 
     @app.route("/api/trades/<trade_id>/close-suggestion")
     @_with_db

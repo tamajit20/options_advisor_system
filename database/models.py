@@ -1745,6 +1745,11 @@ class TradeMtmSnapshotRepo:
         bucket = self.snap_bucket(captured)
         leg_ltps = payload.get("leg_ltps") or {}
         leg_json = json.dumps(leg_ltps, separators=(",", ":")) if leg_ltps else None
+        outlook_json = payload.get("outlook_json")
+        outlook_str = (
+            json.dumps(outlook_json, separators=(",", ":"))
+            if outlook_json else None
+        )
         self.db.execute(
             "DELETE FROM options_trade_mtm_snapshot "
             "WHERE trade_id = ? AND snapshot_at = ? AND snapshot_granularity = ?",
@@ -1753,8 +1758,8 @@ class TradeMtmSnapshotRepo:
         self.db.execute(
             "INSERT INTO options_trade_mtm_snapshot "
             "(trade_id, trade_name, snapshot_at, snapshot_granularity, mtm, "
-            " max_profit, max_loss, dte, leg_ltps_json, feed_source) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " max_profit, max_loss, dte, leg_ltps_json, feed_source, outlook_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 payload["trade_id"],
                 payload.get("trade_name"),
@@ -1766,6 +1771,7 @@ class TradeMtmSnapshotRepo:
                 payload.get("dte"),
                 leg_json,
                 payload.get("feed_source"),
+                outlook_str,
             ],
         ).close()
 
@@ -1817,13 +1823,14 @@ class TradeMtmSnapshotRepo:
             self.db.execute(
                 "INSERT INTO options_trade_mtm_snapshot_history "
                 "(trade_id, trade_name, snapshot_at, snapshot_granularity, mtm, "
-                " max_profit, max_loss, dte, leg_ltps_json, feed_source, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " max_profit, max_loss, dte, leg_ltps_json, feed_source, outlook_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     r["trade_id"], r.get("trade_name"), r["snapshot_at"],
                     r["snapshot_granularity"], r["mtm"], r.get("max_profit"),
                     r.get("max_loss"), r.get("dte"), r.get("leg_ltps_json"),
-                    r.get("feed_source"), r.get("created_at") or now_ist(),
+                    r.get("feed_source"), r.get("outlook_json"),
+                    r.get("created_at") or now_ist(),
                 ],
             ).close()
         cur = self.db.execute(

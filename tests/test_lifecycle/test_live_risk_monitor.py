@@ -873,6 +873,35 @@ class TestLiveMTMPublish:
         assert last.get("direction_fit") in ("aligned", "against", "neutral", "unknown")
         assert last.get("direction_label")
 
+    def test_structural_fit_flip_fires_on_aligned_to_against(self):
+        state = _make_state()
+        state.last_direction_fit = "aligned"
+        monitor, _, _ = _build_monitor(state)
+        outlook = {
+            "direction_fit": "against",
+            "direction_label": "Past breakeven",
+            "direction_detail": "Spot is outside breakevens",
+        }
+        alert = monitor._maybe_structural_flip(
+            state, outlook, datetime(2026, 5, 5, 11, 0), 500.0,
+        )
+        assert alert is not None
+        assert alert.notif_type == "STRUCTURAL_FIT_FLIP"
+        assert state.last_direction_fit == "against"
+
+    def test_structural_fit_flip_suppressed_when_unchanged(self):
+        state = _make_state()
+        state.last_direction_fit = "aligned"
+        monitor, _, _ = _build_monitor(state)
+        outlook = {
+            "direction_fit": "aligned",
+            "direction_label": "Inside breakevens",
+            "direction_detail": "Still inside",
+        }
+        assert monitor._maybe_structural_flip(
+            state, outlook, datetime(2026, 5, 5, 11, 0), 500.0,
+        ) is None
+
     def test_spot_tick_stores_last_spot_when_sl_disabled(self):
         m, bus, state, captured = self._build()
         m._snapshot.spot_index.setdefault("NIFTY", []).append(state.trade_id)

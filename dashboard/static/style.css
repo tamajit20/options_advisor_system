@@ -1784,6 +1784,76 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   font-size: .85rem;
 }
 .lo-grid { display: flex; flex-direction: column; gap: 8px; }
+.lo-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.lo-help-btn {
+  border: 1px solid rgba(14, 165, 233, .35);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 50%;
+  width: 1.35rem;
+  height: 1.35rem;
+  font-size: .72rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.lo-help-sheet {
+  font-size: .78rem;
+  line-height: 1.45;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: var(--surface-alt);
+  border-radius: 6px;
+  border: 1px solid #2a3744;
+}
+.lo-help-sheet p { margin: 0 0 .45rem; }
+.lo-help-sheet p:last-child { margin-bottom: 0; }
+.lo-entry-now {
+  font-size: .78rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+  line-height: 1.35;
+}
+.lo-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: .74rem;
+  margin-top: 6px;
+  line-height: 1.35;
+}
+.lo-em-warn-active { color: var(--warn); font-weight: 600; }
+.lo-scenarios { margin-top: 8px; }
+.lo-scen-label { display: block; font-size: .72rem; margin-bottom: 4px; }
+.lo-scenario-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.lo-scen-chip {
+  border: 1px solid rgba(14, 165, 233, .35);
+  background: rgba(14, 165, 233, .08);
+  color: inherit;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: .72rem;
+  cursor: pointer;
+}
+.lo-scen-chip.active {
+  background: rgba(14, 165, 233, .22);
+  border-color: rgba(14, 165, 233, .55);
+}
+.lo-scenario-detail { margin-top: 4px; font-size: .72rem; }
+.lo-sparkline-wrap { margin-top: 8px; }
+.lo-spark-label { display: block; font-size: .72rem; margin-bottom: 2px; }
+.lo-sparkline { display: block; width: 100%; max-width: 280px; height: 44px; }
+.lo-freshness-badge { font-size: .72rem; }
+.lo-fresh-live { background: rgba(34, 197, 94, .15); color: var(--ok); }
+.lo-fresh-intraday { background: rgba(14, 165, 233, .12); }
+.lo-fresh-eod { background: rgba(100, 116, 139, .15); color: var(--muted); }
+.lo-fit-help { cursor: help; font-size: .85em; }
 .lo-row { display: grid; grid-template-columns: 7.5rem 1fr; gap: 4px 10px; align-items: baseline; }
 .lo-pop, .lo-ev { font-size: 1.05rem; font-weight: 700; }
 .lo-pop-delta { font-size: .78rem; font-weight: 600; }

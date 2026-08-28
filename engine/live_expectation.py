@@ -14,10 +14,13 @@ Pure functions. No I/O.
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import date
 from typing import Any, Mapping, Optional, Sequence
 
 from contracts import SuggestionLeg
+from engine.em_calibration import band_dte, compute_calibration_warning
 from engine.indicators import expected_move
 from engine.leg_builder import breakevens, estimate_pop
 
@@ -494,12 +497,16 @@ def compute_trade_outlook(
     entry_spot: Optional[float] = None,
     live_spot: Optional[float] = None,
     live_iv: Optional[float] = None,
+    current_mtm: Optional[float] = None,
+    leg_ltps: Optional[Mapping[str, Any]] = None,
+    conditions_json: Any = None,
+    include_scenarios: bool = True,
 ) -> dict:
     """Outlook for dashboard display — uses live tick or last stored market data."""
     market = resolve_market_inputs(
         db, underlying, expiry, live_spot=live_spot, live_iv=live_iv,
     )
-    out = live_trade_outlook(
+    base = live_trade_outlook(
         legs=legs,
         strategy=strategy,
         underlying=underlying,
@@ -513,8 +520,43 @@ def compute_trade_outlook(
         entry_spot=entry_spot,
         data_source=market.get("data_source"),
         data_as_of=market.get("data_as_of"),
+        leg_ltps=leg_ltps,
     )
-    return out
+    em_warn = _em_calibration_for_trade(db, underlying, dte)
+    return enrich_trade_outlook(
+        base,
+        current_mtm=current_mtm,
+        conditions_json=conditions_json,
+        em_calibration_warning=em_warn,
+        include_scenarios=include_scenarios,
+        legs=legs,
+        strategy=strategy,
+        underlying=underlying,
+        expiry=expiry,
+        dte=dte,
+        atm_iv=market.get("atm_iv"),
+        max_profit=max_profit,
+        max_loss=max_loss,
+        leg_ltps=leg_ltps,
+    )
+
+
+def _em_calibration_for_trade(db, underlying: str, dte: int) -> Optional[str]:
+    try:
+        from config import STRATEGY_CONFIG
+        from database.models import EmCalibrationRepo
+
+        min_n = int(STRATEGY_CONFIG.get("em_calibration_min_samples") or 4)
+        thresh = float(STRATEGY_CONFIG.get("em_calibration_deviation_threshold") or 0.25)
+        limit = int(STRATEGY_CONFIG.get("em_calibration_lookback_limit") or 12)
+        band = band_dte(dte)
+        samples = EmCalibrationRepo(db).recent_ratios(underlying, band, limit)
+        return compute_calibration_warning(
+            samples, underlying=underlying, dte=dte,
+            min_samples=min_n, deviation_threshold=thresh,
+        )
+    except Exception:
+        return None
 
 
 def _summary(
@@ -561,6 +603,237 @@ def _summary(
     return head if not tail else f"{head}. {' · '.join(tail)}"
 
 
+def compute_expiry_ev(live_pop: Optional[float], max_profit: float, max_loss: float) -> Optional[float]:
+    if live_pop is None:
+        return None
+    p = float(live_pop) / 100.0
+    mp = float(max_profit or 0.0)
+    ml = abs(float(max_loss or 0.0))
+    return round(p * mp + (1.0 - p) * (-ml), 2)
+
+
+def _apply_live_leg_prices(
+    sug_legs: list[SuggestionLeg],
+    leg_ltps: Optional[Mapping[str, Any]],
+) -> list[SuggestionLeg]:
+    if not leg_ltps or not sug_legs:
+        return sug_legs
+    from engine.exit_pricing import _legacy_leg_quote_key, format_leg_quote_key
+
+    out: list[SuggestionLeg] = []
+    for sl in sug_legs:
+        keys = [
+            format_leg_quote_key(sl.symbol, sl.expiry_date, sl.strike, sl.option_type),
+            _legacy_leg_quote_key(sl.symbol, sl.strike, sl.option_type),
+        ]
+        live_p = None
+        for k in keys:
+            if k in leg_ltps:
+                live_p = _as_float(leg_ltps[k])
+                break
+        if live_p is not None and live_p > 0:
+            out.append(replace(
+                sl,
+                suggested_price=live_p,
+                suggested_price_low=live_p,
+                suggested_price_high=live_p,
+            ))
+        else:
+            out.append(sl)
+    return out
+
+
+def _be_distance_detail(
+    spot: Optional[float],
+    upper_be: Optional[float],
+    lower_be: Optional[float],
+) -> dict:
+    spot_f = _as_float(spot)
+    ub = _as_float(upper_be)
+    lb = _as_float(lower_be)
+    if spot_f is None:
+        return {}
+    if lb is not None and spot_f < lb:
+        pts = round(lb - spot_f, 2)
+        pct = round(pts / spot_f * 100.0, 2) if spot_f > 0 else None
+        text = f"₹{pts:,.0f} below lower BE ({pct:.2f}%)" if pct is not None else f"₹{pts:,.0f} below lower BE"
+        return {"be_side": "below_lower", "be_distance_pts": pts, "be_distance_pct": pct, "be_distance_text": text}
+    if ub is not None and spot_f > ub:
+        pts = round(spot_f - ub, 2)
+        pct = round(pts / spot_f * 100.0, 2) if spot_f > 0 else None
+        text = f"₹{pts:,.0f} above upper BE ({pct:.2f}%)" if pct is not None else f"₹{pts:,.0f} above upper BE"
+        return {"be_side": "above_upper", "be_distance_pts": pts, "be_distance_pct": pct, "be_distance_text": text}
+    if lb is not None and ub is not None:
+        mid = (lb + ub) / 2.0
+        pts = round(abs(spot_f - mid), 2)
+        return {
+            "be_side": "inside",
+            "be_distance_pts": pts,
+            "be_distance_pct": round(pts / spot_f * 100.0, 2) if spot_f > 0 else None,
+            "be_distance_text": f"Inside breakevens (₹{pts:,.0f} from mid)",
+        }
+    return {"be_side": "unknown"}
+
+
+def parse_entry_regime(conditions_json: Any) -> dict:
+    raw = conditions_json
+    if not raw:
+        return {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(raw, list):
+        return {}
+    import re
+    out: dict = {}
+    for c in raw:
+        if not isinstance(c, dict):
+            continue
+        detail = str(c.get("detail") or "")
+        label = str(c.get("label") or "").lower()
+        if "iv rank" in label:
+            m = re.search(r"IV Rank\s+([\d.]+)", detail, re.I)
+            if m:
+                out["iv_rank"] = float(m.group(1))
+        if "vix" in label:
+            m = re.search(r"VIX regime:\s*(\w+)", detail, re.I)
+            if m:
+                out["vix_regime"] = m.group(1).upper()
+        if "trend" in label:
+            m = re.search(r"Trend:\s*(\w+)", detail, re.I)
+            if m:
+                out["trend"] = m.group(1).upper()
+        if "pcr" in label:
+            m = re.search(r"PCR\s+([\d.]+)", detail, re.I)
+            if m:
+                out["pcr"] = float(m.group(1))
+    return out
+
+
+def regime_context_note(*, entry_regime: dict, spot_trend: str, strategy: str) -> Optional[str]:
+    entry_trend = (entry_regime.get("trend") or "").upper()
+    if not entry_trend:
+        return None
+    strat = (strategy or "").upper()
+    parts = [f"Entered {entry_trend.lower()}"]
+    if entry_regime.get("iv_rank") is not None:
+        parts.append(f"IV rank {entry_regime['iv_rank']:.0f}")
+    if spot_trend in ("up", "down", "flat"):
+        parts.append(f"spot now {spot_trend}")
+    note = " · ".join(parts)
+    if entry_trend == "SIDEWAYS" and spot_trend == "down" and strat in _RANGE_STRATEGIES:
+        return note + " — drift hurts range/credit trades"
+    if entry_trend == "SIDEWAYS" and spot_trend == "up" and strat in _RANGE_STRATEGIES:
+        return note + " — upside drift tests short call side"
+    if entry_trend == "BULLISH" and spot_trend == "down" and strat in _BULL_STRATEGIES:
+        return note + " — weak vs entry thesis"
+    if entry_trend == "BEARISH" and spot_trend == "up" and strat in _BEAR_STRATEGIES:
+        return note + " — weak vs entry thesis"
+    return note
+
+
+def hold_vs_close_advice(*, current_mtm: Optional[float], hold_ev: Optional[float], direction_fit: Optional[str]) -> Optional[str]:
+    mtm = _as_float(current_mtm)
+    hev = _as_float(hold_ev)
+    if mtm is None or hev is None:
+        return None
+    gap = mtm - hev
+    if gap > 500:
+        if direction_fit == "against":
+            return f"Closing now (MTM ₹{mtm:,.0f}) beats hold EV (₹{hev:,.0f}) — consider booking."
+        return f"Closing now (₹{mtm:,.0f}) exceeds hold EV (₹{hev:,.0f}) — optional profit lock."
+    if hev - mtm > 500:
+        return f"Hold EV (₹{hev:,.0f}) favours staying vs MTM ₹{mtm:,.0f}."
+    return None
+
+
+def _data_source_label(source: Optional[str], as_of: Optional[str]) -> str:
+    if source == "live":
+        return "Live"
+    if source == "intraday":
+        return f"Intraday {as_of}" if as_of else "Last intraday"
+    if source == "eod":
+        return f"EOD {as_of}" if as_of else "EOD close"
+    return ""
+
+
+def compute_scenarios(
+    *,
+    legs: Sequence[Mapping[str, Any] | Any],
+    strategy: str,
+    underlying: str,
+    expiry: date,
+    spot: Optional[float],
+    dte: int,
+    atm_iv: Optional[float],
+    max_profit: float,
+    max_loss: float,
+    leg_ltps: Optional[Mapping[str, Any]] = None,
+) -> list[dict]:
+    spot_f = _as_float(spot)
+    if spot_f is None or spot_f <= 0:
+        return []
+    out: list[dict] = []
+    for label, pct in (("Flat", 0.0), ("Spot −1%", -0.01), ("Spot +1%", 0.01)):
+        scen_spot = round(spot_f * (1.0 + pct), 2)
+        row = live_trade_outlook(
+            legs=legs, strategy=strategy, underlying=underlying, expiry=expiry,
+            spot=scen_spot, dte=dte, atm_iv=atm_iv, max_profit=max_profit, max_loss=max_loss,
+            leg_ltps=leg_ltps,
+        )
+        out.append({
+            "label": label, "spot": scen_spot,
+            "live_pop": row.get("live_pop"), "live_ev": row.get("live_ev"),
+            "direction_label": row.get("direction_label"),
+        })
+    return out
+
+
+def enrich_trade_outlook(
+    base: dict,
+    *,
+    current_mtm: Optional[float] = None,
+    conditions_json: Any = None,
+    em_calibration_warning: Optional[str] = None,
+    include_scenarios: bool = True,
+    legs: Optional[Sequence[Mapping[str, Any] | Any]] = None,
+    strategy: str = "",
+    underlying: str = "",
+    expiry: Optional[date] = None,
+    dte: int = 0,
+    atm_iv: Optional[float] = None,
+    max_profit: float = 0.0,
+    max_loss: float = 0.0,
+    leg_ltps: Optional[Mapping[str, Any]] = None,
+) -> dict:
+    out = dict(base)
+    out["entry_ev"] = compute_expiry_ev(out.get("entry_pop"), max_profit, max_loss)
+    out["close_now_ev"] = round(float(current_mtm), 2) if current_mtm is not None else None
+    out.update(_be_distance_detail(out.get("spot"), out.get("upper_be"), out.get("lower_be")))
+    out["data_source_label"] = _data_source_label(out.get("data_source"), out.get("data_as_of"))
+    entry_regime = parse_entry_regime(conditions_json)
+    out["entry_regime"] = entry_regime
+    regime = regime_context_note(
+        entry_regime=entry_regime, spot_trend=str(out.get("spot_trend") or "unknown"), strategy=strategy,
+    )
+    if regime:
+        out["regime_note"] = regime
+    if em_calibration_warning:
+        out["em_calibration_warning"] = em_calibration_warning
+    out["hold_vs_close"] = hold_vs_close_advice(
+        current_mtm=current_mtm, hold_ev=out.get("live_ev"), direction_fit=out.get("direction_fit"),
+    )
+    if include_scenarios and legs is not None and expiry is not None:
+        out["scenarios"] = compute_scenarios(
+            legs=legs, strategy=strategy, underlying=underlying, expiry=expiry,
+            spot=out.get("spot"), dte=dte, atm_iv=atm_iv or out.get("atm_iv"),
+            max_profit=max_profit, max_loss=max_loss, leg_ltps=leg_ltps,
+        )
+    return out
+
+
 def live_trade_outlook(
     *,
     legs: Sequence[Mapping[str, Any] | Any],
@@ -576,6 +849,7 @@ def live_trade_outlook(
     entry_spot: Optional[float] = None,
     data_source: Optional[str] = None,
     data_as_of: Optional[str] = None,
+    leg_ltps: Optional[Mapping[str, Any]] = None,
 ) -> dict:
     """Live outlook dict (JSON-safe) for an open trade.
 
@@ -591,6 +865,8 @@ def live_trade_outlook(
     ml = abs(float(max_loss or 0.0))
 
     sug_legs = legs_from_fills(legs, underlying=underlying, expiry=expiry)
+    sug_legs = _apply_live_leg_prices(sug_legs, leg_ltps)
+    uses_live_marks = bool(leg_ltps and sug_legs)
     upper_be = lower_be = None
     if sug_legs:
         try:
@@ -690,4 +966,5 @@ def live_trade_outlook(
         "spot_trend": direction.get("spot_trend"),
         "data_source": data_source,
         "data_as_of": data_as_of,
+        "uses_live_marks": uses_live_marks,
     }
