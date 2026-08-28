@@ -1877,9 +1877,9 @@ function renderLiveOutlook(t) {
           <span class="muted lpl-note lo-ev-note">If held to expiry at this win chance (max profit vs max loss)</span>
         </div>
         <div class="lo-row lo-row-direction">
-          <span class="lpl-label">Thesis</span>
+          <span class="lpl-label">Structural fit</span>
           <span class="lpl-val-line"><strong class="lo-direction">\u2014</strong></span>
-          <span class="muted lpl-note lo-direction-note">Whether spot is moving the way this strategy needs</span>
+          <span class="muted lpl-note lo-direction-note">Spot vs breakevens for this strategy \u2014 not the same as current P&amp;L</span>
         </div>
         <div class="lo-row">
           <span class="lpl-label">Market</span>
@@ -1987,7 +1987,7 @@ function _updateLiveOutlook(tradeId, payload) {
     const emText = {
       comfortable: 'Expected move stays inside breakevens',
       tight: 'Near a breakeven \u2014 fragile',
-      outside: 'Spot is past a breakeven',
+      outside: 'Spot is past a breakeven (structural, not necessarily MTM loss)',
       needs_move: 'Still needs a move to breakeven',
     }[emLabel] || '';
     if (marketEl) {

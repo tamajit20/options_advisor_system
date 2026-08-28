@@ -202,6 +202,18 @@ def _spot_trend(spot_change: Optional[float], entry_spot: Optional[float]) -> tu
     return "flat", f"little change ({spot_change:+,.0f} vs entry)"
 
 
+def _inside_between(spot: float, lo: Optional[float], hi: Optional[float]) -> Optional[bool]:
+    if lo is not None and hi is not None:
+        return lo <= spot <= hi
+    return None
+
+
+def _near_strike(spot: float, strike: float, band_pct: float = 0.005) -> bool:
+    if strike <= 0:
+        return False
+    return abs(spot - strike) / strike <= band_pct
+
+
 def assess_direction_fit(
     *,
     strategy: str,
@@ -213,7 +225,10 @@ def assess_direction_fit(
     spot_change: Optional[float] = None,
     entry_spot: Optional[float] = None,
 ) -> dict:
-    """How current spot/move aligns with what this strategy needs to win."""
+    """How current spot aligns with this strategy's breakeven / structural need.
+
+    This is **not** MTM P&L — spot can be past a breakeven while marks are still green.
+    """
     strat = (strategy or "").upper()
     name = "Nifty" if str(underlying or "").upper() == "NIFTY" else str(underlying or "Index")
     spot_f = _as_float(spot)
@@ -221,7 +236,7 @@ def assess_direction_fit(
         return {
             "direction_fit": "unknown",
             "direction_label": "Waiting for spot",
-            "direction_detail": "Need spot to judge whether the market is moving the way this trade wants.",
+            "direction_detail": "Need spot to judge structural fit vs this strategy.",
             "spot_trend": "unknown",
         }
 
@@ -230,48 +245,110 @@ def assess_direction_fit(
     sp = _leg_strike(legs, "SELL", "PE")
     bc = _leg_strike(legs, "BUY", "CE")
     bp = _leg_strike(legs, "BUY", "PE")
+    ub = _as_float(upper_be)
+    lb = _as_float(lower_be)
 
     in_zone: Optional[bool] = None
     want: str = ""
 
-    if strat in _RANGE_STRATEGIES or strat == "IRON_CONDOR":
-        if sp is not None and sc is not None:
+    if strat == "IRON_CONDOR":
+        inside = _inside_between(spot_f, lb, ub)
+        if inside is not None:
+            in_zone = inside
+            want = f"{name} stays inside breakevens ₹{lb:,.0f}–₹{ub:,.0f}"
+        elif sp is not None and sc is not None:
             in_zone = sp <= spot_f <= sc
-            want = f"{name} stays between ₹{sp:,.0f} and ₹{sc:,.0f}"
-        elif lower_be is not None and upper_be is not None:
-            in_zone = lower_be <= spot_f <= upper_be
-            want = f"{name} stays inside breakevens ₹{lower_be:,.0f}–₹{upper_be:,.0f}"
-        else:
-            want = f"{name} stays range-bound"
+            want = f"{name} stays between short strikes ₹{sp:,.0f}–₹{sc:,.0f}"
+    elif strat == "IRON_BUTTERFLY":
+        atm = sc or sp
+        inside = _inside_between(spot_f, lb, ub)
+        if inside is not None:
+            in_zone = inside
+            pin = f"₹{atm:,.0f}" if atm else "ATM"
+            want = f"{name} pins near {pin} (inside breakevens)"
+        elif atm is not None:
+            in_zone = _near_strike(spot_f, atm)
+            want = f"{name} stays near ₹{atm:,.0f}"
+    elif strat == "CALENDAR_SPREAD":
+        atm = sc or sp
+        inside = _inside_between(spot_f, lb, ub)
+        if inside is not None:
+            in_zone = inside
+            want = f"{name} stays calm inside breakevens through near expiry"
+        elif atm is not None:
+            in_zone = _near_strike(spot_f, atm, band_pct=0.01)
+            want = f"{name} stays near ₹{atm:,.0f} without a large move"
+    elif strat == "SHORT_STRANGLE":
+        inside = _inside_between(spot_f, lb, ub)
+        if inside is not None:
+            in_zone = inside
+            want = f"{name} stays inside breakevens ₹{lb:,.0f}–₹{ub:,.0f}"
+        elif sp is not None and sc is not None:
+            in_zone = sp <= spot_f <= sc
+            want = f"{name} stays between short strikes ₹{sp:,.0f}–₹{sc:,.0f}"
     elif strat in _BREAKOUT_STRATEGIES:
-        if upper_be is not None and lower_be is not None:
-            in_zone = spot_f >= upper_be or spot_f <= lower_be
-            want = f"a sharp move above ₹{upper_be:,.0f} or below ₹{lower_be:,.0f}"
+        if ub is not None and lb is not None:
+            in_zone = spot_f >= ub or spot_f <= lb
+            want = f"a sharp move above ₹{ub:,.0f} or below ₹{lb:,.0f}"
         else:
             want = "a large breakout in either direction"
-    elif strat in _BULL_STRATEGIES:
-        key = sp or sc or bc
-        if key is not None:
-            in_zone = spot_f >= key
-            want = f"{name} rises or holds above ₹{key:,.0f}"
-        elif lower_be is not None:
-            in_zone = spot_f >= lower_be
-            want = f"{name} stays above ₹{lower_be:,.0f}"
+    elif strat == "LONG_CALL":
+        if ub is not None:
+            in_zone = spot_f >= ub
+            want = f"{name} above breakeven ₹{ub:,.0f}"
+        elif bc is not None:
+            in_zone = spot_f >= bc
+            want = f"{name} above call strike ₹{bc:,.0f}"
         else:
             want = f"{name} to rally"
-    elif strat in _BEAR_STRATEGIES:
-        key = sc or sp or bp
-        if key is not None:
-            in_zone = spot_f <= key
-            want = f"{name} falls or holds below ₹{key:,.0f}"
-        elif upper_be is not None:
-            in_zone = spot_f <= upper_be
-            want = f"{name} stays below ₹{upper_be:,.0f}"
+    elif strat == "LONG_PUT":
+        if lb is not None:
+            in_zone = spot_f <= lb
+            want = f"{name} below breakeven ₹{lb:,.0f}"
+        elif bp is not None:
+            in_zone = spot_f <= bp
+            want = f"{name} below put strike ₹{bp:,.0f}"
         else:
             want = f"{name} to decline"
+    elif strat == "BULL_PUT_SPREAD":
+        key = lb if lb is not None else sp
+        if key is not None:
+            in_zone = spot_f >= key
+            want = f"{name} at or above ₹{key:,.0f}"
+        else:
+            want = f"{name} to hold above the short put"
+    elif strat == "BEAR_CALL_SPREAD":
+        key = ub if ub is not None else sc
+        if key is not None:
+            in_zone = spot_f <= key
+            want = f"{name} at or below ₹{key:,.0f}"
+        else:
+            want = f"{name} to stay below the short call"
+    elif strat == "JADE_LIZARD":
+        key = lb if lb is not None else sp
+        if key is not None:
+            in_zone = spot_f >= key
+            want = f"{name} flat or above ₹{key:,.0f} (no upside loss)"
+        else:
+            want = f"{name} flat or rallying"
+    elif strat == "BULL_CALL_SPREAD":
+        key = lb if lb is not None else sc
+        if key is not None:
+            in_zone = spot_f >= key
+            want = f"{name} at or above ₹{key:,.0f}"
+        else:
+            want = f"{name} to rally"
+    elif strat == "BEAR_PUT_SPREAD":
+        key = ub if ub is not None else sp
+        if key is not None:
+            in_zone = spot_f <= key
+            want = f"{name} at or below ₹{key:,.0f}"
+        else:
+            want = f"{name} to fall"
     else:
-        if lower_be is not None and upper_be is not None:
-            in_zone = lower_be <= spot_f <= upper_be
+        inside = _inside_between(spot_f, lb, ub)
+        if inside is not None:
+            in_zone = inside
             want = f"{name} stays between breakevens"
 
     if in_zone is True:
@@ -280,14 +357,20 @@ def assess_direction_fit(
             label = "Breakout working"
             detail = f"Spot is outside breakevens — the move this trade paid for. {trend_txt}.".strip()
         elif strat in _BULL_STRATEGIES:
-            label = "Bullish setup intact"
-            detail = f"Spot is where this trade wants it ({want}). {trend_txt}.".strip()
+            label = "Bullish structure intact"
+            detail = f"Spot meets what this trade needs ({want}). {trend_txt}.".strip()
         elif strat in _BEAR_STRATEGIES:
-            label = "Bearish setup intact"
-            detail = f"Spot is where this trade wants it ({want}). {trend_txt}.".strip()
+            label = "Bearish structure intact"
+            detail = f"Spot meets what this trade needs ({want}). {trend_txt}.".strip()
+        elif strat == "IRON_BUTTERFLY":
+            label = "Pin-friendly"
+            detail = f"Spot is near the body — {want.lower()}. {trend_txt}.".strip()
+        elif strat == "CALENDAR_SPREAD":
+            label = "Quiet market"
+            detail = f"Spot is calm enough — {want.lower()}. {trend_txt}.".strip()
         else:
-            label = "Range-friendly"
-            detail = f"Spot is inside the profit zone — {want.lower()}. {trend_txt}.".strip()
+            label = "Inside breakevens"
+            detail = f"Spot is inside breakevens — {want.lower()}. {trend_txt}.".strip()
     elif in_zone is False:
         fit = "against"
         if strat in _BREAKOUT_STRATEGIES:
@@ -298,16 +381,25 @@ def assess_direction_fit(
             ).strip()
         elif strat in _BULL_STRATEGIES:
             label = "Needs a rally"
-            detail = f"Spot is below where this trade earns ({want}). {trend_txt}.".strip()
+            detail = f"Spot is below the structural level ({want}). MTM can still be green from theta/IV. {trend_txt}.".strip()
         elif strat in _BEAR_STRATEGIES:
             label = "Needs a decline"
-            detail = f"Spot is above where this trade earns ({want}). {trend_txt}.".strip()
+            detail = f"Spot is above the structural level ({want}). MTM can still be green from theta/IV. {trend_txt}.".strip()
+        elif strat == "IRON_BUTTERFLY":
+            label = "Away from the pin"
+            detail = f"Spot has drifted from the body — {want.lower()} helps. {trend_txt}.".strip()
+        elif strat == "CALENDAR_SPREAD":
+            label = "Too much movement"
+            detail = f"Spot moved away from the calendar body — {want.lower()}. {trend_txt}.".strip()
         else:
-            label = "Outside profit zone"
-            detail = f"Spot has moved past breakeven — {want.lower()} is what helps now. {trend_txt}.".strip()
+            label = "Past breakeven"
+            detail = (
+                f"Spot is outside breakevens ({want.lower()}). "
+                f"This is structural — you can still show MTM profit. {trend_txt}."
+            ).strip()
     else:
         fit = "neutral"
-        label = "Mixed"
+        label = "Unclear"
         detail = want or "Spot vs breakeven unclear for this strategy."
 
     return {

@@ -144,8 +144,47 @@ class TestLiveTradeOutlook:
             data_source="eod",
         )
         assert out["direction_fit"] == "aligned"
-        assert out["direction_label"] == "Range-friendly"
+        assert out["direction_label"] == "Inside breakevens"
         assert out["data_source"] == "eod"
+
+    def test_iron_condor_uses_breakevens_not_short_strikes(self):
+        """Spot can be outside short body but inside breakevens — still aligned."""
+        out = live_trade_outlook(
+            legs=_ic_legs(), strategy="IRON_CONDOR",
+            underlying="NIFTY", expiry=date(2026, 5, 28),
+            spot=22750.0, dte=10, atm_iv=0.18,
+            max_profit=4500.0, max_loss=15500.0,
+        )
+        assert out["direction_fit"] == "aligned"
+        assert out["direction_label"] == "Inside breakevens"
+
+    def test_iron_condor_past_lower_breakeven(self):
+        out = live_trade_outlook(
+            legs=_ic_legs(), strategy="IRON_CONDOR",
+            underlying="NIFTY", expiry=date(2026, 5, 28),
+            spot=22650.0, dte=10, atm_iv=0.18,
+            max_profit=4500.0, max_loss=15500.0,
+            entry_spot=23000.0,
+        )
+        assert out["direction_fit"] == "against"
+        assert out["direction_label"] == "Past breakeven"
+        assert "MTM" in out["direction_detail"] or "structural" in out["direction_detail"].lower()
+
+    def test_long_call_uses_breakeven_not_strike(self):
+        legs = [
+            {"leg_order": 1, "action": "BUY", "strike": 23000.0, "option_type": "CE",
+             "fill_price": 150.0, "lots": 1, "lot_size": 50},
+        ]
+        fit = assess_direction_fit(
+            strategy="LONG_CALL",
+            underlying="NIFTY",
+            spot=23050.0,
+            upper_be=23150.0,
+            lower_be=None,
+            legs=legs,
+        )
+        assert fit["direction_fit"] == "against"
+        assert "rally" in fit["direction_label"].lower() or fit["direction_fit"] == "against"
 
     def test_direction_against_for_bull_put_below_short_strike(self):
         legs = [
