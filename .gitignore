@@ -25,6 +25,7 @@ Thumbs.db
 data/live_mtm_state.json
 data/live_risk_status.json
 data/ws_status.json
+data/sl_fallback_state.json
 
 # Test outputs
 tests/coverage_html/
