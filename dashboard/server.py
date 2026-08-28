@@ -2934,7 +2934,7 @@ def create_app() -> Flask:
 
         @stream_with_context
         def _gen():
-            last_seen: dict = {}   # trade_id → last mtm value sent
+            last_seen: dict = {}   # trade_id → (mtm, live_pop, spot, live_ev)
             initial_sent = False
             yield ": connected\n\n"
             heartbeat_at = _time.monotonic()
@@ -2945,9 +2945,14 @@ def create_app() -> Flask:
                         with open(MTM_STATE_PATH, encoding="utf-8") as fh:
                             state = _json.load(fh)
                         for tid, payload in (state.get("trades") or {}).items():
-                            cur_mtm = payload.get("mtm")
-                            if not initial_sent or last_seen.get(tid) != cur_mtm:
-                                last_seen[tid] = cur_mtm
+                            cur_key = (
+                                payload.get("mtm"),
+                                payload.get("live_pop"),
+                                payload.get("spot"),
+                                payload.get("live_ev"),
+                            )
+                            if not initial_sent or last_seen.get(tid) != cur_key:
+                                last_seen[tid] = cur_key
                                 yield f"data: {_json.dumps(payload)}\n\n"
                         initial_sent = True
                 except Exception:

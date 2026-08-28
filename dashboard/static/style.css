@@ -1707,7 +1707,7 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .sl-monitor-footer { margin-top: 8px; display: flex; align-items: center; gap: 10px; }
 .sl-save-msg { font-size: .8rem; color: var(--ok); }
 .sl-action-note { margin-top: 10px; font-size: .8rem; color: var(--text-dim); background: rgba(245,158,11,.08); border-left: 3px solid var(--warn); padding: 6px 10px; border-radius: 0 4px 4px 0; }
-@media (max-width: 500px) { .sl-monitor-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 500px) { .sl-monitor-grid { grid-template-columns: 1fr 1fr; } .lo-row { grid-template-columns: 1fr; } }
 
 /* Live profit levels — target vs trailing floor vs loss limit */
 .live-profit-levels {
@@ -1773,6 +1773,20 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   background: rgba(245, 158, 11, .12);
 }
 .lpl-foot { margin-top: 8px; font-size: .72rem; line-height: 1.35; }
+
+/* Live outlook — win chance / expiry EV while the trade is open */
+.live-outlook {
+  background: rgba(14, 165, 233, .06);
+  border: 1px solid rgba(14, 165, 233, .22);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 10px 0 4px;
+  font-size: .85rem;
+}
+.lo-grid { display: flex; flex-direction: column; gap: 8px; }
+.lo-row { display: grid; grid-template-columns: 7.5rem 1fr; gap: 4px 10px; align-items: baseline; }
+.lo-pop, .lo-ev { font-size: 1.05rem; font-weight: 700; }
+.lo-pop-delta { font-size: .78rem; font-weight: 600; }
 
 /* Trade action instruction panel */
 .trade-action-panel {
@@ -2594,6 +2608,7 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .risk-levels-pair { margin: 6px 0 3px; gap: 8px; }
 .risk-levels-pair > .live-profit-levels,
 .risk-levels-pair > .sl-monitor-section { padding: 7px 10px; }
+.live-outlook { padding: 7px 10px; margin: 6px 0 3px; }
 .sl-monitor-section { padding: 7px 10px; margin: 6px 0 3px; }
 .sl-monitor-label   { margin-bottom: 5px; }
 .sl-monitor-footer  { margin-top: 5px; }

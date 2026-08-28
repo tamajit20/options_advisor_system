@@ -72,6 +72,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from config import STRATEGY_CONFIG
 from engine.exit_engine import evaluate_exit
 from engine.exit_pricing import format_leg_quote_key
+from engine.live_expectation import live_trade_outlook
 from engine.pnl_targets import profit_target_trade_rs
 from engine.sl_threshold import effective_sl_rs, loss_milestone_config, loss_milestone_rs
 from providers.base import LiveQuote
@@ -156,6 +157,10 @@ class _TradeState:
     # Phase 3 — #3 MTM throttle
     last_mtm_publish_at: Optional[datetime] = None
     last_mtm_snapshot_at: Optional[datetime] = None
+    # Live outlook (recomputed each MTM publish from spot + ATM IV)
+    entry_pop: Optional[float] = None
+    entry_spot: Optional[float] = None
+    atm_iv: Optional[float] = None
 
 
 @dataclass
@@ -174,7 +179,17 @@ PrimeLoader = Callable[[List[LegKey]], Dict[LegKey, float]]
 # ---------------------------------------------------------------------------
 def make_db_snapshot_loader(db) -> SnapshotLoader:
     """Build a snapshot loader that reads ACTIVE trades from the live DB."""
-    from database.models import TradeRepo
+    from database.models import AtmIvTimeseriesRepo, TradeRepo
+
+    def _latest_atm_iv(symbol: str, expiry: date) -> Optional[float]:
+        try:
+            return AtmIvTimeseriesRepo(db).latest_atm_iv(symbol, expiry)
+        except Exception:
+            logger.debug(
+                "LiveRiskMonitor: ATM IV lookup failed for %s %s",
+                symbol, expiry, exc_info=True,
+            )
+            return None
 
     def _load() -> _Snapshot:
         snap = _Snapshot()
@@ -185,7 +200,7 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
             trade_id = trade["trade_id"]
 
             sug = db.fetch_one(
-                "SELECT strategy, underlying, expiry_date "
+                "SELECT strategy, underlying, expiry_date, probability_of_profit "
                 "FROM options_suggestions WHERE suggestion_id = ?",
                 [trade["suggestion_id"]],
             )
@@ -244,6 +259,20 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
             if not legs:
                 continue
 
+            entry_pop = None
+            if sug.get("probability_of_profit") is not None:
+                try:
+                    entry_pop = float(sug["probability_of_profit"])
+                except (TypeError, ValueError):
+                    entry_pop = None
+            entry_spot = None
+            if trade.get("spot_at_execution") is not None:
+                try:
+                    entry_spot = float(trade["spot_at_execution"])
+                except (TypeError, ValueError):
+                    entry_spot = None
+            atm_iv = _latest_atm_iv(str(sug["underlying"]), sug["expiry_date"])
+
             state = _TradeState(
                 trade_id=trade_id,
                 trade_name=str(trade.get("trade_name") or trade_id),
@@ -262,6 +291,9 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                                     if trade.get("trailing_pnl_floor") is not None
                                     else None),
                 trailing_step_idx=int(trade.get("trailing_step_idx") or 0),
+                entry_pop=entry_pop,
+                entry_spot=entry_spot,
+                atm_iv=atm_iv,
             )
             snap.trades[trade_id] = state
             for leg in legs:
@@ -584,6 +616,8 @@ class LiveRiskMonitor:
                     new_state.last_spot = old.last_spot
                     new_state.last_spot_at = old.last_spot_at
                     new_state.last_mtm_publish_at = old.last_mtm_publish_at
+                    if new_state.atm_iv is None and old.atm_iv is not None:
+                        new_state.atm_iv = old.atm_iv
                     # Trailing SL: prefer the in-memory state if it's
                     # ahead of what the loader returned (the DB row may
                     # be slightly stale vs ticks since the last UPDATE).
@@ -662,6 +696,15 @@ class LiveRiskMonitor:
                 if snap is not None:
                     pending_snapshots.append(snap)
 
+        self._flush_outputs(decisions, pending_mtm, pending_trail, pending_snapshots)
+
+    def _flush_outputs(
+        self,
+        decisions: List["_PendingAlert"],
+        pending_mtm: List[dict],
+        pending_trail: List[Tuple[str, Optional[float], int]],
+        pending_snapshots: List[dict],
+    ) -> None:
         for d in decisions:
             self._dispatch(d)
         for payload in pending_mtm:
@@ -683,8 +726,6 @@ class LiveRiskMonitor:
             self._persist_trailing(*args)
 
     def _handle_spot_tick(self, quote: LiveQuote) -> None:
-        if not self._spot_sl_enabled:
-            return
         sym = str(quote.symbol or "").upper()
         if sym not in options_index_symbols():
             return
@@ -693,13 +734,35 @@ class LiveRiskMonitor:
             return
         now = self._clock()
         decisions: List[_PendingAlert] = []
+        pending_mtm: List[dict] = []
+        pending_trail: List[Tuple[str, Optional[float], int]] = []
+        pending_snapshots: List[dict] = []
         with self._lock:
-            for tid in self._snapshot.spot_index.get(quote.symbol, ()):
+            tids = list(self._snapshot.spot_index.get(quote.symbol, ()))
+            if quote.symbol != sym:
+                for tid in self._snapshot.spot_index.get(sym, ()):
+                    if tid not in tids:
+                        tids.append(tid)
+            for tid in tids:
                 state = self._snapshot.trades.get(tid)
                 if state is None:
                     continue
                 state.last_spot = ltp
                 state.last_spot_at = now
+                if (self._in_session(now)
+                        and self._legs_fresh(state, now)
+                        and self._mtm_throttle_elapsed(state, now)):
+                    alert, mtm, trail, snap = self._evaluate_locked(state, now)
+                    if alert is not None:
+                        decisions.append(alert)
+                    if mtm is not None:
+                        pending_mtm.append(mtm)
+                    if trail is not None:
+                        pending_trail.append(trail)
+                    if snap is not None:
+                        pending_snapshots.append(snap)
+                if not self._spot_sl_enabled:
+                    continue
                 if state.sl_level is None or state.sl_level <= 0:
                     continue
                 if not self._in_session(now):
@@ -740,8 +803,21 @@ class LiveRiskMonitor:
                         # Reset cooldown so a new breach alerts immediately.
                         state.in_breach[key] = False
                         state.last_alert_at.pop(key, None)
-        for d in decisions:
-            self._dispatch(d)
+        self._flush_outputs(decisions, pending_mtm, pending_trail, pending_snapshots)
+
+    def _mtm_throttle_elapsed(self, state: _TradeState, now: datetime) -> bool:
+        if self._mtm_publish_interval.total_seconds() <= 0:
+            return True
+        if state.last_mtm_publish_at is None:
+            return True
+        return (now - state.last_mtm_publish_at) >= self._mtm_publish_interval
+
+    def _legs_fresh(self, state: _TradeState, now: datetime) -> bool:
+        for leg in state.legs:
+            last = state.leg_last_tick.get(leg.key)
+            if last is None or (now - last) > self._stale_window:
+                return False
+        return True
 
     @staticmethod
     def _spot_breached(state: _TradeState, spot: float) -> bool:
@@ -894,6 +970,7 @@ class LiveRiskMonitor:
                 "as_of": now.isoformat(timespec="seconds"),
                 "leg_ltps": self._leg_ltps_dict(state),
             }
+            mtm_payload.update(self._live_outlook_fields(state, dte))
 
         snapshot_payload: Optional[dict] = None
         if (self._mtm_snapshot_persister is not None
@@ -1117,6 +1194,29 @@ class LiveRiskMonitor:
             format_leg_quote_key(k[0], k[1], k[2], k[3]): round(v, 2)
             for k, v in state.leg_ltps.items()
         }
+
+    def _live_outlook_fields(self, state: _TradeState, dte: int) -> dict:
+        """Live win-chance / expiry EV from current spot — never raises."""
+        try:
+            return live_trade_outlook(
+                legs=state.legs,
+                strategy=state.strategy,
+                underlying=state.underlying,
+                expiry=state.expiry,
+                spot=state.last_spot,
+                dte=dte,
+                atm_iv=state.atm_iv,
+                max_profit=state.max_profit,
+                max_loss=state.max_loss,
+                entry_pop=state.entry_pop,
+                entry_spot=state.entry_spot,
+            )
+        except Exception:
+            logger.debug(
+                "LiveRiskMonitor: live outlook failed for %s",
+                state.trade_id, exc_info=True,
+            )
+            return {}
 
     def _record_level_transition(
         self,

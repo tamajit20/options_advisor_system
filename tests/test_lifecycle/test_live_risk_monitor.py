@@ -856,6 +856,31 @@ class TestLiveMTMPublish:
         assert last["trade_id"] == "T-001"
         assert "mtm" in last and "dte" in last and "as_of" in last
 
+    def test_mtm_payload_includes_live_outlook(self):
+        m, bus, state, captured = self._build()
+        state.last_spot = 23000.0
+        state.atm_iv = 0.18
+        state.entry_pop = 65.0
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 90.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 90.0))
+        last = captured[-1]
+        assert last["live_pop"] is not None
+        assert 0 <= last["live_pop"] <= 100
+        assert last["live_ev"] is not None
+        assert last["spot"] == 23000.0
+        assert last["stance"] in ("improving", "weakening", "stable", "unknown")
+        assert "summary" in last
+
+    def test_spot_tick_stores_last_spot_when_sl_disabled(self):
+        m, bus, state, captured = self._build()
+        m._snapshot.spot_index.setdefault("NIFTY", []).append(state.trade_id)
+        m._spot_sl_enabled = False
+        bus.publish("tick", LiveQuote(
+            symbol="NIFTY", expiry=None, strike=None, option_type=None,
+            last_price=23150.0, source=DataSource.LIVE, provider="zerodha",
+        ))
+        assert state.last_spot == 23150.0
+
     def test_throttle_suppresses_within_window(self):
         # 10s throttle + frozen clock — only 1 publish across many ticks.
         m, bus, state, captured = self._build(mtm_interval=10.0)

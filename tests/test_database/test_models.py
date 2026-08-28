@@ -390,3 +390,17 @@ class TestExpiryCalendarRepo:
         ]
         n = ExpiryCalendarRepo(mock_db).upsert_from_fo_rows(rows)
         assert n == 1  # only the strategy underlying counted
+
+
+class TestAtmIvTimeseriesRepo:
+    def test_latest_atm_iv_returns_float(self, mock_db):
+        from database.models import AtmIvTimeseriesRepo
+        mock_db.fetch_one.return_value = {"atm_iv": 0.165}
+        iv = AtmIvTimeseriesRepo(mock_db).latest_atm_iv("NIFTY", date(2026, 5, 28))
+        assert iv == pytest.approx(0.165)
+        mock_db.fetch_one.assert_called_once()
+
+    def test_latest_atm_iv_none_when_missing(self, mock_db):
+        from database.models import AtmIvTimeseriesRepo
+        mock_db.fetch_one.return_value = None
+        assert AtmIvTimeseriesRepo(mock_db).latest_atm_iv("NIFTY", date(2026, 5, 28)) is None

@@ -1972,6 +1972,23 @@ class AtmIvTimeseriesRepo:
         )
         return list(reversed(rows))
 
+    def latest_atm_iv(self, symbol: str, expiry: date) -> Optional[float]:
+        """Most recent ATM IV sample for (symbol, expiry). Decimal (0.18)."""
+        row = self.db.fetch_one(
+            "SELECT TOP 1 atm_iv FROM options_atm_iv_5min "
+            "WHERE symbol = ? AND expiry_date = ? "
+            "  AND atm_iv IS NOT NULL AND atm_iv > 0 "
+            "ORDER BY snapshot_at DESC",
+            [symbol, expiry],
+        )
+        if not row or row.get("atm_iv") is None:
+            return None
+        try:
+            iv = float(row["atm_iv"])
+        except (TypeError, ValueError):
+            return None
+        return iv if iv > 0 else None
+
     def recent_spot_for_symbol(
         self, symbol: str, since: datetime, limit: int = 48
     ) -> List[dict]:
