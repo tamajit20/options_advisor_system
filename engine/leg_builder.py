@@ -125,11 +125,13 @@ def build_bull_put_spread(
     expected_move: float,
     lots: int,
     lot_size: int,
+    em_multiplier: float = 1.0,
 ) -> List[SuggestionLeg]:
     strikes = sorted({float(r["strike"]) for r in chain})
     step = _strike_step(strikes)
-    short_put = closest_strike(strikes, spot - expected_move)
-    long_put  = closest_strike(strikes, short_put - max(step * 2, expected_move * 0.5))
+    em = expected_move * float(em_multiplier or 1.0)
+    short_put = closest_strike(strikes, spot - em)
+    long_put  = closest_strike(strikes, short_put - max(step * 2, em * 0.5))
     legs = [
         _make_leg(1, 2, underlying, expiry, short_put, "PE", "SELL", lots, lot_size, chain,
                   "Bull put spread — short put, primary premium leg"),
@@ -148,11 +150,13 @@ def build_bear_call_spread(
     expected_move: float,
     lots: int,
     lot_size: int,
+    em_multiplier: float = 1.0,
 ) -> List[SuggestionLeg]:
     strikes = sorted({float(r["strike"]) for r in chain})
     step = _strike_step(strikes)
-    short_call = closest_strike(strikes, spot + expected_move)
-    long_call  = closest_strike(strikes, short_call + max(step * 2, expected_move * 0.5))
+    em = expected_move * float(em_multiplier or 1.0)
+    short_call = closest_strike(strikes, spot + em)
+    long_call  = closest_strike(strikes, short_call + max(step * 2, em * 0.5))
     legs = [
         _make_leg(1, 2, underlying, expiry, short_call, "CE", "SELL", lots, lot_size, chain,
                   "Bear call spread — short call, primary premium leg"),
@@ -193,11 +197,9 @@ def build_long_strangle(
 ) -> List[SuggestionLeg]:
     """Long strangle — buy OTM call and put at ±(mult × expected_move).
 
-    ``mult`` is ``STRATEGY_CONFIG['long_strangle_em_multiplier']`` (default 0.5).
-    Wider placement (≈1.0×EM) is cheaper but gives ~23% PoP; tighter placement
-    (≈0.5×EM) lifts PoP toward the strategy_min_pop floor at the cost of a richer
-    debit. Strangles that still can't clear the PoP floor are vetoed downstream
-    in strategy_selector.assemble_suggestion.
+    ``mult`` is ``STRATEGY_CONFIG['long_strangle_em_multiplier']`` (default 1.0).
+    Strikes at ±1×EM sit at the expected-move boundary (cheaper debit, lower
+    PoP). Strangles below ``strategy_min_pop`` are vetoed in assemble_suggestion.
     """
     mult = float(STRATEGY_CONFIG.get("long_strangle_em_multiplier", 1.0))
     strikes = sorted({float(r["strike"]) for r in chain})

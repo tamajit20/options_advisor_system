@@ -278,15 +278,21 @@ class TestLifecycle:
             w.stop()
         assert notif.events == []
 
-@pytest.mark.future
-@pytest.mark.skip(reason="future: PCR-band-cross trigger needs live chain OI (FUTURE_ENHANCEMENT_SCOPES.md -> Risk & Monitoring)")
-def test_pcr_band_cross_triggers_regen_hint():
-    """When live PCR crosses from the neutral band into strong-bullish (<0.55)
-    or strong-bearish (>1.55), the watcher should emit ONE
-    OPPORTUNITY_REGEN_HINT per (symbol, day). Requires snapshotting ATM+/-5
-    chain OI on each SubscriptionManager reload (or a separate intraday
-    chain-OI fetch job)."""
-    pass
+class TestPcrBandTrigger:
+    def test_pcr_band_cross_neutral_to_bullish_fires(self):
+        w, notif, _ = _make_watcher()
+        w.on_pcr_observation("NIFTY", 1.0)
+        w.on_pcr_observation("NIFTY", 0.50)
+        assert len(notif.events) == 1
+        assert notif.events[0]["type"] == "OPPORTUNITY_REGEN_HINT"
+        assert "PCR" in notif.events[0]["title"]
+
+    def test_one_alert_per_symbol_per_day(self):
+        w, notif, _ = _make_watcher()
+        w.on_pcr_observation("NIFTY", 1.0)
+        w.on_pcr_observation("NIFTY", 0.50)
+        w.on_pcr_observation("NIFTY", 0.45)
+        assert len(notif.events) == 1
 
 
 # ---------------------------------------------------------------------------

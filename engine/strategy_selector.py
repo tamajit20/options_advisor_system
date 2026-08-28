@@ -289,6 +289,7 @@ def assemble_suggestion(
     oi_pcr_change: float | None = None,
     calendar_legs: dict | None = None,
     has_long_vol_catalyst: bool = False,
+    companion_mode: bool = False,
 ) -> Suggestion:
     """Top-level: select strategy, build legs, compute economics, return Suggestion.
 
@@ -432,9 +433,13 @@ def assemble_suggestion(
             )
 
     # VIX spike veto (S4): protect short-premium structures when VIX is surging.
-    # A fast-rising VIX (>20% over last 3 trading days) means the market is pricing
-    # in continued large moves — the worst environment for selling premium ATM.
-    _vix_spike_strats = frozenset({"IRON_CONDOR", "IRON_BUTTERFLY"})
+    _vix_spike_strats = frozenset(
+        STRATEGY_CONFIG.get("vix_spike_strategies")
+        or {
+            "IRON_CONDOR", "IRON_BUTTERFLY", "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD",
+            "JADE_LIZARD", "SHORT_STRANGLE",
+        }
+    )
     if strategy in _vix_spike_strats:
         vix_nd = getattr(indicators, "vix_nd_change_pct", None)
         vix_spike_thresh = float(STRATEGY_CONFIG.get("vix_spike_veto_pct", 20.0))
@@ -468,10 +473,16 @@ def assemble_suggestion(
                 lot_size=lot_size,
             )
         elif em_builder is not None:
+            em_kw: dict = {}
+            if companion_mode and strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
+                em_kw["em_multiplier"] = float(
+                    STRATEGY_CONFIG.get("companion_spread_em_multiplier", 0.65)
+                )
             legs = em_builder(
                 underlying=underlying, expiry=expiry, chain=chain,
                 spot=spot, expected_move=indicators.expected_move,
                 lots=lots, lot_size=lot_size,
+                **em_kw,
             )
         elif no_em_builder is not None:
             legs = no_em_builder(

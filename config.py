@@ -152,6 +152,20 @@ SCHEDULER_CONFIG = {
         "weekly_cleanup":     {"day_of_week": "fri", "hour": 9, "minute": 30, "enabled": True},
         # Events calendar sync — Mon market window (VM on from 08:55)
         "events_seed":        {"day_of_week": "mon", "hour": 9,  "minute":  0, "enabled": True},
+        # WS-down fallback: poll chain for SL when live ticks are stale (scheduler only).
+        "intraday_sl_fallback": {
+            "enabled": True,
+            "interval_minutes": 3,
+        },
+        # PCR band-cross poll for opportunity regen hints (chain OI via REST).
+        "pcr_regen_poll": {
+            "enabled": True,
+            "interval_minutes": 5,
+        },
+        # Automated DB backup — Sat morning after VM starts.
+        "db_backup": {
+            "day_of_week": "sat", "hour": 8, "minute": 0, "enabled": True,
+        },
     },
     # Each job also gets a max wallclock budget (seconds) — enforced by
     # `_run_job` via a watchdog thread that closes the DB connection on
@@ -177,6 +191,9 @@ SCHEDULER_CONFIG = {
         "intraday_validator":      180,
         "eod_nightly_pipeline":    1200,
         "morning_eod_catchup":     1200,
+        "intraday_sl_fallback":    120,
+        "pcr_regen_poll":          120,
+        "db_backup":               600,
     },
     # Default for jobs not listed above.
     "default_job_timeout_seconds": 600,
@@ -590,12 +607,20 @@ STRATEGY_CONFIG = {
     },
 
     # Long-strangle strike placement as a multiple of the expected move (EM).
-    # Strikes sit at spot ± (long_strangle_em_multiplier × EM). Smaller = closer
-    # to ATM = higher PoP (but richer debit); larger = wider/cheaper but lower
-    # PoP. The 1.0×EM construction produced ~23% PoP and went 0/6 in June 2026,
-    # so we tighten to 0.5×EM to lift PoP toward the strategy_min_pop floor —
-    # strangles that still can't clear the floor are vetoed in strategy_selector.
-    "long_strangle_em_multiplier": 0.5,
+    # Strikes sit at spot ± (long_strangle_em_multiplier × EM). 1.0×EM places
+    # strikes at the expected-move boundary (cheaper debit, structurally lower PoP).
+    # Strangles below strategy_min_pop are vetoed in assemble_suggestion.
+    "long_strangle_em_multiplier": 1.0,
+
+    # IC/IB companion BPS/BCS use a tighter EM fraction than the primary condor
+    # wings — closer to ATM for standalone directional credit exposure.
+    "companion_spread_em_multiplier": 0.65,
+
+    # Short-premium strategies vetoed when VIX rose sharply over lookback days.
+    "vix_spike_strategies": [
+        "IRON_CONDOR", "IRON_BUTTERFLY", "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD",
+        "JADE_LIZARD", "SHORT_STRANGLE",
+    ],
 
     # Minimum probability-of-profit floor (percent, 0–100) per strategy.
     # Vetoes structurally low-probability debit structures in assemble_suggestion
@@ -840,8 +865,30 @@ STRATEGY_CONFIG = {
     # OpportunityRegenWatcher fires an OPPORTUNITY_REGEN_HINT. Values are
     # absolute IV deltas (e.g. 12.0 → 17.0 = 5.0).
     "regen_iv_pct_threshold": 5.0,
+    # PCR band-cross thresholds for OPPORTUNITY_REGEN_HINT (see pcr_regen_poll job).
+    "regen_pcr_bullish_below": 0.55,
+    "regen_pcr_bearish_above": 1.55,
 
-    # VIX regime thresholds (% change vs prior close)
+    # WS-down intraday SL fallback (lifecycle/intraday_sl_fallback.py).
+    "intraday_sl_fallback": {
+        "enabled": True,
+        "tick_stale_sec": 90.0,
+        "snapshot_max_age_sec": 120.0,
+        "min_unhealthy_streak": 2,
+        "alert_cooldown_minutes": 15,
+    },
+
+    # Greek-stress exit advisory (engine/greeks_exit.py).
+    "greeks_exit": {
+        "enabled": True,
+        "vega_stress_dte_max": 7,
+        "vega_stress_fraction_of_max_loss": 0.08,
+        "vega_stress_min_abs_vega_rs": 1500.0,
+        "vega_stress_min_loss_fraction": 0.10,
+        "delta_stress_dte_max": 5,
+        "delta_stress_fraction_of_max_loss": 0.15,
+        "theta_fade_min_daily_rs": 500.0,
+    },
     "vix_rising_threshold":  5.0,
     "vix_spiking_threshold": 10.0,
 

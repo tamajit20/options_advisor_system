@@ -167,6 +167,7 @@ class _TradeState:
     market_as_of: Optional[str] = None
     conditions_json: Any = None
     last_direction_fit: Optional[str] = None
+    trade_greeks: Optional[dict] = None
 
 
 @dataclass
@@ -185,7 +186,7 @@ PrimeLoader = Callable[[List[LegKey]], Dict[LegKey, float]]
 # ---------------------------------------------------------------------------
 def make_db_snapshot_loader(db) -> SnapshotLoader:
     """Build a snapshot loader that reads ACTIVE trades from the live DB."""
-    from database.models import AtmIvTimeseriesRepo, TradeRepo
+    from database.models import AtmIvTimeseriesRepo, TradeGreeksRepo, TradeRepo
     from engine.live_expectation import resolve_market_inputs
 
     def _latest_atm_iv(symbol: str, expiry: date) -> Optional[float]:
@@ -282,6 +283,7 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
             market = resolve_market_inputs(
                 db, str(sug["underlying"]), sug["expiry_date"],
             )
+            greeks_row = TradeGreeksRepo(db).latest_for_trade(trade_id)
 
             state = _TradeState(
                 trade_id=trade_id,
@@ -309,6 +311,7 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                 market_data_source=market.get("data_source"),
                 market_as_of=market.get("data_as_of"),
                 conditions_json=sug.get("conditions_json"),
+                trade_greeks=greeks_row,
             )
             snap.trades[trade_id] = state
             for leg in legs:
@@ -924,6 +927,7 @@ class LiveRiskMonitor:
             days_to_expiry=dte,
             strategy=state.strategy,
             as_of=now,
+            greeks=state.trade_greeks,
         )
 
         current_pnl = self._current_pnl(state)
@@ -1046,6 +1050,18 @@ class LiveRiskMonitor:
                 ),
                 breach_key="THESIS_FAIL", now=now,
                 threshold_rs=sl_threshold,
+            )
+            return alert, mtm_payload, trailing_persist, snapshot_payload
+
+        if decision.decision == "GREEK_STRESS":
+            alert = self._maybe_alert(
+                state, "GREEK_STRESS", "WARNING",
+                title=f"Greek stress on {state.trade_name}",
+                body=self._format_pnl_body(
+                    state, current_pnl, decision.reason,
+                ),
+                breach_key="GREEK_STRESS", now=now,
+                cooldown=timedelta(hours=4),
             )
             return alert, mtm_payload, trailing_persist, snapshot_payload
 

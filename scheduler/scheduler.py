@@ -46,7 +46,9 @@ from lifecycle.snapshot_orchestrator import (
     run_drift_verifier,
     run_intraday_close_snapshot,
 )
+from lifecycle.intraday_sl_fallback import run_intraday_sl_fallback
 from lifecycle.intraday_validator import run_intraday_validator
+from lifecycle.pcr_regen_poll import run_pcr_regen_poll
 from lifecycle.suggestion_engine import run_live_suggestion_engine, run_suggestion_engine
 from lifecycle.trade_greeks_job import run_trade_greeks_update
 from simulation.simulator import run_simulation_update
@@ -455,6 +457,41 @@ def job_intraday_validator():
     _run_job("intraday_validator", run_intraday_validator)
 
 
+def job_intraday_sl_fallback():
+    _run_job("intraday_sl_fallback", run_intraday_sl_fallback)
+
+
+def job_pcr_regen_poll():
+    _run_job("pcr_regen_poll", run_pcr_regen_poll)
+
+
+def job_db_backup():
+    def _backup(db: SQLServerConnection) -> int:
+        import subprocess
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        script = root / "deploy" / "backup.sh"
+        if not script.is_file():
+            logger.warning("db_backup: deploy/backup.sh not found")
+            return 0
+        try:
+            subprocess.run(
+                ["bash", str(script)],
+                cwd=str(root),
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            return 1
+        except subprocess.CalledProcessError as exc:
+            logger.error("db_backup failed: %s", exc.stderr or exc)
+            raise
+
+    _run_job("db_backup", _backup)
+
+
 def _run_eod_pipeline_steps(label: str) -> int:
     """Run the full EOD chain sequentially (shared by nightly + morning catchup).
 
@@ -564,6 +601,9 @@ JOB_FUNCS = {
     "intraday_close_snapshot": job_intraday_close_snapshot,
     "drift_verifier":          job_drift_verifier,
     "intraday_validator":      job_intraday_validator,
+    "intraday_sl_fallback":    job_intraday_sl_fallback,
+    "pcr_regen_poll":          job_pcr_regen_poll,
+    "db_backup":               job_db_backup,
     "eod_nightly_pipeline":    job_eod_nightly_pipeline,
     "morning_eod_catchup":     job_morning_eod_catchup,
 }

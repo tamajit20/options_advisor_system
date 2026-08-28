@@ -27,6 +27,7 @@ from typing import Mapping, Sequence
 
 from config import STRATEGY_CONFIG
 from contracts import ExitDecision
+from engine.greeks_exit import greeks_stress_check
 from engine.pnl_targets import take_profit_hit
 from engine.sl_threshold import effective_sl_rs
 from utils import now_ist
@@ -44,6 +45,7 @@ def evaluate_exit(
     days_to_expiry: int,
     strategy: str = "",              # Phase 2: drives strategy-aware TP and time-decay exit
     as_of: datetime | None = None,
+    greeks: Mapping | None = None,
 ) -> ExitDecision:
     as_of = as_of or now_ist()
 
@@ -144,6 +146,19 @@ def evaluate_exit(
             reason=f"DTE={days_to_expiry} (≤{td_dte}) for {strategy} — "
                    f"theta mostly captured (P&L ₹{current_pnl:.0f}); close to avoid gamma risk",
             as_of=as_of,
+        )
+
+    greek_reason = greeks_stress_check(
+        strategy=strategy,
+        days_to_expiry=days_to_expiry,
+        current_pnl=current_pnl,
+        max_loss_rs=max_loss_rs,
+        greeks=greeks,
+    )
+    if greek_reason and current_pnl < 0:
+        return ExitDecision(
+            trade_id=trade_id, decision="GREEK_STRESS",
+            reason=greek_reason, as_of=as_of,
         )
 
     return ExitDecision(

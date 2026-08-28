@@ -909,6 +909,7 @@ def _evaluate_underlying(
                         existing_trade_names=existing_names,
                         generated_on=now_ist(),
                         strategy_override=companion_strategy,
+                        companion_mode=True,
                         execution_window=execution_window,
                         data_date=trade_date,
                         entry_date=entry_day,

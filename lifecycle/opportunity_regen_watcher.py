@@ -77,6 +77,24 @@ _VIX_SYMBOL = "VIX"
 _TRIGGER_VIX = "VIX_MOVE"
 _TRIGGER_SPOT = "SPOT_MOVE"
 _TRIGGER_IV = "IV_MOVE"
+_TRIGGER_PCR = "PCR_BAND"
+
+
+def _pcr_band(pcr_value: float) -> str:
+    cfg = STRATEGY_CONFIG
+    bull = float(cfg.get("regen_pcr_bullish_below", 0.55))
+    bear = float(cfg.get("regen_pcr_bearish_above", 1.55))
+    if pcr_value < bull:
+        return "bullish"
+    if pcr_value > bear:
+        return "bearish"
+    lo = float(cfg.get("pcr_neutral_low", 0.7))
+    hi = float(cfg.get("pcr_neutral_high", 1.3))
+    if lo <= pcr_value <= hi:
+        return "neutral"
+    if pcr_value < lo:
+        return "lean_bullish"
+    return "lean_bearish"
 
 
 @dataclass
@@ -84,6 +102,7 @@ class _Baselines:
     """First observed tick per (symbol, ist_date). Cleared on day rollover."""
     spot:    Dict[Tuple[str, date], float] = field(default_factory=dict)
     iv:      Dict[Tuple[str, date], float] = field(default_factory=dict)
+    pcr_band: Dict[Tuple[str, date], str] = field(default_factory=dict)
     fired:   Set[Tuple[str, str, date]]    = field(default_factory=set)
     # ^ {(trigger_kind, symbol, ist_date)} — one alert per kind+symbol+day
     last_day: Optional[date] = None
@@ -196,6 +215,69 @@ class OpportunityRegenWatcher:
         except Exception:
             logger.exception(
                 "OpportunityRegenWatcher: on_iv_observation swallowed exception"
+            )
+
+    def on_pcr_observation(self, symbol: str, pcr_value: float) -> None:
+        """PCR band-cross detector — call from chain-OI poll job. Must NEVER raise."""
+        try:
+            self._on_pcr_locked(symbol, float(pcr_value))
+        except Exception:
+            logger.exception(
+                "OpportunityRegenWatcher: on_pcr_observation swallowed exception"
+            )
+
+    def _on_pcr_locked(self, symbol: str, pcr_value: float) -> None:
+        if not symbol or pcr_value <= 0:
+            return
+        sym = str(symbol).upper()
+        if sym not in self._options_underlyings:
+            return
+        today = self._clock().date()
+        new_band = _pcr_band(pcr_value)
+        with self._lock:
+            self._roll_day_locked(today)
+            key = (sym, today)
+            prev_band = self._state.pcr_band.get(key)
+            if prev_band is None:
+                self._state.pcr_band[key] = new_band
+                logger.debug(
+                    "OpportunityRegenWatcher: PCR baseline %s = %.2f (%s)",
+                    sym, pcr_value, new_band,
+                )
+                return
+            if new_band == prev_band:
+                return
+            extreme = frozenset({"bullish", "bearish"})
+            crossed = (
+                (prev_band == "neutral" and new_band in extreme)
+                or (prev_band in extreme and new_band == "neutral")
+                or (prev_band in extreme and new_band in extreme and prev_band != new_band)
+            )
+            if not crossed:
+                self._state.pcr_band[key] = new_band
+                return
+            dedup_key = (_TRIGGER_PCR, sym, today)
+            if dedup_key in self._state.fired:
+                return
+            self._state.fired.add(dedup_key)
+            self._state.pcr_band[key] = new_band
+
+        title = f"{sym} PCR band shift ({prev_band} → {new_band}) — review opportunity"
+        body = (
+            f"{sym} PCR={pcr_value:.2f} shifted from {prev_band} to {new_band}.\n"
+            f"Morning suggestions for {today} assumed a different OI regime; "
+            f"consider re-running the suggestion engine."
+        )
+        try:
+            self._notifier.notify(
+                "OPPORTUNITY_REGEN_HINT",
+                "INFO",
+                title,
+                body,
+            )
+        except Exception:
+            logger.exception(
+                "OpportunityRegenWatcher: notifier raised on PCR/%s", sym,
             )
 
     def _on_iv_locked(self, symbol: str, iv_pct: float) -> None:
@@ -316,6 +398,7 @@ class OpportunityRegenWatcher:
         )
         self._state.spot.clear()
         self._state.iv.clear()
+        self._state.pcr_band.clear()
         self._state.fired.clear()
         self._state.last_day = today
 

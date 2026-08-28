@@ -169,7 +169,6 @@ class TestVixSpikeVeto:
     def test_iron_condor_vetoed_when_vix_spikes(self):
         from exceptions import StrategyVeto
         chain = _chain()
-        # VIX up 25% over 3 days (above 20% threshold) → hard veto for IC
         ind = _indicators(trend="SIDEWAYS", iv_premium=1.3, adx=18.0, vix_nd_change=25.0)
         with pytest.raises(StrategyVeto, match="VIX has risen"):
             assemble_suggestion(
@@ -186,6 +185,28 @@ class TestVixSpikeVeto:
                 atm_iv=0.18,
                 lots=1,
                 lot_size=75,
+            )
+
+    def test_bull_put_spread_vetoed_when_vix_spikes(self):
+        from exceptions import StrategyVeto
+        chain = _chain()
+        ind = _indicators(trend="BULLISH", iv_premium=1.3, adx=20.0, vix_nd_change=25.0)
+        with pytest.raises(StrategyVeto, match="VIX has risen"):
+            assemble_suggestion(
+                suggestion_id="SUG-BPS",
+                underlying="NIFTY",
+                expiry=date(2026, 5, 29),
+                expiry_type="Weekly",
+                dte=14,
+                spot=23000.0,
+                chain=chain,
+                indicators=ind,
+                confidence=_conf_result(True),
+                iv_rank=65.0,
+                atm_iv=0.18,
+                lots=1,
+                lot_size=75,
+                strategy_override="BULL_PUT_SPREAD",
             )
 
 
@@ -298,13 +319,11 @@ class TestLongStrangleRouting:
         assert sug.strategy == "LONG_STRANGLE"
         call_leg = next(l for l in sug.legs if l.option_type == "CE")
         put_leg  = next(l for l in sug.legs if l.option_type == "PE")
-        # Strikes now sit at ±0.5×EM (long_strangle_em_multiplier default 0.5),
-        # tighter than the old ±1×EM to lift PoP. EM ≈ 300 → ≈ 23150 / 22850:
-        # still genuinely OTM but closer to ATM than the 1×EM (23300/22700) build.
+        # Default ±1.0×EM (long_strangle_em_multiplier): EM ≈ 300 → ≈ 23300 / 22700.
         assert call_leg.strike > 23000
         assert put_leg.strike  < 23000
-        assert 23050 < call_leg.strike < 23250
-        assert 22750 < put_leg.strike  < 22950
+        assert call_leg.strike >= 23250
+        assert put_leg.strike  <= 22750
 
 
 class TestCalendarSpreadAssembly:

@@ -1385,6 +1385,16 @@ class NotificationRepo:
             [limit],
         )
 
+    def recent_for_trade(self, trade_id: str, *, minutes: int = 15) -> List[dict]:
+        """Notifications for *trade_id* within the last *minutes* (cooldown dedup)."""
+        return self.db.fetch_all(
+            "SELECT notif_type, created_at FROM options_notifications "
+            "WHERE related_trade_id = ? "
+            "AND created_at >= DATEADD(minute, ?, GETDATE()) "
+            "ORDER BY created_at DESC",
+            [trade_id, -int(minutes)],
+        )
+
     def filtered(
         self,
         *,

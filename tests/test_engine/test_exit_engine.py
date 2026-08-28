@@ -209,6 +209,23 @@ def test_long_straddle_holds_below_hybrid_cap():
     assert result.decision == "HOLD"
 
 
+def test_greek_stress_when_vega_elevated_and_losing():
+    result = evaluate_exit(
+        trade_id="T-1",
+        legs=_legs(),
+        current_chain=_chain(short_mid=80.0, long_mid=40.0),
+        entry_net_credit=2250.0,
+        max_profit_rs=2250.0,
+        max_loss_rs=5250.0,
+        sl_level_per_share=None,
+        days_to_expiry=5,
+        strategy="IRON_CONDOR",
+        greeks={"net_vega": 3000.0, "net_delta": 50.0},
+    )
+    assert result.decision == "GREEK_STRESS"
+    assert "vega" in result.reason.lower()
+
+
 # ---------------------------------------------------------------------------
 # FUTURE-SCOPE PLACEHOLDERS — see FUTURE_ENHANCEMENT_SCOPES.md
 # ---------------------------------------------------------------------------

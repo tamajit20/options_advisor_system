@@ -278,14 +278,10 @@ class TestEconomicsPrimitives:
 def test_long_strangle_strike_multiplier_is_configurable(sample_chain, expiry_date):
     """LONG_STRANGLE strikes sit at ±(long_strangle_em_multiplier × EM).
 
-    Default is 0.5×EM (tighter than the old 1.0×EM) to lift PoP toward the
-    strategy_min_pop floor while staying genuinely OTM. The multiplier is a
-    config knob, so this test pins both the default placement and that the
-    knob is honoured.
+    Default is 1.0×EM (expected-move boundary). The multiplier is a config knob.
     """
     from config import STRATEGY_CONFIG
 
-    # Default (0.5×EM): ≈ 23150 / 22850 — OTM but closer to ATM than 1×EM.
     legs = build_long_strangle(
         underlying="NIFTY", expiry=expiry_date, chain=sample_chain,
         spot=23000.0, expected_move=300.0, lots=1, lot_size=75,
@@ -294,19 +290,35 @@ def test_long_strangle_strike_multiplier_is_configurable(sample_chain, expiry_da
     long_put  = next(l for l in legs if l.option_type == "PE")
     assert long_call.strike > 23000
     assert long_put.strike  < 23000
-    assert 23050 < long_call.strike < 23250, f"Call strike {long_call.strike} not ~0.5×EM"
-    assert 22750 < long_put.strike  < 22950, f"Put strike {long_put.strike} not ~0.5×EM"
+    assert long_call.strike >= 23250
+    assert long_put.strike  <= 22750
 
-    # Override to 1.0×EM widens the strikes to the ±1σ boundary (≈ 23300 / 22700).
-    with patch.dict(STRATEGY_CONFIG, {"long_strangle_em_multiplier": 1.0}):
-        wide = build_long_strangle(
+    with patch.dict(STRATEGY_CONFIG, {"long_strangle_em_multiplier": 0.5}):
+        tight = build_long_strangle(
             underlying="NIFTY", expiry=expiry_date, chain=sample_chain,
             spot=23000.0, expected_move=300.0, lots=1, lot_size=75,
         )
-    wide_call = next(l for l in wide if l.option_type == "CE")
-    wide_put  = next(l for l in wide if l.option_type == "PE")
-    assert wide_call.strike >= 23250
-    assert wide_put.strike  <= 22750
+    tight_call = next(l for l in tight if l.option_type == "CE")
+    tight_put  = next(l for l in tight if l.option_type == "PE")
+    assert 23050 < tight_call.strike < 23250
+    assert 22750 < tight_put.strike  < 22950
+
+
+def test_companion_spread_em_multiplier(sample_chain, expiry_date):
+    """Companion BPS/BCS use em_multiplier for closer-to-ATM strikes."""
+    full = build_bull_put_spread(
+        underlying="NIFTY", expiry=expiry_date, chain=sample_chain,
+        spot=23000.0, expected_move=300.0, lots=1, lot_size=75,
+        em_multiplier=1.0,
+    )
+    comp = build_bull_put_spread(
+        underlying="NIFTY", expiry=expiry_date, chain=sample_chain,
+        spot=23000.0, expected_move=300.0, lots=1, lot_size=75,
+        em_multiplier=0.65,
+    )
+    full_short = next(l for l in full if l.action == "SELL")
+    comp_short = next(l for l in comp if l.action == "SELL")
+    assert comp_short.strike > full_short.strike
 
 
 # ---------------------------------------------------------------------------
