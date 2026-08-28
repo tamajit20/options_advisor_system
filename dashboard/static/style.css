@@ -1787,6 +1787,8 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .lo-row { display: grid; grid-template-columns: 7.5rem 1fr; gap: 4px 10px; align-items: baseline; }
 .lo-pop, .lo-ev { font-size: 1.05rem; font-weight: 700; }
 .lo-pop-delta { font-size: .78rem; font-weight: 600; }
+.lo-direction { font-size: .95rem; font-weight: 700; }
+.lo-dir-neutral { color: var(--muted); }
 
 /* Trade action instruction panel */
 .trade-action-panel {

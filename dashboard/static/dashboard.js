@@ -183,14 +183,16 @@ function _updateFeedTag(tradeId, opts = {}) {
 function _buildMtmPayload(trade, snapTrade) {
   const sug = trade.suggestion || {};
   const st = snapTrade || {};
+  const lo = trade.live_outlook || {};
   return {
+    ...lo,
     ...st,
     trade_id: trade.trade_id,
     max_profit: st.max_profit ?? trade.actual_max_profit ?? sug.max_profit,
     max_loss: st.max_loss ?? trade.actual_max_loss ?? sug.max_loss,
     trailing_pnl_floor: st.trailing_pnl_floor ?? trade.trailing_pnl_floor,
     mtm: st.mtm,
-    dte: st.dte,
+    dte: st.dte ?? lo.dte,
     as_of: st.as_of,
   };
 }
@@ -1867,20 +1869,36 @@ function renderLiveOutlook(t) {
             <strong class="lo-pop">\u2014</strong>
             <span class="lo-pop-delta muted"></span>
           </span>
-          <span class="muted lpl-note lo-pop-note">From live spot, remaining DTE, and ATM IV \u2014 not the original suggestion</span>
+          <span class="muted lpl-note lo-pop-note">From spot, DTE, and ATM IV \u2014 updates live or from last EOD/intraday data</span>
         </div>
         <div class="lo-row">
           <span class="lpl-label">Expiry EV</span>
           <span class="lpl-val-line"><strong class="lo-ev">\u2014</strong></span>
-          <span class="muted lpl-note lo-ev-note">If held to expiry at this live win chance (max profit vs max loss)</span>
+          <span class="muted lpl-note lo-ev-note">If held to expiry at this win chance (max profit vs max loss)</span>
+        </div>
+        <div class="lo-row lo-row-direction">
+          <span class="lpl-label">Thesis</span>
+          <span class="lpl-val-line"><strong class="lo-direction">\u2014</strong></span>
+          <span class="muted lpl-note lo-direction-note">Whether spot is moving the way this strategy needs</span>
         </div>
         <div class="lo-row">
           <span class="lpl-label">Market</span>
-          <span class="lpl-val-line"><span class="lo-market">Waiting for live data</span></span>
+          <span class="lpl-val-line"><span class="lo-market">Loading market data\u2026</span></span>
           <span class="muted lpl-note lo-market-note"></span>
         </div>
       </div>
     </div>`;
+}
+
+function _loDataSourceLabel(source, asOf) {
+  if (source === 'live') return 'Live';
+  if (source === 'intraday') {
+    return asOf ? `Last intraday (${asOf})` : 'Last intraday snapshot';
+  }
+  if (source === 'eod') {
+    return asOf ? `EOD close (${asOf})` : 'EOD close';
+  }
+  return '';
 }
 
 function _fmtSignedRs(v) {
@@ -1896,12 +1914,16 @@ function _updateLiveOutlook(tradeId, payload) {
     const deltaEl = el.querySelector('.lo-pop-delta');
     const popNote = el.querySelector('.lo-pop-note');
     const evEl = el.querySelector('.lo-ev');
+    const dirEl = el.querySelector('.lo-direction');
+    const dirNote = el.querySelector('.lo-direction-note');
     const marketEl = el.querySelector('.lo-market');
     const marketNote = el.querySelector('.lo-market-note');
     const pop = payload.live_pop != null ? parseFloat(payload.live_pop) : null;
     const entryPop = payload.entry_pop != null ? parseFloat(payload.entry_pop) : null;
     const delta = payload.pop_delta != null ? parseFloat(payload.pop_delta) : null;
     const stance = payload.stance || '';
+    const dirFit = payload.direction_fit || '';
+    const srcLabel = _loDataSourceLabel(payload.data_source, payload.data_as_of);
     if (popEl) {
       popEl.textContent = (pop != null && !isNaN(pop)) ? fmtPct(pop) : '\u2014';
       popEl.classList.remove('pnl-profit', 'pnl-loss');
@@ -1921,8 +1943,8 @@ function _updateLiveOutlook(tradeId, payload) {
         deltaEl.textContent = '';
       }
     }
-    if (popNote && payload.summary) {
-      popNote.textContent = payload.summary;
+    if (popNote) {
+      popNote.textContent = payload.summary || popNote.textContent;
     }
     if (evEl) {
       const ev = payload.live_ev != null ? parseFloat(payload.live_ev) : null;
@@ -1932,7 +1954,18 @@ function _updateLiveOutlook(tradeId, payload) {
         evEl.classList.add(ev >= 0 ? 'pnl-profit' : 'pnl-loss');
       }
     }
+    if (dirEl) {
+      dirEl.textContent = payload.direction_label || '\u2014';
+      dirEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-dir-neutral');
+      if (dirFit === 'aligned') dirEl.classList.add('pnl-profit');
+      else if (dirFit === 'against') dirEl.classList.add('pnl-loss');
+      else dirEl.classList.add('lo-dir-neutral');
+    }
+    if (dirNote && payload.direction_detail) {
+      dirNote.textContent = payload.direction_detail;
+    }
     const marketBits = [];
+    if (srcLabel) marketBits.push(srcLabel);
     if (payload.spot != null) {
       let spotLine = 'Spot \u20b9' + fmt(payload.spot);
       if (payload.spot_change != null) {
@@ -1958,7 +1991,9 @@ function _updateLiveOutlook(tradeId, payload) {
       needs_move: 'Still needs a move to breakeven',
     }[emLabel] || '';
     if (marketEl) {
-      marketEl.textContent = marketBits.length ? marketBits.join('  \u00b7  ') : 'Waiting for live data';
+      marketEl.textContent = marketBits.length
+        ? marketBits.join('  \u00b7  ')
+        : (payload.spot != null ? 'Market data available' : 'No market data yet');
     }
     if (marketNote) marketNote.textContent = emText;
   });

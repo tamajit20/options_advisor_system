@@ -1974,13 +1974,7 @@ class AtmIvTimeseriesRepo:
 
     def latest_atm_iv(self, symbol: str, expiry: date) -> Optional[float]:
         """Most recent ATM IV sample for (symbol, expiry). Decimal (0.18)."""
-        row = self.db.fetch_one(
-            "SELECT TOP 1 atm_iv FROM options_atm_iv_5min "
-            "WHERE symbol = ? AND expiry_date = ? "
-            "  AND atm_iv IS NOT NULL AND atm_iv > 0 "
-            "ORDER BY snapshot_at DESC",
-            [symbol, expiry],
-        )
+        row = self.latest_snapshot(symbol, expiry)
         if not row or row.get("atm_iv") is None:
             return None
         try:
@@ -1988,6 +1982,16 @@ class AtmIvTimeseriesRepo:
         except (TypeError, ValueError):
             return None
         return iv if iv > 0 else None
+
+    def latest_snapshot(self, symbol: str, expiry: date) -> Optional[dict]:
+        """Most recent 5-min ATM IV row with spot and/or IV for (symbol, expiry)."""
+        return self.db.fetch_one(
+            "SELECT TOP 1 snapshot_at, spot, atm_iv, dte "
+            "FROM options_atm_iv_5min "
+            "WHERE symbol = ? AND expiry_date = ? "
+            "ORDER BY snapshot_at DESC",
+            [symbol, expiry],
+        )
 
     def recent_spot_for_symbol(
         self, symbol: str, since: datetime, limit: int = 48

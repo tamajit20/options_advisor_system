@@ -870,6 +870,8 @@ class TestLiveMTMPublish:
         assert last["spot"] == 23000.0
         assert last["stance"] in ("improving", "weakening", "stable", "unknown")
         assert "summary" in last
+        assert last.get("direction_fit") in ("aligned", "against", "neutral", "unknown")
+        assert last.get("direction_label")
 
     def test_spot_tick_stores_last_spot_when_sl_disabled(self):
         m, bus, state, captured = self._build()

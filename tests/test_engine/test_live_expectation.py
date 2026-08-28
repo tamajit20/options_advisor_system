@@ -2,8 +2,14 @@
 from __future__ import annotations
 
 from datetime import date
+from unittest.mock import MagicMock
 
-from engine.live_expectation import live_trade_outlook, normalize_atm_iv
+from engine.live_expectation import (
+    assess_direction_fit,
+    live_trade_outlook,
+    normalize_atm_iv,
+    resolve_market_inputs,
+)
 
 
 def _strangle_legs():
@@ -128,3 +134,46 @@ class TestLiveTradeOutlook:
         )
         assert out["spot_change"] == 150.0
         assert out["expected_move"] is not None and out["expected_move"] > 0
+
+    def test_direction_aligned_for_centered_iron_condor(self):
+        out = live_trade_outlook(
+            legs=_ic_legs(), strategy="IRON_CONDOR",
+            underlying="NIFTY", expiry=date(2026, 5, 28),
+            spot=23000.0, dte=10, atm_iv=0.18,
+            max_profit=4500.0, max_loss=15500.0, entry_spot=23000.0,
+            data_source="eod",
+        )
+        assert out["direction_fit"] == "aligned"
+        assert out["direction_label"] == "Range-friendly"
+        assert out["data_source"] == "eod"
+
+    def test_direction_against_for_bull_put_below_short_strike(self):
+        legs = [
+            {"leg_order": 1, "action": "SELL", "strike": 23200.0, "option_type": "PE",
+             "fill_price": 80.0, "lots": 1, "lot_size": 50},
+            {"leg_order": 2, "action": "BUY", "strike": 23000.0, "option_type": "PE",
+             "fill_price": 35.0, "lots": 1, "lot_size": 50},
+        ]
+        fit = assess_direction_fit(
+            strategy="BULL_PUT_SPREAD",
+            underlying="NIFTY",
+            spot=22800.0,
+            upper_be=23250.0,
+            lower_be=23100.0,
+            legs=legs,
+            spot_change=-200.0,
+            entry_spot=23000.0,
+        )
+        assert fit["direction_fit"] == "against"
+        assert "rally" in fit["direction_label"].lower()
+
+    def test_resolve_market_inputs_prefers_eod_when_no_live(self):
+        db = MagicMock()
+        db.fetch_one.side_effect = [
+            None,
+            {"close_price": 22950.0, "trade_date": date(2026, 5, 27)},
+            None,
+        ]
+        out = resolve_market_inputs(db, "NIFTY", date(2026, 5, 28))
+        assert out["spot"] == 22950.0
+        assert out["data_source"] == "eod"

@@ -962,6 +962,49 @@ def _stored_mtm_payloads(db: Optional[SQLServerConnection] = None) -> Dict[str, 
                 pass
 
 
+def _trade_live_outlook(db: SQLServerConnection, trade: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Compute live outlook for an open trade (live tick or last EOD/intraday data)."""
+    sug = trade.get("suggestion") or {}
+    if not sug.get("strategy"):
+        return None
+    try:
+        from engine.live_expectation import compute_trade_outlook
+        from utils import days_between, now_ist
+
+        expiry = sug.get("expiry_date") or trade.get("expiry_date")
+        if expiry is None:
+            return None
+        if isinstance(expiry, str):
+            expiry = date.fromisoformat(expiry[:10])
+        legs = trade.get("legs") or sug.get("legs") or []
+        live_spot = live_iv = None
+        mtm_row = (_read_live_mtm_state().get("trades") or {}).get(str(trade["trade_id"])) or {}
+        if mtm_row.get("data_source") == "live" and mtm_row.get("spot") is not None:
+            live_spot = float(mtm_row["spot"])
+            if mtm_row.get("atm_iv") is not None:
+                live_iv = float(mtm_row["atm_iv"])
+        entry_pop = sug.get("probability_of_profit")
+        dte = max(days_between(now_ist().date(), expiry), 0)
+        return compute_trade_outlook(
+            db,
+            legs=legs,
+            strategy=str(sug.get("strategy") or ""),
+            underlying=str(sug.get("underlying") or ""),
+            expiry=expiry,
+            dte=dte,
+            max_profit=float(trade.get("actual_max_profit") or sug.get("max_profit") or 0),
+            max_loss=float(trade.get("actual_max_loss") or sug.get("max_loss") or 0),
+            entry_pop=float(entry_pop) if entry_pop is not None else None,
+            entry_spot=float(trade["spot_at_execution"])
+            if trade.get("spot_at_execution") is not None else None,
+            live_spot=live_spot,
+            live_iv=live_iv,
+        )
+    except Exception:
+        logger.debug("trade live outlook failed for %s", trade.get("trade_id"), exc_info=True)
+        return None
+
+
 def _signal_kind_for_open_trade(
     row: Dict[str, Any],
     *,
@@ -1552,13 +1595,16 @@ def create_app() -> Flask:
         notif = NotificationRepo(db)
         rows = trd.open_trades()
         stored_mtm = _stored_mtm_payloads(db)
+        live_snap = _read_live_mtm_state().get("trades") or {}
         out = []
         for r in rows:
             r_out = _row(r)
             r_out["legs"] = [_row(l) for l in trd.legs_with_suggestion_info(r["trade_id"])]
             snap = stored_mtm.get(str(r["trade_id"])) or {}
-            r_out["last_mtm"] = snap.get("mtm")
-            r_out["last_mtm_at"] = snap.get("as_of")
+            mtm_live = live_snap.get(str(r["trade_id"])) or {}
+            merged_snap = {**snap, **mtm_live}
+            r_out["last_mtm"] = merged_snap.get("mtm")
+            r_out["last_mtm_at"] = merged_snap.get("as_of")
             # Live risk alert (TARGET_HIT / LOSS_LIMIT_HIT / PROFIT_FLOOR_HIT /
             # PRE_BREACH_WARNING / PROFIT_FLOOR_SET) so the card can render a prominent badge instead
             # of relying solely on the notification bar.
@@ -1580,6 +1626,7 @@ def create_app() -> Flask:
             else:
                 r_out["suggestion"] = None
                 r_out["entry_quality_score"] = None
+            r_out["live_outlook"] = _trade_live_outlook(db, r_out)
             out.append(r_out)
         return jsonify({"trades": out})
 

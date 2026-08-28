@@ -161,6 +161,10 @@ class _TradeState:
     entry_pop: Optional[float] = None
     entry_spot: Optional[float] = None
     atm_iv: Optional[float] = None
+    fallback_spot: Optional[float] = None
+    fallback_iv: Optional[float] = None
+    market_data_source: Optional[str] = None
+    market_as_of: Optional[str] = None
 
 
 @dataclass
@@ -180,6 +184,7 @@ PrimeLoader = Callable[[List[LegKey]], Dict[LegKey, float]]
 def make_db_snapshot_loader(db) -> SnapshotLoader:
     """Build a snapshot loader that reads ACTIVE trades from the live DB."""
     from database.models import AtmIvTimeseriesRepo, TradeRepo
+    from engine.live_expectation import resolve_market_inputs
 
     def _latest_atm_iv(symbol: str, expiry: date) -> Optional[float]:
         try:
@@ -272,6 +277,9 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                 except (TypeError, ValueError):
                     entry_spot = None
             atm_iv = _latest_atm_iv(str(sug["underlying"]), sug["expiry_date"])
+            market = resolve_market_inputs(
+                db, str(sug["underlying"]), sug["expiry_date"],
+            )
 
             state = _TradeState(
                 trade_id=trade_id,
@@ -294,6 +302,10 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                 entry_pop=entry_pop,
                 entry_spot=entry_spot,
                 atm_iv=atm_iv,
+                fallback_spot=market.get("spot"),
+                fallback_iv=market.get("atm_iv"),
+                market_data_source=market.get("data_source"),
+                market_as_of=market.get("data_as_of"),
             )
             snap.trades[trade_id] = state
             for leg in legs:
@@ -627,6 +639,7 @@ class LiveRiskMonitor:
             self._snapshot = new_snap
         if prime and self._prime is not None:
             self._prime_ltps()
+        self._seed_outlook_on_reload()
 
     def _prime_ltps(self) -> None:
         with self._lock:
@@ -1195,21 +1208,78 @@ class LiveRiskMonitor:
             for k, v in state.leg_ltps.items()
         }
 
-    def _live_outlook_fields(self, state: _TradeState, dte: int) -> dict:
+    def _effective_market(
+        self, state: _TradeState, now: datetime,
+    ) -> tuple[Optional[float], Optional[float], Optional[str], Optional[str]]:
+        live_fresh = (
+            state.last_spot is not None
+            and state.last_spot_at is not None
+            and self._in_session(now)
+            and (now - state.last_spot_at).total_seconds() <= 300
+        )
+        if live_fresh:
+            return state.last_spot, state.atm_iv, "live", None
+        if state.fallback_spot is not None:
+            return (
+                state.fallback_spot,
+                state.fallback_iv or state.atm_iv,
+                state.market_data_source or "eod",
+                state.market_as_of,
+            )
+        return state.last_spot, state.atm_iv, state.market_data_source, state.market_as_of
+
+    def _seed_outlook_on_reload(self) -> None:
+        """Publish outlook from EOD/intraday data when live ticks are unavailable."""
+        now = self._clock()
+        pending: List[dict] = []
+        with self._lock:
+            for state in self._snapshot.trades.values():
+                if self._in_session(now) and state.last_spot is not None:
+                    continue
+                dte = max(days_between(now.date(), state.expiry), 0)
+                outlook = self._live_outlook_fields(state, dte, now=now)
+                if outlook.get("spot") is None and outlook.get("live_pop") is None:
+                    continue
+                pending.append({
+                    "trade_id": state.trade_id,
+                    "trade_name": state.trade_name,
+                    "dte": dte,
+                    "max_profit": state.max_profit,
+                    "max_loss": state.max_loss,
+                    "as_of": now.isoformat(timespec="seconds"),
+                    **outlook,
+                })
+        for payload in pending:
+            try:
+                self._bus.publish(TOPIC_TRADE_MTM, payload)
+                self._write_mtm_state(payload)
+            except Exception:
+                logger.debug(
+                    "LiveRiskMonitor: outlook seed failed for %s",
+                    payload.get("trade_id"), exc_info=True,
+                )
+
+    def _live_outlook_fields(
+        self, state: _TradeState, dte: int, *, now: Optional[datetime] = None,
+    ) -> dict:
         """Live win-chance / expiry EV from current spot — never raises."""
+        now = now or self._clock()
+        spot, iv, source, as_of = self._effective_market(state, now)
         try:
             return live_trade_outlook(
                 legs=state.legs,
                 strategy=state.strategy,
                 underlying=state.underlying,
                 expiry=state.expiry,
-                spot=state.last_spot,
+                spot=spot,
                 dte=dte,
-                atm_iv=state.atm_iv,
+                atm_iv=iv,
                 max_profit=state.max_profit,
                 max_loss=state.max_loss,
                 entry_pop=state.entry_pop,
                 entry_spot=state.entry_spot,
+                data_source=source,
+                data_as_of=as_of,
             )
         except Exception:
             logger.debug(
@@ -1386,13 +1456,16 @@ class LiveRiskMonitor:
         """Write per-trade MTM to a shared file so the Flask dashboard
         container (separate process) can poll it for the live MTM SSE stream."""
         try:
-            self._mtm_state[payload["trade_id"]] = payload
+            tid = payload["trade_id"]
+            existing = self._mtm_state.get(tid) or {}
+            merged = {**existing, **payload}
+            self._mtm_state[tid] = merged
             path = self._mtm_state_path
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             tmp = path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({
-                    "as_of":  payload["as_of"],
+                    "as_of":  merged.get("as_of") or payload.get("as_of"),
                     "trades": self._mtm_state,
                 }, f)
             os.replace(tmp, path)
