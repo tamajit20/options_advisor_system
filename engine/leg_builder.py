@@ -553,9 +553,14 @@ def estimate_pop(
     # ---- Range debit (calendar): P(lower BE < S_T < upper BE) ----
     if strategy in _RANGE_STRATEGIES_PoP:
         upper_be, lower_be = breakevens(legs, strategy or "")
-        if upper_be is not None and lower_be is not None and lower_be < upper_be:
-            p_in = _prob_below(spot, upper_be, dte, atm_iv) - _prob_below(spot, lower_be, dte, atm_iv)
-            return max(0.0, min(100.0, p_in * 100.0))
+        if upper_be is not None and lower_be is not None:
+            if lower_be < upper_be:
+                p_in = _prob_below(spot, upper_be, dte, atm_iv) - _prob_below(spot, lower_be, dte, atm_iv)
+                return max(0.0, min(100.0, p_in * 100.0))
+            # Degenerate envelope (live marks can collapse BEs) — don't fall through
+            # to short-leg delta, which over-states PoP when spot drifted away.
+            inside = lower_be <= spot <= upper_be
+            return 100.0 if inside else 0.0
 
     # ---- Debit / long-premium path: BE-crossing probability ----
     if strategy in _DEBIT_STRATEGIES_PoP:

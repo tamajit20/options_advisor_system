@@ -991,18 +991,20 @@ def live_trade_outlook(
     mp = float(max_profit or 0.0)
     ml = abs(float(max_loss or 0.0))
 
-    sug_legs = legs_from_fills(legs, underlying=underlying, expiry=outlook_expiry)
-    sug_legs = _apply_live_leg_prices(sug_legs, leg_ltps)
-    uses_live_marks = bool(leg_ltps and sug_legs)
+    sug_legs_fill = legs_from_fills(legs, underlying=underlying, expiry=outlook_expiry)
+    # PoP / breakevens use entry fills — live marks on calendars can collapse the
+    # BE envelope (near decay vs far) and falsely inflate win chance via delta PoP.
+    pop_legs = sug_legs_fill
+    uses_live_marks = bool(leg_ltps and sug_legs_fill)
     upper_be = lower_be = None
-    if sug_legs:
+    if pop_legs:
         try:
-            upper_be, lower_be = breakevens(sug_legs, strategy or "")
+            upper_be, lower_be = breakevens(pop_legs, strategy or "")
         except Exception:
             upper_be = lower_be = None
 
     live_pop: Optional[float] = None
-    if spot_f is not None and spot_f > 0 and sug_legs:
+    if spot_f is not None and spot_f > 0 and pop_legs:
         if dte_i <= 0:
             live_pop = _expiry_pop_from_bes(
                 strategy=strategy or "",
@@ -1013,7 +1015,7 @@ def live_trade_outlook(
         elif iv is not None:
             try:
                 live_pop = float(estimate_pop(
-                    sug_legs, spot_f, dte_i, iv, chain=None, strategy=strategy or None,
+                    pop_legs, spot_f, dte_i, iv, chain=None, strategy=strategy or None,
                 ))
             except Exception:
                 live_pop = None

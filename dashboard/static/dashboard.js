@@ -2217,7 +2217,7 @@ function _updateLiveOutlook(tradeId, payload) {
     }
     if (marksNoteEl) {
       const bits = [];
-      if (payload.uses_live_marks) bits.push('PoP breakevens use live leg marks.');
+      if (payload.uses_live_marks) bits.push('PoP uses entry-fill breakevens; MTM uses live leg marks.');
       if (payload.ev_horizon_note) bits.push(payload.ev_horizon_note);
       if (payload.ev_from_now != null && closeNow != null && !isNaN(closeNow)) {
         bits.push(`Expected Δ from now: ${_fmtSignedRs(payload.ev_from_now)}.`);
@@ -2570,9 +2570,19 @@ function renderTradeKvGrid(t, legs) {
       <div class="live-pop-kv" data-trade-id="${escapeHtml(t.trade_id)}"><span class="k">Live PoP</span><br><span class="v">\u2014</span></div>
       ${realUBE != null ? `<div><span class="k">Upper BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realUBE)}</span></div>` : '<div></div>'}
       ${realLBE != null ? `<div><span class="k">Lower BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realLBE)}</span></div>` : '<div></div>'}
-      ${t.net_pnl != null ? `<div><span class="k">P&amp;L</span><br><span class="v">${formatPnlWithPct(t.net_pnl, premium)}</span></div>` : '<div></div>'}
+      ${(() => {
+        const isOpen = (t.status || '').toUpperCase() === 'ACTIVE';
+        const livePnl = t.last_mtm != null ? t.last_mtm : null;
+        if (isOpen && livePnl != null) {
+          return `<div><span class="k">P&amp;L (live)</span><br><span class="v">${formatPnlWithPct(livePnl, premium)}</span></div>`;
+        }
+        if (t.net_pnl != null) {
+          return `<div><span class="k">P&amp;L</span><br><span class="v">${formatPnlWithPct(t.net_pnl, premium)}</span></div>`;
+        }
+        return '<div></div>';
+      })()}
       ${estChg != null ? `<div><span class="k">Est. charges <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(estChg)}</span></div>` : '<div></div>'}
-      ${estNetPnl != null ? `<div><span class="k">Est. net P&amp;L</span><br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${formatPnlWithPct(estNetPnl, premium, { useGrossSign: false })}</span></div>` : '<div></div>'}
+      ${estNetPnl != null ? `<div><span class="k">Est. net at max profit</span><br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${formatPnlWithPct(estNetPnl, premium, { useGrossSign: false })}</span></div>` : '<div></div>'}
       ${dteDisplay != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${escapeHtml(String(dteDisplay))}</span></div>` : '<div></div>'}
       <div><span class="k">Status</span><br><span class="v">${escapeHtml(t.status)}</span></div>
       ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}`;

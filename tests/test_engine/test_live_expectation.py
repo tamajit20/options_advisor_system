@@ -308,6 +308,32 @@ class TestLiveTradeOutlook:
         assert pop_near_horizon < pop_credit_bug
         assert out["live_ev"] < 600.0
 
+    def test_calendar_live_marks_do_not_inflate_pop(self):
+        """Live leg marks must not collapse BEs and inflate PoP via delta fallback."""
+        today = now_ist().date()
+        near = today + timedelta(days=1)
+        far = today + timedelta(days=8)
+        legs = [
+            {"leg_order": 1, "action": "SELL", "strike": 24250.0, "option_type": "CE",
+             "expiry_date": near, "fill_price": 133.5, "lots": 2, "lot_size": 50},
+            {"leg_order": 2, "action": "BUY", "strike": 24250.0, "option_type": "CE",
+             "expiry_date": far, "fill_price": 196.15, "lots": 2, "lot_size": 50},
+        ]
+        leg_ltps = {
+            f"NIFTY|{near.isoformat()}|24250.0|CE": 32.2,
+            f"NIFTY|{far.isoformat()}|24250.0|CE": 114.1,
+        }
+        kw = dict(
+            legs=legs, strategy="CALENDAR_SPREAD", underlying="NIFTY", expiry=near,
+            dte=1, atm_iv=0.17, max_profit=20025.0, max_loss=9397.5, entry_pop=44.7,
+        )
+        base = live_trade_outlook(spot=24070.0, leg_ltps=None, **kw)
+        marked = live_trade_outlook(spot=24070.0, leg_ltps=leg_ltps, **kw)
+        assert base["live_pop"] is not None and base["live_pop"] < 25
+        assert marked["live_pop"] == pytest.approx(base["live_pop"], rel=0.05)
+        assert marked["live_ev"] < 0
+        assert marked["upper_be"] != marked["lower_be"]
+
     def test_long_call_uses_breakeven_not_strike(self):
         legs = [
             {"leg_order": 1, "action": "BUY", "strike": 23000.0, "option_type": "CE",
