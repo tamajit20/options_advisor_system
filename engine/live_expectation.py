@@ -796,11 +796,22 @@ def regime_context_note(*, entry_regime: dict, spot_trend: str, strategy: str) -
     return note
 
 
-def hold_vs_close_advice(*, current_mtm: Optional[float], hold_ev: Optional[float], direction_fit: Optional[str]) -> Optional[str]:
+def hold_vs_close_advice(
+    *,
+    current_mtm: Optional[float],
+    hold_ev: Optional[float],
+    direction_fit: Optional[str],
+    strategy: str = "",
+) -> Optional[str]:
     mtm = _as_float(current_mtm)
     hev = _as_float(hold_ev)
     if mtm is None or hev is None:
         return None
+    if mtm > 0 and hev < 0:
+        return (
+            f"Close now (MTM ₹{mtm:,.0f}) — modeled near-expiry EV is ₹{hev:,.0f}. "
+            f"Expiry EV is total P&L if held, not extra gain from today."
+        )
     gap = mtm - hev
     if gap > 500:
         if direction_fit == "against":
@@ -809,6 +820,32 @@ def hold_vs_close_advice(*, current_mtm: Optional[float], hold_ev: Optional[floa
     if hev - mtm > 500:
         return f"Hold EV (₹{hev:,.0f}) favours staying vs MTM ₹{mtm:,.0f}."
     return None
+
+
+def expiry_ev_note(
+    *,
+    strategy: str,
+    max_profit: float,
+    max_loss: float,
+    near_dte: Optional[int],
+    current_mtm: Optional[float],
+) -> Optional[str]:
+    """Clarify that Expiry EV is modeled total P&L, not incremental gain from MTM."""
+    strat = (strategy or "").upper()
+    mtm = _as_float(current_mtm)
+    mp = float(max_profit or 0.0)
+    if strat != "CALENDAR_SPREAD" or mp <= 0:
+        return None
+    nd = int(near_dte) if near_dte is not None else None
+    bits = [
+        f"Blends win ({mp:,.0f} max) vs loss (−{abs(float(max_loss or 0.0)):,.0f}) — "
+        "total P&L at near expiry, not profit on top of today's MTM.",
+    ]
+    if mtm is not None:
+        bits.append(f"Close now = MTM ₹{mtm:,.0f}.")
+    if nd is not None and nd <= 3:
+        bits.append(f"Near leg {nd} DTE.")
+    return " ".join(bits)
 
 
 def _data_source_label(source: Optional[str], as_of: Optional[str]) -> str:
@@ -885,7 +922,20 @@ def enrich_trade_outlook(
     if em_calibration_warning:
         out["em_calibration_warning"] = em_calibration_warning
     out["hold_vs_close"] = hold_vs_close_advice(
-        current_mtm=current_mtm, hold_ev=out.get("live_ev"), direction_fit=out.get("direction_fit"),
+        current_mtm=current_mtm,
+        hold_ev=out.get("live_ev"),
+        direction_fit=out.get("direction_fit"),
+        strategy=strategy,
+    )
+    mtm_f = _as_float(current_mtm)
+    if mtm_f is not None and out.get("live_ev") is not None:
+        out["ev_from_now"] = round(float(out["live_ev"]) - mtm_f, 2)
+    out["ev_note"] = expiry_ev_note(
+        strategy=strategy,
+        max_profit=max_profit,
+        max_loss=max_loss,
+        near_dte=out.get("near_dte") if out.get("near_dte") is not None else dte,
+        current_mtm=current_mtm,
     )
     if include_scenarios and legs is not None and expiry is not None:
         out["scenarios"] = compute_scenarios(

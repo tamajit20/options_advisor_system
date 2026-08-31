@@ -184,16 +184,17 @@ function _buildMtmPayload(trade, snapTrade) {
   const sug = trade.suggestion || {};
   const st = snapTrade || {};
   const lo = trade.live_outlook || {};
+  // Snap file can hold stale outlook; API live_outlook is recomputed on each page load.
   return {
-    ...lo,
     ...st,
+    ...lo,
     trade_id: trade.trade_id,
     max_profit: st.max_profit ?? trade.actual_max_profit ?? sug.max_profit,
     max_loss: st.max_loss ?? trade.actual_max_loss ?? sug.max_loss,
     trailing_pnl_floor: st.trailing_pnl_floor ?? trade.trailing_pnl_floor,
-    mtm: st.mtm,
-    dte: st.dte ?? lo.dte,
-    as_of: st.as_of,
+    mtm: st.mtm ?? trade.last_mtm,
+    dte: lo.dte ?? st.dte,
+    as_of: st.as_of ?? trade.last_mtm_at,
   };
 }
 
@@ -1870,7 +1871,8 @@ function renderLiveOutlook(t) {
       </div>
       <div class="lo-help-sheet" hidden>
         <p><strong>Win chance</strong> — live PoP from spot, DTE, and ATM IV (or last EOD/intraday when the market is closed). Uses fill prices for breakevens; live leg marks when available.</p>
-        <p><strong>Expiry EV</strong> — expected rupee outcome at expiry: (win% × max profit) + ((1−win%) × −max loss). Not current MTM. For calendar spreads, win chance / EV use the <em>near</em> leg DTE.</p>
+        <p><strong>Close now (MTM)</strong> — your actual mark-to-market P&amp;L right now.</p>
+        <p><strong>Near-expiry EV</strong> — modeled <em>total</em> P&amp;L if held through the near leg: (win% × max profit) + ((1−win%) × −max loss). This is <em>not</em> extra profit on top of MTM, and not what you will make in one day.</p>
         <p><strong>Structural fit</strong> — whether spot meets this strategy's breakeven need. You can show MTM profit while structural fit is &ldquo;past breakeven&rdquo; (theta/IV).</p>
         <p><strong>Close now vs hold</strong> — compares current MTM to hold-to-expiry EV when both are known.</p>
       </div>
@@ -1884,10 +1886,15 @@ function renderLiveOutlook(t) {
           </span>
           <span class="muted lpl-note lo-pop-note">From spot, DTE, and ATM IV \u2014 updates live or from last EOD/intraday data</span>
         </div>
+        <div class="lo-row lo-row-mtm" hidden>
+          <span class="lpl-label">Close now</span>
+          <span class="lpl-val-line"><strong class="lo-mtm">\u2014</strong></span>
+          <span class="muted lpl-note lo-mtm-note">Current mark-to-market P&amp;L</span>
+        </div>
         <div class="lo-row">
-          <span class="lpl-label">Expiry EV</span>
+          <span class="lpl-label lo-ev-label">Near-expiry EV</span>
           <span class="lpl-val-line"><strong class="lo-ev">\u2014</strong></span>
-          <span class="muted lpl-note lo-ev-note">If held to expiry at this win chance (max profit vs max loss)</span>
+          <span class="muted lpl-note lo-ev-note">Modeled total P&amp;L at near expiry (not extra gain from MTM)</span>
         </div>
         <div class="lo-row lo-row-direction">
           <span class="lpl-label">Structural fit<span class="lo-fit-help muted" title="Spot vs breakevens for this strategy — not the same as current P&amp;L"> \u2139</span></span>
@@ -2103,7 +2110,11 @@ function _updateLiveOutlook(tradeId, payload) {
     const popEl = el.querySelector('.lo-pop');
     const deltaEl = el.querySelector('.lo-pop-delta');
     const popNote = el.querySelector('.lo-pop-note');
+    const mtmRow = el.querySelector('.lo-row-mtm');
+    const mtmEl = el.querySelector('.lo-mtm');
+    const evLabel = el.querySelector('.lo-ev-label');
     const evEl = el.querySelector('.lo-ev');
+    const evNote = el.querySelector('.lo-ev-note');
     const dirEl = el.querySelector('.lo-direction');
     const dirNote = el.querySelector('.lo-direction-note');
     const marketEl = el.querySelector('.lo-market');
@@ -2146,6 +2157,18 @@ function _updateLiveOutlook(tradeId, payload) {
       }
       popNote.textContent = note;
     }
+    const closeNow = payload.close_now_ev != null ? parseFloat(payload.close_now_ev)
+      : (payload.mtm != null ? parseFloat(payload.mtm) : null);
+    if (mtmRow && mtmEl) {
+      if (closeNow != null && !isNaN(closeNow)) {
+        mtmRow.hidden = false;
+        mtmEl.textContent = _fmtSignedRs(closeNow);
+        mtmEl.classList.remove('pnl-profit', 'pnl-loss');
+        mtmEl.classList.add(closeNow >= 0 ? 'pnl-profit' : 'pnl-loss');
+      } else {
+        mtmRow.hidden = true;
+      }
+    }
     if (evEl) {
       const ev = payload.live_ev != null ? parseFloat(payload.live_ev) : null;
       evEl.textContent = _fmtSignedRs(ev);
@@ -2153,6 +2176,14 @@ function _updateLiveOutlook(tradeId, payload) {
       if (ev != null && !isNaN(ev)) {
         evEl.classList.add(ev >= 0 ? 'pnl-profit' : 'pnl-loss');
       }
+    }
+    if (evLabel) {
+      evLabel.textContent = (payload.far_dte != null && payload.near_dte != null)
+        ? 'Near-expiry EV' : 'Expiry EV';
+    }
+    if (evNote) {
+      evNote.textContent = payload.ev_note
+        || 'Modeled total P&L at expiry (not extra gain from MTM)';
     }
     if (dirEl) {
       dirEl.textContent = payload.direction_label || '\u2014';
@@ -2186,6 +2217,9 @@ function _updateLiveOutlook(tradeId, payload) {
       const bits = [];
       if (payload.uses_live_marks) bits.push('PoP breakevens use live leg marks.');
       if (payload.ev_horizon_note) bits.push(payload.ev_horizon_note);
+      if (payload.ev_from_now != null && closeNow != null && !isNaN(closeNow)) {
+        bits.push(`Expected Δ from now: ${_fmtSignedRs(payload.ev_from_now)}.`);
+      }
       marksNoteEl.textContent = bits.join(' ');
     }
     const marketBits = [];

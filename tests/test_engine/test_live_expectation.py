@@ -12,6 +12,7 @@ from contracts import SuggestionLeg
 from engine.live_expectation import (
     assess_direction_fit,
     enrich_trade_outlook,
+    expiry_ev_note,
     hold_vs_close_advice,
     live_trade_outlook,
     normalize_atm_iv,
@@ -364,6 +365,26 @@ class TestEnrichTradeOutlook:
             current_mtm=6000.0, hold_ev=2000.0, direction_fit="against",
         )
         assert advice and "Closing now" in advice
+
+    def test_hold_vs_close_when_mtm_positive_ev_negative(self):
+        advice = hold_vs_close_advice(
+            current_mtm=112.0, hold_ev=-6144.0, direction_fit="against",
+            strategy="CALENDAR_SPREAD",
+        )
+        assert advice and "Close now" in advice
+        assert "not extra gain" in advice
+
+    def test_expiry_ev_note_for_calendar(self):
+        note = expiry_ev_note(
+            strategy="CALENDAR_SPREAD",
+            max_profit=15540.0,
+            max_loss=9270.0,
+            near_dte=1,
+            current_mtm=112.0,
+        )
+        assert note and "15,540" in note
+        assert "not profit on top" in note
+        assert "Close now" in note
 
     def test_parse_entry_regime_from_conditions(self):
         cond = [
