@@ -185,6 +185,7 @@ function _buildMtmPayload(trade, snapTrade) {
   const st = snapTrade || {};
   const lo = trade.live_outlook || {};
   // Snap file can hold stale outlook; API live_outlook is recomputed on each page load.
+  const liveMtm = st.mtm ?? trade.last_mtm;
   return {
     ...st,
     ...lo,
@@ -192,7 +193,8 @@ function _buildMtmPayload(trade, snapTrade) {
     max_profit: st.max_profit ?? trade.actual_max_profit ?? sug.max_profit,
     max_loss: st.max_loss ?? trade.actual_max_loss ?? sug.max_loss,
     trailing_pnl_floor: st.trailing_pnl_floor ?? trade.trailing_pnl_floor,
-    mtm: st.mtm ?? trade.last_mtm,
+    mtm: liveMtm,
+    close_now_ev: liveMtm ?? lo.close_now_ev,
     dte: lo.dte ?? st.dte,
     as_of: st.as_of ?? trade.last_mtm_at,
   };
@@ -6587,9 +6589,13 @@ function _applyMtmEvent(m) {
       trade_name: m.trade_name,
     };
   }
+  const payload = {
+    ...m,
+    close_now_ev: m.mtm != null ? m.mtm : m.close_now_ev,
+  };
   _updateCurrentPnlBadge(m.trade_id, m.mtm, m.as_of, true);
-  _updateLiveProfitLevels(m.trade_id, m);
-  _updateLiveOutlook(m.trade_id, m);
+  _updateLiveProfitLevels(m.trade_id, payload);
+  _updateLiveOutlook(m.trade_id, payload);
 
   // Update LEFT panel live price spans with latest leg LTPs
   if (m.leg_ltps && typeof m.leg_ltps === 'object') {

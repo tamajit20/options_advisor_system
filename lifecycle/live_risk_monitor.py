@@ -267,6 +267,9 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
             if not legs:
                 continue
 
+            leg_expiries = [leg.key[1] for leg in legs if leg.key and len(leg.key) > 1]
+            trade_expiry = min(leg_expiries) if leg_expiries else sug["expiry_date"]
+
             entry_pop = None
             if sug.get("probability_of_profit") is not None:
                 try:
@@ -279,9 +282,9 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                     entry_spot = float(trade["spot_at_execution"])
                 except (TypeError, ValueError):
                     entry_spot = None
-            atm_iv = _latest_atm_iv(str(sug["underlying"]), sug["expiry_date"])
+            atm_iv = _latest_atm_iv(str(sug["underlying"]), trade_expiry)
             market = resolve_market_inputs(
-                db, str(sug["underlying"]), sug["expiry_date"],
+                db, str(sug["underlying"]), trade_expiry,
             )
             greeks_row = TradeGreeksRepo(db).latest_for_trade(trade_id)
 
@@ -290,7 +293,7 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                 trade_name=str(trade.get("trade_name") or trade_id),
                 strategy=str(sug.get("strategy") or ""),
                 underlying=str(sug["underlying"]),
-                expiry=sug["expiry_date"],
+                expiry=trade_expiry,
                 entry_net_credit=float(trade.get("net_credit_actual") or 0.0),
                 max_profit=float(trade.get("actual_max_profit") or 0.0),
                 max_loss=float(trade.get("actual_max_loss") or 0.0),
@@ -914,7 +917,6 @@ class LiveRiskMonitor:
              "lots": leg.lots, "lot_size": leg.lot_size}
             for leg in state.legs
         ]
-        dte = max(days_between(now.date(), state.expiry), 0)
         horizon = outlook_horizon(
             strategy=state.strategy,
             legs=state.legs,
@@ -931,7 +933,7 @@ class LiveRiskMonitor:
             max_profit_rs=state.max_profit,
             max_loss_rs=state.max_loss,
             sl_level_per_share=state.sl_level,
-            days_to_expiry=outlook_dte if state.strategy == "CALENDAR_SPREAD" else dte,
+            days_to_expiry=outlook_dte,
             strategy=state.strategy,
             as_of=now,
             greeks=state.trade_greeks,
@@ -943,7 +945,7 @@ class LiveRiskMonitor:
             strategy=state.strategy, max_loss_rs=state.max_loss)
         target_rs, _, _ = profit_target_trade_rs(
             strategy=state.strategy,
-            dte=dte,
+            dte=outlook_dte,
             max_profit_rs=state.max_profit,
             entry_net_credit=state.entry_net_credit,
         )
@@ -991,14 +993,16 @@ class LiveRiskMonitor:
                 "trade_id": state.trade_id,
                 "trade_name": state.trade_name,
                 "mtm": round(current_pnl, 2),
-                "dte": dte,
+                "dte": outlook_dte,
+                "near_dte": horizon.get("near_dte"),
+                "far_dte": horizon.get("far_dte"),
                 "max_profit": state.max_profit,
                 "max_loss": state.max_loss,
                 "trailing_pnl_floor": state.trailing_pnl_floor,
                 "as_of": now.isoformat(timespec="seconds"),
                 "leg_ltps": self._leg_ltps_dict(state),
             }
-            mtm_payload.update(self._live_outlook_fields(state, dte))
+            mtm_payload.update(self._live_outlook_fields(state, now=now))
 
         structural_flip: Optional[_PendingAlert] = None
         if mtm_payload:
@@ -1014,7 +1018,7 @@ class LiveRiskMonitor:
                 "trade_id": state.trade_id,
                 "trade_name": state.trade_name,
                 "mtm": round(current_pnl, 2),
-                "dte": dte,
+                "dte": outlook_dte,
                 "max_profit": state.max_profit,
                 "max_loss": state.max_loss,
                 "as_of": now.isoformat(timespec="seconds"),
@@ -1024,7 +1028,8 @@ class LiveRiskMonitor:
             if mtm_payload:
                 snapshot_payload["outlook_json"] = {
                     k: mtm_payload[k] for k in (
-                        "live_pop", "live_ev", "direction_fit", "direction_label",
+                        "live_pop", "live_ev", "close_now_ev", "hold_vs_close",
+                        "direction_fit", "direction_label", "near_dte", "far_dte",
                         "spot", "as_of",
                     ) if k in mtm_payload
                 }
@@ -1305,14 +1310,13 @@ class LiveRiskMonitor:
             for state in self._snapshot.trades.values():
                 if self._in_session(now) and state.last_spot is not None:
                     continue
-                dte = max(days_between(now.date(), state.expiry), 0)
-                outlook = self._live_outlook_fields(state, dte, now=now)
+                outlook = self._live_outlook_fields(state, now=now)
                 if outlook.get("spot") is None and outlook.get("live_pop") is None:
                     continue
                 pending.append({
                     "trade_id": state.trade_id,
                     "trade_name": state.trade_name,
-                    "dte": dte,
+                    "dte": outlook.get("dte"),
                     "max_profit": state.max_profit,
                     "max_loss": state.max_loss,
                     "as_of": now.isoformat(timespec="seconds"),
@@ -1329,7 +1333,7 @@ class LiveRiskMonitor:
                 )
 
     def _live_outlook_fields(
-        self, state: _TradeState, dte: int, *, now: Optional[datetime] = None,
+        self, state: _TradeState, *, now: Optional[datetime] = None,
     ) -> dict:
         """Live win-chance / expiry EV from current spot — never raises."""
         now = now or self._clock()

@@ -132,7 +132,11 @@ def legs_from_fills(
         key = getter("key")
         if exp is None and isinstance(key, tuple) and len(key) > 1:
             exp = key[1]
-        if not isinstance(exp, date):
+        from engine.exit_pricing import expiry_date as _parse_expiry
+        parsed = _parse_expiry(exp)
+        if parsed is not None:
+            exp = parsed
+        elif not isinstance(exp, date):
             exp = expiry
         out.append(SuggestionLeg(
             leg_order=int(getter("leg_order") or (i + 1)),
@@ -160,11 +164,12 @@ def _expiry_pop_from_bes(
     lower_be: Optional[float],
 ) -> float:
     """Deterministic PoP at expiry (DTE = 0): inside/past breakevens or not."""
-    debit = strategy in _DEBIT_STRATEGIES
-    if debit:
+    strat = (strategy or "").upper()
+    if strat in _DEBIT_STRATEGIES:
         above = upper_be is not None and spot >= upper_be
         below = lower_be is not None and spot <= lower_be
         return 100.0 if (above or below) else 0.0
+    # Calendar + credit range structures: profit inside breakevens at expiry.
     inside = True
     if upper_be is not None and spot > upper_be:
         inside = False

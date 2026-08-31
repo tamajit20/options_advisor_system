@@ -14,6 +14,7 @@ from engine.live_expectation import (
     enrich_trade_outlook,
     expiry_ev_note,
     hold_vs_close_advice,
+    legs_from_fills,
     live_trade_outlook,
     normalize_atm_iv,
     outlook_horizon,
@@ -55,6 +56,19 @@ def _calendar_legs(*, near=None, far=None):
         {"leg_order": 2, "action": "BUY", "strike": 24000.0, "option_type": "CE",
          "expiry_date": far, "fill_price": 280.0, "lots": 1, "lot_size": 50},
     ]
+
+
+class TestLegsFromFills:
+    def test_parses_string_expiry_on_legs(self):
+        today = now_ist().date()
+        exp = today + timedelta(days=5)
+        legs = [
+            {"leg_order": 1, "action": "SELL", "strike": 24000.0, "option_type": "CE",
+             "expiry_date": exp.isoformat(), "fill_price": 100.0, "lots": 1, "lot_size": 50},
+        ]
+        parsed = legs_from_fills(legs, underlying="NIFTY", expiry=today + timedelta(days=20))
+        assert len(parsed) == 1
+        assert parsed[0].expiry_date == exp
 
 
 class TestOutlookHorizon:
