@@ -710,35 +710,124 @@ def _apply_live_leg_prices(
     return out
 
 
-def _be_distance_detail(
+def _fmt_signed_pts(pts: float) -> str:
+    sign = "+" if pts >= 0 else "−"
+    return f"{sign}{abs(pts):,.0f} pts"
+
+
+def _profit_zone_note(lower_be: Optional[float], upper_be: Optional[float]) -> str:
+    lb = _as_float(lower_be)
+    ub = _as_float(upper_be)
+    if lb is not None and ub is not None and lb < ub:
+        return f"Zone ₹{lb:,.0f}–₹{ub:,.0f}"
+    if lb is not None:
+        return f"Above ₹{lb:,.0f}"
+    if ub is not None:
+        return f"Below ₹{ub:,.0f}"
+    return ""
+
+
+def _profit_zone_detail(
+    *,
+    strategy: str,
     spot: Optional[float],
     upper_be: Optional[float],
     lower_be: Optional[float],
 ) -> dict:
+    """Signed point move to profit zone (+ = rally needed, − = decline needed)."""
     spot_f = _as_float(spot)
     ub = _as_float(upper_be)
     lb = _as_float(lower_be)
     if spot_f is None:
         return {}
-    if lb is not None and spot_f < lb:
-        pts = round(lb - spot_f, 2)
-        pct = round(pts / spot_f * 100.0, 2) if spot_f > 0 else None
-        text = f"₹{pts:,.0f} below lower BE ({pct:.2f}%)" if pct is not None else f"₹{pts:,.0f} below lower BE"
-        return {"be_side": "below_lower", "be_distance_pts": pts, "be_distance_pct": pct, "be_distance_text": text}
-    if ub is not None and spot_f > ub:
-        pts = round(spot_f - ub, 2)
-        pct = round(pts / spot_f * 100.0, 2) if spot_f > 0 else None
-        text = f"₹{pts:,.0f} above upper BE ({pct:.2f}%)" if pct is not None else f"₹{pts:,.0f} above upper BE"
-        return {"be_side": "above_upper", "be_distance_pts": pts, "be_distance_pct": pct, "be_distance_text": text}
-    if lb is not None and ub is not None:
-        mid = (lb + ub) / 2.0
-        pts = round(abs(spot_f - mid), 2)
+
+    strat = (strategy or "").upper()
+    note = _profit_zone_note(lb, ub)
+    pct = lambda pts: round(abs(pts) / spot_f * 100.0, 2) if spot_f > 0 else None
+
+    def _inside() -> dict:
         return {
+            "profit_zone_pts": 0.0,
+            "profit_zone_side": "inside",
+            "profit_zone_text": "Inside profit zone",
+            "profit_zone_note": note,
             "be_side": "inside",
-            "be_distance_pts": pts,
-            "be_distance_pct": round(pts / spot_f * 100.0, 2) if spot_f > 0 else None,
-            "be_distance_text": f"Inside breakevens (₹{pts:,.0f} from mid)",
+            "be_distance_pts": 0.0,
+            "be_distance_pct": 0.0,
+            "be_distance_text": "Inside profit zone",
         }
+
+    def _outside(*, pts: float, side: str) -> dict:
+        text = f"Spot needs {_fmt_signed_pts(pts)} for profit zone"
+        abs_pts = round(abs(pts), 2)
+        return {
+            "profit_zone_pts": round(pts, 2),
+            "profit_zone_side": side,
+            "profit_zone_text": text,
+            "profit_zone_note": note,
+            "be_side": side,
+            "be_distance_pts": abs_pts,
+            "be_distance_pct": pct(pts),
+            "be_distance_text": text,
+        }
+
+    # Credit range structures + calendar: profit inside breakevens.
+    if strat in _RANGE_STRATEGIES:
+        if lb is not None and spot_f < lb:
+            return _outside(pts=round(lb - spot_f, 2), side="below_lower")
+        if ub is not None and spot_f > ub:
+            return _outside(pts=round(ub - spot_f, 2), side="above_upper")
+        if lb is not None and ub is not None and lb <= spot_f <= ub:
+            return _inside()
+        return {"be_side": "unknown"}
+
+    # Long premium breakout: profit outside breakevens.
+    if strat in _BREAKOUT_STRATEGIES:
+        if lb is not None and ub is not None:
+            if spot_f >= ub or spot_f <= lb:
+                return _inside()
+            up_pts = round(ub - spot_f, 2)
+            down_pts = round(lb - spot_f, 2)
+            text = (
+                f"Spot needs {_fmt_signed_pts(up_pts)} (up) or "
+                f"{_fmt_signed_pts(down_pts)} (down) for profit zone"
+            )
+            return {
+                "profit_zone_pts": up_pts if abs(up_pts) <= abs(down_pts) else down_pts,
+                "profit_zone_side": "needs_breakout",
+                "profit_zone_text": text,
+                "profit_zone_note": note,
+                "be_side": "needs_breakout",
+                "be_distance_text": text,
+            }
+        return {"be_side": "unknown"}
+
+    # Directional bull: spot at/above lower breakeven (or short put level).
+    if strat in _BULL_STRATEGIES:
+        key = lb
+        if key is not None:
+            if spot_f >= key:
+                return _inside()
+            return _outside(pts=round(key - spot_f, 2), side="below_lower")
+        return {"be_side": "unknown"}
+
+    # Directional bear: spot at/below upper breakeven.
+    if strat in _BEAR_STRATEGIES:
+        key = ub
+        if key is not None:
+            if spot_f <= key:
+                return _inside()
+            return _outside(pts=round(key - spot_f, 2), side="above_upper")
+        return {"be_side": "unknown"}
+
+    # Generic fallback when both breakevens exist.
+    if lb is not None and ub is not None:
+        if spot_f < lb:
+            return _outside(pts=round(lb - spot_f, 2), side="below_lower")
+        if spot_f > ub:
+            return _outside(pts=round(ub - spot_f, 2), side="above_upper")
+        if lb <= spot_f <= ub:
+            return _inside()
     return {"be_side": "unknown"}
 
 
@@ -915,7 +1004,12 @@ def enrich_trade_outlook(
     out = dict(base)
     out["entry_ev"] = compute_expiry_ev(out.get("entry_pop"), max_profit, max_loss)
     out["close_now_ev"] = round(float(current_mtm), 2) if current_mtm is not None else None
-    out.update(_be_distance_detail(out.get("spot"), out.get("upper_be"), out.get("lower_be")))
+    out.update(_profit_zone_detail(
+        strategy=strategy,
+        spot=out.get("spot"),
+        upper_be=out.get("upper_be"),
+        lower_be=out.get("lower_be"),
+    ))
     out["data_source_label"] = _data_source_label(out.get("data_source"), out.get("data_as_of"))
     entry_regime = parse_entry_regime(conditions_json)
     out["entry_regime"] = entry_regime

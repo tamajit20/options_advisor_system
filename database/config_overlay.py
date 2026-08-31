@@ -124,8 +124,10 @@ _DESCRIPTIONS: Dict[str, str] = {
     "strategy_sl_limits":
         "Per-strategy MTM stop (loss_fraction + ₹ cap). Exit Plan and LOSS_LIMIT_HIT.",
     "loss_milestone_alert":
-        "Optional early exit when MTM loss hits pct_of_max_loss % of max loss. "
-        "Separate from strategy SL. JSON: {enabled, pct_of_max_loss, cooldown_minutes}.",
+        "Optional early exit when MTM loss hits pct_of_premium % of entry premium "
+        "(paid for debits, received for credits — same as P&L % brackets). "
+        "Separate from strategy SL. JSON: {enabled, pct_of_premium, cooldown_minutes}. "
+        "Legacy key pct_of_max_loss is still read if pct_of_premium is omitted.",
     "live_risk_monitor":
         "Live alert engine (session, cooldown, trailing floor, pre-breach). Nested JSON.",
     "trading_capital_rs": "Notional capital for circuit-breaker and sizing.",

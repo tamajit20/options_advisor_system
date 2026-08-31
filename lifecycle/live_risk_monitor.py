@@ -15,8 +15,8 @@ uses) and emits a notification when:
 * ``PROFIT_FLOOR_SET`` — a trailing profit-lock step arms and raises the
   trade's ``trailing_pnl_floor``.
 * ``PROFIT_FLOOR_HIT`` — live MTM drops below the armed profit floor.
-* ``LOSS_MILESTONE_HIT`` — optional user-configured ``pct_of_max_loss`` of
-  max loss (see ``loss_milestone_alert``). Separate from hard SL; suggests
+* ``LOSS_MILESTONE_HIT`` — optional user-configured ``pct_of_premium`` of
+  entry premium (see ``loss_milestone_alert``). Separate from hard SL; suggests
   considering an exit when the milestone is crossed.
 * ``LOSS_LIMIT_HIT`` — current PnL crosses the strategy effective loss limit
   (``effective_sl_rs``).
@@ -74,7 +74,12 @@ from engine.exit_engine import evaluate_exit
 from engine.exit_pricing import format_leg_quote_key
 from engine.live_expectation import enrich_trade_outlook, live_trade_outlook, outlook_horizon
 from engine.pnl_targets import profit_target_trade_rs
-from engine.sl_threshold import effective_sl_rs, loss_milestone_config, loss_milestone_rs
+from engine.sl_threshold import (
+    effective_sl_rs,
+    loss_milestone_config,
+    loss_milestone_rs,
+    trade_investment_rs,
+)
 from providers.base import LiveQuote
 from providers.event_bus import (
     EventBus,
@@ -602,7 +607,7 @@ class LiveRiskMonitor:
         """Re-read loss_milestone_alert from STRATEGY_CONFIG."""
         lmc = loss_milestone_config()
         self._loss_milestone_enabled = lmc["enabled"]
-        self._loss_milestone_pct = lmc["pct_of_max_loss"]
+        self._loss_milestone_pct = lmc["pct_of_premium"]
         cd = lmc.get("cooldown_minutes")
         self._loss_milestone_cooldown = (
             timedelta(minutes=int(cd)) if cd is not None else None
@@ -1092,15 +1097,19 @@ class LiveRiskMonitor:
             )
             return alert, mtm_payload, trailing_persist, snapshot_payload
 
-        # 2. Loss milestone — user % of max loss (independent of strategy SL).
-        milestone_rs, milestone_pct = loss_milestone_rs(max_loss_rs=state.max_loss)
+        # 2. Loss milestone — user % of entry premium (independent of strategy SL).
+        investment = trade_investment_rs(entry_net_credit_rs=state.entry_net_credit)
+        milestone_rs, milestone_pct = loss_milestone_rs(investment_rs=investment)
         if (self._loss_milestone_enabled
                 and milestone_rs > 0
                 and decision.decision != "SL_HIT"
                 and current_pnl <= -milestone_rs):
+            prem_label = (
+                "premium received" if state.entry_net_credit > 0 else "premium paid"
+            )
             reason = (
-                f"Loss milestone ({milestone_pct:.0f}% of max loss ₹"
-                f"{state.max_loss:,.0f} = ₹{milestone_rs:,.0f}): "
+                f"Loss milestone ({milestone_pct:.0f}% of {prem_label} ₹"
+                f"{investment:,.0f} = ₹{milestone_rs:,.0f}): "
                 f"MTM ₹{current_pnl:,.0f}. Consider closing — hard SL unchanged."
             )
             alert = self._maybe_alert(

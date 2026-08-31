@@ -203,7 +203,7 @@ def pnl_rules_public() -> Dict[str, Any]:
         "loss_milestone_alert": dict(
             STRATEGY_CONFIG.get("loss_milestone_alert") or {
                 "enabled": False,
-                "pct_of_max_loss": 25.0,
+                "pct_of_premium": 25.0,
             }
         ),
     }

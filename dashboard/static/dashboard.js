@@ -293,7 +293,9 @@ function _resolveLiveLevelThresholds(section, payload) {
     floor = parseFloat(section.dataset.trailingFloor);
   }
   if (floor != null && isNaN(floor)) floor = null;
-  const milestoneRs = lossMilestoneRs(ml);
+  const milestoneRs = lossMilestoneRs(
+    (!isNaN(premiumRs) && premiumRs > 0) ? premiumRs : null,
+  );
   if (targetRs == null && lossRs == null && floor == null && milestoneRs == null) return null;
   return { targetRs, lossRs, floor, milestoneRs };
 }
@@ -724,6 +726,174 @@ function strategyGuideInfoBtn(code) {
   if (!code || code === 'NONE') return '';
   return `<button type="button" class="strategy-guide-btn" data-strategy="${escapeHtml(code)}" title="Learn ${escapeHtml(code)}" aria-label="Learn ${escapeHtml(code)} strategy">\u24d8</button>`;
 }
+
+/** Plain-language glossary — hover or tap the ⓘ icon beside a label. */
+const TERM_HELP = {
+  win_chance: {
+    label: 'Win chance',
+    html: '<strong>Win chance</strong> — Estimated odds this trade finishes profitable at expiry, from today\u2019s index level, days left, and volatility. A model guess, not a forecast of tomorrow\u2019s move.',
+  },
+  pop_entry: {
+    label: 'Entry PoP',
+    html: '<strong>Entry PoP</strong> (probability of profit) — Win-chance estimate from when you opened the trade. Compare with Live PoP to see if odds improved or worsened.',
+  },
+  pop_live: {
+    label: 'Live PoP',
+    html: '<strong>Live PoP</strong> — Win chance recalculated with today\u2019s spot and time left. Updates during the session or from the last market snapshot when closed.',
+  },
+  close_now_mtm: {
+    label: 'Close now',
+    html: '<strong>Close now</strong> — Profit or loss if you exited at current option prices right now. This is real money on the table, before brokerage.',
+  },
+  near_expiry_ev: {
+    label: 'Near-expiry EV',
+    html: '<strong>Near-expiry EV</strong> (expected value) — Average outcome if you hold to expiry: blends max profit \u00d7 win% with max loss \u00d7 loss%. Total P&amp;L at expiry, <em>not</em> extra gain on top of today\u2019s MTM.',
+  },
+  structural_fit: {
+    label: 'Structural fit',
+    html: '<strong>Structural fit</strong> — Is the index where this strategy needs it to be (inside breakevens, near strike, etc.)? You can show green MTM while fit is poor — time decay can help marks before expiry structure fails.',
+  },
+  profit_zone: {
+    label: 'Profit zone',
+    html: '<strong>Profit zone</strong> — Index range where this trade wins at expiry. <strong>+X pts</strong> = needs a rally that many points; <strong>\u2212X pts</strong> = needs a fall. Inside = already in the winning band.',
+  },
+  market_outlook: {
+    label: 'Market',
+    html: '<strong>Market</strong> — Spot, expected move (EM), and days to expiry. EM \u00b1X = typical one-day index swing from volatility; compare with how far spot is from breakevens.',
+  },
+  mtm: {
+    label: 'MTM / P&L',
+    html: '<strong>MTM</strong> (mark-to-market) — Live profit/loss from current option prices vs your entry fills. Changes every tick; not final until you close.',
+  },
+  max_profit: {
+    label: 'Max profit',
+    html: '<strong>Max profit</strong> — Best realistic outcome if the trade works perfectly (e.g. all credit captured, spread at full width). Shown at entry; rarely exact to the rupee.',
+  },
+  max_loss: {
+    label: 'Max loss',
+    html: '<strong>Max loss</strong> — Worst case if the trade fully fails (defined-risk spreads) or premium paid (long options). Your risk cap for sizing.',
+  },
+  est_net_max_profit: {
+    label: 'Est. net at max profit',
+    html: '<strong>Est. net at max profit</strong> — Max profit minus estimated brokerage/charges. Theoretical best case at entry — <em>not</em> what you should expect today or at expiry.',
+  },
+  upper_be: {
+    label: 'Upper breakeven',
+    html: '<strong>Upper breakeven (BE)</strong> — Index level above which this trade starts losing (for range/credit strategies) or where long premium begins to profit. From your actual fill prices.',
+  },
+  lower_be: {
+    label: 'Lower breakeven',
+    html: '<strong>Lower breakeven (BE)</strong> — Index level below which this trade starts losing (for range/credit strategies) or where puts begin to profit. From your actual fill prices.',
+  },
+  dte: {
+    label: 'DTE',
+    html: '<strong>DTE</strong> (days to expiry) — Calendar days until the option expires. Theta (time decay) accelerates in the last week; calendars use the <em>near</em> leg for outlook.',
+  },
+  net_credit: {
+    label: 'Net credit',
+    html: '<strong>Net credit</strong> — Premium received minus premium paid at entry (per unit). Negative = net debit (you paid to open).',
+  },
+  premium: {
+    label: 'Premium',
+    html: '<strong>Premium</strong> — Total option premium paid or received to open the trade (all legs). P&amp;L % is often shown vs this amount.',
+  },
+  est_charges: {
+    label: 'Est. charges',
+    html: '<strong>Est. charges</strong> — Approximate brokerage, STT, and exchange fees from your entry fills. Subtracted in \u201cnet at max profit\u201d.',
+  },
+  target_profit: {
+    label: 'Target profit',
+    html: '<strong>Target profit</strong> — Rupee MTM goal to take money off the table (e.g. 50% of max credit). Hitting it triggers a review alert, not auto-exit.',
+  },
+  loss_milestone: {
+    label: 'Loss milestone',
+    html: '<strong>Loss milestone</strong> — Early warning when MTM loss reaches your configured % of <em>entry premium</em> (premium paid on debits, premium received on credits — same basis as the P&amp;L % bracket). Softer than the hard stop-loss.',
+  },
+  profit_floor: {
+    label: 'Profit floor',
+    html: '<strong>Profit floor</strong> — Trailing lock: after profit builds, this is the minimum MTM you accept before an exit alert. Rises as target steps are hit.',
+  },
+  loss_limit: {
+    label: 'Loss limit',
+    html: '<strong>Loss limit</strong> — Hard MTM stop: exit alert when loss reaches this rupee amount (often a % of max loss). Separate from Nifty spot stop levels.',
+  },
+  spot_sl: {
+    label: 'Nifty SL level',
+    html: '<strong>Spot stop loss</strong> — Index price that triggers an alert to close (or one side of a spread). Based on structure, not MTM alone.',
+  },
+  spot_at_entry: {
+    label: 'Spot at entry',
+    html: '<strong>Spot at entry</strong> — Nifty (or index) level when you executed. Compare with live spot to see how far price has moved.',
+  },
+  live_outlook: {
+    label: 'Live outlook',
+    html: '<strong>Live outlook</strong> — Forward-looking stats for open trades: win chance, hold vs close, and whether index position still fits the strategy. Tap <strong>?</strong> for a full field guide.',
+  },
+  live_profit_levels: {
+    label: 'Live profit levels',
+    html: '<strong>Live profit levels</strong> — MTM-based exit rails: target, trailing floor, milestone, and loss limit. Breaches show here and send notifications.',
+  },
+  pop: {
+    label: 'PoP',
+    html: '<strong>PoP</strong> (probability of profit) — Estimated % chance this suggestion is profitable at expiry if entered at suggested prices.',
+  },
+  credit_per_unit: {
+    label: 'Net credit per unit',
+    html: '<strong>Net credit (per unit)</strong> — Premium in/out for one lot-size unit before multiplying by quantity.',
+  },
+  stop_loss: {
+    label: 'Stop loss',
+    html: '<strong>Stop loss</strong> — Either a spot level (index crosses \u2192 alert) or MTM loss cap for debit spreads. See exit plan for your strategy type.',
+  },
+  iv_rank: {
+    label: 'IV Rank',
+    html: '<strong>IV Rank</strong> — Where implied volatility sits vs its past year (0\u2013100). High = options expensive (good for selling); low = cheap (good for buying).',
+  },
+  expected_move: {
+    label: 'Expected move',
+    html: '<strong>Expected move (EM)</strong> — Typical index range to expiry from current volatility. If EM is smaller than distance to breakeven, the trade may need a lucky move.',
+  },
+};
+
+function termHelpIcon(key) {
+  const t = TERM_HELP[key];
+  if (!t) return '';
+  return `<span class="term-help" tabindex="0" role="button" aria-label="Explain: ${escapeHtml(t.label)}">`
+    + `\u24d8<span class="term-help-popup">${t.html}</span></span>`;
+}
+
+function labelWithHelp(text, key) {
+  return `${text}${key ? termHelpIcon(key) : ''}`;
+}
+
+function kvLabel(text, key) {
+  return `<span class="k">${labelWithHelp(text, key)}</span>`;
+}
+
+function wireTermHelpToggle(root) {
+  if (!window._termHelpDocWired) {
+    window._termHelpDocWired = true;
+    document.addEventListener('click', () => {
+      document.querySelectorAll('.term-help-open').forEach(el => el.classList.remove('term-help-open'));
+    });
+  }
+  (root || document).querySelectorAll('.term-help:not([data-wired])').forEach(el => {
+    el.dataset.wired = '1';
+    el.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const open = el.classList.toggle('term-help-open');
+      if (open) {
+        el.closest('.live-outlook, .trade-action-panel, .card, .sl-monitor-section, .kv-grid')
+          ?.querySelectorAll('.term-help-open')
+          ?.forEach(other => { if (other !== el) other.classList.remove('term-help-open'); });
+      }
+    });
+    el.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') el.classList.remove('term-help-open');
+    });
+  });
+}
+window.wireTermHelpToggle = wireTermHelpToggle;
 
 const toast = (msg, kind='info') => {
   const el = document.createElement('div');
@@ -1518,6 +1688,7 @@ async function loadSuggestion() {
     c.innerHTML = parts.join('');
     bindSuggestionActions();
     bindCollapsibleCardInteractions(c);
+    wireTermHelpToggle(c);
     c.querySelectorAll('.collapsible-card').forEach(card => card.classList.add('mobile-compact'));
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
@@ -1546,7 +1717,7 @@ const PNL_RULES = {
   },
   loss_milestone_alert: {
     enabled: false,
-    pct_of_max_loss: 25.0,
+    pct_of_premium: 25.0,
   },
 };
 
@@ -1631,7 +1802,7 @@ function slLossPctHint(strategy, maxLossRs) {
 }
 
 function lossMilestoneConfig() {
-  return PNL_RULES.loss_milestone_alert || { enabled: false, pct_of_max_loss: 25 };
+  return PNL_RULES.loss_milestone_alert || { enabled: false, pct_of_premium: 25 };
 }
 
 function lossMilestoneEnabled() {
@@ -1639,24 +1810,30 @@ function lossMilestoneEnabled() {
 }
 
 function lossMilestonePct() {
-  const pct = parseFloat(lossMilestoneConfig().pct_of_max_loss);
+  const cfg = lossMilestoneConfig();
+  const pct = parseFloat(
+    cfg.pct_of_premium != null ? cfg.pct_of_premium : cfg.pct_of_max_loss,
+  );
   return (!isNaN(pct) && pct > 0) ? pct : null;
 }
 
-function lossMilestoneRs(maxLossRs) {
-  if (!lossMilestoneEnabled() || maxLossRs == null || maxLossRs <= 0) return null;
+/** Rupee MTM loss that triggers milestone — % of entry premium (same as P&L % basis). */
+function lossMilestoneRs(investmentRs) {
+  if (!lossMilestoneEnabled() || investmentRs == null || investmentRs <= 0) return null;
   const pct = lossMilestonePct();
   if (pct == null) return null;
-  return maxLossRs * (pct / 100);
+  return investmentRs * (pct / 100);
 }
 
-function lossMilestonePctSuffix() {
+function lossMilestonePctSuffix(premiumKind) {
   const pct = lossMilestonePct();
-  return pct != null ? ` (${Math.round(pct)}%)` : '';
+  if (pct == null) return '';
+  const kind = premiumKind === 'received' ? 'premium received' : 'premium paid';
+  return ` (${Math.round(pct)}% of ${kind})`;
 }
 
-function lossMilestonePctHint() {
-  const s = lossMilestonePctSuffix();
+function lossMilestonePctHint(premiumKind) {
+  const s = lossMilestonePctSuffix(premiumKind);
   return s ? `<span class="pct-hint">${s}</span>` : '';
 }
 
@@ -1760,7 +1937,7 @@ function renderLiveProfitLevels(t) {
     : '';
   const currentRow = `
         <div class="lpl-row lpl-current-row live-mtm" data-trade-id="${escapeHtml(t.trade_id)}"${premAttrs}>
-          <span class="lpl-label">Current P&amp;L</span>
+          <span class="lpl-label">${labelWithHelp('Current P&amp;L', 'mtm')}</span>
           <span class="lpl-val-line">
             <strong class="cpnl-val lpl-current-val">\u2014</strong><span class="cpnl-pct-bracket lpl-current-pct muted"></span>
           </span>
@@ -1780,7 +1957,7 @@ function renderLiveProfitLevels(t) {
   if (!showLevels) {
     return `
     <div class="live-profit-levels live-profit-levels--mtm-only" data-trade-id="${escapeHtml(t.trade_id)}"${premAttrs}>
-      <div class="sl-monitor-label">Live P&amp;L</div>
+      <div class="sl-monitor-label">${labelWithHelp('Live P&amp;L', 'mtm')}</div>
       <div class="lpl-grid">${currentRow}</div>
     </div>`;
   }
@@ -1788,7 +1965,9 @@ function renderLiveProfitLevels(t) {
               : (sug.max_loss != null ? sug.max_loss : null);
   const ml = mlRaw != null ? parseFloat(mlRaw) : null;
   const lossRs = effectiveSlRs(strat, ml);
-  const milestoneRs = lossMilestoneRs(ml);
+  const investmentRs = premium ? premium.rs : null;
+  const milestoneRs = lossMilestoneRs(investmentRs);
+  const milestoneKind = premium ? premium.kind : 'paid';
   const stepIdx = parseInt(t.trailing_step_idx || 0, 10);
   const floor = t.trailing_pnl_floor != null ? parseFloat(t.trailing_pnl_floor) : null;
   const steps = liveRiskMonitor().trailing_sl_steps || [];
@@ -1816,7 +1995,7 @@ function renderLiveProfitLevels(t) {
     : '';
   const targetHtml = targetRs != null ? `
         <div class="lpl-row lpl-target-row">
-          <span class="lpl-label">Target profit</span>
+          <span class="lpl-label">${labelWithHelp('Target profit', 'target_profit')}</span>
           <span class="lpl-val-line">
             <span class="lpl-val lpl-target">\u20b9${fmt(targetRs)}</span>
             <span class="lpl-status lpl-status-target" hidden></span>
@@ -1830,21 +2009,21 @@ function renderLiveProfitLevels(t) {
          data-strategy="${escapeHtml(strat)}"
          data-expiry="${expiry ? escapeHtml(String(expiry).slice(0, 10)) : ''}"
          data-trailing-floor="${floorAttr}"${premData}>
-      <div class="sl-monitor-label">Live profit levels</div>
+      <div class="sl-monitor-label">${labelWithHelp('Live profit levels', 'live_profit_levels')}</div>
       <div class="lpl-grid">
         ${currentRow}
         ${targetHtml}
         ${milestoneRs != null ? `
         <div class="lpl-row lpl-milestone-row">
-          <span class="lpl-label">Loss milestone</span>
+          <span class="lpl-label">${labelWithHelp('Loss milestone', 'loss_milestone')}</span>
           <span class="lpl-val-line">
-            <span class="lpl-val lpl-milestone">\u20b9${fmt(milestoneRs)} loss${lossMilestonePctHint()}</span>
+            <span class="lpl-val lpl-milestone">\u20b9${fmt(milestoneRs)} loss${lossMilestonePctHint(milestoneKind)}</span>
             <span class="lpl-status lpl-status-milestone" hidden></span>
           </span>
-          <span class="muted lpl-note">Optional early exit at ${Math.round(lossMilestonePct())}% of max loss — separate from hard SL</span>
+          <span class="muted lpl-note">Alert at ${Math.round(lossMilestonePct())}% loss on \u20b9${fmt(investmentRs)} ${milestoneKind === 'received' ? 'premium received' : 'premium paid'} \u2014 separate from hard SL</span>
         </div>` : ''}
         <div class="lpl-row lpl-floor-row">
-          <span class="lpl-label">Profit floor</span>
+          <span class="lpl-label">${labelWithHelp('Profit floor', 'profit_floor')}</span>
           <span class="lpl-val-line">
             ${floorValHtml}
             <span class="lpl-status lpl-status-floor" hidden></span>
@@ -1852,7 +2031,7 @@ function renderLiveProfitLevels(t) {
           <span class="muted lpl-note live-profit-floor-note">${floorNote}</span>
         </div>
         <div class="lpl-row lpl-loss-row">
-          <span class="lpl-label">Loss limit</span>
+          <span class="lpl-label">${labelWithHelp('Loss limit', 'loss_limit')}</span>
           <span class="lpl-val-line">
             <span class="lpl-val lpl-loss">${lossRs != null ? `\u20b9${fmt(lossRs)} loss${slLossPctHint(strat, ml)}` : '\u2014'}</span>
             <span class="lpl-status lpl-status-loss" hidden></span>
@@ -1868,20 +2047,22 @@ function renderLiveOutlook(t) {
   return `
     <div class="live-outlook" data-trade-id="${escapeHtml(t.trade_id)}">
       <div class="lo-head">
-        <div class="sl-monitor-label">Live outlook</div>
+        <div class="sl-monitor-label">${labelWithHelp('Live outlook', 'live_outlook')}</div>
         <button type="button" class="lo-help-btn" aria-label="What do these numbers mean?">?</button>
       </div>
       <div class="lo-help-sheet" hidden>
-        <p><strong>Win chance</strong> — live PoP from spot, DTE, and ATM IV (or last EOD/intraday when the market is closed). Uses fill prices for breakevens; live leg marks when available.</p>
-        <p><strong>Close now (MTM)</strong> — your actual mark-to-market P&amp;L right now.</p>
-        <p><strong>Near-expiry EV</strong> — modeled <em>total</em> P&amp;L if held through the near leg: (win% × max profit) + ((1−win%) × −max loss). This is <em>not</em> extra profit on top of MTM, and not what you will make in one day.</p>
-        <p><strong>Structural fit</strong> — whether spot meets this strategy's breakeven need. You can show MTM profit while structural fit is &ldquo;past breakeven&rdquo; (theta/IV).</p>
-        <p><strong>Close now vs hold</strong> — compares current MTM to hold-to-expiry EV when both are known.</p>
+        <p><strong>Win chance</strong> — estimated odds of profit at expiry from today\u2019s spot and days left. Not a prediction of tomorrow\u2019s direction.</p>
+        <p><strong>Close now</strong> — real profit/loss if you exit at current option prices (MTM).</p>
+        <p><strong>Near-expiry EV</strong> — average total P&amp;L if held to expiry (win% \u00d7 max profit + loss% \u00d7 \u2212max loss). Not extra profit on top of MTM.</p>
+        <p><strong>Structural fit</strong> — whether the index is where this strategy needs it. Green MTM + poor fit can happen (time decay).</p>
+        <p><strong>Profit zone</strong> — points the index must move (+ up, \u2212 down) to reach the winning breakeven band.</p>
+        <p><strong>Close now vs hold</strong> — compares locking in MTM vs modeled hold-to-expiry outcome.</p>
+        <p class="muted" style="margin-top:.35rem">Tip: tap the \u24d8 icons beside each row for a short explanation.</p>
       </div>
       <div class="lo-entry-now muted"></div>
       <div class="lo-grid">
         <div class="lo-row">
-          <span class="lpl-label">Win chance</span>
+          <span class="lpl-label">${labelWithHelp('Win chance', 'win_chance')}</span>
           <span class="lpl-val-line">
             <strong class="lo-pop">\u2014</strong>
             <span class="lo-pop-delta muted"></span>
@@ -1889,27 +2070,27 @@ function renderLiveOutlook(t) {
           <span class="muted lpl-note lo-pop-note">From spot, DTE, and ATM IV \u2014 updates live or from last EOD/intraday data</span>
         </div>
         <div class="lo-row lo-row-mtm" hidden>
-          <span class="lpl-label">Close now</span>
+          <span class="lpl-label">${labelWithHelp('Close now', 'close_now_mtm')}</span>
           <span class="lpl-val-line"><strong class="lo-mtm">\u2014</strong></span>
           <span class="muted lpl-note lo-mtm-note">Current mark-to-market P&amp;L</span>
         </div>
         <div class="lo-row">
-          <span class="lpl-label lo-ev-label">Near-expiry EV</span>
+          <span class="lpl-label lo-ev-label">${labelWithHelp('Near-expiry EV', 'near_expiry_ev')}</span>
           <span class="lpl-val-line"><strong class="lo-ev">\u2014</strong></span>
           <span class="muted lpl-note lo-ev-note">Modeled total P&amp;L at near expiry (not extra gain from MTM)</span>
         </div>
         <div class="lo-row lo-row-direction">
-          <span class="lpl-label">Structural fit<span class="lo-fit-help muted" title="Spot vs breakevens for this strategy — not the same as current P&amp;L"> \u2139</span></span>
+          <span class="lpl-label">${labelWithHelp('Structural fit', 'structural_fit')}</span>
           <span class="lpl-val-line"><strong class="lo-direction">\u2014</strong></span>
           <span class="muted lpl-note lo-direction-note">Spot vs breakevens for this strategy \u2014 not the same as current P&amp;L</span>
         </div>
         <div class="lo-row lo-row-be-dist" hidden>
-          <span class="lpl-label">Breakeven</span>
-          <span class="lpl-val-line"><span class="lo-be-dist">\u2014</span></span>
+          <span class="lpl-label">${labelWithHelp('Profit zone', 'profit_zone')}</span>
+          <span class="lpl-val-line"><strong class="lo-be-dist">\u2014</strong></span>
           <span class="muted lpl-note lo-be-dist-note"></span>
         </div>
         <div class="lo-row">
-          <span class="lpl-label">Market</span>
+          <span class="lpl-label">${labelWithHelp('Market', 'market_outlook')}</span>
           <span class="lpl-val-line"><span class="lo-market">Loading market data\u2026</span></span>
           <span class="muted lpl-note lo-market-note"></span>
         </div>
@@ -2123,6 +2304,7 @@ function _updateLiveOutlook(tradeId, payload) {
     const marketNote = el.querySelector('.lo-market-note');
     const beDistRow = el.querySelector('.lo-row-be-dist');
     const beDistEl = el.querySelector('.lo-be-dist');
+    const beDistNote = el.querySelector('.lo-be-dist-note');
     const holdCloseEl = el.querySelector('.lo-hold-close');
     const regimeEl = el.querySelector('.lo-regime');
     const emWarnEl = el.querySelector('.lo-em-warn');
@@ -2180,8 +2362,10 @@ function _updateLiveOutlook(tradeId, payload) {
       }
     }
     if (evLabel) {
-      evLabel.textContent = (payload.far_dte != null && payload.near_dte != null)
+      const evText = (payload.far_dte != null && payload.near_dte != null)
         ? 'Near-expiry EV' : 'Expiry EV';
+      evLabel.innerHTML = labelWithHelp(evText, 'near_expiry_ev');
+      wireTermHelpToggle(evLabel);
     }
     if (evNote) {
       evNote.textContent = payload.ev_note
@@ -2198,11 +2382,21 @@ function _updateLiveOutlook(tradeId, payload) {
       dirNote.textContent = payload.direction_detail;
     }
     if (beDistRow && beDistEl) {
-      if (payload.be_distance_text) {
+      const pzText = payload.profit_zone_text || payload.be_distance_text;
+      if (pzText) {
         beDistRow.hidden = false;
-        beDistEl.textContent = payload.be_distance_text;
+        beDistEl.textContent = pzText;
+        beDistEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-dir-neutral');
+        const side = payload.profit_zone_side || payload.be_side || '';
+        if (side === 'inside') beDistEl.classList.add('pnl-profit');
+        else if (side in { below_lower: 1, above_upper: 1, needs_breakout: 1 }) {
+          beDistEl.classList.add('pnl-loss');
+        } else beDistEl.classList.add('lo-dir-neutral');
       } else {
         beDistRow.hidden = true;
+      }
+      if (beDistNote) {
+        beDistNote.textContent = payload.profit_zone_note || '';
       }
     }
     if (holdCloseEl) {
@@ -2344,16 +2538,22 @@ function _computeTradeActionInstruction(opts) {
   }
   if (milestoneHit || rn === 'LOSS_MILESTONE_HIT') {
     const pct = lossMilestonePct();
+    const premLbl = premiumInfo && premiumInfo.kind === 'received'
+      ? 'premium received' : 'premium paid';
+    const premRs = premiumInfo && premiumInfo.rs ? premiumInfo.rs : null;
     return {
       tone: 'warn',
       verb: 'CONSIDER EXIT',
       title: 'Loss milestone hit — consider closing',
-      instruction: pct != null
-        ? `Configured loss milestone (${Math.round(pct)}% of max loss) reached. `
+      instruction: pct != null && premRs
+        ? `Configured loss milestone (${Math.round(pct)}% of ${premLbl} \u20b9${fmt(premRs)} = \u2212\u20b9${fmt(milestoneRs || premRs * pct / 100)} MTM). `
           + 'You may close now to limit further loss. Hard stop-loss is separate and still applies.'
-        : 'Configured loss milestone reached. You may close now — hard stop-loss still applies.',
+        : (pct != null
+          ? `Configured loss milestone (${Math.round(pct)}% of entry premium) reached. `
+            + 'You may close now — hard stop-loss still applies.'
+          : 'Configured loss milestone reached. You may close now — hard stop-loss still applies.'),
       why: liveMtm != null && milestoneRs != null
-        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · milestone −₹${fmt(milestoneRs)}`
+        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · milestone \u2212\u20b9${fmt(milestoneRs)} (${Math.round(pct || 0)}% of premium)`
         : 'Loss milestone alert is active.',
       cta: 'Use Close Trade below if you want to exit.',
     };
@@ -2451,7 +2651,7 @@ function _computeTradeActionInstruction(opts) {
       why: [
         liveMtm != null ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)}` : null,
         ol.live_pop != null ? `Win chance ${fmtPct(ol.live_pop)}` : null,
-        ol.be_distance_text || null,
+        ol.profit_zone_text || ol.be_distance_text || null,
       ].filter(Boolean).join(' · ') || outlookSummary || '',
       cta: 'Hold unless loss limit / floor / EOD rule fires.',
     };
@@ -2559,33 +2759,33 @@ function renderTradeKvGrid(t, legs) {
       ? t.suggestion.estimated_charges_total : null);
   const estNetPnl = (estMp != null && estChg != null) ? (estMp - estChg) : null;
   return `
-      <div><span class="k">Entry date</span><br><span class="v">${fmtDt(t.executed_on)}</span></div>
-      ${t.suggestion && t.suggestion.expiry_date ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : '<div></div>'}
-      <div><span class="k">Net credit (actual)</span><br><span class="v">\u20b9${fmt(t.net_credit_actual)}</span></div>
-      ${premium ? `<div><span class="k">${premium.kind === 'received' ? 'Premium received' : 'Premium paid'}</span><br><span class="v">\u20b9${fmt(premium.rs)}</span></div>` : '<div></div>'}
-      <div><span class="k">Type</span><br><span class="v">${escapeHtml(t.position_type)}</span></div>
-      ${estMp != null ? `<div><span class="k">Est. max profit</span><br><span class="v pnl-profit">\u20b9${fmt(estMp)}</span></div>` : '<div></div>'}
-      ${estMl != null ? `<div><span class="k">Est. max loss</span><br><span class="v pnl-loss">\u20b9${fmt(estMl)}<span class="econ-ml-hint">${pctHint(estMl, t.net_credit_actual, 'credit')}</span></span></div>` : '<div></div>'}
-      ${estPop != null ? `<div><span class="k">Entry PoP</span><br><span class="v">${fmtPct(estPop)}</span></div>` : '<div></div>'}
-      <div class="live-pop-kv" data-trade-id="${escapeHtml(t.trade_id)}"><span class="k">Live PoP</span><br><span class="v">\u2014</span></div>
-      ${realUBE != null ? `<div><span class="k">Upper BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realUBE)}</span></div>` : '<div></div>'}
-      ${realLBE != null ? `<div><span class="k">Lower BE <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(realLBE)}</span></div>` : '<div></div>'}
+      <div>${kvLabel('Entry date')}<br><span class="v">${fmtDt(t.executed_on)}</span></div>
+      ${t.suggestion && t.suggestion.expiry_date ? `<div>${kvLabel('Options expiry')}<br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : '<div></div>'}
+      <div>${kvLabel('Net credit (actual)', 'net_credit')}<br><span class="v">\u20b9${fmt(t.net_credit_actual)}</span></div>
+      ${premium ? `<div>${kvLabel(premium.kind === 'received' ? 'Premium received' : 'Premium paid', 'premium')}<br><span class="v">\u20b9${fmt(premium.rs)}</span></div>` : '<div></div>'}
+      <div>${kvLabel('Type')}<br><span class="v">${escapeHtml(t.position_type)}</span></div>
+      ${estMp != null ? `<div>${kvLabel('Est. max profit', 'max_profit')}<br><span class="v pnl-profit">\u20b9${fmt(estMp)}</span></div>` : '<div></div>'}
+      ${estMl != null ? `<div>${kvLabel('Est. max loss', 'max_loss')}<br><span class="v pnl-loss">\u20b9${fmt(estMl)}<span class="econ-ml-hint">${pctHint(estMl, t.net_credit_actual, 'credit')}</span></span></div>` : '<div></div>'}
+      ${estPop != null ? `<div>${kvLabel('Entry PoP', 'pop_entry')}<br><span class="v">${fmtPct(estPop)}</span></div>` : '<div></div>'}
+      <div class="live-pop-kv" data-trade-id="${escapeHtml(t.trade_id)}">${kvLabel('Live PoP', 'pop_live')}<br><span class="v">\u2014</span></div>
+      ${realUBE != null ? `<div>${kvLabel('Upper BE (from fills)', 'upper_be')}<br><span class="v">\u20b9${fmt(realUBE)}</span></div>` : '<div></div>'}
+      ${realLBE != null ? `<div>${kvLabel('Lower BE (from fills)', 'lower_be')}<br><span class="v">\u20b9${fmt(realLBE)}</span></div>` : '<div></div>'}
       ${(() => {
         const isOpen = (t.status || '').toUpperCase() === 'ACTIVE';
         const livePnl = t.last_mtm != null ? t.last_mtm : null;
         if (isOpen && livePnl != null) {
-          return `<div><span class="k">P&amp;L (live)</span><br><span class="v">${formatPnlWithPct(livePnl, premium)}</span></div>`;
+          return `<div>${kvLabel('P&amp;L (live)', 'mtm')}<br><span class="v">${formatPnlWithPct(livePnl, premium)}</span></div>`;
         }
         if (t.net_pnl != null) {
-          return `<div><span class="k">P&amp;L</span><br><span class="v">${formatPnlWithPct(t.net_pnl, premium)}</span></div>`;
+          return `<div>${kvLabel('P&amp;L', 'mtm')}<br><span class="v">${formatPnlWithPct(t.net_pnl, premium)}</span></div>`;
         }
         return '<div></div>';
       })()}
-      ${estChg != null ? `<div><span class="k">Est. charges <span class="muted" style="font-size:.7rem">(from fills)</span></span><br><span class="v">\u20b9${fmt(estChg)}</span></div>` : '<div></div>'}
-      ${estNetPnl != null ? `<div><span class="k">Est. net at max profit</span><br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${formatPnlWithPct(estNetPnl, premium, { useGrossSign: false })}</span></div>` : '<div></div>'}
-      ${dteDisplay != null ? `<div><span class="k">DTE at entry</span><br><span class="v">${escapeHtml(String(dteDisplay))}</span></div>` : '<div></div>'}
-      <div><span class="k">Status</span><br><span class="v">${escapeHtml(t.status)}</span></div>
-      ${t.closed_on ? `<div><span class="k">Exit date</span><br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}`;
+      ${estChg != null ? `<div>${kvLabel('Est. charges (from fills)', 'est_charges')}<br><span class="v">\u20b9${fmt(estChg)}</span></div>` : '<div></div>'}
+      ${estNetPnl != null ? `<div>${kvLabel('Est. net at max profit', 'est_net_max_profit')}<br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${formatPnlWithPct(estNetPnl, premium, { useGrossSign: false })}</span></div>` : '<div></div>'}
+      ${dteDisplay != null ? `<div>${kvLabel('DTE at entry', 'dte')}<br><span class="v">${escapeHtml(String(dteDisplay))}</span></div>` : '<div></div>'}
+      <div>${kvLabel('Status')}<br><span class="v">${escapeHtml(t.status)}</span></div>
+      ${t.closed_on ? `<div>${kvLabel('Exit date')}<br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}`;
 }
 
 function renderTradeActionPanel(t) {
@@ -4222,15 +4422,15 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     ${renderStrategyRationale(s)}
     ${renderPlainEnglishStructured(s)}
     <div class="kv-grid">
-      ${s.generated_on ? `<div><span class="k">Suggested on</span><br><span class="v">${fmtDate(s.generated_on)}</span></div>` : ''}
-      ${s.expiry_date  ? `<div><span class="k">Options expiry</span><br><span class="v">${fmtDate(s.expiry_date)}</span></div>` : ''}
-      <div><span class="k">Net credit (per unit)</span><br><span class="v econ-np">₹${fmt(econ.np)}</span></div>
-      <div><span class="k">Total credit <span class="econ-qty-hint muted" style="font-size:.75rem">(×${baseQty})</span></span><br><span class="v econ-tot-credit">₹${fmt(baseTotalCredit)}</span></div>
-      <div><span class="k">Max profit</span><br><span class="v econ-mp">₹${fmt(econ.mp)}</span></div>
-      <div><span class="k">Max loss</span><br><span class="v econ-ml">₹${fmt(econ.ml)}<span class="econ-ml-hint">${pctHint(econ.ml, econ.np, 'credit')}</span></span></div>
-      <div><span class="k">PoP</span><br><span class="v">${fmtPct(econ.pop)}</span></div>
-      ${econ.ub != null ? `<div><span class="k">Upper BE</span><br><span class="v econ-ub">₹${fmt(econ.ub)}${spotDist(econ.ub, s.spot_at_generation)}</span></div>` : ''}
-      ${econ.lb != null ? `<div><span class="k">Lower BE</span><br><span class="v econ-lb">₹${fmt(econ.lb)}${spotDist(econ.lb, s.spot_at_generation)}</span></div>` : ''}
+      ${s.generated_on ? `<div>${kvLabel('Suggested on')}<br><span class="v">${fmtDate(s.generated_on)}</span></div>` : ''}
+      ${s.expiry_date  ? `<div>${kvLabel('Options expiry', 'dte')}<br><span class="v">${fmtDate(s.expiry_date)}</span></div>` : ''}
+      <div>${kvLabel('Net credit (per unit)', 'credit_per_unit')}<br><span class="v econ-np">₹${fmt(econ.np)}</span></div>
+      <div>${kvLabel('Total credit')}<br><span class="v econ-tot-credit">₹${fmt(baseTotalCredit)}<span class="econ-qty-hint muted" style="font-size:.75rem"> (×${baseQty})</span></span></div>
+      <div>${kvLabel('Max profit', 'max_profit')}<br><span class="v econ-mp">₹${fmt(econ.mp)}</span></div>
+      <div>${kvLabel('Max loss', 'max_loss')}<br><span class="v econ-ml">₹${fmt(econ.ml)}<span class="econ-ml-hint">${pctHint(econ.ml, econ.np, 'credit')}</span></span></div>
+      <div>${kvLabel('PoP', 'pop')}<br><span class="v">${fmtPct(econ.pop)}</span></div>
+      ${econ.ub != null ? `<div>${kvLabel('Upper BE', 'upper_be')}<br><span class="v econ-ub">₹${fmt(econ.ub)}${spotDist(econ.ub, s.spot_at_generation)}</span></div>` : ''}
+      ${econ.lb != null ? `<div>${kvLabel('Lower BE', 'lower_be')}<br><span class="v econ-lb">₹${fmt(econ.lb)}${spotDist(econ.lb, s.spot_at_generation)}</span></div>` : ''}
       ${(() => {
         const twoSided = ['IRON_CONDOR', 'IRON_BUTTERFLY'].includes(s.strategy);
         const debitOrMtm = isDebitStrategy(s.strategy) || econ.sl == null;
@@ -4238,10 +4438,10 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           const mtmNote = isDebitStrategy(s.strategy)
             ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">Spot SL not used — ${slExitPlanText(s.strategy, econ.ml)}</span>`
             : '';
-          return `<div><span class="k">Stop loss</span><br><span class="v">MTM-based${slLossPctHint(s.strategy, econ.ml)}${mtmNote}</span></div>`;
+          return `<div>${kvLabel('Stop loss', 'stop_loss')}<br><span class="v">MTM-based${slLossPctHint(s.strategy, econ.ml)}${mtmNote}</span></div>`;
         }
         if (!twoSided) {
-          return `<div><span class="k">Stop loss</span><br><span class="v">₹${fmt(econ.sl)}${slLossPctHint(s.strategy, econ.ml)}${spotDist(econ.sl, s.spot_at_generation)}</span></div>`;
+          return `<div>${kvLabel('Stop loss', 'stop_loss')}<br><span class="v">₹${fmt(econ.sl)}${slLossPctHint(s.strategy, econ.ml)}${spotDist(econ.sl, s.spot_at_generation)}</span></div>`;
         }
         const shortCallLeg = (s.legs || []).find(l => l.action === 'SELL' && l.option_type === 'CE');
         const shortPutLeg  = (s.legs || []).find(l => l.action === 'SELL' && l.option_type === 'PE');
@@ -4770,6 +4970,7 @@ async function loadTrades() {
     bindGapReplayPanels();
     bindCollapsibleCardInteractions(c);
     bindMobileCloseOnExpand(c);
+    wireTermHelpToggle(c);
     _focusPendingTradeCard();
     c.querySelectorAll('.collapsible-card').forEach(card => {
       card.classList.add('mobile-compact');
@@ -5518,7 +5719,7 @@ function renderTrade(t, expanded = false) {
         </div>
         <div class="card-head-pnl-row">
         <span class="tag tag-current-pnl live-mtm" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs} title="Current profit/loss">
-          <span class="cpnl-label">Current P&amp;L</span>
+          <span class="cpnl-label">${labelWithHelp('Current P&amp;L', 'mtm')}</span>
           <span class="cpnl-metrics"><strong class="cpnl-val">\u2014</strong><span class="cpnl-pct-bracket muted"></span></span>
         </span>
         </div>
@@ -5539,7 +5740,7 @@ function renderTrade(t, expanded = false) {
       const liveProfitHtml = renderLiveProfitLevels(t);
       const slMonitorHtml = `
     <div class="sl-monitor-section">
-      <div class="sl-monitor-label">Stop-loss monitor</div>
+      <div class="sl-monitor-label">${labelWithHelp('Stop-loss monitor', 'spot_sl')}</div>
       <div class="sl-monitor-grid">
         ${(() => {
           const twoSided = t.suggestion && ['IRON_CONDOR', 'IRON_BUTTERFLY'].includes(t.suggestion.strategy);
@@ -5588,12 +5789,12 @@ function renderTrade(t, expanded = false) {
             </div>`;
           }
           return `<div class="sl-field">
-            <label class="sl-label">Nifty SL level</label>
+            <label class="sl-label">${labelWithHelp('Nifty SL level', 'spot_sl')}</label>
             <span class="sl-prem-val">${t.actual_stop_loss_level != null ? `\u20b9${fmt(t.actual_stop_loss_level)}${slLossPctHint(slStrat, slMl)}` : '\u2014 not set'}</span>
           </div>`;
         })()}
         <div class="sl-field">
-          <label class="sl-label">Spot at entry</label>
+          <label class="sl-label">${labelWithHelp('Spot at entry', 'spot_at_entry')}</label>
           <span class="sl-prem-val">${t.spot_at_execution != null ? `\u20b9${fmt(t.spot_at_execution)}` : '\u2014 not set'}</span>
         </div>
       </div>
@@ -5759,6 +5960,7 @@ async function loadHistorySuggestions() {
     if (summaryEl) summaryEl.textContent = _histFilterSummary(data.count, 'suggestion');
     c.className='';
     c.innerHTML = data.suggestions.map(renderHistorySuggestion).join('');
+    wireTermHelpToggle(c);
   } catch (e) {
     if (summaryEl) summaryEl.textContent = '';
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;

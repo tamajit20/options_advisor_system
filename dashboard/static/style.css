@@ -2246,7 +2246,8 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .conf-detail-na { opacity: .3; }
 
 /* ── Confidence gate logic info icon + popup ────────────────────── */
-.conf-logic-info {
+.conf-logic-info,
+.term-help {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2254,21 +2255,32 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   margin-left: 4px;
   font-size: .78rem;
   color: var(--text-dim);
-  cursor: default;
+  cursor: help;
   vertical-align: middle;
   opacity: .7;
   transition: opacity .15s;
+  border: none;
+  background: none;
+  padding: 0;
+  line-height: 1;
 }
 .conf-logic-info:hover,
-.conf-logic-info:focus { opacity: 1; outline: none; }
+.conf-logic-info:focus,
+.term-help:hover,
+.term-help:focus,
+.term-help.term-help-open {
+  opacity: 1;
+  outline: none;
+}
 
-.conf-logic-popup {
+.conf-logic-popup,
+.term-help-popup {
   display: none;
   position: absolute;
   top: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  width: 270px;
+  width: min(290px, 85vw);
   background: #0f1923;
   border: 1px solid rgba(255,255,255,.12);
   border-radius: 8px;
@@ -2280,9 +2292,12 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   z-index: 999;
   white-space: normal;
   pointer-events: none;
+  text-align: left;
+  font-weight: 400;
 }
 /* arrow pointing up */
-.conf-logic-popup::after {
+.conf-logic-popup::after,
+.term-help-popup::after {
   content: '';
   position: absolute;
   bottom: 100%;
@@ -2292,7 +2307,31 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   border-bottom-color: rgba(255,255,255,.12);
 }
 .conf-logic-info:hover .conf-logic-popup,
-.conf-logic-info:focus .conf-logic-popup { display: block; }
+.conf-logic-info:focus .conf-logic-popup,
+.term-help:hover .term-help-popup,
+.term-help:focus .term-help-popup,
+.term-help.term-help-open .term-help-popup {
+  display: block;
+}
+/* Keep popups inside narrow columns (trade kv grid, live outlook) */
+.kv-grid .term-help-popup,
+.kv-grid-trade .term-help-popup,
+.lo-row .term-help-popup,
+.lpl-label .term-help-popup {
+  left: 0;
+  transform: none;
+}
+.kv-grid .term-help-popup::after,
+.kv-grid-trade .term-help-popup::after,
+.lo-row .term-help-popup::after,
+.lpl-label .term-help-popup::after {
+  left: 12px;
+  transform: none;
+}
+.sl-monitor-label .term-help,
+.lo-head .term-help {
+  vertical-align: baseline;
+}
 /* --- Close trade simulation --- */
 .close-step-banner{font-size:.78rem;color:#8898aa;margin-bottom:10px;line-height:1.7}
 .step-badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:.7rem;font-weight:700;margin-right:3px}

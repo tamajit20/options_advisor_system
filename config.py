@@ -775,11 +775,12 @@ STRATEGY_CONFIG = {
     },
 
     # Loss milestone — optional early exit when MTM loss reaches a user-set
-    # percentage of max loss. Independent of strategy SL (loss_fraction) and
-    # pre_breach_fraction (% of SL threshold). When enabled, fires LOSS_MILESTONE_HIT.
+    # percentage of premium at entry (paid for debits, received for credits).
+    # Same basis as dashboard P&L % brackets. Independent of strategy SL.
+    # When enabled, fires LOSS_MILESTONE_HIT.
     "loss_milestone_alert": {
         "enabled": False,
-        "pct_of_max_loss": 25.0,
+        "pct_of_premium": 25.0,
         "cooldown_minutes": None,
     },
 

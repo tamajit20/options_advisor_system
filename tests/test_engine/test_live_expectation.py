@@ -20,6 +20,7 @@ from engine.live_expectation import (
     outlook_horizon,
     parse_entry_regime,
     resolve_market_inputs,
+    _profit_zone_detail,
 )
 
 
@@ -382,6 +383,40 @@ class TestLiveTradeOutlook:
         assert out["data_source"] == "eod"
 
 
+class TestProfitZoneDetail:
+    def test_calendar_below_lower_needs_rally(self):
+        out = _profit_zone_detail(
+            strategy="CALENDAR_SPREAD",
+            spot=24070.0,
+            lower_be=24187.35,
+            upper_be=24312.65,
+        )
+        assert out["profit_zone_pts"] == pytest.approx(117.35, abs=0.01)
+        assert "+117" in out["profit_zone_text"]
+        assert "profit zone" in out["profit_zone_text"]
+        assert "24,187" in out["profit_zone_note"]
+
+    def test_calendar_inside_zone(self):
+        out = _profit_zone_detail(
+            strategy="CALENDAR_SPREAD",
+            spot=24250.0,
+            lower_be=24187.35,
+            upper_be=24312.65,
+        )
+        assert out["profit_zone_side"] == "inside"
+        assert out["profit_zone_text"] == "Inside profit zone"
+
+    def test_iron_condor_above_upper_needs_decline(self):
+        out = _profit_zone_detail(
+            strategy="IRON_CONDOR",
+            spot=23300.0,
+            lower_be=22710.0,
+            upper_be=23290.0,
+        )
+        assert out["profit_zone_pts"] == pytest.approx(-10.0, abs=0.01)
+        assert "−10" in out["profit_zone_text"] or "-10" in out["profit_zone_text"]
+
+
 class TestEnrichTradeOutlook:
     def test_be_distance_outside_upper(self):
         base = live_trade_outlook(
@@ -396,6 +431,8 @@ class TestEnrichTradeOutlook:
             expiry=date(2026, 5, 28), dte=10, include_scenarios=True,
         )
         assert out["be_distance_text"]
+        assert "profit zone" in out["be_distance_text"].lower()
+        assert out["profit_zone_text"]
         assert out["entry_ev"] is not None
         assert out["close_now_ev"] == 1200.0
         assert len(out.get("scenarios") or []) == 3

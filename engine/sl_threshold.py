@@ -70,12 +70,20 @@ def effective_sl_rs(*, strategy: str, max_loss_rs: float) -> Tuple[float, str]:
     return pct_rs, f"{frac * 100:.0f}% of max loss"
 
 
+def trade_investment_rs(*, entry_net_credit_rs: float) -> float:
+    """Absolute premium at entry — same basis as dashboard P&L % brackets."""
+    return abs(float(entry_net_credit_rs or 0.0))
+
+
 def loss_milestone_config() -> Dict[str, Any]:
     """Resolved loss-milestone knobs from STRATEGY_CONFIG."""
     raw = STRATEGY_CONFIG.get("loss_milestone_alert") or {}
     enabled = bool(raw.get("enabled", False))
+    pct_raw = raw.get("pct_of_premium")
+    if pct_raw is None:
+        pct_raw = raw.get("pct_of_max_loss")  # legacy deployments
     try:
-        pct = float(raw.get("pct_of_max_loss", 25.0))
+        pct = float(pct_raw if pct_raw is not None else 25.0)
     except (TypeError, ValueError):
         pct = 25.0
     pct = max(0.0, min(100.0, pct))
@@ -88,15 +96,15 @@ def loss_milestone_config() -> Dict[str, Any]:
             cooldown_minutes = None
     return {
         "enabled": enabled,
-        "pct_of_max_loss": pct,
+        "pct_of_premium": pct,
         "cooldown_minutes": cooldown_minutes,
     }
 
 
-def loss_milestone_rs(*, max_loss_rs: float) -> Tuple[float, float]:
-    """Return (milestone_rs, pct_of_max_loss) when enabled; else (0.0, 0.0)."""
+def loss_milestone_rs(*, investment_rs: float) -> Tuple[float, float]:
+    """Return (milestone_rs, pct_of_premium) when enabled; else (0.0, pct)."""
     cfg = loss_milestone_config()
-    if not cfg["enabled"] or max_loss_rs <= 0 or cfg["pct_of_max_loss"] <= 0:
-        return 0.0, cfg["pct_of_max_loss"]
-    pct = cfg["pct_of_max_loss"]
-    return max_loss_rs * (pct / 100.0), pct
+    pct = cfg["pct_of_premium"]
+    if not cfg["enabled"] or investment_rs <= 0 or pct <= 0:
+        return 0.0, pct
+    return investment_rs * (pct / 100.0), pct

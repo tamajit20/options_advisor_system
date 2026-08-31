@@ -410,7 +410,7 @@ class TestLossMilestoneHit:
     def test_loss_milestone_fires_at_configured_pct(self, mocker):
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
-            {"loss_milestone_alert": {"enabled": True, "pct_of_max_loss": 25.0}},
+            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 25.0}},
             clear=False,
         )
         state = _make_state(max_loss=10000.0)
@@ -419,7 +419,7 @@ class TestLossMilestoneHit:
             cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
         )
         monitor._bind_loss_milestone_cfg()
-        # SELL @100 → loss at close 130 → pnl -3000 = 30% of max loss (> 25% milestone).
+        # SELL @100 → close 130 → pnl -3000 = 30% of ₹10k premium (> 25% milestone).
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 130.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 130.0))
         assert notifier.notify.call_count == 1
@@ -427,10 +427,28 @@ class TestLossMilestoneHit:
         assert kwargs["notif_type"] == "LOSS_MILESTONE_HIT"
         assert kwargs["severity"] == "WARNING"
 
+    def test_milestone_uses_premium_not_max_loss(self, mocker):
+        """25% of premium (10k→−2.5k) fires at −3k MTM; 25% of max_loss (20k→−5k) would not."""
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 25.0}},
+            clear=False,
+        )
+        state = _make_state(max_loss=20000.0, credit=10000.0)
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
+        )
+        monitor._bind_loss_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 130.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 130.0))
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "LOSS_MILESTONE_HIT"
+
     def test_hard_sl_still_fires_when_milestone_enabled(self, mocker):
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
-            {"loss_milestone_alert": {"enabled": True, "pct_of_max_loss": 25.0}},
+            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 25.0}},
             clear=False,
         )
         state = _make_state(max_loss=10000.0)
@@ -447,7 +465,7 @@ class TestLossMilestoneHit:
     def test_loss_milestone_disabled_skips_alert(self, mocker):
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
-            {"loss_milestone_alert": {"enabled": False, "pct_of_max_loss": 25.0}},
+            {"loss_milestone_alert": {"enabled": False, "pct_of_premium": 25.0}},
             clear=False,
         )
         state = _make_state(max_loss=10000.0)
