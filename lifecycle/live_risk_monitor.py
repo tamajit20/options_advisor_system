@@ -72,7 +72,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from config import STRATEGY_CONFIG
 from engine.exit_engine import evaluate_exit
 from engine.exit_pricing import format_leg_quote_key
-from engine.live_expectation import enrich_trade_outlook, live_trade_outlook
+from engine.live_expectation import enrich_trade_outlook, live_trade_outlook, outlook_horizon
 from engine.pnl_targets import profit_target_trade_rs
 from engine.sl_threshold import effective_sl_rs, loss_milestone_config, loss_milestone_rs
 from providers.base import LiveQuote
@@ -915,6 +915,13 @@ class LiveRiskMonitor:
             for leg in state.legs
         ]
         dte = max(days_between(now.date(), state.expiry), 0)
+        horizon = outlook_horizon(
+            strategy=state.strategy,
+            legs=state.legs,
+            fallback_expiry=state.expiry,
+            as_of=now.date(),
+        )
+        outlook_dte = int(horizon["outlook_dte"])
 
         decision = evaluate_exit(
             trade_id=state.trade_id,
@@ -924,7 +931,7 @@ class LiveRiskMonitor:
             max_profit_rs=state.max_profit,
             max_loss_rs=state.max_loss,
             sl_level_per_share=state.sl_level,
-            days_to_expiry=dte,
+            days_to_expiry=outlook_dte if state.strategy == "CALENDAR_SPREAD" else dte,
             strategy=state.strategy,
             as_of=now,
             greeks=state.trade_greeks,
@@ -1326,6 +1333,14 @@ class LiveRiskMonitor:
     ) -> dict:
         """Live win-chance / expiry EV from current spot — never raises."""
         now = now or self._clock()
+        horizon = outlook_horizon(
+            strategy=state.strategy,
+            legs=state.legs,
+            fallback_expiry=state.expiry,
+            as_of=now.date(),
+        )
+        outlook_expiry = horizon["outlook_expiry"]
+        outlook_dte = int(horizon["outlook_dte"])
         spot, iv, source, as_of = self._effective_market(state, now)
         leg_ltps = self._leg_ltps_dict(state)
         try:
@@ -1333,9 +1348,9 @@ class LiveRiskMonitor:
                 legs=state.legs,
                 strategy=state.strategy,
                 underlying=state.underlying,
-                expiry=state.expiry,
+                expiry=outlook_expiry,
                 spot=spot,
-                dte=dte,
+                dte=outlook_dte,
                 atm_iv=iv,
                 max_profit=state.max_profit,
                 max_loss=state.max_loss,
@@ -1358,8 +1373,8 @@ class LiveRiskMonitor:
                 legs=state.legs,
                 strategy=state.strategy,
                 underlying=state.underlying,
-                expiry=state.expiry,
-                dte=dte,
+                expiry=outlook_expiry,
+                dte=outlook_dte,
                 atm_iv=iv,
                 max_profit=state.max_profit,
                 max_loss=state.max_loss,

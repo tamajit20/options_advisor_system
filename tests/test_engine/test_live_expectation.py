@@ -1,40 +1,110 @@
 """Unit tests for engine.live_expectation — live PoP / EV on open trades."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import MagicMock
 
+import pytest
+from utils import now_ist
+
+from engine.leg_builder import estimate_pop
+from contracts import SuggestionLeg
 from engine.live_expectation import (
     assess_direction_fit,
     enrich_trade_outlook,
     hold_vs_close_advice,
     live_trade_outlook,
     normalize_atm_iv,
+    outlook_horizon,
     parse_entry_regime,
     resolve_market_inputs,
 )
 
 
 def _strangle_legs():
+    exp = now_ist().date() + timedelta(days=10)
     return [
         {"leg_order": 1, "action": "SELL", "strike": 23000.0, "option_type": "CE",
-         "fill_price": 100.0, "lots": 1, "lot_size": 50},
+         "expiry_date": exp, "fill_price": 100.0, "lots": 1, "lot_size": 50},
         {"leg_order": 2, "action": "SELL", "strike": 23000.0, "option_type": "PE",
-         "fill_price": 100.0, "lots": 1, "lot_size": 50},
+         "expiry_date": exp, "fill_price": 100.0, "lots": 1, "lot_size": 50},
     ]
 
 
 def _ic_legs():
+    exp = now_ist().date() + timedelta(days=10)
     return [
         {"leg_order": 1, "action": "SELL", "strike": 23200.0, "option_type": "CE",
-         "fill_price": 80.0, "lots": 1, "lot_size": 50},
+         "expiry_date": exp, "fill_price": 80.0, "lots": 1, "lot_size": 50},
         {"leg_order": 2, "action": "BUY", "strike": 23400.0, "option_type": "CE",
-         "fill_price": 35.0, "lots": 1, "lot_size": 50},
+         "expiry_date": exp, "fill_price": 35.0, "lots": 1, "lot_size": 50},
         {"leg_order": 3, "action": "SELL", "strike": 22800.0, "option_type": "PE",
-         "fill_price": 80.0, "lots": 1, "lot_size": 50},
+         "expiry_date": exp, "fill_price": 80.0, "lots": 1, "lot_size": 50},
         {"leg_order": 4, "action": "BUY", "strike": 22600.0, "option_type": "PE",
-         "fill_price": 35.0, "lots": 1, "lot_size": 50},
+         "expiry_date": exp, "fill_price": 35.0, "lots": 1, "lot_size": 50},
     ]
+
+
+def _calendar_legs(*, near=None, far=None):
+    near = near or date(2026, 9, 1)
+    far = far or date(2026, 9, 8)
+    return [
+        {"leg_order": 1, "action": "SELL", "strike": 24000.0, "option_type": "CE",
+         "expiry_date": near, "fill_price": 120.0, "lots": 1, "lot_size": 50},
+        {"leg_order": 2, "action": "BUY", "strike": 24000.0, "option_type": "CE",
+         "expiry_date": far, "fill_price": 280.0, "lots": 1, "lot_size": 50},
+    ]
+
+
+class TestOutlookHorizon:
+    def test_calendar_uses_near_leg_dte(self):
+        today = now_ist().date()
+        near = today + timedelta(days=1)
+        far = today + timedelta(days=8)
+        h = outlook_horizon(
+            strategy="CALENDAR_SPREAD",
+            legs=_calendar_legs(near=near, far=far),
+            fallback_expiry=far,
+            as_of=today,
+        )
+        assert h["near_dte"] == 1
+        assert h["far_dte"] == 8
+        assert h["outlook_dte"] == 1
+        assert h["outlook_expiry"] == near
+
+    @pytest.mark.parametrize("strategy", [
+        "IRON_CONDOR",
+        "IRON_BUTTERFLY",
+        "SHORT_STRANGLE",
+        "BULL_PUT_SPREAD",
+        "BEAR_CALL_SPREAD",
+        "JADE_LIZARD",
+        "LONG_STRADDLE",
+        "LONG_STRANGLE",
+        "LONG_CALL",
+        "LONG_PUT",
+        "BULL_CALL_SPREAD",
+        "BEAR_PUT_SPREAD",
+    ])
+    def test_single_expiry_strategy_dte_unchanged(self, strategy):
+        """Non-calendar strategies share one expiry — DTE must match that expiry."""
+        today = now_ist().date()
+        exp = today + timedelta(days=12)
+        legs = _ic_legs() if "IRON" in strategy or strategy in (
+            "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD", "JADE_LIZARD",
+            "BULL_CALL_SPREAD", "BEAR_PUT_SPREAD",
+        ) else _strangle_legs()
+        for leg in legs:
+            leg["expiry_date"] = exp
+        h = outlook_horizon(
+            strategy=strategy,
+            legs=legs,
+            fallback_expiry=exp,
+            as_of=today,
+        )
+        assert h["outlook_dte"] == 12
+        assert h["outlook_expiry"] == exp
+        assert "far_dte" not in h
 
 
 class TestNormalizeAtmIv:
@@ -106,9 +176,16 @@ class TestLiveTradeOutlook:
         assert out["pop_delta"] is not None and out["pop_delta"] >= 5
 
     def test_expiry_day_inside_bes_is_certain_win_for_credit(self):
+        exp = now_ist().date()
+        legs = [
+            {"leg_order": 1, "action": "SELL", "strike": 23000.0, "option_type": "CE",
+             "expiry_date": exp, "fill_price": 100.0, "lots": 1, "lot_size": 50},
+            {"leg_order": 2, "action": "SELL", "strike": 23000.0, "option_type": "PE",
+             "expiry_date": exp, "fill_price": 100.0, "lots": 1, "lot_size": 50},
+        ]
         out = live_trade_outlook(
-            legs=_strangle_legs(), strategy="IRON_CONDOR",
-            underlying="NIFTY", expiry=date(2026, 5, 28),
+            legs=legs, strategy="IRON_CONDOR",
+            underlying="NIFTY", expiry=exp,
             spot=23000.0, dte=0, atm_iv=None,
             max_profit=10000.0, max_loss=10000.0,
         )
@@ -117,9 +194,16 @@ class TestLiveTradeOutlook:
         assert out["live_ev"] == 10000.0
 
     def test_expiry_day_outside_bes_is_certain_loss_for_credit(self):
+        exp = now_ist().date()
+        legs = [
+            {"leg_order": 1, "action": "SELL", "strike": 23000.0, "option_type": "CE",
+             "expiry_date": exp, "fill_price": 100.0, "lots": 1, "lot_size": 50},
+            {"leg_order": 2, "action": "SELL", "strike": 23000.0, "option_type": "PE",
+             "expiry_date": exp, "fill_price": 100.0, "lots": 1, "lot_size": 50},
+        ]
         out = live_trade_outlook(
-            legs=_strangle_legs(), strategy="IRON_CONDOR",
-            underlying="NIFTY", expiry=date(2026, 5, 28),
+            legs=legs, strategy="IRON_CONDOR",
+            underlying="NIFTY", expiry=exp,
             spot=24000.0, dte=0, atm_iv=None,
             max_profit=10000.0, max_loss=8000.0,
         )
@@ -172,6 +256,42 @@ class TestLiveTradeOutlook:
         assert out["direction_fit"] == "against"
         assert out["direction_label"] == "Past breakeven"
         assert "MTM" in out["direction_detail"] or "structural" in out["direction_detail"].lower()
+
+    def test_calendar_near_dte_and_low_pop_when_past_be(self):
+        today = now_ist().date()
+        near = today + timedelta(days=1)
+        far = today + timedelta(days=8)
+        legs = _calendar_legs(near=near, far=far)
+        sug = [
+            SuggestionLeg(
+                leg_order=1, hedge_pair_leg=2, symbol="NIFTY", expiry_date=near,
+                strike=24000.0, option_type="CE", action="SELL",
+                lots=1, lot_size=50, suggested_price=120.0,
+                suggested_price_low=120.0, suggested_price_high=120.0, leg_purpose_note="",
+            ),
+            SuggestionLeg(
+                leg_order=2, hedge_pair_leg=1, symbol="NIFTY", expiry_date=far,
+                strike=24000.0, option_type="CE", action="BUY",
+                lots=1, lot_size=50, suggested_price=280.0,
+                suggested_price_low=280.0, suggested_price_high=280.0, leg_purpose_note="",
+            ),
+        ]
+        pop_far_horizon = estimate_pop(sug, spot=23816.0, dte=8, atm_iv=0.18, strategy="CALENDAR_SPREAD")
+        pop_near_horizon = estimate_pop(sug, spot=23816.0, dte=1, atm_iv=0.18, strategy="CALENDAR_SPREAD")
+        pop_credit_bug = estimate_pop(sug, spot=23816.0, dte=8, atm_iv=0.18, strategy="SHORT_STRANGLE")
+        out = live_trade_outlook(
+            legs=legs, strategy="CALENDAR_SPREAD",
+            underlying="NIFTY", expiry=far,
+            spot=23816.0, dte=8, atm_iv=0.18,
+            max_profit=6000.0, max_loss=8000.0, entry_pop=48.0,
+        )
+        assert out["dte"] == 1
+        assert out["far_dte"] == 8
+        assert out["direction_fit"] == "against"
+        assert out["live_pop"] is not None
+        assert out["live_pop"] == pytest.approx(pop_near_horizon, rel=0.01)
+        assert pop_near_horizon < pop_credit_bug
+        assert out["live_ev"] < 600.0
 
     def test_long_call_uses_breakeven_not_strike(self):
         legs = [

@@ -66,6 +66,57 @@ def normalize_atm_iv(raw: Any) -> Optional[float]:
     return iv if iv > 0 else None
 
 
+def outlook_horizon(
+    *,
+    strategy: str,
+    legs: Sequence[Mapping[str, Any] | Any],
+    fallback_expiry: date,
+    as_of: date,
+) -> dict:
+    """DTE / expiry for live outlook — calendars use the *near* leg horizon."""
+    from engine.exit_pricing import expiry_date, unique_leg_expiries
+    from utils import days_between
+
+    expiries: list[date] = []
+    for raw in legs or []:
+        exp = None
+        if isinstance(raw, Mapping):
+            exp = expiry_date(raw.get("expiry_date") or raw.get("expiry"))
+        else:
+            key = getattr(raw, "key", None)
+            if isinstance(key, tuple) and len(key) > 1:
+                exp = expiry_date(key[1])
+            if exp is None:
+                exp = expiry_date(getattr(raw, "expiry_date", None))
+        if exp is not None and exp not in expiries:
+            expiries.append(exp)
+    if not expiries:
+        expiries = unique_leg_expiries(legs) if legs else []
+    if not expiries:
+        expiries = [fallback_expiry]
+
+    near = min(expiries)
+    far = max(expiries)
+    near_dte = max(days_between(as_of, near), 0)
+    far_dte = max(days_between(as_of, far), 0)
+    multi = len(expiries) >= 2 and near != far
+    # Only CALENDAR_SPREAD is multi-expiry today; near leg drives PoP / EV.
+    # Single-expiry strategies: min(leg expiries) equals the shared expiry.
+    outlook_expiry, outlook_dte = near, near_dte
+
+    out = {
+        "outlook_expiry": outlook_expiry,
+        "outlook_dte": outlook_dte,
+        "near_expiry": near.isoformat(),
+        "near_dte": near_dte,
+        "dte": outlook_dte,
+    }
+    if multi:
+        out["far_expiry"] = far.isoformat()
+        out["far_dte"] = far_dte
+    return out
+
+
 def legs_from_fills(
     legs: Sequence[Mapping[str, Any] | Any],
     *,
@@ -501,18 +552,27 @@ def compute_trade_outlook(
     leg_ltps: Optional[Mapping[str, Any]] = None,
     conditions_json: Any = None,
     include_scenarios: bool = True,
+    as_of: Optional[date] = None,
 ) -> dict:
     """Outlook for dashboard display — uses live tick or last stored market data."""
+    from utils import now_ist
+
+    as_of = as_of or now_ist().date()
+    horizon = outlook_horizon(
+        strategy=strategy, legs=legs, fallback_expiry=expiry, as_of=as_of,
+    )
+    outlook_expiry = horizon["outlook_expiry"]
+    outlook_dte = int(horizon["outlook_dte"])
     market = resolve_market_inputs(
-        db, underlying, expiry, live_spot=live_spot, live_iv=live_iv,
+        db, underlying, outlook_expiry, live_spot=live_spot, live_iv=live_iv,
     )
     base = live_trade_outlook(
         legs=legs,
         strategy=strategy,
         underlying=underlying,
-        expiry=expiry,
+        expiry=outlook_expiry,
         spot=market.get("spot"),
-        dte=dte,
+        dte=outlook_dte,
         atm_iv=market.get("atm_iv"),
         max_profit=max_profit,
         max_loss=max_loss,
@@ -522,8 +582,8 @@ def compute_trade_outlook(
         data_as_of=market.get("data_as_of"),
         leg_ltps=leg_ltps,
     )
-    em_warn = _em_calibration_for_trade(db, underlying, dte)
-    return enrich_trade_outlook(
+    em_warn = _em_calibration_for_trade(db, underlying, outlook_dte)
+    enriched = enrich_trade_outlook(
         base,
         current_mtm=current_mtm,
         conditions_json=conditions_json,
@@ -532,13 +592,15 @@ def compute_trade_outlook(
         legs=legs,
         strategy=strategy,
         underlying=underlying,
-        expiry=expiry,
-        dte=dte,
+        expiry=outlook_expiry,
+        dte=outlook_dte,
         atm_iv=market.get("atm_iv"),
         max_profit=max_profit,
         max_loss=max_loss,
         leg_ltps=leg_ltps,
     )
+    enriched.update({k: v for k, v in horizon.items() if k not in enriched})
+    return enriched
 
 
 def _em_calibration_for_trade(db, underlying: str, dte: int) -> Optional[str]:
@@ -856,15 +918,25 @@ def live_trade_outlook(
     ``live_pop`` / ``live_ev`` are None until spot and ATM IV are available
     (except DTE 0, which only needs spot + breakevens).
     """
+    from utils import now_ist
+
+    as_of = now_ist().date()
+    horizon = outlook_horizon(
+        strategy=strategy or "",
+        legs=legs,
+        fallback_expiry=expiry,
+        as_of=as_of,
+    )
+    outlook_expiry = horizon["outlook_expiry"]
     spot_f = _as_float(spot)
     entry_spot_f = _as_float(entry_spot)
     entry_pop_f = _as_float(entry_pop)
     iv = normalize_atm_iv(atm_iv)
-    dte_i = max(int(dte or 0), 0)
+    dte_i = max(int(horizon["outlook_dte"]), 0)
     mp = float(max_profit or 0.0)
     ml = abs(float(max_loss or 0.0))
 
-    sug_legs = legs_from_fills(legs, underlying=underlying, expiry=expiry)
+    sug_legs = legs_from_fills(legs, underlying=underlying, expiry=outlook_expiry)
     sug_legs = _apply_live_leg_prices(sug_legs, leg_ltps)
     uses_live_marks = bool(leg_ltps and sug_legs)
     upper_be = lower_be = None
@@ -942,7 +1014,7 @@ def live_trade_outlook(
         data_source=data_source,
     )
 
-    return {
+    result = {
         "live_pop": live_pop,
         "live_ev": live_ev,
         "entry_pop": round(entry_pop_f, 1) if entry_pop_f is not None else None,
@@ -952,6 +1024,10 @@ def live_trade_outlook(
         "entry_spot": round(entry_spot_f, 2) if entry_spot_f is not None else None,
         "spot_change": spot_change,
         "dte": dte_i,
+        "near_dte": horizon.get("near_dte"),
+        "far_dte": horizon.get("far_dte"),
+        "near_expiry": horizon.get("near_expiry"),
+        "far_expiry": horizon.get("far_expiry"),
         "atm_iv": round(iv, 4) if iv is not None else None,
         "expected_move": em,
         "upper_be": round(upper_be, 2) if upper_be is not None else None,
@@ -968,3 +1044,9 @@ def live_trade_outlook(
         "data_as_of": data_as_of,
         "uses_live_marks": uses_live_marks,
     }
+    if horizon.get("far_dte") is not None and (strategy or "").upper() == "CALENDAR_SPREAD":
+        result["ev_horizon_note"] = (
+            f"Win chance / EV use near leg ({horizon['near_dte']} DTE); "
+            f"far leg {horizon['far_dte']} DTE still open after that."
+        )
+    return result

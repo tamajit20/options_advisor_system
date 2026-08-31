@@ -1870,7 +1870,7 @@ function renderLiveOutlook(t) {
       </div>
       <div class="lo-help-sheet" hidden>
         <p><strong>Win chance</strong> — live PoP from spot, DTE, and ATM IV (or last EOD/intraday when the market is closed). Uses fill prices for breakevens; live leg marks when available.</p>
-        <p><strong>Expiry EV</strong> — expected rupee outcome at expiry: (win% × max profit) + ((1−win%) × −max loss). Not current MTM.</p>
+        <p><strong>Expiry EV</strong> — expected rupee outcome at expiry: (win% × max profit) + ((1−win%) × −max loss). Not current MTM. For calendar spreads, win chance / EV use the <em>near</em> leg DTE.</p>
         <p><strong>Structural fit</strong> — whether spot meets this strategy's breakeven need. You can show MTM profit while structural fit is &ldquo;past breakeven&rdquo; (theta/IV).</p>
         <p><strong>Close now vs hold</strong> — compares current MTM to hold-to-expiry EV when both are known.</p>
       </div>
@@ -2183,9 +2183,10 @@ function _updateLiveOutlook(tradeId, payload) {
       emWarnEl.classList.toggle('lo-em-warn-active', !!payload.em_calibration_warning);
     }
     if (marksNoteEl) {
-      marksNoteEl.textContent = payload.uses_live_marks
-        ? 'PoP breakevens use live leg marks.'
-        : '';
+      const bits = [];
+      if (payload.uses_live_marks) bits.push('PoP breakevens use live leg marks.');
+      if (payload.ev_horizon_note) bits.push(payload.ev_horizon_note);
+      marksNoteEl.textContent = bits.join(' ');
     }
     const marketBits = [];
     if (srcLabel) marketBits.push(srcLabel);
@@ -2204,7 +2205,13 @@ function _updateLiveOutlook(tradeId, payload) {
       marketBits.push('EM \u00b1' + fmt(payload.expected_move));
     }
     if (payload.dte != null) {
-      marketBits.push(payload.dte + ' DTE');
+      const nearD = payload.near_dte != null ? parseInt(payload.near_dte, 10) : payload.dte;
+      const farD = payload.far_dte != null ? parseInt(payload.far_dte, 10) : null;
+      if (farD != null && !isNaN(farD) && farD !== nearD) {
+        marketBits.push(`Near ${nearD} DTE · Far ${farD} DTE`);
+      } else {
+        marketBits.push(nearD + ' DTE');
+      }
     }
     const emLabel = payload.em_vs_be;
     const emText = {
