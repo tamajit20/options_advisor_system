@@ -2732,14 +2732,6 @@ function renderTradeProfitZone(t, legs) {
 
 function renderTradeKvGrid(t, legs) {
   const premium = tradePremiumFromLegs(legs);
-  const scLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'CE' && l.fill_price != null);
-  const spLeg = legs.find(l => l.action === 'SELL' && l.option_type === 'PE' && l.fill_price != null);
-  let fillNetCredit = 0;
-  legs.filter(l => l.executed && l.fill_price != null).forEach(l => {
-    fillNetCredit += (l.action === 'SELL' ? 1 : -1) * parseFloat(l.fill_price);
-  });
-  const realUBE = scLeg ? parseFloat(scLeg.strike) + fillNetCredit : null;
-  const realLBE = spLeg ? parseFloat(spLeg.strike) - fillNetCredit : null;
   const estMp = t.actual_max_profit != null ? t.actual_max_profit
               : (t.suggestion && t.suggestion.max_profit != null ? t.suggestion.max_profit : null);
   const estMl = t.actual_max_loss != null ? t.actual_max_loss
@@ -2749,9 +2741,12 @@ function renderTradeKvGrid(t, legs) {
   const estDte = t.suggestion && t.suggestion.dte != null ? t.suggestion.dte : null;
   const dteLeft = t.suggestion && t.suggestion.expiry_date
     ? dteFromExpiry(t.suggestion.expiry_date) : null;
-  const dteDisplay = estDte != null
-    ? `${estDte}${dteLeft != null ? ` (${dteLeft} left)` : ''}`
-    : (dteLeft != null ? `${dteLeft} left` : null);
+  const dteDisplay = t.suggestion && t.suggestion.expiry_date
+    ? `${fmtDate(t.suggestion.expiry_date)}${dteLeft != null ? ` (${dteLeft} left)` : ''}${estDte != null && dteLeft == null ? ` · ${estDte} DTE at entry` : ''}`
+    : (estDte != null
+      ? `${estDte}${dteLeft != null ? ` (${dteLeft} left)` : ''}`
+      : (dteLeft != null ? `${dteLeft} left` : null));
+  const isOpenTrade = (t.status || '').toUpperCase() === 'ACTIVE';
   const execWithFills = legs.filter(l => l.executed && l.fill_price != null);
   const estChg = execWithFills.length > 0
     ? estChargesFromLegs(execWithFills)
@@ -2760,31 +2755,16 @@ function renderTradeKvGrid(t, legs) {
   const estNetPnl = (estMp != null && estChg != null) ? (estMp - estChg) : null;
   return `
       <div>${kvLabel('Entry date')}<br><span class="v">${fmtDt(t.executed_on)}</span></div>
-      ${t.suggestion && t.suggestion.expiry_date ? `<div>${kvLabel('Options expiry')}<br><span class="v">${fmtDate(t.suggestion.expiry_date)}</span></div>` : '<div></div>'}
-      <div>${kvLabel('Net credit (actual)', 'net_credit')}<br><span class="v">\u20b9${fmt(t.net_credit_actual)}</span></div>
-      ${premium ? `<div>${kvLabel(premium.kind === 'received' ? 'Premium received' : 'Premium paid', 'premium')}<br><span class="v">\u20b9${fmt(premium.rs)}</span></div>` : '<div></div>'}
+      ${dteDisplay != null ? `<div>${kvLabel('Options expiry', 'dte')}<br><span class="v">${escapeHtml(String(dteDisplay))}</span></div>` : '<div></div>'}
+      <div>${kvLabel('Net credit (actual)', 'net_credit')}<br><span class="v">\u20b9${fmt(t.net_credit_actual)}${premium ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">${premium.kind === 'received' ? 'Premium received' : 'Premium paid'} \u20b9${fmt(premium.rs)} total</span>` : ''}</span></div>
       <div>${kvLabel('Type')}<br><span class="v">${escapeHtml(t.position_type)}</span></div>
       ${estMp != null ? `<div>${kvLabel('Est. max profit', 'max_profit')}<br><span class="v pnl-profit">\u20b9${fmt(estMp)}</span></div>` : '<div></div>'}
       ${estMl != null ? `<div>${kvLabel('Est. max loss', 'max_loss')}<br><span class="v pnl-loss">\u20b9${fmt(estMl)}<span class="econ-ml-hint">${pctHint(estMl, t.net_credit_actual, 'credit')}</span></span></div>` : '<div></div>'}
       ${estPop != null ? `<div>${kvLabel('Entry PoP', 'pop_entry')}<br><span class="v">${fmtPct(estPop)}</span></div>` : '<div></div>'}
       <div class="live-pop-kv" data-trade-id="${escapeHtml(t.trade_id)}">${kvLabel('Live PoP', 'pop_live')}<br><span class="v">\u2014</span></div>
-      ${realUBE != null ? `<div>${kvLabel('Upper BE (from fills)', 'upper_be')}<br><span class="v">\u20b9${fmt(realUBE)}</span></div>` : '<div></div>'}
-      ${realLBE != null ? `<div>${kvLabel('Lower BE (from fills)', 'lower_be')}<br><span class="v">\u20b9${fmt(realLBE)}</span></div>` : '<div></div>'}
-      ${(() => {
-        const isOpen = (t.status || '').toUpperCase() === 'ACTIVE';
-        const livePnl = t.last_mtm != null ? t.last_mtm : null;
-        if (isOpen && livePnl != null) {
-          return `<div>${kvLabel('P&amp;L (live)', 'mtm')}<br><span class="v">${formatPnlWithPct(livePnl, premium)}</span></div>`;
-        }
-        if (t.net_pnl != null) {
-          return `<div>${kvLabel('P&amp;L', 'mtm')}<br><span class="v">${formatPnlWithPct(t.net_pnl, premium)}</span></div>`;
-        }
-        return '<div></div>';
-      })()}
+      ${(!isOpenTrade && t.net_pnl != null) ? `<div>${kvLabel('P&amp;L', 'mtm')}<br><span class="v">${formatPnlWithPct(t.net_pnl, premium)}</span></div>` : '<div></div>'}
       ${estChg != null ? `<div>${kvLabel('Est. charges (from fills)', 'est_charges')}<br><span class="v">\u20b9${fmt(estChg)}</span></div>` : '<div></div>'}
       ${estNetPnl != null ? `<div>${kvLabel('Est. net at max profit', 'est_net_max_profit')}<br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${formatPnlWithPct(estNetPnl, premium, { useGrossSign: false })}</span></div>` : '<div></div>'}
-      ${dteDisplay != null ? `<div>${kvLabel('DTE at entry', 'dte')}<br><span class="v">${escapeHtml(String(dteDisplay))}</span></div>` : '<div></div>'}
-      <div>${kvLabel('Status')}<br><span class="v">${escapeHtml(t.status)}</span></div>
       ${t.closed_on ? `<div>${kvLabel('Exit date')}<br><span class="v">${fmtDt(t.closed_on)}</span></div>` : ''}`;
 }
 
@@ -4423,7 +4403,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     ${renderPlainEnglishStructured(s)}
     <div class="kv-grid">
       ${s.generated_on ? `<div>${kvLabel('Suggested on')}<br><span class="v">${fmtDate(s.generated_on)}</span></div>` : ''}
-      ${s.expiry_date  ? `<div>${kvLabel('Options expiry', 'dte')}<br><span class="v">${fmtDate(s.expiry_date)}</span></div>` : ''}
+      ${s.expiry_date ? `<div>${kvLabel('Options expiry', 'dte')}<br><span class="v">${fmtDate(s.expiry_date)}${s.dte != null ? ` <span class="muted">(${s.dte} DTE)</span>` : ''}</span></div>` : (s.dte != null ? `<div>${kvLabel('DTE', 'dte')}<br><span class="v">${s.dte}</span></div>` : '')}
       <div>${kvLabel('Net credit (per unit)', 'credit_per_unit')}<br><span class="v econ-np">₹${fmt(econ.np)}</span></div>
       <div>${kvLabel('Total credit')}<br><span class="v econ-tot-credit">₹${fmt(baseTotalCredit)}<span class="econ-qty-hint muted" style="font-size:.75rem"> (×${baseQty})</span></span></div>
       <div>${kvLabel('Max profit', 'max_profit')}<br><span class="v econ-mp">₹${fmt(econ.mp)}</span></div>
@@ -4468,7 +4448,6 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       <div><span class="k">Premium SL <span class="muted" style="font-size:.72rem">(1.5× credit)</span></span><br><span class="v econ-psl">₹${fmt((econ.np||0) * baseQty * 1.5)}<span class="pct-hint"> (150%)</span></span></div>
       <div><span class="k">Est. charges</span><br><span class="v econ-chg">₹${fmt(econ.chg)}</span></div>
       <div><span class="k">Est. net P&amp;L</span><br><span class="v econ-npnl">${formatPnlWithPct(econ.npnl, sugPremium, { useGrossSign: false })}</span></div>
-      <div><span class="k">DTE</span><br><span class="v">${s.dte ?? '—'}</span></div>
     </div>
     ${execOrderBanner(s.legs, s.strategy, 'entry')}
     <div class="legs-grid">${legsHtml}</div>
@@ -5729,9 +5708,7 @@ function renderTrade(t, expanded = false) {
       <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
     <div class="collapsible-preview">
-      ${t.suggestion?.strategy ? `<span>${escapeHtml(t.suggestion.strategy)}</span>` : ''}
       ${_tradePremium ? `<span>${_tradePremium.kind === 'received' ? 'Premium received' : 'Premium paid'} <strong>\u20b9${fmt(_tradePremium.rs)}</strong></span>` : (t.net_credit_actual != null ? `<span>Entry <strong>\u20b9${fmt(t.net_credit_actual)}</strong>/u</span>` : '')}
-      ${t.spot_at_execution != null ? `<span>Spot @ entry <strong>\u20b9${fmt(t.spot_at_execution)}</strong></span>` : ''}
     </div>`;
   const bodyHtml = `
     ${renderTradeActionPanel(t)}
