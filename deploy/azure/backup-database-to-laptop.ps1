@@ -53,28 +53,32 @@ if ($SshKeyPath) {
 New-Item -ItemType Directory -Force -Path $LocalBackupDir | Out-Null
 
 Write-Host "==> [1/2] SQL BACKUP DATABASE on VM (${DbName} only)..."
-$remoteScript = @"
+$remoteScript = @'
 set -euo pipefail
 export COMPOSE_PROFILES=bundled
-cd '$VmProjectDir'
+cd '__VM_PROJECT_DIR__'
 # shellcheck disable=SC1091
+set -a
 source .env.docker
-DB='${DbName}'
-STAMP=\$(date +%Y%m%d-%H%M%S)
-REL="backups/\${DB}-\${STAMP}.bak"
-CONTAINER="/var/opt/mssql/backup/\${DB}-\${STAMP}.bak"
+set +a
+DB='__DB_NAME__'
+STAMP=$(date +%Y%m%d-%H%M%S)
+REL="backups/${DB}-${STAMP}.bak"
+CONTAINER="/var/opt/mssql/backup/${DB}-${STAMP}.bak"
 mkdir -p backups
-if ! docker compose ps sqlserver 2>/dev/null | grep -q 'Up'; then
+if ! docker compose ps sqlserver 2>/dev/null | grep -qE 'Up|healthy'; then
   echo "ERROR: sqlserver container is not running." >&2
   exit 1
 fi
 docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd \
-  -S localhost -U sa -P "\${MSSQL_SA_PASSWORD}" -C -b -Q \
-  "BACKUP DATABASE [\${DB}] TO DISK = N'\${CONTAINER}' WITH INIT, COMPRESSION, STATS = 10"
-docker cp "options_sqlserver:\${CONTAINER}" "\${REL}"
-echo "DONE_DB_BACKUP \${REL}"
-"@
+  -S localhost -U sa -P "${MSSQL_SA_PASSWORD}" -C -b -Q \
+  "BACKUP DATABASE [${DB}] TO DISK = N'${CONTAINER}' WITH INIT, STATS = 10" >/dev/null
+docker cp "options_sqlserver:${CONTAINER}" "${REL}"
+echo "DONE_DB_BACKUP ${REL}"
+'@.Replace('__VM_PROJECT_DIR__', $VmProjectDir).Replace('__DB_NAME__', $DbName)
+$remoteScript = $remoteScript -replace "`r`n", "`n" -replace "`r", "`n"
 $backupOutput = $remoteScript | & ssh @sshArgs $sshTarget "bash -s" 2>&1
+$backupExit = $LASTEXITCODE
 $backupOutput | ForEach-Object { Write-Host $_ }
 
 $remoteRel = $null
@@ -85,7 +89,10 @@ foreach ($line in ($backupOutput -split "`n")) {
     }
 }
 if (-not $remoteRel) {
-    throw "Database backup failed on VM. Check sqlserver is running."
+    if ($backupExit -ne 0) {
+        throw "Database backup failed on VM (ssh exit $backupExit). Check sqlserver is running."
+    }
+    throw "Database backup failed on VM. DONE_DB_BACKUP marker not found in output."
 }
 
 $remoteFull = "$VmProjectDir/$($remoteRel -replace '\\','/')"
