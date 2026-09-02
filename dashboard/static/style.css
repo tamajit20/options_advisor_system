@@ -656,6 +656,88 @@ table.dt {
 }
 .btn:hover { background: var(--primary-dim); }
 .btn-accent { background: var(--accent); color: #111; }
+.btn.is-disabled,
+.btn[aria-disabled="true"] {
+  opacity: .55;
+  cursor: not-allowed;
+  filter: grayscale(.15);
+}
+.btn.is-loading { opacity: .75; pointer-events: none; }
+.zerodha-exec-progress-summary {
+  font-weight: 600;
+  font-size: .95rem;
+  margin-bottom: 4px;
+}
+.zerodha-exec-spinner {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto 12px;
+  border: 3px solid rgba(56, 189, 248, .25);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: zerodha-spin .8s linear infinite;
+}
+@keyframes zerodha-spin { to { transform: rotate(360deg); } }
+
+.zerodha-execution-strip {
+  background: rgba(56, 189, 248, .08);
+  border-bottom: 1px solid rgba(56, 189, 248, .22);
+  padding: 4px 14px;
+  font-size: .82rem;
+  color: var(--text);
+}
+.zerodha-execution-strip-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 1400px;
+  margin: 0 auto;
+  min-height: 22px;
+}
+.zerodha-execution-strip-inner--ok {
+  color: var(--ok);
+}
+.zerodha-execution-strip-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.zerodha-exec-spinner--sm {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border-width: 2px;
+}
+.zerodha-inflight-panel {
+  background: rgba(56, 189, 248, .08);
+  border: 1px solid rgba(56, 189, 248, .28);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.zerodha-inflight-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.zerodha-inflight-legs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.zerodha-inflight-leg {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: .82rem;
+}
+.zerodha-inflight-leg-sym { font-family: var(--mono, monospace); font-size: .78rem; }
+.zerodha-inflight-note { font-size: .75rem; margin: 8px 0 0; }
+
 .btn-ghost  { background: transparent; color: var(--text); border: 1px solid #3a4754; }
 .btn-danger { background: var(--err); }
 .btn-warn   { background: rgba(245,158,11,.15); color: var(--warn);

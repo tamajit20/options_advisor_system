@@ -76,6 +76,7 @@ let _zerodhaValid = false;
 let _zerodhaExecutionEnabled = false;
 let _zerodhaExecutionReady = false;
 let _lastMtmByTrade = {};  // tradeId → { mtm, as_of, receivedAt }
+const _zerodhaInflightPolls = new Map(); // key → stop function
 
 function _parseMtmAsOf(asOfStr) {
   if (!asOfStr) return null;
@@ -99,6 +100,9 @@ function _zerodhaExecuteDisabledReason(requireLiveGate) {
   if (!_zerodhaHasSession || !_zerodhaValid) {
     return 'Log in to Zerodha first (header pill or WS Monitor tab)';
   }
+  if (!_zerodhaExecutionReady) {
+    return 'Zerodha execution is not ready — verify API key in Config and refresh after login';
+  }
   if (requireLiveGate) {
     return 'Suggestion failed live execution checks — cannot place broker orders until checks pass';
   }
@@ -106,7 +110,38 @@ function _zerodhaExecuteDisabledReason(requireLiveGate) {
 }
 
 function _zerodhaExecuteReady(requireLiveGate) {
-  return _zerodhaExecutionReady && !requireLiveGate;
+  return !_zerodhaExecuteDisabledReason(requireLiveGate);
+}
+
+function _zerodhaExecButtonState(requireLiveGate, fallbackTitle) {
+  const reason = _zerodhaExecuteDisabledReason(requireLiveGate);
+  return { ready: !reason, reason, title: reason || fallbackTitle };
+}
+
+function _applyZerodhaButtonState(btn, state) {
+  if (!btn) return;
+  btn.classList.toggle('is-disabled', !state.ready);
+  if (state.ready) btn.removeAttribute('aria-disabled');
+  else btn.setAttribute('aria-disabled', 'true');
+  btn.removeAttribute('disabled');
+  btn.title = state.title;
+}
+
+function _refreshZerodhaExecButtons() {
+  $$('.btn-zerodha-exec').forEach(btn => {
+    const card = btn.closest('.card[data-sug-id]');
+    const requireLiveGate = card?.dataset?.requireLiveGate === '1';
+    _applyZerodhaButtonState(btn, _zerodhaExecButtonState(
+      requireLiveGate,
+      'Place entry orders in Zerodha (monitored until filled)',
+    ));
+  });
+  $$('.btn-zerodha-close').forEach(btn => {
+    _applyZerodhaButtonState(btn, _zerodhaExecButtonState(
+      false,
+      'Place close orders in Zerodha (monitored until filled)',
+    ));
+  });
 }
 
 function _zerodhaBtnTitle(fallback, requireLiveGate) {
@@ -158,7 +193,340 @@ function _closeZerodhaConfirmModal() {
   modal.hidden = true;
   document.body.classList.remove('sg-modal-open');
   const submit = document.getElementById('zerodha-confirm-submit');
-  if (submit) submit.onclick = null;
+  if (submit) {
+    submit.onclick = null;
+    submit.hidden = false;
+    submit.disabled = false;
+    submit.textContent = 'Place orders';
+  }
+}
+
+function _setZerodhaModalBody(title, bodyHtml) {
+  document.getElementById('zerodha-confirm-title').textContent = title;
+  document.getElementById('zerodha-confirm-body').innerHTML = bodyHtml;
+}
+
+function _renderZerodhaExecutionProgress(preview) {
+  const legs = preview?.legs || [];
+  const total = legs.length;
+  const rows = legs.map(l => {
+    const lo = l.leg_order ?? l.execution_step;
+    return `
+    <tr data-leg-order="${lo}">
+      <td class="num">${l.execution_step || lo}</td>
+      <td><span class="tag tag-sm">${escapeHtml(l.transaction_type || l.action || '')}</span></td>
+      <td>${escapeHtml(l.tradingsymbol || '')}</td>
+      <td class="num">${l.quantity != null ? l.quantity : ''}</td>
+      <td><span class="tag tag-sm tag-warn zerodha-leg-status">Waiting</span></td>
+    </tr>`;
+  }).join('');
+  return `
+    <div id="zerodha-exec-progress-summary" class="zerodha-exec-progress-summary">
+      Placing orders…${total ? ` (0/${total} legs filled)` : ''}
+    </div>
+    <p class="muted" style="margin:8px 0 10px;font-size:.82rem">Leg status updates live below. The trade appears on My Trades only after all legs fill.</p>
+    <div class="zerodha-exec-spinner" aria-hidden="true"></div>
+    <div class="hist-legs-scroll">
+      <table class="dt">
+        <thead><tr>
+          <th class="num">Step</th><th>Side</th><th>Symbol</th><th class="num">Qty</th><th>Status</th>
+        </tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="muted">No legs in preview</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
+function _zerodhaLegStatusTag(status) {
+  const s = (status || '').toUpperCase();
+  if (s === 'COMPLETE') return { lbl: 'Filled', cls: 'tag-ok' };
+  if (s === 'FAILED' || s === 'REJECTED' || s === 'CANCELLED') return { lbl: s, cls: 'tag-err' };
+  if (s === 'OPEN' || s === 'PENDING' || s === 'TRIGGER PENDING') return { lbl: 'Pending', cls: 'tag-warn' };
+  return { lbl: status || 'Waiting', cls: 'tag-warn' };
+}
+
+function _zerodhaIsInflightStatus(overall) {
+  const s = (overall || '').toUpperCase();
+  return s === 'IN_FLIGHT' || s === 'PARTIAL';
+}
+
+function _zerodhaInflightKey(meta) {
+  return meta.suggestionId || meta.tradeId || meta.pollUrl || 'zerodha';
+}
+
+function _zerodhaInflightLabel(meta) {
+  return meta.label || meta.suggestionId || meta.tradeId || 'Zerodha order';
+}
+
+function _renderZerodhaInflightLegRows(orders, preview) {
+  const previewLegs = preview?.legs || [];
+  if (previewLegs.length) {
+    const byLeg = {};
+    (orders || []).forEach(o => { byLeg[o.leg_order] = o; });
+    return previewLegs.map(l => {
+      const lo = l.leg_order ?? l.execution_step;
+      const o = byLeg[lo];
+      const st = _zerodhaLegStatusTag(o?.status);
+      const sym = l.tradingsymbol || o?.tradingsymbol || `Leg ${lo}`;
+      return `<div class="zerodha-inflight-leg">
+        <span class="zerodha-inflight-leg-sym">${escapeHtml(sym)}</span>
+        <span class="tag tag-sm ${st.cls}">${o?.fill_price != null && st.lbl === 'Filled' ? `Filled @ \u20b9${fmt(o.fill_price)}` : st.lbl}</span>
+      </div>`;
+    }).join('');
+  }
+  return (orders || []).map(o => {
+    const st = _zerodhaLegStatusTag(o.status);
+    return `<div class="zerodha-inflight-leg">
+      <span class="zerodha-inflight-leg-sym">${escapeHtml(o.tradingsymbol || `Leg ${o.leg_order}`)}</span>
+      <span class="tag tag-sm ${st.cls}">${o.fill_price != null && st.lbl === 'Filled' ? `Filled @ \u20b9${fmt(o.fill_price)}` : st.lbl}</span>
+    </div>`;
+  }).join('');
+}
+
+function _hideZerodhaInflightSurfaces(meta) {
+  const sid = meta?.suggestionId;
+  if (sid) {
+    const card = document.querySelector(`.card[data-sug-id="${CSS.escape(sid)}"]`);
+    card?.querySelector('.zerodha-inflight-chip')?.setAttribute('hidden', '');
+    const panel = card?.querySelector('.zerodha-inflight-panel');
+    if (panel) panel.hidden = true;
+  }
+  const strip = document.getElementById('zerodha-execution-strip');
+  if (strip && !_zerodhaInflightPolls.size) {
+    strip.hidden = true;
+    strip.innerHTML = '';
+  }
+}
+
+function _updateZerodhaInflightSurfaces(meta, preview, status) {
+  const legs = preview?.legs || [];
+  const total = legs.length || status?.total_orders || 0;
+  const filled = status?.filled_count ?? 0;
+  const overall = status?.overall_status || 'NONE';
+  const inflight = _zerodhaIsInflightStatus(overall);
+  const label = _zerodhaInflightLabel(meta);
+  const progressText = total ? `${filled}/${total} legs filled` : 'Placing orders…';
+
+  // Modal body (when open)
+  const summary = document.getElementById('zerodha-exec-progress-summary');
+  if (summary) summary.textContent = progressText;
+  const byLeg = {};
+  (status?.orders || []).forEach(o => { byLeg[o.leg_order] = o; });
+  (legs.length ? legs : (status?.orders || [])).forEach(l => {
+    const lo = l.leg_order ?? l.execution_step;
+    const row = document.querySelector(`#zerodha-confirm-body tr[data-leg-order="${lo}"]`);
+    if (!row) return;
+    const cell = row.querySelector('.zerodha-leg-status');
+    if (!cell) return;
+    const o = byLeg[lo];
+    const st = _zerodhaLegStatusTag(o?.status);
+    cell.className = `tag tag-sm ${st.cls} zerodha-leg-status`;
+    cell.textContent = (o?.fill_price != null && st.lbl === 'Filled')
+      ? `Filled @ \u20b9${fmt(o.fill_price)}`
+      : st.lbl;
+  });
+
+  if (!inflight && overall === 'NONE') {
+    _hideZerodhaInflightSurfaces(meta);
+    return;
+  }
+
+  // Suggestion card chip (visible when card collapsed)
+  const sid = meta?.suggestionId;
+  if (sid) {
+    const card = document.querySelector(`.card[data-sug-id="${CSS.escape(sid)}"]`);
+    const chip = card?.querySelector('.zerodha-inflight-chip');
+    if (chip) {
+      if (inflight || (filled > 0 && filled < total)) {
+        chip.removeAttribute('hidden');
+        chip.textContent = `Zerodha ${progressText}`;
+        chip.title = `${label} — live broker fill progress`;
+      } else if (overall === 'COMPLETE') {
+        chip.removeAttribute('hidden');
+        chip.textContent = 'Zerodha complete';
+        chip.className = 'tag tag-ok zerodha-inflight-chip';
+        chip.title = 'All broker legs filled';
+      } else {
+        chip.setAttribute('hidden', '');
+      }
+    }
+    const panel = card?.querySelector('.zerodha-inflight-panel');
+    if (panel) {
+      if (inflight || (filled > 0 && filled < total)) {
+        panel.hidden = false;
+        panel.innerHTML = `
+          <div class="zerodha-inflight-head">
+            <strong>Live Zerodha progress</strong>
+            <span class="tag tag-info">${escapeHtml(progressText)}</span>
+          </div>
+          <div class="zerodha-inflight-legs">${_renderZerodhaInflightLegRows(status?.orders, preview)}</div>
+          <p class="muted zerodha-inflight-note">Trade appears on My Trades only after all legs fill.</p>`;
+      } else {
+        panel.hidden = true;
+      }
+    }
+  }
+
+  // App-wide strip — one compact line; hidden on Suggestion tab (card has full detail)
+  const strip = document.getElementById('zerodha-execution-strip');
+  if (strip && (inflight || (filled > 0 && filled < total))) {
+    strip.dataset.inflight = '1';
+    strip.innerHTML = `
+      <div class="zerodha-execution-strip-inner">
+        <span class="zerodha-exec-spinner zerodha-exec-spinner--sm" aria-hidden="true"></span>
+        <span class="zerodha-execution-strip-text"><strong>Zerodha</strong> · ${escapeHtml(label)} · ${escapeHtml(progressText)}</span>
+      </div>`;
+  } else if (strip && overall === 'COMPLETE' && filled >= total && total > 0) {
+    strip.dataset.inflight = '';
+    strip.innerHTML = `
+      <div class="zerodha-execution-strip-inner zerodha-execution-strip-inner--ok">
+        <span class="zerodha-execution-strip-text"><strong>Zerodha</strong> · ${escapeHtml(label)} · all ${total} legs filled${status?.trade_id ? ` · ${escapeHtml(status.trade_id)}` : ''}</span>
+      </div>`;
+    setTimeout(() => {
+      if (strip?.querySelector('.zerodha-execution-strip-inner--ok')) {
+        strip.hidden = true;
+        strip.innerHTML = '';
+        strip.dataset.inflight = '';
+      }
+    }, 5000);
+  }
+  _syncZerodhaExecutionStrip();
+}
+
+function _isSuggestionTabActive() {
+  return document.querySelector('.nav-item.active')?.dataset?.tab === 'suggestion';
+}
+
+/** Keep header row clean: strip is a slim second line, hidden on Suggestion tab. */
+function _syncZerodhaExecutionStrip() {
+  const strip = document.getElementById('zerodha-execution-strip');
+  if (!strip) return;
+  const hasContent = strip.innerHTML.trim().length > 0;
+  const inflight = strip.dataset.inflight === '1' || _zerodhaInflightPolls.size > 0;
+  if (!hasContent) {
+    strip.hidden = true;
+    return;
+  }
+  strip.hidden = inflight && _isSuggestionTabActive();
+}
+
+function _stopZerodhaInflightPoll(key) {
+  const stop = _zerodhaInflightPolls.get(key);
+  if (stop) {
+    stop();
+    _zerodhaInflightPolls.delete(key);
+  }
+}
+
+function _startZerodhaOrderPolling(pollUrl, preview, meta = {}) {
+  const key = _zerodhaInflightKey({ ...meta, pollUrl });
+  _stopZerodhaInflightPoll(key);
+  const ctrl = { stop: false, intervalId: null, tradeNotified: false };
+  const tick = async () => {
+    if (ctrl.stop) return;
+    try {
+      const status = await API(pollUrl);
+      _updateZerodhaInflightSurfaces(meta, preview, status);
+      if (status.trade_id && !ctrl.tradeNotified) {
+        ctrl.tradeNotified = true;
+        loadTrades();
+        if (meta.onTradeCreated) meta.onTradeCreated(status.trade_id);
+      }
+      if (!_zerodhaIsInflightStatus(status.overall_status) && status.overall_status !== 'NONE') {
+        _stopZerodhaInflightPoll(key);
+      }
+    } catch (_) { /* poll errors are non-fatal during execution */ }
+  };
+  tick();
+  ctrl.intervalId = setInterval(tick, 1500);
+  const stopFn = () => {
+    ctrl.stop = true;
+    if (ctrl.intervalId) clearInterval(ctrl.intervalId);
+    _zerodhaInflightPolls.delete(key);
+  };
+  _zerodhaInflightPolls.set(key, stopFn);
+  return stopFn;
+}
+
+async function _scanInflightZerodhaExecutions() {
+  const cards = $$('.card[data-sug-id]');
+  await Promise.all(cards.map(async card => {
+    const sid = card.dataset.sugId;
+    if (!sid) return;
+    const key = sid;
+    if (_zerodhaInflightPolls.has(key)) return;
+    try {
+      const status = await API(`/api/suggestion/${sid}/zerodha-orders`);
+      if (!_zerodhaIsInflightStatus(status.overall_status)) return;
+      const label = card.querySelector('.card-head-title h3')?.textContent?.trim() || sid;
+      _updateZerodhaInflightSurfaces({ suggestionId: sid, label }, null, status);
+      _startZerodhaOrderPolling(
+        `/api/suggestion/${sid}/zerodha-orders`,
+        { legs: (status.orders || []).map(o => ({
+          leg_order: o.leg_order,
+          tradingsymbol: o.tradingsymbol,
+          execution_step: o.leg_order,
+        })) },
+        { suggestionId: sid, label },
+      );
+    } catch (_) { /* non-fatal */ }
+  }));
+}
+
+function _zerodhaModalExecutionError(err) {
+  _setZerodhaModalBody('Execution failed', `
+    <div class="pending-close-alert"><strong>Order failed.</strong><br>${escapeHtml(err.message)}</div>
+    <p class="muted" style="font-size:.82rem;margin-top:8px">Check your Zerodha order book before retrying.</p>`);
+  const submit = document.getElementById('zerodha-confirm-submit');
+  if (submit) {
+    submit.hidden = false;
+    submit.textContent = 'Close';
+    submit.disabled = false;
+    submit.onclick = () => _closeZerodhaConfirmModal();
+  }
+}
+
+function _renderZerodhaExecutionResult(preview, result) {
+  const fillByLeg = {};
+  (result?.leg_fills || []).forEach(f => { fillByLeg[f.leg_order] = f; });
+  const legs = preview?.legs || [];
+  const filledCount = (result?.leg_fills || []).length;
+  const allComplete = legs.length > 0 && filledCount >= legs.length;
+  const rows = legs.map(l => {
+    const lo = l.leg_order ?? l.execution_step;
+    const f = fillByLeg[lo];
+    const statusLbl = f ? 'Filled' : 'Not filled';
+    const statusCls = f ? 'tag-ok' : 'tag-err';
+    return `<tr>
+      <td class="num">${l.execution_step || lo}</td>
+      <td><span class="tag tag-sm">${escapeHtml(l.transaction_type || l.action || '')}</span></td>
+      <td>${escapeHtml(l.tradingsymbol || '')}</td>
+      <td class="num">${l.quantity != null ? l.quantity : ''}</td>
+      <td><span class="tag tag-sm ${statusCls}">${statusLbl}</span></td>
+      <td class="num">${f ? `\u20b9${fmt(f.fill_price)}` : '\u2014'}</td>
+      <td class="muted" style="font-size:.72rem">${f?.kite_order_id ? escapeHtml(f.kite_order_id) : ''}</td>
+    </tr>`;
+  }).join('');
+  const summaryCls = allComplete ? 'tag-ok' : (filledCount ? 'tag-warn' : 'tag-err');
+  const summaryLbl = allComplete
+    ? 'All legs filled'
+    : (filledCount ? `Partial fill (${filledCount}/${legs.length} legs)` : 'No fills recorded');
+  const tradeLine = result?.trade_id
+    ? `<p style="margin:0 0 8px"><strong>Trade:</strong> <code>${escapeHtml(result.trade_id)}</code></p>` : '';
+  return `
+    <div style="margin-bottom:10px">
+      <span class="tag ${summaryCls}">${summaryLbl}</span>
+      ${result?.message ? `<span class="muted" style="margin-left:8px;font-size:.85rem">${escapeHtml(result.message)}</span>` : ''}
+    </div>
+    ${tradeLine}
+    <div class="hist-legs-scroll">
+      <table class="dt">
+        <thead><tr>
+          <th class="num">Step</th><th>Side</th><th>Symbol</th><th class="num">Qty</th>
+          <th>Fill status</th><th class="num">Fill price</th><th>Order ID</th>
+        </tr></thead>
+        <tbody>${rows || '<tr><td colspan="7" class="muted">No leg details</td></tr>'}</tbody>
+      </table>
+    </div>`;
 }
 
 function _renderZerodhaPreviewTable(preview) {
@@ -207,19 +575,20 @@ function _renderZerodhaPreviewTable(preview) {
 
 function showZerodhaConfirmModal(preview, { title, submitLabel, onConfirm }) {
   const modal = _ensureZerodhaConfirmModal();
-  document.getElementById('zerodha-confirm-title').textContent = title || 'Confirm Zerodha orders';
-  document.getElementById('zerodha-confirm-body').innerHTML = _renderZerodhaPreviewTable(preview);
+  _setZerodhaModalBody(title || 'Confirm Zerodha orders', _renderZerodhaPreviewTable(preview));
   const submit = document.getElementById('zerodha-confirm-submit');
+  submit.hidden = false;
+  submit.disabled = false;
   submit.textContent = submitLabel || 'Place orders';
   submit.onclick = async () => {
     submit.disabled = true;
     try {
-      await onConfirm();
-      _closeZerodhaConfirmModal();
+      const keepOpen = await onConfirm();
+      if (!keepOpen) _closeZerodhaConfirmModal();
     } catch (err) {
       toast(err.message, 'err');
     } finally {
-      submit.disabled = false;
+      if (!submit.hidden) submit.disabled = false;
     }
   };
   modal.hidden = false;
@@ -1154,6 +1523,7 @@ function switchTab(name) {
       history.replaceState(null, '', '#' + name);
     }
   } catch (_) {}
+  _syncZerodhaExecutionStrip();
 }
 window.switchTab = switchTab;
 
@@ -1865,6 +2235,7 @@ async function loadSuggestion() {
     bindCollapsibleCardInteractions(c);
     wireTermHelpToggle(c);
     c.querySelectorAll('.collapsible-card').forEach(card => card.classList.add('mobile-compact'));
+    _scanInflightZerodhaExecutions();
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -4537,8 +4908,14 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
   const canExecute = !readOnly && suggestionCanExecute(s);
   const canExecuteAtSuggested = !readOnly && suggestionCanExecuteAtSuggested(s);
   const showExecActions = canExecute || canExecuteAtSuggested;
-  const zExecDisabledAttr = (canExecute && _zerodhaExecuteReady(true)) ? '' : ' disabled';
-  const zExecTitle = _zerodhaBtnTitle('Place entry orders in Zerodha (monitored until filled)', !canExecute);
+  const zExecRequireGate = !canExecute;
+  const zExecSt = _zerodhaExecButtonState(
+    zExecRequireGate,
+    'Place entry orders in Zerodha (monitored until filled)',
+  );
+  const zExecBtnClass = `btn btn-accent btn-zerodha-exec${zExecSt.ready ? '' : ' is-disabled'}`;
+  const zExecAria = zExecSt.ready ? '' : ' aria-disabled="true"';
+  const zExecTitle = escapeHtml(zExecSt.title);
   const gateLabel = s.execution_gate?.label
     || (s.is_stale ? 'Stale' : null)
     || (sugStatus === 'IGNORED' ? 'Retired' : null);
@@ -4557,6 +4934,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
         ${regimePairChip(s)}
         ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn" title="Live checks failed — use Mark Executed at suggested prices">${escapeHtml(gateLabel)}</span>` : ''}
+        <span class="tag tag-info zerodha-inflight-chip" hidden title="Zerodha fill progress">Zerodha</span>
         ${sugStatus === 'IGNORED' ? '<span class="tag tag-warn">Retired</span>' : ''}
         ${s.is_stale && sugStatus === 'PENDING' && !gateLabel ? '<span class="tag tag-warn">Stale</span>' : ''}
         ${_qualityBadge(s.entry_quality_score, '', {
@@ -4661,7 +5039,8 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           <strong class="exec-path-title">Via Zerodha</strong>
           <span class="muted exec-path-hint">Places LIMIT orders in your broker — records the trade when filled</span>
         </div>
-        <button type="button" class="btn btn-accent btn-zerodha-exec"${zExecDisabledAttr} title="${zExecTitle}">Place orders in Zerodha</button>
+        <div class="zerodha-inflight-panel" hidden aria-live="polite"></div>
+        <button type="button" class="${zExecBtnClass}"${zExecAria} title="${zExecTitle}">Place orders in Zerodha</button>
         <div class="zerodha-limit-row muted">Optional limit prices (blank = live auto):</div>
         <div class="zerodha-limit-grid">
           ${(s.legs || []).map(l => `
@@ -4727,6 +5106,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     data-spot-at-gen="${s.spot_at_generation || 0}"
     data-sug-range-lo="${sugRangeLo}"
     data-sug-range-hi="${sugRangeHi}"
+    data-require-live-gate="${canExecute ? '0' : '1'}"
     data-short-call-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='CE')||{}).strike||''}"
     data-short-put-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='PE')||{}).strike||''}"`;
   return wrapCollapsibleCard(summaryHtml, bodyHtml, {
@@ -4958,15 +5338,28 @@ function bindSuggestionActions() {
   }));
 
   $$('.btn-zerodha-exec').forEach(b => b.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     const btn = e.currentTarget;
-    if (btn.disabled) return;
-    const card = btn.closest('.card');
+    const card = btn.closest('.card[data-sug-id]');
+    if (!card) {
+      toast('Could not find suggestion card — refresh the page and try again.', 'err');
+      return;
+    }
+    const requireLiveGate = card.dataset.requireLiveGate === '1';
+    const blocked = _zerodhaExecuteDisabledReason(requireLiveGate);
+    if (blocked) {
+      toast(blocked, 'warn');
+      return;
+    }
     const sid = card.dataset.sugId;
     const spotInput = card.querySelector('.exec-spot-input');
     const spotRaw = spotInput?.value.trim();
     const spotVal = spotRaw ? parseFloat(spotRaw) : (parseFloat(card.dataset.spotAtGen) || null);
     const legLimits = _collectZerodhaLegLimits(card, '.zerodha-limit-price');
-    btn.disabled = true;
+    const prevLabel = btn.textContent;
+    btn.classList.add('is-loading');
+    btn.textContent = 'Loading preview…';
     try {
       const body = {};
       if (spotVal != null) body.spot_at_execution = spotVal;
@@ -4976,28 +5369,77 @@ function bindSuggestionActions() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const preview = prev.preview;
+      const preview = prev?.preview;
+      if (!preview || !(preview.legs || []).length) {
+        throw new Error('Preview returned no legs — check Zerodha session and suggestion legs');
+      }
       showZerodhaConfirmModal(preview, {
         title: preview.all_limits_in_band
           ? 'Confirm Zerodha entry orders'
           : 'Warning: limits outside suggestion band',
         submitLabel: preview.all_limits_in_band ? 'Place entry orders' : 'Proceed anyway',
         onConfirm: async () => {
+          const execLabel = card.querySelector('.card-head-title h3')?.textContent?.trim() || sid;
+          _setZerodhaModalBody('Executing in Zerodha…', _renderZerodhaExecutionProgress(preview));
+          const submit = document.getElementById('zerodha-confirm-submit');
+          if (submit) submit.hidden = true;
           const execBody = { ...body, ack_out_of_band: !preview.all_limits_in_band };
-          const r = await API(`/api/suggestion/${sid}/zerodha-execute`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(execBody),
+          const pollMeta = {
+            suggestionId: sid,
+            label: execLabel,
+            onTradeCreated: (tid) => toast(`Trade ${tid} created — visible on My Trades`, 'info'),
+          };
+          const stopPoll = _startZerodhaOrderPolling(
+            `/api/suggestion/${sid}/zerodha-orders`,
+            preview,
+            pollMeta,
+          );
+          let r;
+          try {
+            r = await API(`/api/suggestion/${sid}/zerodha-execute`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(execBody),
+            });
+          } catch (err) {
+            _zerodhaModalExecutionError(err);
+            throw err;
+          } finally {
+            stopPoll();
+          }
+          _updateZerodhaInflightSurfaces(pollMeta, preview, {
+            filled_count: (r.leg_fills || []).length,
+            total_orders: (preview.legs || []).length,
+            overall_status: 'COMPLETE',
+            trade_id: r.trade_id,
+            orders: (r.leg_fills || []).map(f => ({
+              leg_order: f.leg_order,
+              status: 'COMPLETE',
+              fill_price: f.fill_price,
+              kite_order_id: f.kite_order_id,
+            })),
           });
+          _setZerodhaModalBody(
+            r.trade_id ? 'Execution complete' : 'Execution result',
+            _renderZerodhaExecutionResult(preview, r),
+          );
+          if (submit) {
+            submit.hidden = false;
+            submit.textContent = 'Done';
+            submit.disabled = false;
+            submit.onclick = () => _closeZerodhaConfirmModal();
+          }
           toast(r.message || `Trade ${r.trade_id} created in Zerodha`, 'ok');
           loadSuggestion();
           loadTrades();
+          return true;
         },
       });
     } catch (err) {
       toast(err.message, 'err');
     } finally {
-      btn.disabled = !_zerodhaExecuteReady(true);
+      btn.classList.remove('is-loading');
+      btn.textContent = prevLabel;
     }
   }));
 
@@ -5419,11 +5861,13 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     }).join('');
 
     const closePremium = tradePremiumFromLegs(data.legs);
-    const zCloseDisabledAttr = _zerodhaExecuteReady(false) ? '' : ' disabled';
-    const zCloseTitle = _zerodhaBtnTitle(
-      'Place closing LIMIT orders in Zerodha. Leave fill fields blank for auto limits.',
+    const zCloseSt = _zerodhaExecButtonState(
       false,
+      'Place closing LIMIT orders in Zerodha. Leave fill fields blank for auto limits.',
     );
+    const zCloseBtnClass = `btn btn-accent btn-zerodha-close${zCloseSt.ready ? '' : ' is-disabled'}`;
+    const zCloseAria = zCloseSt.ready ? '' : ' aria-disabled="true"';
+    const zCloseTitle = escapeHtml(zCloseSt.title);
 
     content.innerHTML = `
         <div class="close-two-col">
@@ -5453,7 +5897,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
             </div>
             <div class="btn-row" style="margin-top:8px">
               <button class="btn btn-danger btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm &amp; record fills</button>
-              <button class="btn btn-accent btn-zerodha-close" data-trade-id="${escapeHtml(tradeId)}"${zCloseDisabledAttr} title="${zCloseTitle}">Close in Zerodha</button>
+              <button type="button" class="${zCloseBtnClass}"${zCloseAria} data-trade-id="${escapeHtml(tradeId)}" title="${zCloseTitle}">Close in Zerodha</button>
             </div>
             <p class="muted" style="font-size:.78rem;margin-top:6px">Close in Zerodha: leave fill prices blank for live auto limits, or enter your LIMIT per leg.</p>
           </div>
@@ -5548,9 +5992,15 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
   }
 }
 async function submitZerodhaClose(tradeId, btn, panel) {
-  if (btn.disabled) return;
+  const blocked = _zerodhaExecuteDisabledReason(false);
+  if (blocked) {
+    toast(blocked, 'warn');
+    return;
+  }
   const legLimits = panel ? _collectZerodhaLegLimits(panel, '.close-price') : [];
-  btn.disabled = true;
+  const prevLabel = btn.textContent;
+  btn.classList.add('is-loading');
+  btn.textContent = 'Loading preview…';
   try {
     const body = {};
     if (legLimits.length) body.leg_limits = legLimits;
@@ -5559,31 +6009,56 @@ async function submitZerodhaClose(tradeId, btn, panel) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const preview = prev.preview;
+    const preview = prev?.preview;
+    if (!preview || !(preview.legs || []).length) {
+      throw new Error('Close preview returned no legs');
+    }
     showZerodhaConfirmModal(preview, {
       title: 'Confirm Zerodha close orders',
       submitLabel: 'Place close orders',
       onConfirm: async () => {
-        btn.disabled = true;
-        btn.textContent = 'Closing in Zerodha…';
+        _setZerodhaModalBody('Closing in Zerodha…', _renderZerodhaExecutionProgress(preview));
+        const submit = document.getElementById('zerodha-confirm-submit');
+        if (submit) submit.hidden = true;
+        const closeMeta = { tradeId, label: `Close ${tradeId}` };
+        const stopPoll = _startZerodhaOrderPolling(
+          `/api/trades/${tradeId}/zerodha-orders`,
+          preview,
+          closeMeta,
+        );
+        let r;
         try {
-          const r = await API(`/api/trades/${tradeId}/zerodha-close`, {
+          r = await API(`/api/trades/${tradeId}/zerodha-close`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
           });
-          toast(r.message || `Trade ${tradeId} closed in Zerodha`, 'ok');
-          loadTrades();
+        } catch (err) {
+          _zerodhaModalExecutionError(err);
+          throw err;
         } finally {
-          btn.disabled = !_zerodhaExecuteReady(false);
-          btn.textContent = 'Close in Zerodha';
+          stopPoll();
         }
+        _setZerodhaModalBody(
+          'Close complete',
+          _renderZerodhaExecutionResult(preview, r),
+        );
+        if (submit) {
+          submit.hidden = false;
+          submit.textContent = 'Done';
+          submit.disabled = false;
+          submit.onclick = () => _closeZerodhaConfirmModal();
+        }
+        toast(r.message || `Trade ${tradeId} closed in Zerodha`, 'ok');
+        loadTrades();
+        return true;
       },
     });
   } catch (err) {
     toast(err.message, 'err');
   } finally {
-    btn.disabled = !_zerodhaExecuteReady(false);
+    btn.classList.remove('is-loading');
+    btn.textContent = prevLabel;
   }
 }
 
@@ -7898,6 +8373,7 @@ async function loadZerodhaStatus() {
       }
     }
     _refreshAllFeedTags();
+    _refreshZerodhaExecButtons();
     // Update header pill (always present)
     if (headerBtn && headerIcon && headerLabel) {
       if (!d.has_session) {

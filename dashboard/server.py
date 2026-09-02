@@ -1698,6 +1698,31 @@ def create_app() -> Flask:
             ],
         })
 
+    @app.route("/api/suggestion/<sid>/zerodha-orders")
+    @_with_db
+    def api_zerodha_orders_for_suggestion(db: SQLServerConnection, sid: str):
+        """Live broker-order status for in-flight Zerodha entry execution."""
+        from database.broker_order_repo import BrokerOrderRepo
+        from lifecycle.zerodha_execution_log import group_broker_orders
+
+        rows = [_row(r) for r in BrokerOrderRepo(db).by_suggestion(sid)]
+        trade_id = next((r["trade_id"] for r in rows if r.get("trade_id")), None)
+        filled = sum(
+            1 for r in rows if str(r.get("status") or "").upper() == "COMPLETE"
+        )
+        overall = "NONE"
+        if rows:
+            groups = group_broker_orders(rows)
+            overall = groups[0].get("overall_status") or "UNKNOWN"
+        return jsonify({
+            "suggestion_id": sid,
+            "trade_id": trade_id,
+            "orders": rows,
+            "overall_status": overall,
+            "filled_count": filled,
+            "total_orders": len(rows),
+        })
+
     # ---------- Tab 2: My Trades ----------
     @app.route("/api/trades/open")
     @_with_db
@@ -1878,6 +1903,29 @@ def create_app() -> Flask:
                 }
                 for f in outcome.leg_fills
             ],
+        })
+
+    @app.route("/api/trades/<trade_id>/zerodha-orders")
+    @_with_db
+    def api_zerodha_orders_for_trade(db: SQLServerConnection, trade_id: str):
+        """Live broker-order status for in-flight Zerodha close execution."""
+        from database.broker_order_repo import BrokerOrderRepo
+        from lifecycle.zerodha_execution_log import group_broker_orders
+
+        rows = [_row(r) for r in BrokerOrderRepo(db).by_trade(trade_id)]
+        filled = sum(
+            1 for r in rows if str(r.get("status") or "").upper() == "COMPLETE"
+        )
+        overall = "NONE"
+        if rows:
+            groups = group_broker_orders(rows)
+            overall = groups[0].get("overall_status") or "UNKNOWN"
+        return jsonify({
+            "trade_id": trade_id,
+            "orders": rows,
+            "overall_status": overall,
+            "filled_count": filled,
+            "total_orders": len(rows),
         })
 
     @app.route("/api/trades/<trade_id>", methods=["DELETE"])
