@@ -1037,6 +1037,28 @@ ZERODHA_API_CONFIG = {
 
 
 # ---------------------------------------------------------------------------
+# Zerodha — broker order execution (Kite Connect write path)
+# ---------------------------------------------------------------------------
+# Requires a valid daily Kite session (same OAuth flow as market data).
+# Also gated by runtime flag `trade_execution_enabled` (dashboard toggle).
+ZERODHA_EXECUTION_CONFIG = {
+    # Master env kill switch — when False, Execute/Close in Zerodha buttons are disabled.
+    "enabled": _env_bool("OPT_ZERODHA_EXECUTION_ENABLED", False),
+    # Per-leg live LTP must fall within suggested_price_low/high when set.
+    "require_price_band": _env_bool("OPT_ZERODHA_REQUIRE_PRICE_BAND", True),
+    # Fallback when band columns are NULL: max % drift from suggested_price mid.
+    "max_price_drift_pct": float(_env("OPT_ZERODHA_MAX_PRICE_DRIFT_PCT", "10")),
+    "order_poll_interval_sec": float(_env("OPT_ZERODHA_ORDER_POLL_SEC", "2")),
+    "order_max_wait_sec": float(_env("OPT_ZERODHA_ORDER_MAX_WAIT_SEC", "45")),
+    "order_max_retries": _env_int("OPT_ZERODHA_ORDER_MAX_RETRIES", 3),
+    # LIMIT price offset from LTP: BUY pays up, SELL accepts less (better fill odds).
+    "limit_slippage_pct": float(_env("OPT_ZERODHA_LIMIT_SLIPPAGE_PCT", "0.5")),
+    "product": _env("OPT_ZERODHA_ORDER_PRODUCT", "NRML"),
+    "variety": _env("OPT_ZERODHA_ORDER_VARIETY", "regular"),
+}
+
+
+# ---------------------------------------------------------------------------
 # Alerts / Notifications
 # ---------------------------------------------------------------------------
 ALERTS_CONFIG = {
@@ -1103,6 +1125,8 @@ RETENTION_CONFIG = {
     "atm_iv_5min_keep_days":      180,
     # Hourly trade MTM snapshots (hot table); history kept with trades audit.
     "trade_mtm_snapshot_history_keep_days": 1825,
+    # Zerodha broker order audit (`options_broker_orders`) — ~30 days default.
+    "broker_orders_keep_days": _env_int("OPT_BROKER_ORDERS_KEEP_DAYS", 30),
 }
 
 
@@ -1193,3 +1217,4 @@ LOGGING_CONFIG_DEFAULTS = copy.deepcopy(LOGGING_CONFIG)
 EVENTS_CONFIG_DEFAULTS = copy.deepcopy(EVENTS_CONFIG)
 PROVIDERS_CONFIG_DEFAULTS = copy.deepcopy(PROVIDERS_CONFIG)
 ZERODHA_API_CONFIG_DEFAULTS = copy.deepcopy(ZERODHA_API_CONFIG)
+ZERODHA_EXECUTION_CONFIG_DEFAULTS = copy.deepcopy(ZERODHA_EXECUTION_CONFIG)

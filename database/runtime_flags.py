@@ -28,10 +28,10 @@ Flag inventory
 - `sl_alerts`              (bool, default True)  — emit loss-limit, spot-SL, pre-breach, short-leg stress.
 - `closure_alerts`         (bool, default True)  — emit TARGET_HIT (whole-trade take-profit).
 - `opportunity_alerts`     (bool, default True)  — emit PERFECT_ENTRY notifications.
-- `trade_execution_enabled`(bool, default False) — placeholder; we do not place
-                                                   orders today, but the flag is
-                                                   reserved so the dashboard UI
-                                                   can show it as "off".
+- `trade_execution_enabled`(bool, default False) — when True (and
+                                                   `ZERODHA_EXECUTION_CONFIG.enabled`),
+                                                   dashboard Execute/Close in Zerodha
+                                                   buttons are active.
 - `options_advisor_enabled` (bool, default True)  — Options Advisor WS load:
                                                    index/option ticks, chain
                                                    aggregator, intraday monitors.
@@ -111,7 +111,10 @@ DEFAULT_FLAGS: List[_FlagSpec] = [
         key=FLAG_TRADE_EXECUTION_ENABLED,
         default="false",
         type="bool",
-        description="Reserved. The system does not place broker orders today; flag exists for forward compatibility.",
+        description=(
+            "Enable Zerodha broker execution from the dashboard. Requires "
+            "OPT_ZERODHA_EXECUTION_ENABLED=true and a valid daily Kite session."
+        ),
     ),
     _FlagSpec(
         key=FLAG_CIRCUIT_BREAKER_ACTIVE,

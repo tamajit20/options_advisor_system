@@ -108,12 +108,26 @@ def kite_console_redirect_url() -> str:
     return zerodha_callback_url()
 
 
-def _zerodha_status_payload() -> dict:
+def _zerodha_status_payload(db: Optional["SQLServerConnection"] = None) -> dict:
     from providers.zerodha.session import is_token_valid, load_session, token_valid_until
+    from lifecycle.zerodha_executor import (
+        zerodha_execution_config_enabled,
+        zerodha_execution_enabled,
+        zerodha_execution_ready,
+    )
 
     callback = zerodha_callback_url()
     manual_paste = kite_redirect_https_required(callback)
     console_redirect = kite_console_redirect_url()
+    config_on = zerodha_execution_config_enabled()
+    runtime_on = False
+    ready = False
+    if db is not None:
+        try:
+            runtime_on = zerodha_execution_enabled(db)
+            ready = zerodha_execution_ready(db)
+        except Exception:
+            logger.debug("zerodha status: execution flag read failed", exc_info=True)
     base = {
         "public_base_url": public_base_url(),
         "redirect_url": callback,
@@ -121,6 +135,10 @@ def _zerodha_status_payload() -> dict:
         "login_path": "/zerodha/login",
         "kite_https_required": manual_paste,
         "kite_manual_paste_flow": manual_paste,
+        "execution_config_enabled": config_on,
+        "execution_runtime_enabled": runtime_on,
+        "execution_enabled": config_on and runtime_on,
+        "execution_ready": ready,
     }
     s = load_session()
     if s is None:
@@ -141,6 +159,15 @@ def _zerodha_status_payload() -> dict:
         "generated_at": s.generated_at.isoformat(),
         "valid_until": until.isoformat() if until else None,
     }
+
+
+def _zerodha_execution_ready(db: SQLServerConnection) -> bool:
+    try:
+        from lifecycle.zerodha_executor import zerodha_execution_ready
+        return bool(zerodha_execution_ready(db))
+    except Exception:
+        logger.debug("zerodha_execution_ready probe failed", exc_info=True)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1190,6 +1217,7 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
         "circuit_breaker_active": cb_active,
         "kill_switch":             kill_switch,
         "trade_execution_enabled": trade_exec_enabled,
+        "zerodha_execution_ready": _zerodha_execution_ready(db),
         "options_advisor_enabled": options_app_enabled,
         "scheduler_running":       sch_running,
         "trade_signals":           _active_trade_signals(db),
@@ -1432,8 +1460,9 @@ def create_app() -> Flask:
         })
 
     @app.route("/api/zerodha/status")
-    def api_zerodha_status():
-        return jsonify(_zerodha_status_payload())
+    @_with_db
+    def api_zerodha_status(db: SQLServerConnection):
+        return jsonify(_zerodha_status_payload(db))
 
     @app.route("/api/zerodha/logout", methods=["POST"])
     def api_zerodha_logout():
@@ -1598,6 +1627,77 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"trade_id": trade_id})
 
+    @app.route("/api/suggestion/<sid>/zerodha-preview", methods=["POST"])
+    @_with_db
+    def api_zerodha_preview(db: SQLServerConnection, sid: str):
+        from lifecycle.zerodha_executor import (
+            ZerodhaExecutionError,
+            parse_leg_limits,
+            preview_suggestion_execution,
+            zerodha_execution_ready,
+        )
+        if not zerodha_execution_ready(db):
+            return jsonify({"error": "Zerodha execution is not ready"}), 403
+        payload = request.get_json(silent=True) or {}
+        spot_raw = payload.get("spot_at_execution")
+        leg_limits = parse_leg_limits(payload.get("leg_limits"))
+        try:
+            preview = preview_suggestion_execution(
+                db, sid,
+                leg_limits=leg_limits or None,
+                spot_at_execution=float(spot_raw) if spot_raw is not None else None,
+            )
+        except ZerodhaExecutionError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"preview": preview.to_dict()})
+
+    @app.route("/api/suggestion/<sid>/zerodha-execute", methods=["POST"])
+    @_with_db
+    def api_zerodha_execute(db: SQLServerConnection, sid: str):
+        from lifecycle.zerodha_executor import (
+            ZerodhaExecutionError,
+            execute_suggestion_in_zerodha,
+            zerodha_execution_ready,
+        )
+        if not zerodha_execution_ready(db):
+            return jsonify({
+                "error": (
+                    "Zerodha execution is not ready — enable the feature, "
+                    "log in to Zerodha, and turn on trade_execution_enabled"
+                ),
+            }), 403
+        payload = request.get_json(silent=True) or {}
+        spot_raw = payload.get("spot_at_execution")
+        from lifecycle.zerodha_executor import parse_leg_limits
+        leg_limits = parse_leg_limits(payload.get("leg_limits"))
+        ack_oob = bool(payload.get("ack_out_of_band"))
+        try:
+            outcome = execute_suggestion_in_zerodha(
+                db, sid,
+                spot_at_execution=float(spot_raw) if spot_raw is not None else None,
+                leg_limits=leg_limits or None,
+                ack_out_of_band=ack_oob,
+            )
+        except ZerodhaExecutionError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("zerodha execute failed for %s", sid)
+            return jsonify({"error": str(exc)}), 500
+        return jsonify({
+            "ok": True,
+            "trade_id": outcome.trade_id,
+            "message": outcome.message,
+            "leg_fills": [
+                {
+                    "leg_order": f.leg_order,
+                    "fill_price": f.fill_price,
+                    "fill_time": f.fill_time.isoformat(),
+                    "kite_order_id": f.kite_order_id,
+                }
+                for f in outcome.leg_fills
+            ],
+        })
+
     # ---------- Tab 2: My Trades ----------
     @app.route("/api/trades/open")
     @_with_db
@@ -1716,6 +1816,69 @@ def create_app() -> Flask:
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"ok": True})
+
+    @app.route("/api/trades/<trade_id>/zerodha-close-preview", methods=["POST"])
+    @_with_db
+    def api_zerodha_close_preview(db: SQLServerConnection, trade_id: str):
+        from lifecycle.zerodha_executor import (
+            ZerodhaExecutionError,
+            parse_leg_limits,
+            preview_close_execution,
+            zerodha_execution_ready,
+        )
+        if not zerodha_execution_ready(db):
+            return jsonify({"error": "Zerodha execution is not ready"}), 403
+        payload = request.get_json(silent=True) or {}
+        leg_limits = parse_leg_limits(payload.get("leg_limits"))
+        try:
+            preview = preview_close_execution(
+                db, trade_id, leg_limits=leg_limits or None,
+            )
+        except ZerodhaExecutionError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"preview": preview.to_dict()})
+
+    @app.route("/api/trades/<trade_id>/zerodha-close", methods=["POST"])
+    @_with_db
+    def api_zerodha_close(db: SQLServerConnection, trade_id: str):
+        from lifecycle.zerodha_executor import (
+            ZerodhaExecutionError,
+            close_trade_in_zerodha,
+            zerodha_execution_ready,
+        )
+        if not zerodha_execution_ready(db):
+            return jsonify({
+                "error": (
+                    "Zerodha execution is not ready — enable the feature, "
+                    "log in to Zerodha, and turn on trade_execution_enabled"
+                ),
+            }), 403
+        payload = request.get_json(silent=True) or {}
+        from lifecycle.zerodha_executor import parse_leg_limits
+        leg_limits = parse_leg_limits(payload.get("leg_limits"))
+        try:
+            outcome = close_trade_in_zerodha(
+                db, trade_id, leg_limits=leg_limits or None,
+            )
+        except ZerodhaExecutionError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("zerodha close failed for %s", trade_id)
+            return jsonify({"error": str(exc)}), 500
+        return jsonify({
+            "ok": True,
+            "trade_id": outcome.trade_id,
+            "message": outcome.message,
+            "leg_fills": [
+                {
+                    "leg_order": f.leg_order,
+                    "fill_price": f.fill_price,
+                    "fill_time": f.fill_time.isoformat(),
+                    "kite_order_id": f.kite_order_id,
+                }
+                for f in outcome.leg_fills
+            ],
+        })
 
     @app.route("/api/trades/<trade_id>", methods=["DELETE"])
     @_with_db
@@ -2333,6 +2496,44 @@ def create_app() -> Flask:
         repo = LogRepo(db)
         hours = int(request.args.get("hours", 24))
         return jsonify(repo.counts_by_level(since_hours=hours))
+
+    @app.route("/api/zerodha/execution-logs")
+    @_with_db
+    def api_zerodha_execution_logs(db: SQLServerConnection):
+        from config import RETENTION_CONFIG
+        from database.broker_order_repo import BrokerOrderRepo
+        from database.models import TradeRepo
+        from lifecycle.zerodha_execution_log import group_broker_orders
+
+        days = int(request.args.get("days", RETENTION_CONFIG["broker_orders_keep_days"]))
+        limit = min(int(request.args.get("limit", 100)), 500)
+        trade_id = (request.args.get("trade_id") or "").strip() or None
+        suggestion_id = (request.args.get("suggestion_id") or "").strip() or None
+        since = now_ist() - timedelta(days=max(days, 1))
+
+        rows = BrokerOrderRepo(db).list_since(
+            since,
+            limit=limit * 20,
+            trade_id=trade_id,
+            suggestion_id=suggestion_id,
+        )
+        trade_ids = {r["trade_id"] for r in rows if r.get("trade_id")}
+        trade_names: dict = {}
+        trd = TradeRepo(db)
+        for tid in trade_ids:
+            t = trd.get(tid)
+            if t and t.get("trade_name"):
+                trade_names[tid] = t["trade_name"]
+
+        groups = group_broker_orders([_row(r) for r in rows], trade_names=trade_names)
+        if not trade_id and not suggestion_id:
+            groups = groups[:limit]
+
+        return jsonify({
+            "retention_days": RETENTION_CONFIG["broker_orders_keep_days"],
+            "since": since.isoformat(),
+            "executions": groups,
+        })
 
     @app.route("/api/jobs/latest")
     @_with_db

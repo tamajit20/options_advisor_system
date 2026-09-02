@@ -1,0 +1,143 @@
+"""
+database/broker_order_repo.py
+===============================
+
+Persistence for Zerodha (Kite) orders — maps suggestion/trade legs to
+broker order IDs and tracks fill status for audit and UI.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, date
+from typing import Any, Dict, Iterable, List, Optional
+
+from database.connection import SQLServerConnection
+
+
+class BrokerOrderRepo:
+    def __init__(self, db: SQLServerConnection):
+        self.db = db
+
+    def insert(self, row: Dict[str, Any]) -> int:
+        cur = self.db.execute(
+            """
+            INSERT INTO options_broker_orders
+              (operation, suggestion_id, trade_id, leg_order, kite_order_id,
+               tradingsymbol, exchange, transaction_type, quantity, limit_price,
+               fill_price, status, tag, error_message, retry_count, created_at, updated_at)
+            OUTPUT INSERTED.id
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                row["operation"],
+                row.get("suggestion_id"),
+                row.get("trade_id"),
+                int(row["leg_order"]),
+                row.get("kite_order_id"),
+                row["tradingsymbol"],
+                row.get("exchange", "NFO"),
+                row["transaction_type"],
+                int(row["quantity"]),
+                row.get("limit_price"),
+                row.get("fill_price"),
+                row.get("status", "PENDING"),
+                row.get("tag"),
+                row.get("error_message"),
+                int(row.get("retry_count") or 0),
+                row.get("created_at"),
+                row.get("updated_at"),
+            ],
+        )
+        out = cur.fetchone()
+        cur.close()
+        return int(out[0])
+
+    def update_status(
+        self,
+        row_id: int,
+        *,
+        status: str,
+        kite_order_id: Optional[str] = None,
+        fill_price: Optional[float] = None,
+        error_message: Optional[str] = None,
+        retry_count: Optional[int] = None,
+        updated_at: Optional[datetime] = None,
+    ) -> None:
+        sets = ["status = ?", "updated_at = ?"]
+        params: list = [status, updated_at]
+        if kite_order_id is not None:
+            sets.append("kite_order_id = ?")
+            params.append(kite_order_id)
+        if fill_price is not None:
+            sets.append("fill_price = ?")
+            params.append(fill_price)
+        if error_message is not None:
+            sets.append("error_message = ?")
+            params.append(error_message)
+        if retry_count is not None:
+            sets.append("retry_count = ?")
+            params.append(retry_count)
+        params.append(row_id)
+        self.db.execute(
+            f"UPDATE options_broker_orders SET {', '.join(sets)} WHERE id = ?",
+            params,
+        ).close()
+
+    def by_suggestion(self, suggestion_id: str) -> List[dict]:
+        return self.db.fetch_all(
+            "SELECT * FROM options_broker_orders WHERE suggestion_id = ? "
+            "ORDER BY leg_order, id",
+            [suggestion_id],
+        )
+
+    def by_trade(self, trade_id: str, *, operation: Optional[str] = None) -> List[dict]:
+        if operation:
+            return self.db.fetch_all(
+                "SELECT * FROM options_broker_orders WHERE trade_id = ? AND operation = ? "
+                "ORDER BY leg_order, id",
+                [trade_id, operation],
+            )
+        return self.db.fetch_all(
+            "SELECT * FROM options_broker_orders WHERE trade_id = ? ORDER BY leg_order, id",
+            [trade_id],
+        )
+
+    def pending_for_suggestion(self, suggestion_id: str) -> List[dict]:
+        return self.db.fetch_all(
+            "SELECT * FROM options_broker_orders WHERE suggestion_id = ? "
+            "AND status IN ('PENDING', 'OPEN', 'TRIGGER PENDING')",
+            [suggestion_id],
+        )
+
+    def list_since(
+        self,
+        since: datetime,
+        *,
+        limit: int = 500,
+        trade_id: Optional[str] = None,
+        suggestion_id: Optional[str] = None,
+    ) -> List[dict]:
+        clauses = ["created_at >= ?"]
+        params: list = [int(limit), since]
+        if trade_id:
+            clauses.append("trade_id = ?")
+            params.append(trade_id)
+        if suggestion_id:
+            clauses.append("suggestion_id = ?")
+            params.append(suggestion_id)
+        where = " AND ".join(clauses)
+        return self.db.fetch_all(
+            f"SELECT TOP (?) * FROM options_broker_orders WHERE {where} "
+            "ORDER BY created_at DESC, id DESC",
+            params,
+        )
+
+    def delete_older_than(self, cutoff: date) -> int:
+        """Delete broker order audit rows with ``created_at`` before ``cutoff``."""
+        cur = self.db.execute(
+            "DELETE FROM options_broker_orders WHERE created_at < ?",
+            [datetime.combine(cutoff, datetime.min.time())],
+        )
+        n = cur.rowcount or 0
+        cur.close()
+        return n

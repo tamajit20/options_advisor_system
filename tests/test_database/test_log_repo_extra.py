@@ -151,3 +151,25 @@ class TestJobLogRepo:
         mock_db.fetch_one.return_value = None
         repo = lr.JobLogRepo(mock_db)
         assert repo.last_status("fo_bhav") is None
+
+    def test_delete_older_than_system_logs(self, mock_db):
+        cur = MagicMock()
+        cur.rowcount = 42
+        mock_db.execute.return_value = cur
+        repo = lr.LogRepo(mock_db)
+        n = repo.delete_older_than(datetime(2026, 6, 1).date())
+        assert n == 42
+        sql, params = mock_db.execute.call_args[0]
+        assert "options_system_logs" in sql
+        assert "logged_at < ?" in sql
+
+    def test_delete_older_than_job_log(self, mock_db):
+        cur = MagicMock()
+        cur.rowcount = 7
+        mock_db.execute.return_value = cur
+        repo = lr.JobLogRepo(mock_db)
+        n = repo.delete_older_than(datetime(2026, 6, 1).date())
+        assert n == 7
+        sql, params = mock_db.execute.call_args[0]
+        assert "options_job_log" in sql
+        assert "started_at < ?" in sql

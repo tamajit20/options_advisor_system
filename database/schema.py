@@ -473,6 +473,34 @@ _TABLE_DDL: List[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS IX_options_notifications_unread ON options_notifications (read_at, created_at DESC)",
 
+    # ---------------- Broker order audit (Zerodha execution) ----------------
+    """
+    IF OBJECT_ID('options_broker_orders', 'U') IS NULL
+    CREATE TABLE options_broker_orders (
+        id                 BIGINT IDENTITY(1,1) PRIMARY KEY,
+        operation          NVARCHAR(10)  NOT NULL,
+        suggestion_id      NVARCHAR(40)  NULL,
+        trade_id           NVARCHAR(40)  NULL,
+        leg_order          INT           NOT NULL,
+        kite_order_id      NVARCHAR(40)  NULL,
+        tradingsymbol      NVARCHAR(100) NOT NULL,
+        exchange           NVARCHAR(10)  NOT NULL DEFAULT 'NFO',
+        transaction_type   NVARCHAR(4)   NOT NULL,
+        quantity           INT           NOT NULL,
+        limit_price        DECIMAL(18,4) NULL,
+        fill_price         DECIMAL(18,4) NULL,
+        status             NVARCHAR(30)  NOT NULL DEFAULT 'PENDING',
+        tag                NVARCHAR(20)  NULL,
+        error_message      NVARCHAR(500) NULL,
+        retry_count        INT           NOT NULL DEFAULT 0,
+        created_at         DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        updated_at         DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_broker_orders_sugg ON options_broker_orders (suggestion_id, leg_order)",
+    "CREATE INDEX IF NOT EXISTS IX_options_broker_orders_trade ON options_broker_orders (trade_id, leg_order)",
+    "CREATE INDEX IF NOT EXISTS IX_options_broker_orders_kite ON options_broker_orders (kite_order_id)",
+
     # ---------------- Runtime kill switches (Phase 4) ----------------
     # Single-row key/value table that the live components poll. Designed so
     # the operator can disable WS streaming, alert categories, or trade
@@ -1046,6 +1074,7 @@ def list_tables() -> List[str]:
         "options_job_log",
         "options_config",
         "options_notifications",
+        "options_broker_orders",
         "options_runtime_flags",
         "options_intraday_close_snapshot",
         "options_trade_mtm_snapshot",

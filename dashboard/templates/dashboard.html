@@ -228,7 +228,13 @@
 
     <article class="panel" id="panel-logs" aria-hidden="true">
       <h2 class="panel-title">Logs</h2>
-      <div class="filter-row">
+      <div class="filter-row logs-mode-row">
+        <div class="logs-mode-toggle" role="tablist" aria-label="Log type">
+          <button type="button" class="btn btn-ghost logs-mode-btn active" data-logs-mode="system">System logs</button>
+          <button type="button" class="btn btn-ghost logs-mode-btn" data-logs-mode="zerodha">Zerodha executions</button>
+        </div>
+      </div>
+      <div id="logs-system-filters" class="filter-row">
         <select id="log-level">
           <option value="">All levels</option>
           <option>DEBUG</option><option>INFO</option><option>WARNING</option>
@@ -236,6 +242,11 @@
         </select>
         <input id="log-search" type="search" placeholder="Search…" />
         <button id="log-refresh" class="btn">Refresh</button>
+      </div>
+      <div id="logs-zerodha-filters" class="filter-row" hidden>
+        <input id="zerodha-log-trade" type="search" placeholder="Filter by trade ID…" />
+        <button id="zerodha-log-refresh" class="btn">Refresh</button>
+        <span id="zerodha-log-retention" class="muted" style="font-size:.78rem;margin-left:auto"></span>
       </div>
       <div id="jobs-strip" class="jobs-strip" style="display:none"></div>
       <div id="logs-container" class="loading">Loading…</div>

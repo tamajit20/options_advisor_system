@@ -559,6 +559,8 @@ def job_weekly_cleanup():
             SuggestionRepo, NotificationRepo,
             ChainTimeseriesRepo, AtmIvTimeseriesRepo, TradeMtmSnapshotRepo,
         )
+        from database.log_repo import LogRepo, JobLogRepo
+        from database.broker_order_repo import BrokerOrderRepo
         today = today_ist()
         n = 0
         n += FoEodRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["fo_bhav_keep_days"]))
@@ -570,6 +572,10 @@ def job_weekly_cleanup():
         n += NotificationRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["notifications_keep_days"]))
         n += ChainTimeseriesRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["chain_5min_keep_days"]))
         n += AtmIvTimeseriesRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["atm_iv_5min_keep_days"]))
+        n += LogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["system_logs_keep_days"]))
+        n += JobLogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["job_log_keep_days"]))
+        n += BrokerOrderRepo(db).delete_older_than(
+            today - _td(days=RETENTION_CONFIG["broker_orders_keep_days"]))
         mtm_repo = TradeMtmSnapshotRepo(db)
         n += mtm_repo.archive_non_active()
         n += mtm_repo.delete_history_older_than(

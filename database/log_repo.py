@@ -24,7 +24,7 @@ import logging
 import sys
 import threading
 import traceback
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from queue import Empty, Queue
 from typing import Iterable, List, Optional
 
@@ -241,6 +241,16 @@ class LogRepo:
         )
         return {r["level"]: r["n"] for r in rows}
 
+    def delete_older_than(self, cutoff: date) -> int:
+        """Delete log rows older than ``cutoff`` (retention trim)."""
+        cur = self.db.execute(
+            "DELETE FROM options_system_logs WHERE logged_at < ?",
+            [datetime.combine(cutoff, datetime.min.time())],
+        )
+        n = cur.rowcount or 0
+        cur.close()
+        return n
+
 
 class JobLogRepo:
     """Write/read for `options_job_log`."""
@@ -298,3 +308,13 @@ class JobLogRepo:
             [job_name],
         )
         return row["status"] if row else None
+
+    def delete_older_than(self, cutoff: date) -> int:
+        """Delete finished job runs older than ``cutoff`` (retention trim)."""
+        cur = self.db.execute(
+            "DELETE FROM options_job_log WHERE started_at < ?",
+            [datetime.combine(cutoff, datetime.min.time())],
+        )
+        n = cur.rowcount or 0
+        cur.close()
+        return n

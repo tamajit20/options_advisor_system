@@ -72,7 +72,7 @@ if ! docker compose ps sqlserver 2>/dev/null | grep -qE 'Up|healthy'; then
 fi
 docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd \
   -S localhost -U sa -P "${MSSQL_SA_PASSWORD}" -C -b -Q \
-  "BACKUP DATABASE [${DB}] TO DISK = N'${CONTAINER}' WITH INIT, STATS = 10" >/dev/null
+  "BACKUP DATABASE [${DB}] TO DISK = N'${CONTAINER}' WITH INIT, STATS = 10"
 docker cp "options_sqlserver:${CONTAINER}" "${REL}"
 echo "DONE_DB_BACKUP ${REL}"
 '@.Replace('__VM_PROJECT_DIR__', $VmProjectDir).Replace('__DB_NAME__', $DbName)
