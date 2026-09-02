@@ -94,6 +94,9 @@ def test_catalog_covers_strategy_and_namespaces():
     assert items["scheduler.eod_pipeline_skip_steps"]["needs_restart"] is False
     assert "zerodha_charges.gst_pct" in items
     assert items["zerodha_charges.gst_pct"]["group"] == "charges"
+    assert "zerodha_execution.enabled" in items
+    assert items["zerodha_execution.enabled"]["group"] == "zerodha"
+    assert items["zerodha_execution.enabled"]["type"] == "bool"
     assert "events.calendar" in items
     assert items["events.calendar"]["type"] == "json"
     assert "alerts.telegram_enabled" in items

@@ -94,7 +94,7 @@ function _mtmAgeSec(tradeId) {
 
 function _zerodhaExecuteDisabledReason(requireLiveGate) {
   if (!_zerodhaExecutionEnabled) {
-    return 'Zerodha execution is disabled — set OPT_ZERODHA_EXECUTION_ENABLED=true and enable trade_execution_enabled in Config';
+    return 'Zerodha execution is disabled — enable zerodha_execution.enabled and trade_execution_enabled in Config';
   }
   if (!_zerodhaHasSession || !_zerodhaValid) {
     return 'Log in to Zerodha first (header pill or WS Monitor tab)';
@@ -6894,104 +6894,295 @@ function _cfgEncode(item) {
   return String(item.value);
 }
 
-function _cfgRead(item, input) {
-  if (item.type === 'bool') return input.checked;
+function _cfgReadInput(input, type) {
+  if (type === 'bool' || input.type === 'checkbox') return input.checked;
   const raw = input.value;
-  if (item.type === 'json') return JSON.parse(raw);
-  if (item.type === 'int') return parseInt(raw, 10);
-  if (item.type === 'number') return parseFloat(raw);
+  if (type === 'json' || input.tagName === 'TEXTAREA') return JSON.parse(raw);
+  if (type === 'int') return parseInt(raw, 10);
+  if (type === 'number') return parseFloat(raw);
   return raw;
+}
+
+function _cfgSerializeValue(value, type) {
+  if (type === 'bool') return value ? 'true' : 'false';
+  if (type === 'json') return JSON.stringify(value);
+  if (value == null) return '';
+  return String(value);
 }
 
 function _cfgInput(item) {
   const val = escapeHtml(_cfgEncode(item));
   const disabled = item.locked ? ' disabled' : '';
   if (item.type === 'bool') {
-    return `<label class="cfg-toggle"><input type="checkbox" data-cfg-input="${escapeHtml(item.key)}"${item.value ? ' checked' : ''}${disabled}> on</label>`;
+    return `<label class="cfg-toggle"><input type="checkbox" data-cfg-input="${escapeHtml(item.key)}"${item.value ? ' checked' : ''}${disabled}><span>On</span></label>`;
   }
   if (item.type === 'json') {
-    return `<textarea class="cfg-json" data-cfg-input="${escapeHtml(item.key)}" rows="8" spellcheck="false"${disabled}>${val}</textarea>`;
+    return `<textarea class="cfg-json" data-cfg-input="${escapeHtml(item.key)}" rows="6" spellcheck="false"${disabled}>${val}</textarea>`;
   }
   const step = item.type === 'int' ? '1' : 'any';
   const inputType = (item.type === 'int' || item.type === 'number') ? 'number' : 'text';
-  return `<input type="${inputType}" step="${step}" data-cfg-input="${escapeHtml(item.key)}" value="${val}"${disabled}>`;
+  return `<input class="cfg-input" type="${inputType}" step="${step}" data-cfg-input="${escapeHtml(item.key)}" value="${val}"${disabled}>`;
+}
+
+function _cfgBadges(item) {
+  const ov = item.overridden
+    ? `<span class="cfg-over">override</span>`
+    : `<span class="cfg-def">default</span>`;
+  const locked = item.locked ? `<span class="cfg-locked-badge">locked</span>` : '';
+  const restart = item.needs_restart
+    ? `<span class="cfg-restart" title="Takes effect after a process restart">restart</span>`
+    : '';
+  return `${ov}${locked}${restart}`;
+}
+
+function _cfgField(item) {
+  const wide = item.type === 'json' ? ' cfg-field--wide' : '';
+  const reset = (item.overridden && !item.locked)
+    ? `<button type="button" class="btn btn-ghost btn-xs cfg-reset" data-key="${escapeHtml(item.key)}">Reset</button>`
+    : '';
+  const defPreview = item.type === 'json'
+    ? ''
+    : `<span class="muted cfg-default">Default: ${escapeHtml(String(item.default))}</span>`;
+  return `<div class="cfg-field${wide}${item.locked ? ' cfg-locked' : ''}"
+      data-key="${escapeHtml(item.key)}"
+      data-type="${escapeHtml(item.type)}"
+      data-locked="${item.locked ? '1' : '0'}"
+      data-overridden="${item.overridden ? '1' : '0'}"
+      data-original="${escapeHtml(_cfgSerializeValue(item.value, item.type))}">
+    <div class="cfg-field-head">
+      <code class="cfg-field-key">${escapeHtml(item.key)}</code>
+      <span class="cfg-field-badges">${_cfgBadges(item)}</span>
+      ${reset}
+    </div>
+    <p class="cfg-field-desc muted">${escapeHtml(item.description || '')}</p>
+    ${_cfgInput(item)}
+    ${defPreview}
+  </div>`;
+}
+
+function _cfgFlagField(f) {
+  const on = String(f.value).toLowerCase() === 'true';
+  return `<div class="cfg-field cfg-field--flag"
+      data-flag-key="${escapeHtml(f.key)}"
+      data-type="bool"
+      data-original="${on ? 'true' : 'false'}">
+    <div class="cfg-field-head">
+      <code class="cfg-field-key">${escapeHtml(f.key)}</code>
+    </div>
+    <p class="cfg-field-desc muted">${escapeHtml(f.description || '')}</p>
+    <label class="cfg-toggle">
+      <input type="checkbox" data-flag-input="${escapeHtml(f.key)}"${on ? ' checked' : ''}>
+      <span>On</span>
+    </label>
+  </div>`;
 }
 
 function renderConfigPage(data) {
   const flags = data.flags || [];
-  const groups = data.groups || [];
-  const flagRows = flags.map(f => {
-    const on = String(f.value).toLowerCase() === 'true';
-    return `<label class="cfg-flag">
-      <input type="checkbox" data-flag-key="${escapeHtml(f.key)}"${on ? ' checked' : ''}>
-      <span>
-        <strong>${escapeHtml(f.key)}</strong>
-        <span class="muted">${escapeHtml(f.description || '')}</span>
-      </span>
-    </label>`;
-  }).join('');
+  const groups = (data.groups || []).filter(g => g.items && g.items.length);
+  const navItems = [
+    `<a class="cfg-nav-link" href="#cfg-section-runtime">Runtime switches</a>`,
+    ...groups.map(g =>
+      `<a class="cfg-nav-link" href="#cfg-section-${escapeHtml(g.id)}">${escapeHtml(g.label)}</a>`),
+  ].join('');
 
-  const groupHtml = groups.map(g => {
-    if (!g.items || !g.items.length) return '';
-    const open = g.id === 'pnl' ? ' open' : '';
-    const rows = g.items.map(item => {
-      const ov = item.overridden
-        ? `<span class="cfg-over">override</span>`
-        : `<span class="cfg-def">default</span>`;
-      const locked = item.locked
-        ? `<span class="cfg-locked-badge">locked</span>`
-        : '';
-      const restart = item.needs_restart
-        ? `<span class="cfg-restart" title="Takes effect after a process restart">restart</span>`
-        : '';
-      const reset = (item.overridden && !item.locked)
-        ? `<button type="button" class="btn btn-ghost cfg-reset" data-key="${escapeHtml(item.key)}">Reset</button>`
-        : '';
-      const save = item.locked
-        ? ''
-        : `<button type="button" class="btn btn-accent cfg-save" data-key="${escapeHtml(item.key)}">Save</button>`;
-      const defPreview = item.type === 'json'
-        ? ''
-        : `<span class="muted cfg-default">file default: ${escapeHtml(String(item.default))}</span>`;
-      return `<div class="cfg-row${item.locked ? ' cfg-locked' : ''}" data-key="${escapeHtml(item.key)}" data-group="${escapeHtml(g.id)}" data-type="${escapeHtml(item.type)}" data-locked="${item.locked ? '1' : '0'}">
-        <div class="cfg-row-head">
-          <code>${escapeHtml(item.key)}</code>
-          ${ov}${locked}${restart}
-        </div>
-        <p class="muted cfg-desc">${escapeHtml(item.description || '')}</p>
-        ${_cfgInput(item)}
-        ${defPreview}
-        <div class="cfg-row-actions">
-          ${save}
-          ${reset}
-        </div>
-      </div>`;
-    }).join('');
-    return `<details class="cfg-group"${open}>
-      <summary>${escapeHtml(g.label)} <span class="muted">(${g.items.length})</span></summary>
-      <div class="cfg-group-body">${rows}</div>
-    </details>`;
-  }).join('');
+  const flagSection = `
+    <section class="cfg-section" id="cfg-section-runtime">
+      <div class="cfg-section-head">
+        <h3>Runtime switches</h3>
+        <p class="muted">Live kill / alert / execution gates — no restart required.</p>
+      </div>
+      <div class="cfg-field-grid">
+        ${flags.length ? flags.map(_cfgFlagField).join('') : '<div class="empty">No runtime flags (database unreachable).</div>'}
+      </div>
+    </section>`;
+
+  const groupHtml = groups.map(g => `
+    <section class="cfg-section" id="cfg-section-${escapeHtml(g.id)}">
+      <div class="cfg-section-head">
+        <h3>${escapeHtml(g.label)}</h3>
+        <span class="muted cfg-section-count">${g.items.length} setting${g.items.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="cfg-field-grid">
+        ${g.items.map(_cfgField).join('')}
+      </div>
+    </section>`).join('');
 
   return `<div class="cfg-page">
-    <input type="search" id="cfg-filter" class="cfg-filter" placeholder="Filter keys…">
-    <p class="muted cfg-intro">Every editable knob from <code>config.py</code> is listed here. Secrets (API keys, passwords, tokens) are not shown. Badges marked <em>restart</em> need the matching process restarted (scheduler, WS runner, or dashboard) after Save.</p>
-    <section class="cfg-group cfg-flags">
-      <h3>Runtime switches</h3>
-      <p class="muted">Live kill / alert gates. Take effect without a restart.</p>
-      ${flagRows || '<div class="empty">No runtime flags (database unreachable).</div>'}
-    </section>
+    <div class="cfg-toolbar">
+      <input type="search" id="cfg-filter" class="cfg-filter" placeholder="Filter settings…">
+      <div class="cfg-toolbar-actions">
+        <span id="cfg-dirty-hint" class="cfg-dirty-hint muted">No unsaved changes</span>
+        <button type="button" class="btn btn-ghost" id="cfg-discard" disabled>Discard</button>
+        <button type="button" class="btn btn-accent" id="cfg-save-all" disabled>Save all changes</button>
+      </div>
+    </div>
+    <nav class="cfg-section-nav" aria-label="Config sections">${navItems}</nav>
+    ${flagSection}
     ${groupHtml}
   </div>`;
 }
 
-async function _saveCfgKey(key, value) {
-  const data = await API('/api/config/' + encodeURIComponent(key), {
+function _cfgFieldInput(field) {
+  return field.querySelector('[data-cfg-input], [data-flag-input]');
+}
+
+function _cfgFieldCurrent(field) {
+  const input = _cfgFieldInput(field);
+  if (!input) return '';
+  const type = field.dataset.type || (input.type === 'checkbox' ? 'bool' : 'text');
+  try {
+    return _cfgSerializeValue(_cfgReadInput(input, type), type);
+  } catch (_) {
+    return '__invalid__';
+  }
+}
+
+function _cfgUpdateDirtyState(root) {
+  let dirty = 0;
+  root.querySelectorAll('.cfg-field').forEach(field => {
+    const input = _cfgFieldInput(field);
+    if (!input || field.dataset.locked === '1') return;
+    const changed = _cfgFieldCurrent(field) !== (field.dataset.original || '');
+    field.classList.toggle('cfg-field--dirty', changed);
+    if (changed) dirty += 1;
+  });
+  const hint = root.querySelector('#cfg-dirty-hint');
+  const saveBtn = root.querySelector('#cfg-save-all');
+  const discardBtn = root.querySelector('#cfg-discard');
+  if (hint) {
+    hint.textContent = dirty
+      ? `${dirty} unsaved change${dirty === 1 ? '' : 's'}`
+      : 'No unsaved changes';
+    hint.classList.toggle('cfg-dirty-hint--active', dirty > 0);
+  }
+  if (saveBtn) saveBtn.disabled = dirty === 0;
+  if (discardBtn) discardBtn.disabled = dirty === 0;
+}
+
+function _cfgCollectChanges(root) {
+  const configs = [];
+  const flags = [];
+  root.querySelectorAll('.cfg-field').forEach(field => {
+    if (field.dataset.locked === '1') return;
+    const current = _cfgFieldCurrent(field);
+    if (current === '__invalid__' || current === (field.dataset.original || '')) return;
+    const input = _cfgFieldInput(field);
+    const type = field.dataset.type || (input && input.type === 'checkbox' ? 'bool' : 'text');
+    const key = field.dataset.key || field.dataset.flagKey;
+    if (!key || !input) return;
+    const value = _cfgReadInput(input, type);
+    if (field.dataset.flagKey) flags.push({ key, value: !!value });
+    else configs.push({ key, value });
+  });
+  return { configs, flags };
+}
+
+async function _saveCfgBulk(root) {
+  const { configs, flags } = _cfgCollectChanges(root);
+  if (!configs.length && !flags.length) return null;
+  const data = await API('/api/config/bulk', {
     method: 'PUT',
-    body: JSON.stringify({ value }),
+    body: JSON.stringify({ configs, flags }),
   });
   applyPnlRules(data && data.pnl_rules);
   return data;
+}
+
+function _cfgBindPage(root) {
+  const filter = root.querySelector('#cfg-filter');
+  if (filter) {
+    filter.addEventListener('input', () => {
+      const q = filter.value.trim().toLowerCase();
+      root.querySelectorAll('.cfg-field').forEach(field => {
+        const hit = !q
+          || (field.dataset.key || field.dataset.flagKey || '').toLowerCase().includes(q)
+          || field.textContent.toLowerCase().includes(q);
+        field.hidden = !hit;
+      });
+      root.querySelectorAll('.cfg-section').forEach(section => {
+        const any = [...section.querySelectorAll('.cfg-field')].some(f => !f.hidden);
+        section.hidden = q && !any;
+      });
+      root.querySelectorAll('.cfg-nav-link').forEach(link => {
+        const id = (link.getAttribute('href') || '').slice(1);
+        const section = id ? root.querySelector('#' + id) : null;
+        link.hidden = !!section && section.hidden;
+      });
+    });
+  }
+
+  root.querySelectorAll('.cfg-nav-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const id = (link.getAttribute('href') || '').slice(1);
+      const target = id ? root.querySelector('#' + id) : null;
+      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+
+  root.addEventListener('input', (e) => {
+    if (e.target.matches('[data-cfg-input], [data-flag-input]')) _cfgUpdateDirtyState(root);
+  });
+  root.addEventListener('change', (e) => {
+    if (e.target.matches('[data-cfg-input], [data-flag-input]')) _cfgUpdateDirtyState(root);
+  });
+
+  const saveBtn = root.querySelector('#cfg-save-all');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      try {
+        const data = await _saveCfgBulk(root);
+        if (!data) {
+          toast('No changes to save', 'warn');
+          return;
+        }
+        const n = (data.saved_configs || []).length + (data.saved_flags || []).length;
+        const errN = (data.errors || []).length;
+        const restartNote = data.needs_restart ? ' — some items need a restart' : '';
+        toast(
+          errN
+            ? `Saved ${n} item(s); ${errN} failed${restartNote}`
+            : `Saved ${n} change${n === 1 ? '' : 's'}${restartNote}`,
+          errN ? 'warn' : 'ok',
+        );
+        refreshGlobalBanners();
+        loadConfig();
+      } catch (e) {
+        toast(`Save failed: ${e.message}`, 'err');
+        _cfgUpdateDirtyState(root);
+      }
+    });
+  }
+
+  const discardBtn = root.querySelector('#cfg-discard');
+  if (discardBtn) {
+    discardBtn.addEventListener('click', () => {
+      if (!window.confirm('Discard all unsaved changes?')) return;
+      loadConfig();
+    });
+  }
+
+  root.querySelectorAll('.cfg-reset').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.key;
+      if (!key || !window.confirm(`Reset ${key} to the config.py default?`)) return;
+      btn.disabled = true;
+      try {
+        const data = await API('/api/config/' + encodeURIComponent(key), { method: 'DELETE' });
+        applyPnlRules(data && data.pnl_rules);
+        toast(`Reset ${key}`, 'ok');
+        loadConfig();
+      } catch (e) {
+        toast(`Reset failed: ${e.message}`, 'err');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  _cfgUpdateDirtyState(root);
 }
 
 async function loadConfig() {
@@ -7001,79 +7192,7 @@ async function loadConfig() {
     const data = await API('/api/config');
     c.className = '';
     c.innerHTML = renderConfigPage(data);
-    const filter = $('#cfg-filter');
-    if (filter) {
-      filter.addEventListener('input', () => {
-        const q = filter.value.trim().toLowerCase();
-        c.querySelectorAll('.cfg-row').forEach(row => {
-          const hit = !q || (row.dataset.key || '').toLowerCase().includes(q)
-            || row.textContent.toLowerCase().includes(q);
-          row.hidden = !hit;
-        });
-        c.querySelectorAll('.cfg-group').forEach(g => {
-          if (g.classList.contains('cfg-flags')) return;
-          const any = [...g.querySelectorAll('.cfg-row')].some(r => !r.hidden);
-          g.hidden = q && !any;
-        });
-      });
-    }
-    c.querySelectorAll('[data-flag-key]').forEach(el => {
-      el.addEventListener('change', async () => {
-        const key = el.dataset.flagKey;
-        const prev = !el.checked;
-        try {
-          await setAppsRuntimeFlag(key, el.checked);
-          toast(`Flag ${key} = ${el.checked}`, 'ok');
-        } catch (_) {
-          el.checked = prev;
-        }
-      });
-    });
-    c.querySelectorAll('.cfg-save').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const key = btn.dataset.key;
-        const row = btn.closest('.cfg-row');
-        const input = row && row.querySelector('[data-cfg-input]');
-        if (!input || row.dataset.locked === '1') return;
-        const itemType = row.dataset.type || (input.tagName === 'TEXTAREA' ? 'json'
-          : (input.type === 'checkbox' ? 'bool'
-            : (input.type === 'number' ? 'number' : 'text')));
-        btn.disabled = true;
-        try {
-          let value;
-          if (itemType === 'bool' || input.type === 'checkbox') value = input.checked;
-          else if (itemType === 'json' || input.tagName === 'TEXTAREA') value = JSON.parse(input.value);
-          else if (itemType === 'int') value = parseInt(input.value, 10);
-          else if (itemType === 'number') value = parseFloat(input.value);
-          else value = input.value;
-          const data = await _saveCfgKey(key, value);
-          const restartNote = data && data.needs_restart ? ' — restart required' : '';
-          toast(`Saved ${key}${restartNote}`, 'ok');
-          loadConfig();
-        } catch (e) {
-          toast(`Save failed: ${e.message}`, 'err');
-        } finally {
-          btn.disabled = false;
-        }
-      });
-    });
-    c.querySelectorAll('.cfg-reset').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const key = btn.dataset.key;
-        if (!window.confirm(`Reset ${key} to the config.py default?`)) return;
-        btn.disabled = true;
-        try {
-          const data = await API('/api/config/' + encodeURIComponent(key), { method: 'DELETE' });
-          applyPnlRules(data && data.pnl_rules);
-          toast(`Reset ${key}`, 'ok');
-          loadConfig();
-        } catch (e) {
-          toast(`Reset failed: ${e.message}`, 'err');
-        } finally {
-          btn.disabled = false;
-        }
-      });
-    });
+    _cfgBindPage(c);
   } catch (e) {
     c.className = '';
     c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;

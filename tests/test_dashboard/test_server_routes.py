@@ -510,6 +510,34 @@ class TestConfigRoutes:
                            content_type="application/json")
         assert resp.status_code == 400
 
+    def test_bulk_save(self, client, mocker):
+        mocker.patch("dashboard.server.ConfigRepo.set")
+        mocker.patch("dashboard.server.ConfigRepo.get_all", return_value=[])
+        mocker.patch("database.config_overlay.apply_config_overrides")
+        mock_flags = mocker.patch("database.runtime_flags.RuntimeFlagsRepo")
+        mock_flags.return_value.set.return_value = None
+        resp = client.put(
+            "/api/config/bulk",
+            data=json.dumps({
+                "configs": [{"key": "take_profit_fraction", "value": 0.7}],
+                "flags": [{"key": "trade_execution_enabled", "value": True}],
+            }),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert "take_profit_fraction" in body["saved_configs"]
+        assert "trade_execution_enabled" in body["saved_flags"]
+
+    def test_bulk_save_empty(self, client):
+        resp = client.put(
+            "/api/config/bulk",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400
+
 
 class TestNotifications:
     def test_recent(self, client, mocker):

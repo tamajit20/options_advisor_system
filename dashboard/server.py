@@ -2554,10 +2554,17 @@ def create_app() -> Flask:
     @_with_db
     def api_config_list(db: SQLServerConnection):
         from database.config_overlay import apply_strategy_overrides, catalog_payload
+        from database.runtime_flags import RuntimeFlagsRepo
         try:
             apply_strategy_overrides(db)
         except Exception:
             logger.debug("config overlay before catalog skipped", exc_info=True)
+        try:
+            RuntimeFlagsRepo(db, cache_ttl_seconds=0).seed_defaults()
+            db.commit()
+        except Exception:
+            logger.debug("runtime flag seed before config catalog skipped", exc_info=True)
+            db.rollback()
         payload = catalog_payload(db)
         payload["config"] = [
             _row(r) for r in (payload.get("config") or []) if isinstance(r, dict)
@@ -2638,6 +2645,88 @@ def create_app() -> Flask:
             "key": key,
             "value": default_value_for(key),
             "needs_restart": spec.needs_restart,
+            "pnl_rules": _pnl_rules_payload(),
+        })
+
+    @app.route("/api/config/bulk", methods=["PUT"])
+    @_with_db
+    def api_config_bulk_save(db: SQLServerConnection):
+        from database.config_overlay import (
+            apply_config_overrides, coerce_value, default_value_for, resolve_spec,
+        )
+        from database.runtime_flags import RuntimeFlagsRepo
+        payload = request.get_json(silent=True) or {}
+        config_items = payload.get("configs") or []
+        flag_items = payload.get("flags") or []
+        if not config_items and not flag_items:
+            return jsonify({"error": "Nothing to save"}), 400
+
+        saved_configs: List[str] = []
+        saved_flags: List[str] = []
+        errors: List[Dict[str, str]] = []
+        needs_restart = False
+        flag_repo = RuntimeFlagsRepo(db, cache_ttl_seconds=0)
+
+        for item in config_items:
+            key = item.get("key")
+            if not key:
+                errors.append({"key": "", "error": "missing key"})
+                continue
+            try:
+                spec = resolve_spec(key)
+            except KeyError:
+                errors.append({"key": key, "error": "unknown config key"})
+                continue
+            existing = next(
+                (r for r in (ConfigRepo(db).get_all() or [])
+                 if isinstance(r, dict) and r.get("config_key") == key),
+                None,
+            )
+            if existing and existing.get("is_locked"):
+                errors.append({"key": key, "error": "locked"})
+                continue
+            try:
+                value = coerce_value(key, item.get("value"))
+            except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                errors.append({"key": key, "error": str(exc)})
+                continue
+            ConfigRepo(db).set(
+                key=key, value=value,
+                category=item.get("category") or spec.group,
+                description=item.get("description"),
+                default_value=default_value_for(key),
+            )
+            saved_configs.append(key)
+            needs_restart = needs_restart or spec.needs_restart
+
+        for item in flag_items:
+            key = item.get("key")
+            if not key:
+                errors.append({"key": "", "error": "missing flag key"})
+                continue
+            try:
+                flag_repo.set(key, item.get("value"), modified_by="dashboard")
+                saved_flags.append(key)
+            except KeyError:
+                errors.append({"key": key, "error": "unknown runtime flag"})
+            except (ValueError, TypeError) as exc:
+                errors.append({"key": key, "error": str(exc)})
+
+        if errors and not saved_configs and not saved_flags:
+            db.rollback()
+            return jsonify({"error": "Save failed", "errors": errors}), 400
+
+        db.commit()
+        try:
+            apply_config_overrides(db)
+        except Exception:
+            logger.exception("config overlay after bulk save failed")
+        return jsonify({
+            "ok": True,
+            "saved_configs": saved_configs,
+            "saved_flags": saved_flags,
+            "errors": errors,
+            "needs_restart": needs_restart,
             "pnl_rules": _pnl_rules_payload(),
         })
 

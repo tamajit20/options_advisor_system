@@ -44,6 +44,8 @@ from config import (
     ZERODHA_CONFIG_DEFAULTS,
     ZERODHA_EQUITY_INTRADAY_CONFIG,
     ZERODHA_EQUITY_INTRADAY_CONFIG_DEFAULTS,
+    ZERODHA_EXECUTION_CONFIG,
+    ZERODHA_EXECUTION_CONFIG_DEFAULTS,
 )
 
 
@@ -70,6 +72,7 @@ _PNL_KEYS = frozenset({
 })
 
 _GROUP_META: Sequence[Tuple[str, str]] = (
+    ("zerodha", "Zerodha broker execution"),
     ("pnl", "Profit targets & stop-loss"),
     ("sizing", "Capital & sizing"),
     ("gates", "Entry gates & IV"),
@@ -143,6 +146,25 @@ _DESCRIPTIONS: Dict[str, str] = {
         "Email channel. Channel objects are built at process start — restart after changing.",
     "zerodha_api.enabled":
         "Hard kill switch for the Kite adapter. Restart the WS runner after changing.",
+    "zerodha_execution.enabled":
+        "Enable Execute/Close in Zerodha from the dashboard. Also turn on the "
+        "trade_execution_enabled runtime switch below.",
+    "zerodha_execution.require_price_band":
+        "Reject LIMIT prices outside the suggestion band (preview warns; ack required).",
+    "zerodha_execution.max_price_drift_pct":
+        "When band columns are empty, max % drift from suggested mid before blocking.",
+    "zerodha_execution.order_poll_interval_sec":
+        "Seconds between Kite order-status polls while waiting for fills.",
+    "zerodha_execution.order_max_wait_sec":
+        "Give up polling a single leg after this many seconds (then retry).",
+    "zerodha_execution.order_max_retries":
+        "Re-place a leg up to this many times before failing the trade.",
+    "zerodha_execution.limit_slippage_pct":
+        "Auto LIMIT offset from LTP: BUY pays up, SELL accepts less (%).",
+    "zerodha_execution.product":
+        "Kite product code for option orders (e.g. NRML, MIS).",
+    "zerodha_execution.variety":
+        "Kite order variety (usually regular).",
 }
 
 
@@ -207,6 +229,8 @@ def _specs() -> List[_Spec]:
             skip=frozenset({"log_dir", "log_file_name"}), needs_restart=True)
     _add_ns("providers", "providers", PROVIDERS_CONFIG, PROVIDERS_CONFIG_DEFAULTS,
             needs_restart=True)
+    _add_ns("zerodha_execution", "zerodha", ZERODHA_EXECUTION_CONFIG,
+            ZERODHA_EXECUTION_CONFIG_DEFAULTS)
     out.append(_Spec(
         key="zerodha_api.enabled", local_key="enabled", group="providers",
         target=ZERODHA_API_CONFIG, defaults=ZERODHA_API_CONFIG_DEFAULTS,
@@ -323,6 +347,8 @@ def restore_file_defaults() -> None:
     PROVIDERS_CONFIG.update(copy.deepcopy(PROVIDERS_CONFIG_DEFAULTS))
     ZERODHA_API_CONFIG.clear()
     ZERODHA_API_CONFIG.update(copy.deepcopy(ZERODHA_API_CONFIG_DEFAULTS))
+    ZERODHA_EXECUTION_CONFIG.clear()
+    ZERODHA_EXECUTION_CONFIG.update(copy.deepcopy(ZERODHA_EXECUTION_CONFIG_DEFAULTS))
     EVENTS_CONFIG.clear()
     EVENTS_CONFIG.extend(copy.deepcopy(EVENTS_CONFIG_DEFAULTS))
 
