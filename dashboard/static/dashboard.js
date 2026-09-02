@@ -5381,7 +5381,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
             </div>
             <div class="btn-row" style="margin-top:8px">
               <button class="btn btn-danger btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm &amp; record fills</button>
-              <button class="btn btn-accent btn-zerodha-close" data-trade-id="${escapeHtml(tradeId)}"${_zerodhaExecuteReady(false) ? '' : ' disabled'} title="${escapeHtml(_zerodhaExecuteDisabledReason(false) || 'Place closing LIMIT orders in Zerodha; use fill fields for optional limits')">Close in Zerodha</button>
+              <button class="btn btn-accent btn-zerodha-close" data-trade-id="${escapeHtml(tradeId)}"${_zerodhaExecuteReady(false) ? '' : ' disabled'} title="${escapeHtml(_zerodhaExecuteDisabledReason(false) || 'Place closing LIMIT orders in Zerodha; use fill fields for optional limits')}">Close in Zerodha</button>
             </div>
             <p class="muted" style="font-size:.78rem;margin-top:6px">Close in Zerodha: leave fill prices blank for live auto limits, or enter your LIMIT per leg.</p>
           </div>
