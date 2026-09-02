@@ -5,8 +5,8 @@
   'use strict';
 
   const MOBILE_MQ = window.matchMedia('(max-width: 1024px)');
-  const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'config'];
-  const SYSTEM_TABS = ['logs', 'jobs', 'wsmon'];
+  const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'zerodha-logs', 'jobs', 'wsmon', 'config'];
+  const SYSTEM_TABS = ['logs', 'zerodha-logs', 'jobs', 'wsmon'];
 
   function getActiveTab() {
     if (typeof window.TABS === 'object' && Array.isArray(window.TABS)) {

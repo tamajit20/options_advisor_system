@@ -1449,10 +1449,10 @@ const toast = (msg, kind='info') => {
 window.toast = toast;
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
+const TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'zerodha-logs', 'jobs', 'wsmon', 'notifications', 'config'];
 window.TABS = TABS;
-const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'config'];
-const SYSTEM_TABS = ['logs', 'jobs', 'wsmon'];
+const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'zerodha-logs', 'jobs', 'wsmon', 'config'];
+const SYSTEM_TABS = ['logs', 'zerodha-logs', 'jobs', 'wsmon'];
 const TAB_LOADERS = {};
 const TAB_LEAVE = {};
 
@@ -1506,7 +1506,8 @@ function switchTab(name) {
     if (typeof window.renderLearningPage === 'function') window.renderLearningPage();
   }
   if (name === 'history')       loadHistory();
-  if (name === 'logs')          loadLogsPanel();
+  if (name === 'logs')          loadLogs();
+  if (name === 'zerodha-logs')  loadZerodhaExecutionLogs();
   if (name === 'jobs')          loadJobs();
   if (name === 'wsmon')         loadWsMonitor();
   if (name === 'notifications') loadNotifications();
@@ -7260,41 +7261,11 @@ function renderHistoryTrade(t) {
   `, { open: false, className: 'hist-card' });
 }
 
-// ---------------- Tab 4: Logs ----------------
-let _logsMode = 'system';
-
-function loadLogsPanel() {
-  if (_logsMode === 'zerodha') loadZerodhaExecutionLogs();
-  else loadLogs();
-}
-
-function _setLogsMode(mode) {
-  _logsMode = mode === 'zerodha' ? 'zerodha' : 'system';
-  $$('.logs-mode-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.logsMode === _logsMode);
-  });
-  const sysF = $('#logs-system-filters');
-  const zF = $('#logs-zerodha-filters');
-  if (sysF) sysF.hidden = _logsMode !== 'system';
-  if (zF) zF.hidden = _logsMode !== 'zerodha';
-  loadLogsPanel();
-}
-
-$$('.logs-mode-btn').forEach(btn => {
-  btn.addEventListener('click', () => _setLogsMode(btn.dataset.logsMode || 'system'));
-});
-
-function _brokerStatusClass(status) {
-  const s = (status || '').toUpperCase();
-  if (s === 'COMPLETE') return 'ok';
-  if (s === 'FAILED' || s === 'REJECTED' || s === 'CANCELLED') return 'err';
-  if (s === 'PARTIAL') return 'warn';
-  if (s === 'IN_FLIGHT' || s === 'OPEN' || s === 'PENDING') return 'info';
-  return '';
-}
+// ---------------- Tab 4: System logs ----------------
 
 async function loadZerodhaExecutionLogs() {
-  const c = $('#logs-container');
+  const c = $('#zerodha-logs-container');
+  if (!c) return;
   c.className = 'loading';
   c.textContent = 'Loading…';
   const params = new URLSearchParams();
@@ -7365,6 +7336,15 @@ async function loadZerodhaExecutionLogs() {
   }
 }
 
+function _brokerStatusClass(status) {
+  const s = (status || '').toUpperCase();
+  if (s === 'COMPLETE') return 'ok';
+  if (s === 'FAILED' || s === 'REJECTED' || s === 'CANCELLED') return 'err';
+  if (s === 'PARTIAL') return 'warn';
+  if (s === 'IN_FLIGHT' || s === 'OPEN' || s === 'PENDING') return 'info';
+  return '';
+}
+
 async function loadLogs() {
   const c = $('#logs-container');
   c.className='loading'; c.textContent='Loading…';
@@ -7397,7 +7377,7 @@ function levelClass(lvl) {
   if (lvl === 'INFO') return 'info';
   return '';
 }
-$('#log-refresh').addEventListener('click', loadLogsPanel);
+$('#log-refresh').addEventListener('click', loadLogs);
 $('#log-level').addEventListener('change', loadLogs);
 $('#log-search').addEventListener('keydown', e => { if (e.key === 'Enter') loadLogs(); });
 const _zLogRefresh = $('#zerodha-log-refresh');
