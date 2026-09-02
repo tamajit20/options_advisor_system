@@ -109,6 +109,38 @@ class BrokerOrderRepo:
             [suggestion_id],
         )
 
+    def orphan_entry_fills(self, suggestion_id: str) -> List[dict]:
+        """COMPLETE ENTRY rows with no linked trade — failed post-fill bookkeeping."""
+        return self.db.fetch_all(
+            "SELECT * FROM options_broker_orders WHERE suggestion_id = ? "
+            "AND operation = 'ENTRY' AND status = 'COMPLETE' AND trade_id IS NULL "
+            "ORDER BY leg_order, id",
+            [suggestion_id],
+        )
+
+    def has_kite_orders_for_trade(self, trade_id: str) -> bool:
+        row = self.db.fetch_one(
+            "SELECT TOP 1 1 AS x FROM options_broker_orders "
+            "WHERE trade_id = ? AND kite_order_id IS NOT NULL",
+            [trade_id],
+        )
+        return row is not None
+
+    def pending_for_trade(self, trade_id: str, *, operation: Optional[str] = None) -> List[dict]:
+        clauses = [
+            "trade_id = ?",
+            "status IN ('PENDING', 'OPEN', 'TRIGGER PENDING')",
+        ]
+        params: list = [trade_id]
+        if operation:
+            clauses.append("operation = ?")
+            params.append(operation)
+        where = " AND ".join(clauses)
+        return self.db.fetch_all(
+            f"SELECT * FROM options_broker_orders WHERE {where} ORDER BY leg_order, id",
+            params,
+        )
+
     def list_since(
         self,
         since: datetime,

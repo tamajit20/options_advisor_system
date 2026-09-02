@@ -447,14 +447,15 @@ def catalog_payload(db) -> Dict[str, Any]:
     ]
     flags: List[Dict[str, Any]] = []
     try:
-        from database.runtime_flags import RuntimeFlagsRepo
+        from database.runtime_flags import RuntimeFlagsRepo, _DEFAULTS_BY_KEY
         repo = RuntimeFlagsRepo(db, cache_ttl_seconds=0)
         for f in repo.all():
+            spec = _DEFAULTS_BY_KEY.get(f.key)
             flags.append({
                 "key": f.key,
                 "value": f.value,
                 "type": f.type,
-                "description": f.description,
+                "description": (spec.description if spec else None) or f.description,
                 "last_modified": str(f.last_modified) if f.last_modified else None,
                 "modified_by": f.modified_by,
             })

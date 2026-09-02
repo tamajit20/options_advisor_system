@@ -78,6 +78,7 @@ def mark_executed(
     *,
     execute_at_suggested: bool = False,
     skip_execution_gate: bool = False,
+    execution_provider: Optional[str] = None,
 ) -> Optional[str]:
     sug = SuggestionRepo(db)
     trd = TradeRepo(db)
@@ -264,7 +265,7 @@ def mark_executed(
         trd.write_execution_provenance(
             trade_id,
             execution_data_source=suggestion.get("data_source"),
-            execution_provider=suggestion.get("provider"),
+            execution_provider=execution_provider or suggestion.get("provider"),
             gate_passed=gate_passed,
             time_from_suggestion_sec=time_from,
         )

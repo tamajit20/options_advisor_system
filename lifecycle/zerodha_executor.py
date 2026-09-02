@@ -33,7 +33,11 @@ from engine.zerodha_price_guard import (
     validate_live_prices,
 )
 from lifecycle.leg_execution_order import leg_execution_order, legs_in_execution_order
-from lifecycle.trade_executor import close_trade_with_fills, mark_executed
+from lifecycle.trade_executor import (
+    close_trade_with_fills,
+    mark_executed,
+    _circuit_breaker_on,
+)
 from providers.zerodha.execution_facade import KiteExecutionFacade
 from providers.zerodha.facade import KiteFacade
 from providers.zerodha.instruments import Instrument, InstrumentMaster
@@ -42,6 +46,10 @@ from utils import now_ist
 
 
 logger = logging.getLogger(__name__)
+
+EXECUTION_PROVIDER_ZERODHA = "zerodha"
+EXECUTION_CHANNEL_ZERODHA = "zerodha"
+EXECUTION_CHANNEL_MANUAL = "manual"
 
 _TERMINAL_FAIL = frozenset({"REJECTED", "CANCELLED"})
 _IN_FLIGHT = frozenset({"PENDING", "OPEN", "TRIGGER PENDING"})
@@ -100,6 +108,59 @@ def zerodha_execution_ready(db: SQLServerConnection) -> bool:
     if not ZERODHA_API_CONFIG.get("api_key"):
         return False
     return zerodha_session_ready()
+
+
+def trade_execution_channel(db: SQLServerConnection, trade_row: dict) -> str:
+    """Return ``zerodha`` or ``manual`` for dashboard badges."""
+    provider = str(trade_row.get("execution_provider") or "").lower()
+    trade_id = trade_row.get("trade_id")
+    if provider == EXECUTION_PROVIDER_ZERODHA:
+        return EXECUTION_CHANNEL_ZERODHA
+    if trade_id and BrokerOrderRepo(db).has_kite_orders_for_trade(str(trade_id)):
+        return EXECUTION_CHANNEL_ZERODHA
+    return EXECUTION_CHANNEL_MANUAL
+
+
+def _assert_entry_execution_allowed(db: SQLServerConnection, suggestion_id: str) -> None:
+    orphans = BrokerOrderRepo(db).orphan_entry_fills(suggestion_id)
+    if orphans:
+        legs = ", ".join(str(r.get("leg_order")) for r in orphans)
+        raise ZerodhaExecutionError(
+            "Prior Zerodha entry leg(s) filled without a recorded trade "
+            f"(leg(s) {legs}) — flatten on Kite and clear broker rows before retrying"
+        )
+
+
+def _alert_rollback_failure(
+    db: SQLServerConnection,
+    *,
+    suggestion_id: Optional[str],
+    trade_id: Optional[str],
+    leg_orders: List[int],
+    context: str,
+) -> None:
+    if not leg_orders:
+        return
+    try:
+        from contracts import Notification
+        from database.models import NotificationRepo
+
+        leg_txt = ", ".join(str(lo) for lo in leg_orders)
+        NotificationRepo(db).insert(Notification(
+            created_at=now_ist(),
+            notif_type="ZERODHA_ROLLBACK_FAILED",
+            severity="CRITICAL",
+            title="Zerodha rollback failed — manual action required",
+            body=(
+                f"{context}. Leg(s) {leg_txt} may still be open at the broker. "
+                "Flatten on Kite before retrying."
+            ),
+            related_suggestion_id=suggestion_id,
+            related_trade_id=trade_id,
+        ))
+        db.commit()
+    except Exception:
+        logger.exception("zerodha rollback alert failed")
 
 
 def _lock_for(key: str) -> threading.Lock:
@@ -425,32 +486,40 @@ def _place_and_monitor_leg(
     raise ZerodhaExecutionError(str(last_exc or "order placement failed"))
 
 
-def _rollback_entry_legs(
+def _rollback_filled_legs(
     facade: KiteExecutionFacade,
     db: SQLServerConnection,
     *,
-    suggestion_id: str,
+    suggestion_id: Optional[str],
+    trade_id: Optional[str],
     legs_by_order: Dict[int, dict],
     completed: List[LegFillOutcome],
-) -> None:
+    mode: str,
+) -> List[int]:
     """Best-effort reverse orders for legs already filled before a failure."""
     if not completed:
-        return
+        return []
     logger.warning(
-        "Rolling back %d filled leg(s) for suggestion %s after failure",
-        len(completed), suggestion_id,
+        "Rolling back %d filled leg(s) (%s) for suggestion=%s trade=%s",
+        len(completed), mode, suggestion_id, trade_id,
     )
     master = InstrumentMaster(loader=lambda: facade.instruments("NFO"))
     master.refresh_if_stale()
+    failed: List[int] = []
     for fill in reversed(completed):
         leg = legs_by_order[fill.leg_order]
         inst = _resolve_instrument(leg, master)
         orig_txn = "BUY" if str(leg.get("action", "")).upper() == "BUY" else "SELL"
-        reverse_txn = "SELL" if orig_txn == "BUY" else "BUY"
+        if mode == "exit":
+            close_txn = "BUY" if orig_txn == "SELL" else "SELL"
+            reverse_txn = "SELL" if close_txn == "BUY" else "BUY"
+        else:
+            reverse_txn = "SELL" if orig_txn == "BUY" else "BUY"
         key = _kite_symbol_key(inst)
         ltp = _fetch_ltps(facade, [key]).get(key)
         if ltp is None:
             logger.error("rollback: no LTP for leg %s", fill.leg_order)
+            failed.append(fill.leg_order)
             continue
         try:
             _place_and_monitor_leg(
@@ -461,13 +530,79 @@ def _rollback_entry_legs(
                 transaction_type=reverse_txn,
                 ltp=ltp,
                 suggestion_id=suggestion_id,
-                trade_id=None,
+                trade_id=trade_id,
             )
         except Exception:
             logger.exception(
                 "rollback failed for leg %s — manual intervention required",
                 fill.leg_order,
             )
+            failed.append(fill.leg_order)
+    if failed:
+        ctx = (
+            f"Entry rollback failed after a leg error (suggestion {suggestion_id})"
+            if mode == "entry"
+            else f"Close rollback failed after a leg error (trade {trade_id})"
+        )
+        _alert_rollback_failure(
+            db,
+            suggestion_id=suggestion_id,
+            trade_id=trade_id,
+            leg_orders=failed,
+            context=ctx,
+        )
+    return failed
+
+
+def _rollback_entry_legs(
+    facade: KiteExecutionFacade,
+    db: SQLServerConnection,
+    *,
+    suggestion_id: str,
+    legs_by_order: Dict[int, dict],
+    completed: List[LegFillOutcome],
+) -> None:
+    _rollback_filled_legs(
+        facade, db,
+        suggestion_id=suggestion_id,
+        trade_id=None,
+        legs_by_order=legs_by_order,
+        completed=completed,
+        mode="entry",
+    )
+
+
+def _rollback_close_legs(
+    facade: KiteExecutionFacade,
+    db: SQLServerConnection,
+    *,
+    trade_id: str,
+    suggestion_id: Optional[str],
+    legs_by_order: Dict[int, dict],
+    completed: List[LegFillOutcome],
+) -> None:
+    _rollback_filled_legs(
+        facade, db,
+        suggestion_id=suggestion_id,
+        trade_id=trade_id,
+        legs_by_order=legs_by_order,
+        completed=completed,
+        mode="exit",
+    )
+
+
+def _refresh_leg_ltp(
+    facade: KiteExecutionFacade,
+    inst_map: Dict[int, Instrument],
+    leg: dict,
+) -> float:
+    lo = int(leg["leg_order"])
+    inst = inst_map[lo]
+    key = _kite_symbol_key(inst)
+    ltp = _fetch_ltps(facade, [key]).get(key)
+    if ltp is None:
+        raise ZerodhaExecutionError(f"leg {lo}: live price unavailable")
+    return ltp
 
 
 def _live_ltp_map(
@@ -651,7 +786,9 @@ def _entry_context(
         raise ZerodhaExecutionError(
             "Broker orders already in flight for this suggestion — wait or cancel on Kite"
         )
-    gate = validate_execution(suggestion, legs)
+    _assert_entry_execution_allowed(db, suggestion_id)
+    cb_active = _circuit_breaker_on(db)
+    gate = validate_execution(suggestion, legs, circuit_breaker_active=cb_active)
     if not gate.ok:
         raise ZerodhaExecutionError(f"Execution blocked: {gate.reason()}")
     facade, master = _build_client()
@@ -745,10 +882,17 @@ def execute_suggestion_in_zerodha(
         try:
             for leg in ordered:
                 lo = int(leg["leg_order"])
+                ltp = _refresh_leg_ltp(facade, inst_map, leg)
+                live_map[lo] = ltp
+                remaining = [l for l in legs if int(l["leg_order"]) not in {
+                    f.leg_order for f in completed
+                }]
+                price_gate = validate_live_prices(remaining, live_map)
+                if not price_gate.ok:
+                    raise ZerodhaExecutionError(
+                        f"Live prices out of band before leg {lo}: {price_gate.reason()}"
+                    )
                 plan = plan_by_order[lo]
-                ltp = live_map.get(lo)
-                if ltp is None:
-                    raise ZerodhaExecutionError(f"leg {lo}: live price unavailable")
                 txn = plan.transaction_type
                 user_lim = (leg_limits or {}).get(lo)
                 outcome = _place_and_monitor_leg(
@@ -787,15 +931,31 @@ def execute_suggestion_in_zerodha(
             )
             for f in completed
         ]
-        trade_id = mark_executed(
-            db,
-            suggestion_id,
-            fills,
-            spot_at_execution=spot,
-            actual_stop_loss_level=suggestion.get("stop_loss_level"),
-            skip_execution_gate=True,
-        )
+        try:
+            trade_id = mark_executed(
+                db,
+                suggestion_id,
+                fills,
+                spot_at_execution=spot,
+                actual_stop_loss_level=suggestion.get("stop_loss_level"),
+                skip_execution_gate=True,
+                execution_provider=EXECUTION_PROVIDER_ZERODHA,
+            )
+        except Exception:
+            _rollback_entry_legs(
+                facade, db,
+                suggestion_id=suggestion_id,
+                legs_by_order=legs_by_order,
+                completed=completed,
+            )
+            raise
         if trade_id is None:
+            _rollback_entry_legs(
+                facade, db,
+                suggestion_id=suggestion_id,
+                legs_by_order=legs_by_order,
+                completed=completed,
+            )
             raise ZerodhaExecutionError("Trade was not created after fills")
 
         broker_rows = BrokerOrderRepo(db).by_suggestion(suggestion_id)
@@ -849,6 +1009,8 @@ def preview_close_execution(
         strategy = str((sug_row or {}).get("strategy") or "")
     ordered = legs_in_execution_order(open_exits, strategy, mode="close")
     plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="close", strategy=strategy)
+    limit_map = {p.leg_order: p.limit_price for p in plans}
+    limit_gate = validate_limit_prices(open_exits, limit_map)
     return ExecutionPreview(
         operation="EXIT",
         suggestion_id=trade.get("suggestion_id"),
@@ -856,8 +1018,8 @@ def preview_close_execution(
         trade_name=trade.get("trade_name"),
         strategy=strategy or None,
         legs=plans,
-        all_limits_in_band=True,
-        limit_vetoes=[],
+        all_limits_in_band=limit_gate.ok,
+        limit_vetoes=limit_gate.vetoes,
         spot_at_execution=None,
     )
 
@@ -867,6 +1029,7 @@ def close_trade_in_zerodha(
     trade_id: str,
     *,
     leg_limits: Optional[Dict[int, float]] = None,
+    ack_out_of_band: bool = False,
 ) -> ExecutionOutcome:
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError(
@@ -897,6 +1060,12 @@ def close_trade_in_zerodha(
         if not open_exits:
             raise ZerodhaExecutionError("All legs already have exit fills recorded")
 
+        pending = BrokerOrderRepo(db).pending_for_trade(trade_id, operation="EXIT")
+        if pending:
+            raise ZerodhaExecutionError(
+                "Broker close orders already in flight for this trade — wait or cancel on Kite"
+            )
+
         facade, master = _build_client()
         live_map, inst_map = _live_ltp_map(facade, master, open_exits)
 
@@ -906,28 +1075,42 @@ def close_trade_in_zerodha(
             strategy = str((sug_row or {}).get("strategy") or "")
 
         ordered = legs_in_execution_order(open_exits, strategy, mode="close")
+        plans = _build_leg_plans(
+            ordered, inst_map, live_map, leg_limits, mode="close", strategy=strategy,
+        )
+        _enforce_limit_band(open_exits, plans, ack_out_of_band=ack_out_of_band)
         completed: List[LegFillOutcome] = []
-
-        for leg in ordered:
-            lo = int(leg["leg_order"])
-            ltp = live_map.get(lo)
-            if ltp is None:
-                raise ZerodhaExecutionError(f"leg {lo}: live price unavailable for close")
-            orig = str(leg.get("action") or "").upper()
-            close_txn = "BUY" if orig == "SELL" else "SELL"
-            user_lim = (leg_limits or {}).get(lo)
-            outcome = _place_and_monitor_leg(
-                db, facade,
-                operation="EXIT",
-                leg=leg,
-                inst=inst_map[lo],
-                transaction_type=close_txn,
-                ltp=ltp,
-                suggestion_id=trade.get("suggestion_id"),
+        legs_by_order = {int(l["leg_order"]): l for l in open_exits}
+        plan_by_order = {p.leg_order: p for p in plans}
+        try:
+            for leg in ordered:
+                lo = int(leg["leg_order"])
+                ltp = _refresh_leg_ltp(facade, inst_map, leg)
+                live_map[lo] = ltp
+                plan = plan_by_order[lo]
+                close_txn = plan.transaction_type
+                user_lim = (leg_limits or {}).get(lo)
+                outcome = _place_and_monitor_leg(
+                    db, facade,
+                    operation="EXIT",
+                    leg=leg,
+                    inst=inst_map[lo],
+                    transaction_type=close_txn,
+                    ltp=ltp,
+                    suggestion_id=trade.get("suggestion_id"),
+                    trade_id=trade_id,
+                    user_limit_price=user_lim,
+                )
+                completed.append(outcome)
+        except Exception:
+            _rollback_close_legs(
+                facade, db,
                 trade_id=trade_id,
-                user_limit_price=user_lim,
+                suggestion_id=trade.get("suggestion_id"),
+                legs_by_order=legs_by_order,
+                completed=completed,
             )
-            completed.append(outcome)
+            raise
 
         exits = [
             {

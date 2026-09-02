@@ -73,6 +73,8 @@ function _inMarketHours() {
 const LIVE_FEED_STALE_SEC = 45;
 let _zerodhaHasSession = false;
 let _zerodhaValid = false;
+let _zerodhaExecutionConfigEnabled = false;
+let _zerodhaExecutionRuntimeEnabled = false;
 let _zerodhaExecutionEnabled = false;
 let _zerodhaExecutionReady = false;
 let _lastMtmByTrade = {};  // tradeId → { mtm, as_of, receivedAt }
@@ -94,8 +96,11 @@ function _mtmAgeSec(tradeId) {
 }
 
 function _zerodhaExecuteDisabledReason(requireLiveGate) {
-  if (!_zerodhaExecutionEnabled) {
-    return 'Zerodha execution is disabled — enable zerodha_execution.enabled and trade_execution_enabled in Config';
+  if (!_zerodhaExecutionConfigEnabled) {
+    return 'Enable zerodha_execution.enabled in Config → Zerodha broker execution';
+  }
+  if (!_zerodhaExecutionRuntimeEnabled) {
+    return 'Enable trade_execution_enabled in Config → Runtime switches';
   }
   if (!_zerodhaHasSession || !_zerodhaValid) {
     return 'Log in to Zerodha first (header pill or WS Monitor tab)';
@@ -142,10 +147,45 @@ function _refreshZerodhaExecButtons() {
       'Place close orders in Zerodha (monitored until filled)',
     ));
   });
+  _updateZerodhaReadinessHints();
+}
+
+function _updateZerodhaReadinessHints() {
+  $$('.zerodha-readiness-hint').forEach(el => {
+    const card = el.closest('.card[data-sug-id]');
+    const requireLiveGate = card?.dataset?.requireLiveGate === '1';
+    const reason = _zerodhaExecuteDisabledReason(requireLiveGate);
+    if (reason) {
+      el.hidden = false;
+      el.textContent = reason;
+    } else {
+      el.hidden = true;
+      el.textContent = '';
+    }
+  });
 }
 
 function _zerodhaBtnTitle(fallback, requireLiveGate) {
   return escapeHtml(_zerodhaExecuteDisabledReason(requireLiveGate) || fallback);
+}
+
+function tradeExecutionChannel(t) {
+  if (t?.execution_channel) return t.execution_channel;
+  const p = String(t?.execution_provider || '').toLowerCase();
+  return p === 'zerodha' ? 'zerodha' : 'manual';
+}
+
+function executionChannelBadge(channel, { inflightSlot = false } = {}) {
+  if (inflightSlot) {
+    return '<span class="tag tag-info zerodha-inflight-chip" hidden title="Zerodha fill progress"></span>';
+  }
+  if (channel === 'zerodha') {
+    return '<span class="tag tag-accent" title="Opened via Zerodha broker execution">Zerodha</span>';
+  }
+  if (channel === 'manual') {
+    return '<span class="tag tag-muted" title="Recorded manually in dashboard">Manual</span>';
+  }
+  return '';
 }
 
 function _collectZerodhaLegLimits(root, inputSelector) {
@@ -2237,6 +2277,7 @@ async function loadSuggestion() {
     wireTermHelpToggle(c);
     c.querySelectorAll('.collapsible-card').forEach(card => card.classList.add('mobile-compact'));
     _scanInflightZerodhaExecutions();
+    _refreshZerodhaExecButtons();
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -4935,7 +4976,8 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
         ${regimePairChip(s)}
         ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn" title="Live checks failed — use Mark Executed at suggested prices">${escapeHtml(gateLabel)}</span>` : ''}
-        <span class="tag tag-info zerodha-inflight-chip" hidden title="Zerodha fill progress">Zerodha</span>
+        ${executionChannelBadge(s.execution_channel)}
+        ${showExecActions && !readOnly ? executionChannelBadge(null, { inflightSlot: true }) : ''}
         ${sugStatus === 'IGNORED' ? '<span class="tag tag-warn">Retired</span>' : ''}
         ${s.is_stale && sugStatus === 'PENDING' && !gateLabel ? '<span class="tag tag-warn">Stale</span>' : ''}
         ${_qualityBadge(s.entry_quality_score, '', {
@@ -5040,6 +5082,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           <strong class="exec-path-title">Via Zerodha</strong>
           <span class="muted exec-path-hint">Places LIMIT orders in your broker — records the trade when filled</span>
         </div>
+        <div class="zerodha-readiness-hint pending-close-alert" style="font-size:.82rem;padding:8px 10px;margin:0" hidden></div>
         <div class="zerodha-inflight-panel" hidden aria-live="polite"></div>
         <button type="button" class="${zExecBtnClass}"${zExecAria} title="${zExecTitle}">Place orders in Zerodha</button>
         <div class="zerodha-limit-row muted">Optional limit prices (blank = live auto):</div>
@@ -6015,13 +6058,16 @@ async function submitZerodhaClose(tradeId, btn, panel) {
       throw new Error('Close preview returned no legs');
     }
     showZerodhaConfirmModal(preview, {
-      title: 'Confirm Zerodha close orders',
-      submitLabel: 'Place close orders',
+      title: preview.all_limits_in_band
+        ? 'Confirm Zerodha close orders'
+        : 'Warning: close limits outside suggestion band',
+      submitLabel: preview.all_limits_in_band ? 'Place close orders' : 'Proceed anyway',
       onConfirm: async () => {
         _setZerodhaModalBody('Closing in Zerodha…', _renderZerodhaExecutionProgress(preview));
         const submit = document.getElementById('zerodha-confirm-submit');
         if (submit) submit.hidden = true;
         const closeMeta = { tradeId, label: `Close ${tradeId}` };
+        const execBody = { ...body, ack_out_of_band: !preview.all_limits_in_band };
         const stopPoll = _startZerodhaOrderPolling(
           `/api/trades/${tradeId}/zerodha-orders`,
           preview,
@@ -6032,7 +6078,7 @@ async function submitZerodhaClose(tradeId, btn, panel) {
           r = await API(`/api/trades/${tradeId}/zerodha-close`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+            body: JSON.stringify(execBody),
           });
         } catch (err) {
           _zerodhaModalExecutionError(err);
@@ -6475,6 +6521,7 @@ function renderTrade(t, expanded = false) {
         })()}
         <span class="tag live-risk-live" data-trade-id="${escapeHtml(t.trade_id)}" hidden></span>
         ${hasPendingClose ? `<span class="tag tag-warn" title="Record exit prices to compute P&L">CLOSE PENDING</span>` : ''}
+        ${executionChannelBadge(tradeExecutionChannel(t))}
         <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
         <span class="tag tag-warn live-feed-tag" data-trade-id="${escapeHtml(t.trade_id)}" title="Checking feed\u2026">\u2026</span>
@@ -7665,6 +7712,10 @@ function _cfgBindPage(root) {
         );
         refreshGlobalBanners();
         loadConfig();
+        loadZerodhaStatus();
+        if (document.querySelector('.card[data-sug-id] .btn-zerodha-exec')) {
+          loadSuggestion();
+        }
       } catch (e) {
         toast(`Save failed: ${e.message}`, 'err');
         _cfgUpdateDirtyState(root);
@@ -8323,6 +8374,8 @@ async function loadZerodhaStatus() {
     const d = await r.json();
     _zerodhaHasSession = !!d.has_session;
     _zerodhaValid = !!d.valid;
+    _zerodhaExecutionConfigEnabled = !!d.execution_config_enabled;
+    _zerodhaExecutionRuntimeEnabled = !!d.execution_runtime_enabled;
     _zerodhaExecutionEnabled = !!d.execution_enabled;
     _zerodhaExecutionReady = !!d.execution_ready;
     const callbackEl = document.getElementById('zerodha-callback-url');

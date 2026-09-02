@@ -76,7 +76,68 @@ def test_execute_rejects_non_pending(db_conn, mocker, mock_instrument):
         "suggested_price_high": 105,
     }])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
     with pytest.raises(ZerodhaExecutionError, match="PENDING"):
+        execute_suggestion_in_zerodha(db_conn, "SUG-1")
+
+
+def test_execute_blocks_orphan_broker_fills(db_conn, mocker):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("database.models.SuggestionRepo.get", return_value={
+        "suggestion_id": "SUG-1",
+        "status": "PENDING",
+        "strategy": "LONG_CALL",
+    })
+    mocker.patch("database.models.SuggestionRepo.legs", return_value=[{
+        "leg_order": 1,
+        "action": "BUY",
+        "option_type": "CE",
+        "symbol": "NIFTY",
+        "expiry_date": date(2026, 5, 28),
+        "strike": 23000,
+        "lots": 1,
+        "lot_size": 50,
+        "suggested_price": 100,
+        "suggested_price_low": 95,
+        "suggested_price_high": 105,
+    }])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills",
+        return_value=[{"leg_order": 1, "status": "COMPLETE"}],
+    )
+    with pytest.raises(ZerodhaExecutionError, match="Prior Zerodha entry"):
+        execute_suggestion_in_zerodha(db_conn, "SUG-1")
+
+
+def test_execute_blocks_circuit_breaker_before_orders(db_conn, mocker):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("database.models.SuggestionRepo.get", return_value={
+        "suggestion_id": "SUG-1",
+        "status": "PENDING",
+        "strategy": "LONG_CALL",
+    })
+    mocker.patch("database.models.SuggestionRepo.legs", return_value=[{
+        "leg_order": 1,
+        "action": "BUY",
+        "option_type": "CE",
+        "symbol": "NIFTY",
+        "expiry_date": date(2026, 5, 28),
+        "strike": 23000,
+        "lots": 1,
+        "lot_size": 50,
+        "suggested_price": 100,
+        "suggested_price_low": 95,
+        "suggested_price_high": 105,
+    }])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
+    mocker.patch("lifecycle.zerodha_executor._circuit_breaker_on", return_value=True)
+    mocker.patch(
+        "engine.execution_validator.validate_execution",
+        return_value=MagicMock(ok=False, reason=lambda: "circuit breaker"),
+    )
+    with pytest.raises(ZerodhaExecutionError, match="circuit breaker"):
         execute_suggestion_in_zerodha(db_conn, "SUG-1")
 
 
@@ -105,6 +166,7 @@ def test_execute_happy_path_single_leg(db_conn, mocker, mock_instrument):
     mocker.patch("database.models.SuggestionRepo.get", return_value=suggestion)
     mocker.patch("database.models.SuggestionRepo.legs", return_value=[leg])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
     mocker.patch("engine.execution_validator.validate_execution", return_value=MagicMock(ok=True, vetoes=[]))
 
     kite = MagicMock()
@@ -126,6 +188,7 @@ def test_execute_happy_path_single_leg(db_conn, mocker, mock_instrument):
     master.refresh = MagicMock()
 
     mocker.patch("lifecycle.zerodha_executor._build_client", return_value=(facade, master))
+    mocker.patch("lifecycle.zerodha_executor._refresh_leg_ltp", side_effect=lambda _f, _m, leg: 100.0)
     mocker.patch("lifecycle.zerodha_executor.mark_executed", return_value="TRD-1")
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.insert", return_value=42)
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.update_status")

@@ -114,17 +114,20 @@ def _zerodha_status_payload(db: Optional["SQLServerConnection"] = None) -> dict:
         zerodha_execution_config_enabled,
         zerodha_execution_enabled,
         zerodha_execution_ready,
+        zerodha_execution_runtime_enabled,
     )
 
     callback = zerodha_callback_url()
     manual_paste = kite_redirect_https_required(callback)
     console_redirect = kite_console_redirect_url()
     config_on = zerodha_execution_config_enabled()
-    runtime_on = False
+    runtime_flag_on = False
+    exec_on = False
     ready = False
     if db is not None:
         try:
-            runtime_on = zerodha_execution_enabled(db)
+            runtime_flag_on = zerodha_execution_runtime_enabled(db)
+            exec_on = zerodha_execution_enabled(db)
             ready = zerodha_execution_ready(db)
         except Exception:
             logger.debug("zerodha status: execution flag read failed", exc_info=True)
@@ -136,8 +139,8 @@ def _zerodha_status_payload(db: Optional["SQLServerConnection"] = None) -> dict:
         "kite_https_required": manual_paste,
         "kite_manual_paste_flow": manual_paste,
         "execution_config_enabled": config_on,
-        "execution_runtime_enabled": runtime_on,
-        "execution_enabled": config_on and runtime_on,
+        "execution_runtime_enabled": runtime_flag_on,
+        "execution_enabled": exec_on,
         "execution_ready": ready,
     }
     s = load_session()
@@ -168,6 +171,26 @@ def _zerodha_execution_ready(db: SQLServerConnection) -> bool:
     except Exception:
         logger.debug("zerodha_execution_ready probe failed", exc_info=True)
         return False
+
+
+def _zerodha_execution_auth_required():
+    """Block broker execution APIs when dashboard auth is not configured."""
+    from dashboard.auth import configured_api_key
+    from lifecycle.zerodha_executor import zerodha_execution_config_enabled
+    if zerodha_execution_config_enabled() and not configured_api_key():
+        return jsonify({
+            "error": (
+                "Zerodha execution requires OPT_DASHBOARD_API_KEY — "
+                "set it in .env.docker and restart the app"
+            ),
+        }), 503
+    return None
+
+
+def _enrich_trade_execution_channel(db: SQLServerConnection, row: dict) -> dict:
+    from lifecycle.zerodha_executor import trade_execution_channel
+    row["execution_channel"] = trade_execution_channel(db, row)
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -1630,6 +1653,9 @@ def create_app() -> Flask:
     @app.route("/api/suggestion/<sid>/zerodha-preview", methods=["POST"])
     @_with_db
     def api_zerodha_preview(db: SQLServerConnection, sid: str):
+        auth_block = _zerodha_execution_auth_required()
+        if auth_block is not None:
+            return auth_block
         from lifecycle.zerodha_executor import (
             ZerodhaExecutionError,
             parse_leg_limits,
@@ -1654,6 +1680,9 @@ def create_app() -> Flask:
     @app.route("/api/suggestion/<sid>/zerodha-execute", methods=["POST"])
     @_with_db
     def api_zerodha_execute(db: SQLServerConnection, sid: str):
+        auth_block = _zerodha_execution_auth_required()
+        if auth_block is not None:
+            return auth_block
         from lifecycle.zerodha_executor import (
             ZerodhaExecutionError,
             execute_suggestion_in_zerodha,
@@ -1764,6 +1793,9 @@ def create_app() -> Flask:
                 r_out["suggestion"] = None
                 r_out["entry_quality_score"] = None
             r_out["live_outlook"] = _trade_live_outlook(db, r_out)
+            _enrich_trade_execution_channel(db, r_out)
+            if r_out.get("suggestion"):
+                r_out["suggestion"]["execution_channel"] = r_out["execution_channel"]
             out.append(r_out)
         return jsonify({"trades": out})
 
@@ -1776,6 +1808,7 @@ def create_app() -> Flask:
             return jsonify({"error": "Not found"}), 404
         r_out = _row(r)
         r_out["legs"] = [_row(l) for l in trd.legs(trade_id)]
+        _enrich_trade_execution_channel(db, r_out)
         return jsonify({"trade": r_out})
 
     @app.route("/api/trades/<trade_id>/resuggest", methods=["POST"])
@@ -1845,6 +1878,9 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/zerodha-close-preview", methods=["POST"])
     @_with_db
     def api_zerodha_close_preview(db: SQLServerConnection, trade_id: str):
+        auth_block = _zerodha_execution_auth_required()
+        if auth_block is not None:
+            return auth_block
         from lifecycle.zerodha_executor import (
             ZerodhaExecutionError,
             parse_leg_limits,
@@ -1866,6 +1902,9 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/zerodha-close", methods=["POST"])
     @_with_db
     def api_zerodha_close(db: SQLServerConnection, trade_id: str):
+        auth_block = _zerodha_execution_auth_required()
+        if auth_block is not None:
+            return auth_block
         from lifecycle.zerodha_executor import (
             ZerodhaExecutionError,
             close_trade_in_zerodha,
@@ -1881,9 +1920,12 @@ def create_app() -> Flask:
         payload = request.get_json(silent=True) or {}
         from lifecycle.zerodha_executor import parse_leg_limits
         leg_limits = parse_leg_limits(payload.get("leg_limits"))
+        ack_oob = bool(payload.get("ack_out_of_band"))
         try:
             outcome = close_trade_in_zerodha(
-                db, trade_id, leg_limits=leg_limits or None,
+                db, trade_id,
+                leg_limits=leg_limits or None,
+                ack_out_of_band=ack_oob,
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -2412,6 +2454,7 @@ def create_app() -> Flask:
             "SELECT t.trade_id, t.suggestion_id, t.trade_name, t.executed_on, t.closed_on, "
             "  t.status, t.position_type, t.net_credit_actual, t.gross_pnl, t.net_pnl, "
             "  t.total_charges, t.spot_at_execution, t.exit_instruction, "
+            "  t.execution_provider, "
             "  t.actual_max_profit, t.actual_max_loss, "
             "  t.actual_upper_breakeven, t.actual_lower_breakeven, t.actual_stop_loss_level, "
             "  s.underlying, s.strategy, s.generated_on AS sug_generated_on, "
@@ -2454,7 +2497,7 @@ def create_app() -> Flask:
             if sid and sid not in seen_sug:
                 seen_sug[sid] = [_row(lg) for lg in sug_repo.legs(sid)]
             sug_legs = seen_sug.get(sid, [])
-            out.append({
+            item = {
                 "trade_id":          r["trade_id"],
                 "trade_name":        r["trade_name"],
                 "executed_on":       r["executed_on"],
@@ -2467,6 +2510,7 @@ def create_app() -> Flask:
                 "net_pnl":           r["net_pnl"],
                 "spot_at_execution": r["spot_at_execution"],
                 "exit_instruction":  r["exit_instruction"],
+                "execution_provider": r.get("execution_provider"),
                 "actual_max_profit": r["actual_max_profit"],
                 "actual_max_loss":   r["actual_max_loss"],
                 "actual_upper_be":   r["actual_upper_breakeven"],
@@ -2494,7 +2538,9 @@ def create_app() -> Flask:
                     "entry_quality_score": r.get("sug_entry_quality"),
                     "legs":        sug_legs,
                 } if r.get("underlying") else None,
-            })
+            }
+            _enrich_trade_execution_channel(db, item)
+            out.append(item)
 
         # Distinct underlyings / strategies for filter dropdowns (date window only)
         facet_sql = (
