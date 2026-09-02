@@ -1,16 +1,24 @@
 """Tests for lifecycle/zerodha_executor.py (mocked Kite)."""
 
 from datetime import date, datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from lifecycle.zerodha_executor import (
+    EXECUTION_CHANNEL_MANUAL,
+    EXECUTION_CHANNEL_ZERODHA,
+    EXECUTION_PROVIDER_ZERODHA,
+    LegFillOutcome,
     ZerodhaExecutionError,
+    close_trade_in_zerodha,
     execute_suggestion_in_zerodha,
+    preview_close_execution,
+    trade_execution_channel,
     zerodha_execution_enabled,
 )
 from providers.zerodha.instruments import Instrument
+from utils import now_ist
 
 
 _IST = timezone.utc  # tests only need consistent tz-aware dt
@@ -39,6 +47,138 @@ def mock_instrument():
         segment="NFO-OPT",
         exchange="NFO",
     )
+
+
+@pytest.fixture
+def sample_leg():
+    return {
+        "leg_order": 1,
+        "action": "BUY",
+        "option_type": "CE",
+        "symbol": "NIFTY",
+        "expiry_date": date(2026, 5, 28),
+        "strike": 23000,
+        "lots": 1,
+        "lot_size": 50,
+        "suggested_price": 100,
+        "suggested_price_low": 95,
+        "suggested_price_high": 105,
+    }
+
+
+@pytest.fixture
+def sample_suggestion():
+    return {
+        "suggestion_id": "SUG-1",
+        "status": "PENDING",
+        "strategy": "LONG_CALL",
+        "spot_at_generation": 23000,
+        "stop_loss_level": 22800,
+    }
+
+
+def _mock_kite_facade(mocker, mock_instrument):
+    kite = MagicMock()
+    kite.place_order.return_value = "OID-1"
+    kite.order_history.return_value = [{"status": "COMPLETE", "average_price": 99.5}]
+    kite.ltp.return_value = {
+        "NFO:NIFTY26MAY23000CE": {"last_price": 100.0},
+        "NSE:NIFTY 50": {"last_price": 23010},
+    }
+
+    facade = MagicMock()
+    facade.place_order = kite.place_order
+    facade.order_history = kite.order_history
+    facade.ltp = kite.ltp
+    facade.modify_order = kite.modify_order
+    facade.cancel_order = kite.cancel_order
+    facade.instruments = MagicMock(return_value=[])
+
+    master = MagicMock()
+    master.get_option.return_value = mock_instrument
+    master.refresh_if_stale = MagicMock()
+    master.refresh = MagicMock()
+
+    mocker.patch(
+        "lifecycle.zerodha_executor._build_client",
+        return_value=(facade, master),
+    )
+    mocker.patch(
+        "lifecycle.zerodha_executor._refresh_leg_ltp",
+        side_effect=lambda _f, _m, leg: 100.0,
+    )
+    return kite, facade, master
+
+
+def _patch_entry_gate(mocker):
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion",
+        return_value=[],
+    )
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills",
+        return_value=[],
+    )
+    mocker.patch(
+        "engine.execution_validator.validate_execution",
+        return_value=MagicMock(ok=True, reason=lambda: "OK"),
+    )
+    mocker.patch("lifecycle.zerodha_executor._circuit_breaker_on", return_value=False)
+
+
+def test_trade_execution_channel_from_provider(db_conn, mocker):
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.has_kite_orders_for_trade",
+        return_value=False,
+    )
+    ch = trade_execution_channel(
+        db_conn, {"trade_id": "TRD-1", "execution_provider": "zerodha"},
+    )
+    assert ch == EXECUTION_CHANNEL_ZERODHA
+
+
+def test_trade_execution_channel_from_broker_orders(db_conn, mocker):
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.has_kite_orders_for_trade",
+        return_value=True,
+    )
+    ch = trade_execution_channel(
+        db_conn, {"trade_id": "TRD-1", "execution_provider": "nse_eod"},
+    )
+    assert ch == EXECUTION_CHANNEL_ZERODHA
+
+
+def test_trade_execution_channel_manual(db_conn, mocker):
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.has_kite_orders_for_trade",
+        return_value=False,
+    )
+    ch = trade_execution_channel(
+        db_conn, {"trade_id": "TRD-1", "execution_provider": "nse_eod"},
+    )
+    assert ch == EXECUTION_CHANNEL_MANUAL
+
+
+def test_validate_execution_receives_circuit_breaker_flag(db_conn, mocker, sample_leg, sample_suggestion):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
+    mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
+    mocker.patch("lifecycle.zerodha_executor._circuit_breaker_on", return_value=True)
+    validate = mocker.patch(
+        "lifecycle.zerodha_executor.validate_execution",
+        return_value=MagicMock(ok=True, reason=lambda: "OK"),
+    )
+    mocker.patch(
+        "lifecycle.zerodha_executor.validate_live_prices",
+        return_value=MagicMock(ok=True, reason=lambda: "OK"),
+    )
+    mocker.patch("lifecycle.zerodha_executor._build_client", return_value=(MagicMock(), MagicMock()))
+    from lifecycle.zerodha_executor import _entry_context
+
+    _entry_context(db_conn, "SUG-1", None)
+    assert validate.call_args.kwargs["circuit_breaker_active"] is True
 
 
 def test_execution_disabled_without_config(db_conn, mocker):
@@ -141,55 +281,16 @@ def test_execute_blocks_circuit_breaker_before_orders(db_conn, mocker):
         execute_suggestion_in_zerodha(db_conn, "SUG-1")
 
 
-def test_execute_happy_path_single_leg(db_conn, mocker, mock_instrument):
+def test_execute_happy_path_single_leg(
+    db_conn, mocker, mock_instrument, sample_leg, sample_suggestion,
+):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
-    leg = {
-        "leg_order": 1,
-        "action": "BUY",
-        "option_type": "CE",
-        "symbol": "NIFTY",
-        "expiry_date": date(2026, 5, 28),
-        "strike": 23000,
-        "lots": 1,
-        "lot_size": 50,
-        "suggested_price": 100,
-        "suggested_price_low": 95,
-        "suggested_price_high": 105,
-    }
-    suggestion = {
-        "suggestion_id": "SUG-1",
-        "status": "PENDING",
-        "strategy": "LONG_CALL",
-        "spot_at_generation": 23000,
-        "stop_loss_level": 22800,
-    }
-    mocker.patch("database.models.SuggestionRepo.get", return_value=suggestion)
-    mocker.patch("database.models.SuggestionRepo.legs", return_value=[leg])
-    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
-    mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
-    mocker.patch("engine.execution_validator.validate_execution", return_value=MagicMock(ok=True, vetoes=[]))
+    mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
+    mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
+    _patch_entry_gate(mocker)
 
-    kite = MagicMock()
-    kite.place_order.return_value = "OID-1"
-    kite.order_history.return_value = [{"status": "COMPLETE", "average_price": 99.5}]
-    kite.ltp.return_value = {"NFO:NIFTY26MAY23000CE": {"last_price": 100.0}, "NSE:NIFTY 50": {"last_price": 23010}}
-
-    facade = MagicMock()
-    facade.place_order = kite.place_order
-    facade.order_history = kite.order_history
-    facade.ltp = kite.ltp
-    facade.modify_order = kite.modify_order
-    facade.cancel_order = kite.cancel_order
-    facade.instruments = MagicMock(return_value=[])
-
-    master = MagicMock()
-    master.get_option.return_value = mock_instrument
-    master.refresh_if_stale = MagicMock()
-    master.refresh = MagicMock()
-
-    mocker.patch("lifecycle.zerodha_executor._build_client", return_value=(facade, master))
-    mocker.patch("lifecycle.zerodha_executor._refresh_leg_ltp", side_effect=lambda _f, _m, leg: 100.0)
-    mocker.patch("lifecycle.zerodha_executor.mark_executed", return_value="TRD-1")
+    kite, _, _ = _mock_kite_facade(mocker, mock_instrument)
+    mark = mocker.patch("lifecycle.zerodha_executor.mark_executed", return_value="TRD-1")
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.insert", return_value=42)
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.update_status")
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.by_suggestion", return_value=[])
@@ -198,3 +299,144 @@ def test_execute_happy_path_single_leg(db_conn, mocker, mock_instrument):
     assert out.ok
     assert out.trade_id == "TRD-1"
     kite.place_order.assert_called_once()
+    mark.assert_called_once()
+    assert mark.call_args.kwargs["execution_provider"] == EXECUTION_PROVIDER_ZERODHA
+    assert mark.call_args.kwargs["skip_execution_gate"] is True
+
+
+def test_execute_rolls_back_when_mark_executed_fails(
+    db_conn, mocker, mock_instrument, sample_leg, sample_suggestion,
+):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
+    mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
+    _patch_entry_gate(mocker)
+    _mock_kite_facade(mocker, mock_instrument)
+    mocker.patch(
+        "lifecycle.zerodha_executor.mark_executed",
+        side_effect=ValueError("circuit breaker"),
+    )
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.insert", return_value=42)
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.update_status")
+    rollback = mocker.patch("lifecycle.zerodha_executor._rollback_entry_legs")
+
+    with pytest.raises(ValueError, match="circuit breaker"):
+        execute_suggestion_in_zerodha(db_conn, "SUG-1")
+    rollback.assert_called_once()
+
+
+def test_close_trade_blocks_pending_exit_orders(db_conn, mocker):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("database.models.TradeRepo.get", return_value={
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+    })
+    mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[{
+        "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
+    }])
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.pending_for_trade",
+        return_value=[{"status": "OPEN"}],
+    )
+    with pytest.raises(ZerodhaExecutionError, match="already in flight"):
+        close_trade_in_zerodha(db_conn, "TRD-1")
+
+
+def test_close_trade_rolls_back_when_second_leg_fails(db_conn, mocker, mock_instrument):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    legs = [
+        {
+            "leg_order": 1, "executed": True, "exit_price": None, "action": "SELL",
+            "option_type": "CE", "symbol": "NIFTY", "expiry_date": date(2026, 5, 28),
+            "strike": 23000, "lots": 1, "lot_size": 50,
+            "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
+        },
+        {
+            "leg_order": 2, "executed": True, "exit_price": None, "action": "BUY",
+            "option_type": "PE", "symbol": "NIFTY", "expiry_date": date(2026, 5, 28),
+            "strike": 23000, "lots": 1, "lot_size": 50,
+            "suggested_price": 90, "suggested_price_low": 85, "suggested_price_high": 95,
+        },
+    ]
+    mocker.patch("database.models.TradeRepo.get", return_value={
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+    })
+    mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=legs)
+    mocker.patch("database.models.SuggestionRepo.get", return_value={"strategy": "LONG_STRADDLE"})
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_trade", return_value=[])
+    mocker.patch("lifecycle.zerodha_executor._enforce_limit_band")
+    _mock_kite_facade(mocker, mock_instrument)
+
+    calls = {"n": 0}
+
+    def _place_side_effect(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return LegFillOutcome(
+                leg_order=1, fill_price=99.0, fill_time=now_ist(),
+                kite_order_id="OID-1", broker_row_id=1,
+            )
+        raise ZerodhaExecutionError("leg 2 failed")
+
+    mocker.patch("lifecycle.zerodha_executor._place_and_monitor_leg", side_effect=_place_side_effect)
+    rollback = mocker.patch("lifecycle.zerodha_executor._rollback_close_legs")
+
+    with pytest.raises(ZerodhaExecutionError, match="leg 2 failed"):
+        close_trade_in_zerodha(db_conn, "TRD-1")
+    rollback.assert_called_once()
+
+
+def test_close_trade_happy_path(db_conn, mocker, mock_instrument):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    leg = {
+        "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
+        "option_type": "CE", "symbol": "NIFTY", "expiry_date": date(2026, 5, 28),
+        "strike": 23000, "lots": 1, "lot_size": 50,
+        "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
+    }
+    mocker.patch("database.models.TradeRepo.get", return_value={
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+    })
+    mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_trade", return_value=[])
+    _mock_kite_facade(mocker, mock_instrument)
+    mocker.patch(
+        "lifecycle.zerodha_executor._place_and_monitor_leg",
+        return_value=LegFillOutcome(
+            leg_order=1, fill_price=98.0, fill_time=now_ist(),
+            kite_order_id="OID-1", broker_row_id=1,
+        ),
+    )
+    close = mocker.patch("lifecycle.zerodha_executor.close_trade_with_fills")
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.by_trade",
+        return_value=[{"operation": "EXIT", "status": "COMPLETE"}],
+    )
+
+    out = close_trade_in_zerodha(db_conn, "TRD-1")
+    assert out.ok
+    assert out.trade_id == "TRD-1"
+    close.assert_called_once()
+
+
+def test_preview_close_execution_reports_limit_vetoes(db_conn, mocker, mock_instrument):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    leg = {
+        "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
+        "option_type": "CE", "symbol": "NIFTY", "expiry_date": date(2026, 5, 28),
+        "strike": 23000, "lots": 1, "lot_size": 50,
+        "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
+    }
+    mocker.patch("database.models.TradeRepo.get", return_value={
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+    })
+    mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
+    _mock_kite_facade(mocker, mock_instrument)
+    mocker.patch(
+        "lifecycle.zerodha_executor._resolve_limit_price",
+        return_value=200.0,
+    )
+
+    preview = preview_close_execution(db_conn, "TRD-1")
+    assert preview.operation == "EXIT"
+    assert preview.all_limits_in_band is False
+    assert preview.limit_vetoes
