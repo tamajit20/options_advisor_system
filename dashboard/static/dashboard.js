@@ -109,6 +109,10 @@ function _zerodhaExecuteReady(requireLiveGate) {
   return _zerodhaExecutionReady && !requireLiveGate;
 }
 
+function _zerodhaBtnTitle(fallback, requireLiveGate) {
+  return escapeHtml(_zerodhaExecuteDisabledReason(requireLiveGate) || fallback);
+}
+
 function _collectZerodhaLegLimits(root, inputSelector) {
   const out = [];
   $$(inputSelector, root).forEach(inp => {
@@ -4493,6 +4497,8 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
   const canExecute = !readOnly && suggestionCanExecute(s);
   const canExecuteAtSuggested = !readOnly && suggestionCanExecuteAtSuggested(s);
   const showExecActions = canExecute || canExecuteAtSuggested;
+  const zExecDisabledAttr = (canExecute && _zerodhaExecuteReady(true)) ? '' : ' disabled';
+  const zExecTitle = _zerodhaBtnTitle('Place entry orders in Zerodha (monitored until filled)', !canExecute);
   const gateLabel = s.execution_gate?.label
     || (s.is_stale ? 'Stale' : null)
     || (sugStatus === 'IGNORED' ? 'Retired' : null);
@@ -4610,7 +4616,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     <div class="exec-action-bar">
       <button type="button" class="btn btn-ghost btn-mark-exec" data-at-suggested="1">Mark Executed at suggested prices</button>
       <div class="zerodha-exec-cluster">
-        <button type="button" class="btn btn-accent btn-zerodha-exec"${canExecute && _zerodhaExecuteReady(true) ? '' : ' disabled'} title="${escapeHtml(_zerodhaExecuteDisabledReason(!canExecute) || 'Place entry orders in Zerodha (monitored until filled)')}">Execute in Zerodha</button>
+        <button type="button" class="btn btn-accent btn-zerodha-exec"${zExecDisabledAttr} title="${zExecTitle}">Execute in Zerodha</button>
         <div class="zerodha-limit-row muted" style="font-size:.78rem;margin-top:6px">Optional limit prices (blank = live auto):</div>
         <div class="zerodha-limit-grid">
           ${(s.legs || []).map(l => `
@@ -5352,6 +5358,11 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     }).join('');
 
     const closePremium = tradePremiumFromLegs(data.legs);
+    const zCloseDisabledAttr = _zerodhaExecuteReady(false) ? '' : ' disabled';
+    const zCloseTitle = _zerodhaBtnTitle(
+      'Place closing LIMIT orders in Zerodha. Leave fill fields blank for auto limits.',
+      false,
+    );
 
     content.innerHTML = `
         <div class="close-two-col">
@@ -5381,7 +5392,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
             </div>
             <div class="btn-row" style="margin-top:8px">
               <button class="btn btn-danger btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm &amp; record fills</button>
-              <button class="btn btn-accent btn-zerodha-close" data-trade-id="${escapeHtml(tradeId)}"${_zerodhaExecuteReady(false) ? '' : ' disabled'} title="${escapeHtml(_zerodhaExecuteDisabledReason(false) || 'Place closing LIMIT orders in Zerodha; use fill fields for optional limits')}">Close in Zerodha</button>
+              <button class="btn btn-accent btn-zerodha-close" data-trade-id="${escapeHtml(tradeId)}"${zCloseDisabledAttr} title="${zCloseTitle}">Close in Zerodha</button>
             </div>
             <p class="muted" style="font-size:.78rem;margin-top:6px">Close in Zerodha: leave fill prices blank for live auto limits, or enter your LIMIT per leg.</p>
           </div>
