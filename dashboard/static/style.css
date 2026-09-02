@@ -665,6 +665,84 @@ table.dt {
 .btn-confirm-pending:hover { background: #b45309 !important; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
+.exec-actions-panel {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 12px 16px;
+  margin-top: 12px;
+  align-items: start;
+}
+.exec-path {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 10px;
+  background: rgba(255,255,255,.03);
+  min-width: 0;
+}
+.exec-path-broker {
+  border-color: rgba(245, 158, 11, .35);
+  background: rgba(245, 158, 11, .06);
+}
+.exec-path-manual {
+  border-color: rgba(255,255,255,.14);
+}
+.exec-path-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.exec-path-title {
+  font-size: .88rem;
+}
+.exec-path-hint {
+  font-size: .74rem;
+  line-height: 1.35;
+}
+.exec-path-or {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  color: var(--text-dim);
+  font-size: .78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.exec-path-or span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: var(--surface-alt);
+}
+.zerodha-limit-row {
+  font-size: .74rem;
+}
+.zerodha-limit-grid,
+.exec-fill-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.exec-manual-fills {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+.exec-manual-fills-label {
+  font-size: .74rem;
+}
+.exec-actions-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
 .exec-action-bar {
   display: flex;
   flex-wrap: wrap;
@@ -693,6 +771,14 @@ table.dt {
   width: 88px;
   min-height: 36px;
   padding: 4px 8px;
+}
+@media (max-width: 820px) {
+  .exec-actions-panel {
+    grid-template-columns: 1fr;
+  }
+  .exec-path-or {
+    padding: 2px 0;
+  }
 }
 
 /* ---------- Supplement panel (Complete Trade) ---------- */

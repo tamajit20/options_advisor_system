@@ -35,6 +35,7 @@ from engine.zerodha_price_guard import (
 from lifecycle.leg_execution_order import leg_execution_order, legs_in_execution_order
 from lifecycle.trade_executor import close_trade_with_fills, mark_executed
 from providers.zerodha.execution_facade import KiteExecutionFacade
+from providers.zerodha.facade import KiteFacade
 from providers.zerodha.instruments import Instrument, InstrumentMaster
 from providers.zerodha.session import is_token_valid, load_session
 from utils import now_ist
@@ -116,11 +117,15 @@ def _build_client() -> Tuple[KiteExecutionFacade, InstrumentMaster]:
         raise ZerodhaExecutionError(
             "Zerodha session missing or expired — log in on the dashboard first"
         )
+    read = KiteFacade(
+        api_key=ZERODHA_API_CONFIG["api_key"],
+        access_token=session.access_token,
+    )
     facade = KiteExecutionFacade(
         api_key=ZERODHA_API_CONFIG["api_key"],
         access_token=session.access_token,
     )
-    master = InstrumentMaster(loader=lambda: facade.instruments("NFO"))
+    master = InstrumentMaster(loader=lambda: read.instruments("NFO"))
     master.refresh_if_stale()
     return facade, master
 

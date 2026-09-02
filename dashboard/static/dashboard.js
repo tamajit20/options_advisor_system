@@ -770,6 +770,37 @@ function premiumFromSuggestion(s) {
   return null;
 }
 
+/** Upfront capital or broker margin needed to open the suggested position. */
+function suggestionCapitalRequired(s, econ, baseQty, baseWidthTotal) {
+  const strategy = s.strategy || '';
+  const debit = isDebitStrategy(strategy) || (econ.np != null && parseFloat(econ.np) < 0);
+  const premium = premiumFromSuggestion(s);
+  if (debit) {
+    const rs = premium?.rs
+      ?? (econ.ml != null ? parseFloat(econ.ml) : null)
+      ?? (econ.np != null ? Math.abs(parseFloat(econ.np) * baseQty) : null);
+    return {
+      label: 'Capital required',
+      key: 'capital_required',
+      rs,
+      hint: 'Premium paid upfront to open the position',
+    };
+  }
+  const rs = econ.ml != null ? parseFloat(econ.ml) : null;
+  const grossWidth = baseWidthTotal > 0 ? baseWidthTotal : null;
+  const creditRs = premium?.kind === 'received' ? premium.rs : null;
+  let hint = 'Approximate broker margin blocked for this defined-risk spread';
+  if (grossWidth != null && creditRs != null) {
+    hint = `Spread width ₹${fmt(grossWidth)} − credit ₹${fmt(creditRs)} (blocked by broker)`;
+  }
+  return {
+    label: 'Margin required',
+    key: 'margin_required',
+    rs,
+    hint,
+  };
+}
+
 function _premiumLabel(kind, aggregate = false) {
   if (aggregate) return 'premium deployed';
   return kind === 'received' ? 'premium received' : 'premium paid';
@@ -908,6 +939,14 @@ const TERM_HELP = {
   max_loss: {
     label: 'Max loss',
     html: '<strong>Max loss</strong> — Worst case if the trade fully fails (defined-risk spreads) or premium paid (long options). Your risk cap for sizing.',
+  },
+  margin_required: {
+    label: 'Margin required',
+    html: '<strong>Margin required</strong> — Approximate funds your broker blocks to sell this defined-risk spread (spread width minus net credit received). Not an extra cash outlay on top of max loss.',
+  },
+  capital_required: {
+    label: 'Capital required',
+    html: '<strong>Capital required</strong> — Total premium you pay upfront to buy the options (debit strategies). Same as your maximum loss at entry.',
   },
   est_net_max_profit: {
     label: 'Est. net at max profit',
@@ -4451,6 +4490,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
   }
   const baseTotalCredit = (econ.np || 0) * baseQty;
   const sugPremium = premiumFromCreditTotal(baseTotalCredit);
+  const capitalReq = suggestionCapitalRequired(s, econ, baseQty, baseWidthTotal);
   const sugStrategy = s.strategy || '';
   const sugDte = s.dte != null ? parseInt(s.dte, 10) : null;
   const legsHtml = (s.legs || []).map(l => {
@@ -4528,6 +4568,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     <div class="collapsible-preview">
       <span>PoP <strong>${fmtPct(econ.pop)}</strong></span>
       <span>Credit <strong>₹${fmt(econ.np)}</strong>/u</span>
+      ${capitalReq.rs != null ? `<span>${capitalReq.key === 'capital_required' ? 'Capital' : 'Margin'} <strong>₹${fmt(capitalReq.rs)}</strong></span>` : ''}
       <span>Max loss <strong>₹${fmt(econ.ml)}</strong></span>
       ${s.dte != null ? `<span>DTE <strong>${s.dte}</strong></span>` : ''}
     </div>`;
@@ -4544,6 +4585,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       ${s.expiry_date ? `<div>${kvLabel('Options expiry', 'dte')}<br><span class="v">${fmtDate(s.expiry_date)}${s.dte != null ? ` <span class="muted">(${s.dte} DTE)</span>` : ''}</span></div>` : (s.dte != null ? `<div>${kvLabel('DTE', 'dte')}<br><span class="v">${s.dte}</span></div>` : '')}
       <div>${kvLabel('Net credit (per unit)', 'credit_per_unit')}<br><span class="v econ-np">₹${fmt(econ.np)}</span></div>
       <div>${kvLabel('Total credit')}<br><span class="v econ-tot-credit">₹${fmt(baseTotalCredit)}<span class="econ-qty-hint muted" style="font-size:.75rem"> (×${baseQty})</span></span></div>
+      ${capitalReq.rs != null ? `<div>${kvLabel(capitalReq.label, capitalReq.key)}<br><span class="v econ-cap-req">₹${fmt(capitalReq.rs)}</span>${capitalReq.hint ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">${escapeHtml(capitalReq.hint)}</span>` : ''}</div>` : ''}
       <div>${kvLabel('Max profit', 'max_profit')}<br><span class="v econ-mp">₹${fmt(econ.mp)}</span></div>
       <div>${kvLabel('Max loss', 'max_loss')}<br><span class="v econ-ml">₹${fmt(econ.ml)}<span class="econ-ml-hint">${pctHint(econ.ml, econ.np, 'credit')}</span></span></div>
       <div>${kvLabel('PoP', 'pop')}<br><span class="v">${fmtPct(econ.pop)}</span></div>
@@ -4613,11 +4655,14 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
         </div>`}
       </div>
     </div>` : ''}
-    <div class="exec-action-bar">
-      <button type="button" class="btn btn-ghost btn-mark-exec" data-at-suggested="1">Mark Executed at suggested prices</button>
-      <div class="zerodha-exec-cluster">
-        <button type="button" class="btn btn-accent btn-zerodha-exec"${zExecDisabledAttr} title="${zExecTitle}">Execute in Zerodha</button>
-        <div class="zerodha-limit-row muted" style="font-size:.78rem;margin-top:6px">Optional limit prices (blank = live auto):</div>
+    <div class="exec-actions-panel">
+      <div class="exec-path exec-path-broker">
+        <div class="exec-path-head">
+          <strong class="exec-path-title">Via Zerodha</strong>
+          <span class="muted exec-path-hint">Places LIMIT orders in your broker — records the trade when filled</span>
+        </div>
+        <button type="button" class="btn btn-accent btn-zerodha-exec"${zExecDisabledAttr} title="${zExecTitle}">Place orders in Zerodha</button>
+        <div class="zerodha-limit-row muted">Optional limit prices (blank = live auto):</div>
         <div class="zerodha-limit-grid">
           ${(s.legs || []).map(l => `
             <label class="exec-fill-leg zerodha-limit-leg">
@@ -4629,24 +4674,32 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
             </label>`).join('')}
         </div>
       </div>
-      <div class="exec-fill-cluster">
-        ${(s.legs || []).map(l => `
-          <label class="exec-fill-leg">
-            <span>${escapeHtml(l.action)} ${l.strike} ${escapeHtml(l.option_type)}</span>
-            <input type="number" step="0.05" min="0.05" class="exec-fill-price"
-                   data-leg-order="${l.leg_order}"
-                   value="${l.suggested_price}"
-                   title="Your fill for this leg">
-          </label>`).join('')}
-        <button type="button" class="btn btn-accent btn-exec-manual"${canExecuteAtSuggested ? ' data-skip-gate="1"' : ''}>Execute</button>
+      <div class="exec-path-or" aria-hidden="true"><span>or</span></div>
+      <div class="exec-path exec-path-manual">
+        <div class="exec-path-head">
+          <strong class="exec-path-title">Record manually</strong>
+          <span class="muted exec-path-hint">No broker orders — you already traded elsewhere</span>
+        </div>
+        <button type="button" class="btn btn-ghost btn-mark-exec" data-at-suggested="1">Record at suggested prices</button>
+        <div class="exec-manual-fills">
+          <span class="exec-manual-fills-label muted">Or enter your actual fill prices:</span>
+          <div class="exec-fill-grid">
+            ${(s.legs || []).map(l => `
+              <label class="exec-fill-leg">
+                <span>${escapeHtml(l.action)} ${l.strike} ${escapeHtml(l.option_type)}</span>
+                <input type="number" step="0.05" min="0.05" class="exec-fill-price"
+                       data-leg-order="${l.leg_order}"
+                       value="${l.suggested_price}"
+                       title="Your fill for this leg">
+              </label>`).join('')}
+          </div>
+          <button type="button" class="btn btn-accent btn-exec-manual"${canExecuteAtSuggested ? ' data-skip-gate="1"' : ''}>Record my fills</button>
+        </div>
       </div>
-      <button type="button" class="btn btn-ghost btn-ignore">Ignore</button>
-    </div>
-    <p class="muted exec-suggested-note" style="margin-top:8px;font-size:.82rem">
-      <strong>Execute in Zerodha</strong> places LIMIT orders (optional limits above; blank uses live price).
-      <strong>Mark Executed at suggested prices</strong> records today’s trade at the suggested ₹ shown on each leg.
-      Enter your actual fills and click <strong>Execute</strong> to use those prices instead.
-    </p>` : '')}`;
+      <div class="exec-actions-footer">
+        <button type="button" class="btn btn-ghost btn-ignore">Ignore suggestion</button>
+      </div>
+    </div>` : '')}`;
 
   if (readOnly) {
     const detailsCls = inlineHeader
@@ -4781,7 +4834,15 @@ function bindSuggestionActions() {
       setText('.econ-np',         `₹${fmt(liveCreditPerUnit)}`);
       setText('.econ-tot-credit', `₹${fmt(liveTotalCredit)}`);
       setText('.econ-mp',         `₹${fmt(liveMp)}`);
-      if (isCreditStrat) setText('.econ-ml', `₹${fmt(liveMl)}`);
+      if (isCreditStrat) {
+        setText('.econ-ml', `₹${fmt(liveMl)}`);
+        setText('.econ-cap-req', `₹${fmt(liveMl)}`);
+      } else {
+        const strategy = card.dataset.strategy || '';
+        if (isDebitStrategy(strategy) && liveTotalCredit < 0) {
+          setText('.econ-cap-req', `₹${fmt(Math.abs(liveTotalCredit))}`);
+        }
+      }
       setText('.econ-chg',        `₹${fmt(liveChg)}`);
       const npnlEl = card.querySelector('.econ-npnl');
       if (npnlEl) {
@@ -4868,7 +4929,7 @@ function bindSuggestionActions() {
       cancelBtn.textContent = 'Cancel';
       cancelBtn.addEventListener('click', () => {
         btn.dataset.confirmed = '';
-        btn.textContent = 'Mark Executed at suggested prices';
+        btn.textContent = 'Record at suggested prices';
         btn.classList.remove('btn-confirm-pending');
         cancelBtn.remove();
       });
@@ -4876,7 +4937,7 @@ function bindSuggestionActions() {
       return;
     }
     btn.dataset.confirmed = '';
-    btn.textContent = 'Mark Executed at suggested prices';
+    btn.textContent = 'Record at suggested prices';
     btn.classList.remove('btn-confirm-pending');
     btn.nextElementSibling?.classList.contains('btn-confirm-cancel') && btn.nextElementSibling.remove();
 
@@ -4950,7 +5011,7 @@ function bindSuggestionActions() {
     const fillInputs = $$('.exec-fill-price', card);
     const prices = fillInputs.map(inp => parseFloat(inp.value));
     if (prices.some(p => !p || isNaN(p) || p <= 0)) {
-      toast('Enter a fill price for every leg before Execute.', 'err');
+      toast('Enter a fill price for every leg before recording.', 'err');
       fillInputs.find(inp => {
         const p = parseFloat(inp.value);
         return !p || isNaN(p) || p <= 0;
@@ -4985,14 +5046,14 @@ function bindSuggestionActions() {
 
     if (!btn.dataset.confirmed) {
       btn.dataset.confirmed = '1';
-      btn.textContent = `Confirm Execute · ${numLots} lot${numLots !== 1 ? 's' : ''}?`;
+      btn.textContent = `Confirm record · ${numLots} lot${numLots !== 1 ? 's' : ''}?`;
       btn.classList.add('btn-confirm-pending');
       const cancelBtn = document.createElement('button');
       cancelBtn.className = 'btn btn-ghost btn-confirm-cancel';
       cancelBtn.textContent = 'Cancel';
       cancelBtn.addEventListener('click', () => {
         btn.dataset.confirmed = '';
-        btn.textContent = 'Execute';
+        btn.textContent = 'Record my fills';
         btn.classList.remove('btn-confirm-pending');
         cancelBtn.remove();
       });
@@ -5000,7 +5061,7 @@ function bindSuggestionActions() {
       return;
     }
     btn.dataset.confirmed = '';
-    btn.textContent = 'Execute';
+    btn.textContent = 'Record my fills';
     btn.classList.remove('btn-confirm-pending');
     btn.nextElementSibling?.classList.contains('btn-confirm-cancel') && btn.nextElementSibling.remove();
 
