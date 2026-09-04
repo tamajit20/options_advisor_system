@@ -1080,4 +1080,7 @@ def list_tables() -> List[str]:
         "options_trade_mtm_snapshot",
         "options_trade_mtm_snapshot_history",
         "options_trade_level_events",
+        "options_chain_5min",
+        "options_atm_iv_5min",
+        "options_em_calibration",
     ]

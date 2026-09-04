@@ -43,6 +43,14 @@ Dashboard: http://localhost:5001
 
 See **[deploy/azure/OPERATIONS.md](deploy/azure/OPERATIONS.md)** — first install, database update, code-only deploy.
 
+## Fresh laptop + fresh VM (Cursor / AI setup)
+
+Open this folder in Cursor Agent mode and say:
+
+> **Follow readmefirst.txt and bootstrap everything.**
+
+See **`readmefirst.txt`** at repo root — single entry point for humans and AI.
+
 ## Folder Structure
 
 See [ARCHITECTURE.txt](ARCHITECTURE.txt) for module dependency rules.

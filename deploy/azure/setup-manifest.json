@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "id": "laptop_tools",
+      "title": "Laptop prerequisites",
+      "items": [
+        {"id": "python", "label": "Python 3", "critical": true, "check": "command", "command": "python --version"},
+        {"id": "sqlcmd", "label": "sqlcmd (SSMS tools)", "critical": true, "check": "command", "command": "sqlcmd -?" },
+        {"id": "ssh", "label": "OpenSSH client", "critical": true, "check": "command", "command": "ssh -V"},
+        {"id": "git", "label": "Git", "critical": false, "check": "command", "command": "git --version"},
+        {"id": "az", "label": "Azure CLI", "critical": false, "check": "command", "command": "az version"}
+      ]
+    },
+    {
+      "id": "laptop_config",
+      "title": "Laptop configuration",
+      "items": [
+        {"id": "laptop_config_file", "label": "deploy/azure/laptop.config.ps1", "critical": true, "check": "file", "path": "deploy/azure/laptop.config.ps1"},
+        {"id": "ssh_key", "label": "SSH private key file", "critical": true, "check": "config_path", "config_key": "SshKeyPath"},
+        {"id": "vm_host", "label": "VmHost configured", "critical": true, "check": "config_value", "config_key": "VmHost", "not": "YOUR_VM_PUBLIC_IP"},
+        {"id": "local_sql", "label": "Local SQL Express reachable", "critical": true, "check": "sql_server"},
+        {"id": "backup_dir", "label": "Local backup folder", "critical": false, "check": "config_dir", "config_key": "LocalBackupDir"},
+        {"id": "archive_dir", "label": "Local archive folder", "critical": false, "check": "config_dir", "config_key": "LocalArchiveDir"}
+      ]
+    },
+    {
+      "id": "laptop_automation",
+      "title": "Laptop automation",
+      "items": [
+        {"id": "archive_task", "label": "Scheduled task OptionsAdvisor-ArchiveMerge", "critical": true, "check": "scheduled_task", "task_name": "OptionsAdvisor-ArchiveMerge"}
+      ]
+    },
+    {
+      "id": "vm_connectivity",
+      "title": "VM connectivity",
+      "items": [
+        {"id": "vm_ssh", "label": "SSH to VM", "critical": true, "check": "vm_ssh"},
+        {"id": "vm_dashboard", "label": "Dashboard HTTP :5001", "critical": true, "check": "vm_http", "port": 5001},
+        {"id": "vm_compose", "label": "Docker stack running on VM", "critical": true, "check": "vm_compose"}
+      ]
+    },
+    {
+      "id": "vm_automation",
+      "title": "VM automation (Azure)",
+      "items": [
+        {"id": "vm_uptime_schedules", "label": "VM start/stop schedules", "critical": false, "check": "azure_uptime"},
+        {"id": "vm_archive_scripts", "label": "Archive export scripts on VM", "critical": false, "check": "vm_file", "remote_path": "deploy/archive-export.sh"}
+      ]
+    }
+  ]
+}

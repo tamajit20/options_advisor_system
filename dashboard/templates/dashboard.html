@@ -70,10 +70,7 @@
           <span class="nav-icon">📜</span><span class="nav-label">History</span>
         </button>
         <button class="nav-item" data-tab="logs">
-          <span class="nav-icon">🪵</span><span class="nav-label">System logs</span>
-        </button>
-        <button class="nav-item" data-tab="zerodha-logs">
-          <span class="nav-icon">📋</span><span class="nav-label">Zerodha logs</span>
+          <span class="nav-icon">🪵</span><span class="nav-label">Logs</span>
         </button>
         <button class="nav-item" data-tab="jobs">
           <span class="nav-icon">🔧</span><span class="nav-label">Jobs</span>
@@ -232,29 +229,37 @@
     </article>
 
     <article class="panel" id="panel-logs" aria-hidden="true">
-      <h2 class="panel-title">System logs</h2>
-      <div class="filter-row">
-        <select id="log-level">
-          <option value="">All levels</option>
-          <option>DEBUG</option><option>INFO</option><option>WARNING</option>
-          <option>ERROR</option><option>CRITICAL</option>
-        </select>
-        <input id="log-search" type="search" placeholder="Search…" />
-        <button id="log-refresh" class="btn">Refresh</button>
-      </div>
-      <div id="jobs-strip" class="jobs-strip" style="display:none"></div>
-      <div id="logs-container" class="loading">Loading…</div>
-    </article>
+      <h2 class="panel-title">Logs</h2>
 
-    <article class="panel" id="panel-zerodha-logs" aria-hidden="true">
-      <h2 class="panel-title">Zerodha execution log</h2>
-      <p class="muted" style="margin:0 0 .75rem;font-size:.82rem">Broker order audit — entry, exit, and rollback rows grouped by trade or suggestion.</p>
-      <div class="filter-row">
-        <input id="zerodha-log-trade" type="search" placeholder="Filter by trade ID…" />
-        <button id="zerodha-log-refresh" class="btn">Refresh</button>
-        <span id="zerodha-log-retention" class="muted" style="font-size:.78rem;margin-left:auto"></span>
+      <div class="hist-subtabs log-subtabs">
+        <button type="button" class="hist-subtab active" data-ltab="system">System</button>
+        <button type="button" class="hist-subtab" data-ltab="zerodha">Zerodha</button>
       </div>
-      <div id="zerodha-logs-container" class="loading">Loading…</div>
+
+      <div id="log-pane-system">
+        <div class="filter-row">
+          <select id="log-level">
+            <option value="">All levels</option>
+            <option>DEBUG</option><option>INFO</option><option>WARNING</option>
+            <option>ERROR</option><option>CRITICAL</option>
+          </select>
+          <input id="log-search" type="search" placeholder="Search…" />
+          <button id="log-refresh" class="btn">Refresh</button>
+          <span id="system-log-retention" class="muted" style="font-size:.78rem;margin-left:auto"></span>
+        </div>
+        <div id="jobs-strip" class="jobs-strip" style="display:none"></div>
+        <div id="logs-container" class="loading">Loading…</div>
+      </div>
+
+      <div id="log-pane-zerodha" hidden>
+        <p class="muted" style="margin:0 0 .75rem;font-size:.82rem">Broker order audit — entry, exit, and rollback rows grouped by trade or suggestion.</p>
+        <div class="filter-row">
+          <input id="zerodha-log-trade" type="search" placeholder="Filter by trade ID…" />
+          <button id="zerodha-log-refresh" class="btn">Refresh</button>
+          <span id="zerodha-log-retention" class="muted" style="font-size:.78rem;margin-left:auto"></span>
+        </div>
+        <div id="zerodha-logs-container" class="loading">Loading…</div>
+      </div>
     </article>
 
     <article class="panel" id="panel-jobs" aria-hidden="true">
@@ -437,8 +442,7 @@
     <div class="more-drawer-section">
       <p class="more-drawer-section-label">Options Advisor — tools</p>
       <div class="more-drawer-grid">
-        <button type="button" class="more-drawer-item" data-tab="logs"><span class="more-drawer-icon">🪵</span>System logs</button>
-        <button type="button" class="more-drawer-item" data-tab="zerodha-logs"><span class="more-drawer-icon">📋</span>Zerodha logs</button>
+        <button type="button" class="more-drawer-item" data-tab="logs"><span class="more-drawer-icon">🪵</span>Logs</button>
         <button type="button" class="more-drawer-item" data-tab="jobs"><span class="more-drawer-icon">🔧</span>Jobs</button>
         <button type="button" class="more-drawer-item" data-tab="wsmon"><span class="more-drawer-icon">📡</span>WS Monitor</button>
       </div>

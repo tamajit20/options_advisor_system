@@ -67,7 +67,7 @@ else
 fi
 
 cd "${INSTALL_DIR}"
-chmod +x deploy/*.sh 2>/dev/null || true
+chmod +x deploy/*.sh deploy/azure/open-port-5001.sh 2>/dev/null || true
 
 # Persist bundled SQL profile for all future docker compose commands.
 if ! grep -q 'COMPOSE_PROFILES=bundled' "$HOME/.bashrc" 2>/dev/null; then
@@ -129,9 +129,13 @@ echo ""
 echo " Backup database to laptop:"
 echo "   .\\deploy\\azure\\backup-database-to-laptop.ps1"
 echo ""
- echo " Each trading morning on the VM:"
- echo "   docker compose exec options_advisor python main.py --zerodha-login"
- echo ""
- echo " Routine code deploy (schema auto on restart):"
+echo " Each trading morning on the VM:"
+echo "   docker compose exec options_advisor python main.py --zerodha-login"
+echo ""
+echo " New laptop setup (Windows):"
+echo "   .\\deploy\\azure\\setup-new-environment.ps1"
+echo "   .\\deploy\\azure\\Test-EnvironmentSetup.ps1"
+echo ""
+echo " Routine code deploy (schema auto on restart):"
  echo "   ./deploy/update.sh"
  echo "================================================================="

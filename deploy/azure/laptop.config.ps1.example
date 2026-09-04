@@ -20,6 +20,8 @@ $script:SshKeyPath    = "D:\Share\StockAnalyzer\OptionsAdvisor_key.pem"
 
 # Local folder for SQL Server .bak files ONLY (not app code/logs)
 $script:LocalBackupDir = "D:\Backups\OptionsAdvisorDB"
+$script:LocalArchiveDir = "D:\Backups\OptionsAdvisorDB\archive"
+$script:LocalArchiveDb  = "OptionsAdvisorDB_Archive"
 
 # Local SQL Server (used when restore script creates a .bak for you)
 $script:LocalSqlServer = "TAMAJITLAPTOP\SQLEXPRESS"

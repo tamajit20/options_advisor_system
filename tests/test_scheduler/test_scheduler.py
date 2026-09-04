@@ -138,7 +138,7 @@ class TestJobFuncsRegistry:
         expected = {
             "fo_bhav_download", "spot_bhav_download", "vix_download", "fii_download",
             "iv_calculation", "suggestion_engine", "simulation_update", "exit_engine",
-            "events_seed", "weekly_cleanup", "eod_nightly_pipeline",
+            "events_seed", "weekly_archive", "weekly_log_cleanup", "eod_nightly_pipeline",
             "morning_eod_catchup",
         }
         assert expected.issubset(set(sched.JOB_FUNCS.keys()))

@@ -147,9 +147,14 @@ SCHEDULER_CONFIG = {
         "intraday_validator": {
             "day_of_week": "mon-fri", "hour": 9, "minute": 35, "enabled": True,
         },
-        # Fri 09:30 IST: retention trim in the morning (after morning_eod_catchup)
-        # so the VM can stop at 15:45 with Mon-Thu — no extra Fri evening window.
-        "weekly_cleanup":     {"day_of_week": "fri", "hour": 9, "minute": 30, "enabled": True},
+        # Fri 09:30 IST: move aged rows → *_Archive (VM stays lean; laptop keeps history).
+        "weekly_archive":     {"day_of_week": "fri", "hour": 9, "minute": 30, "enabled": True},
+        # Fri 09:35 IST: delete log tables only.
+        "weekly_log_cleanup": {"day_of_week": "fri", "hour": 9, "minute": 35, "enabled": True},
+        # Fri 15:36 IST: .bak of pending *_Archive before VM stops @ 15:45 (Mon–Fri uptime).
+        "archive_export":     {"day_of_week": "fri", "hour": 15, "minute": 36, "enabled": True},
+        # Legacy name — disabled; use weekly_log_cleanup + weekly_archive.
+        "weekly_cleanup":     {"day_of_week": "fri", "hour": 9, "minute": 30, "enabled": False},
         # Events calendar sync — Mon market window (VM on from 08:55)
         "events_seed":        {"day_of_week": "mon", "hour": 9,  "minute":  0, "enabled": True},
         # WS-down fallback: poll chain for SL when live ticks are stale (scheduler only).
@@ -162,9 +167,9 @@ SCHEDULER_CONFIG = {
             "enabled": True,
             "interval_minutes": 5,
         },
-        # Automated DB backup — Sat morning after VM starts.
+        # Hot DB backup — Fri before VM stop (Sat job removed: VM off on weekends).
         "db_backup": {
-            "day_of_week": "sat", "hour": 8, "minute": 0, "enabled": True,
+            "day_of_week": "fri", "hour": 15, "minute": 38, "enabled": True,
         },
     },
     # Each job also gets a max wallclock budget (seconds) — enforced by
@@ -186,6 +191,9 @@ SCHEDULER_CONFIG = {
         "events_seed":        300,
         "event_eve_review":   180,
         "weekly_cleanup":     1800,
+        "weekly_archive":     3600,
+        "weekly_log_cleanup": 600,
+        "archive_export":     900,
         "intraday_close_snapshot": 300,
         "drift_verifier":          120,
         "intraday_validator":      180,
@@ -1114,7 +1122,7 @@ RETENTION_CONFIG = {
     "suggestions_keep_days":      1825,  # 5 years (audit)
     "trades_keep_days":           1825,
     "simulations_keep_days":      730,
-    "system_logs_keep_days":      90,
+    "system_logs_keep_days":      7,     # weekly cleanup (Fri job)
     "job_log_keep_days":          90,
     "notifications_keep_days":    180,
     # 5-min chain trajectory tables (Zerodha WS aggregator).
@@ -1125,8 +1133,19 @@ RETENTION_CONFIG = {
     "atm_iv_5min_keep_days":      180,
     # Hourly trade MTM snapshots (hot table); history kept with trades audit.
     "trade_mtm_snapshot_history_keep_days": 1825,
-    # Zerodha broker order audit (`options_broker_orders`) — ~30 days default.
-    "broker_orders_keep_days": _env_int("OPT_BROKER_ORDERS_KEEP_DAYS", 30),
+    # Zerodha broker order audit (`options_broker_orders`) — 3 months default.
+    "broker_orders_keep_days": _env_int("OPT_BROKER_ORDERS_KEEP_DAYS", 90),
+}
+
+
+# ---------------------------------------------------------------------------
+# Archive export (VM → laptop merge pipeline)
+# ---------------------------------------------------------------------------
+ARCHIVE_EXPORT_CONFIG = {
+    "enabled": True,
+    "export_db_name": _env("OPT_ARCHIVE_EXPORT_DB_NAME", "OptionsAdvisorDB_ArchiveExport"),
+    "export_timeout_seconds": 900,
+    "pending_manifest": "backups/archive/PENDING.json",
 }
 
 
@@ -1213,6 +1232,7 @@ SIMULATION_CONFIG_DEFAULTS = copy.deepcopy(SIMULATION_CONFIG)
 DASHBOARD_CONFIG_DEFAULTS = copy.deepcopy(DASHBOARD_CONFIG)
 ALERTS_CONFIG_DEFAULTS = copy.deepcopy(ALERTS_CONFIG)
 RETENTION_CONFIG_DEFAULTS = copy.deepcopy(RETENTION_CONFIG)
+ARCHIVE_EXPORT_CONFIG_DEFAULTS = copy.deepcopy(ARCHIVE_EXPORT_CONFIG)
 LOGGING_CONFIG_DEFAULTS = copy.deepcopy(LOGGING_CONFIG)
 EVENTS_CONFIG_DEFAULTS = copy.deepcopy(EVENTS_CONFIG)
 PROVIDERS_CONFIG_DEFAULTS = copy.deepcopy(PROVIDERS_CONFIG)

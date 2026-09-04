@@ -1489,10 +1489,10 @@ const toast = (msg, kind='info') => {
 window.toast = toast;
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'zerodha-logs', 'jobs', 'wsmon', 'notifications', 'config'];
+const TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
 window.TABS = TABS;
-const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'zerodha-logs', 'jobs', 'wsmon', 'config'];
-const SYSTEM_TABS = ['logs', 'zerodha-logs', 'jobs', 'wsmon'];
+const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'config'];
+const SYSTEM_TABS = ['logs', 'jobs', 'wsmon'];
 const TAB_LOADERS = {};
 const TAB_LEAVE = {};
 
@@ -1546,8 +1546,7 @@ function switchTab(name) {
     if (typeof window.renderLearningPage === 'function') window.renderLearningPage();
   }
   if (name === 'history')       loadHistory();
-  if (name === 'logs')          loadLogs();
-  if (name === 'zerodha-logs')  loadZerodhaExecutionLogs();
+  if (name === 'logs')          loadLogsPane();
   if (name === 'jobs')          loadJobs();
   if (name === 'wsmon')         loadWsMonitor();
   if (name === 'notifications') loadNotifications();
@@ -1579,16 +1578,20 @@ $$('.nav-item, .bnav-item, .options-subtab').forEach(b => {
 // down → TDZ ReferenceError that breaks Jobs/Logs/Wsmon tabs.
 function _restoreActiveTab() {
   let initial = null;
+  let logsSubtab = null;
   const hash = (window.location.hash || '').replace(/^#/, '');
   if (hash === 'learn' || hash.startsWith('learn/')) initial = 'learn';
+  else if (hash === 'zerodha-logs') { initial = 'logs'; logsSubtab = 'zerodha'; }
   else if (hash && TABS.includes(hash)) initial = hash;
   if (!initial) {
     try {
       const saved = localStorage.getItem('activeTab');
       if (saved === 'learn' || (saved && saved.startsWith('learn/'))) initial = 'learn';
+      else if (saved === 'zerodha-logs') { initial = 'logs'; logsSubtab = 'zerodha'; }
       else if (saved && TABS.includes(saved)) initial = saved;
     } catch (_) {}
   }
+  if (logsSubtab) _logsPendingSubtab = logsSubtab;
   if (initial) switchTab(initial);
 }
 if (document.readyState === 'loading') {
@@ -7308,9 +7311,39 @@ function renderHistoryTrade(t) {
   `, { open: false, className: 'hist-card' });
 }
 
-// ---------------- Tab 4: System logs ----------------
+// ---------------- Tab 4: Logs (System + Zerodha sub-tabs) ----------------
+
+let _logsActiveSubtab = 'system';
+let _logsPendingSubtab = null;
+
+function switchLogsSubtab(name) {
+  _logsActiveSubtab = name;
+  document.querySelectorAll('.log-subtabs .hist-subtab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.ltab === name);
+  });
+  const sysPane = $('#log-pane-system');
+  const zPane = $('#log-pane-zerodha');
+  if (sysPane) sysPane.hidden = name !== 'system';
+  if (zPane) zPane.hidden = name !== 'zerodha';
+  if (name === 'system') loadLogs();
+  else loadZerodhaExecutionLogs();
+}
+
+function loadLogsPane() {
+  if (_logsPendingSubtab) {
+    switchLogsSubtab(_logsPendingSubtab);
+    _logsPendingSubtab = null;
+    return;
+  }
+  switchLogsSubtab(_logsActiveSubtab);
+}
+
+document.querySelectorAll('.log-subtabs .hist-subtab').forEach(btn => {
+  btn.addEventListener('click', () => switchLogsSubtab(btn.dataset.ltab));
+});
 
 async function loadZerodhaExecutionLogs() {
+  if (_logsActiveSubtab !== 'zerodha') return;
   const c = $('#zerodha-logs-container');
   if (!c) return;
   c.className = 'loading';
@@ -7393,6 +7426,7 @@ function _brokerStatusClass(status) {
 }
 
 async function loadLogs() {
+  if (_logsActiveSubtab !== 'system') return;
   const c = $('#logs-container');
   c.className='loading'; c.textContent='Loading…';
   const params = new URLSearchParams();
@@ -7401,14 +7435,19 @@ async function loadLogs() {
   if (lvl) params.set('level', lvl);
   if (q)   params.set('search', q);
   try {
-    const logs = await API('/api/logs?' + params);
-    if (!logs.logs.length) {
+    const data = await API('/api/logs?' + params);
+    const retEl = $('#system-log-retention');
+    if (retEl && data.retention_days != null) {
+      retEl.textContent = `Retention: ${data.retention_days} days (weekly cleanup)`;
+    }
+    const rows = data.logs || [];
+    if (!rows.length) {
       c.className=''; c.innerHTML = '<div class="empty">No logs.</div>'; return;
     }
     c.className='';
     c.innerHTML = `<table class="dt"><thead><tr>
       <th>Time</th><th>Level</th><th>Module</th><th>Message</th></tr></thead>
-      <tbody>${logs.logs.map(l => `<tr>
+      <tbody>${rows.map(l => `<tr>
         <td>${escapeHtml(l.logged_at)}</td>
         <td><span class="tag tag-${levelClass(l.level)}">${escapeHtml(l.level)}</span></td>
         <td>${escapeHtml(l.module || '')}</td>

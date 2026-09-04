@@ -1,5 +1,7 @@
 # Azure operations runbook
 
+**Greenfield setup (new laptop + new VM):** see [SETUP-CHECKLIST.md](SETUP-CHECKLIST.md) — `setup-new-environment.ps1` + `Test-EnvironmentSetup.ps1`.
+
 One place for the three things you do most often:
 
 1. **First-time install** — new VM, app, and (optionally) your laptop database  

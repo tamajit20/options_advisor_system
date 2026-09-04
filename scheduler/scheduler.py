@@ -548,8 +548,50 @@ def job_morning_eod_catchup():
     _run_job("morning_eod_catchup", _pipeline)
 
 
+def job_weekly_archive():
+    """Move aged hot rows into *_Archive tables (no deletes except logs)."""
+    from lifecycle.archive_orchestrator import run_archive
+
+    _run_job("weekly_archive", run_archive)
+
+
+def job_weekly_log_cleanup():
+    """Delete log tables only; keep MTM hot-table maintenance."""
+    from datetime import timedelta as _td
+    from config import RETENTION_CONFIG
+
+    def _cleanup(db: SQLServerConnection) -> int:
+        from database.log_repo import LogRepo, JobLogRepo
+        from database.broker_order_repo import BrokerOrderRepo
+        from database.models import TradeMtmSnapshotRepo
+        today = today_ist()
+        n = 0
+        n += LogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["system_logs_keep_days"]))
+        n += JobLogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["job_log_keep_days"]))
+        n += BrokerOrderRepo(db).delete_older_than(
+            today - _td(days=RETENTION_CONFIG["broker_orders_keep_days"]))
+        mtm_repo = TradeMtmSnapshotRepo(db)
+        n += mtm_repo.archive_non_active()
+        db.commit()
+        return n
+
+    _run_job("weekly_log_cleanup", _cleanup)
+
+
+def job_archive_export():
+    """Export pending *_Archive chunk as .bak for laptop merge."""
+    def _export(db: SQLServerConnection) -> int:
+        from lifecycle.archive_export import run_archive_export
+
+        n = run_archive_export(db)
+        db.commit()
+        return n
+
+    _run_job("archive_export", _export)
+
+
 def job_weekly_cleanup():
-    """Apply retention policy and trim historical data."""
+    """Legacy: full retention delete — disabled; use weekly_archive + weekly_log_cleanup."""
     from datetime import timedelta as _td
     from config import RETENTION_CONFIG
 
@@ -604,6 +646,9 @@ JOB_FUNCS = {
     "events_seed":        job_events_seed,
     "event_eve_review":   job_event_eve_review,
     "weekly_cleanup":     job_weekly_cleanup,
+    "weekly_archive":     job_weekly_archive,
+    "weekly_log_cleanup": job_weekly_log_cleanup,
+    "archive_export":     job_archive_export,
     "intraday_close_snapshot": job_intraday_close_snapshot,
     "drift_verifier":          job_drift_verifier,
     "intraday_validator":      job_intraday_validator,

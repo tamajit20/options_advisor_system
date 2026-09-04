@@ -698,8 +698,14 @@ _JOB_META: Dict[str, Dict[str, str]] = {
                             "description": "Sequential EOD chain (disabled — use Morning EOD Catchup @ 09:00; manual re-run only)."},
     "morning_eod_catchup": {"icon": "🌅", "name": "Morning EOD Catchup",
                             "description": "Same EOD chain at 09:00 IST when the VM boots (08:55) — backfills missed overnight runs before market open."},
-    "weekly_cleanup":     {"icon": "🧹", "name": "Weekly Cleanup",
-                            "description": "Applies retention policy and trims historical data (Fri 09:30 IST, after morning EOD catchup)."},
+    "weekly_cleanup":     {"icon": "🧹", "name": "Weekly Cleanup (legacy)",
+                            "description": "Deprecated — use Weekly Archive + Log Cleanup."},
+    "weekly_archive":     {"icon": "📦", "name": "Weekly Archive",
+                            "description": "Move aged rows to *_Archive tables (Fri 09:30)."},
+    "weekly_log_cleanup": {"icon": "🪵", "name": "Log Cleanup",
+                            "description": "Delete system/job/broker logs only (Fri 09:35)."},
+    "archive_export":     {"icon": "💾", "name": "Archive Export",
+                            "description": "Export pending *_Archive .bak before VM stop (Fri 15:36)."},
 }
 
 _DOW_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu",
@@ -2571,6 +2577,7 @@ def create_app() -> Flask:
     @app.route("/api/logs")
     @_with_db
     def api_logs(db: SQLServerConnection):
+        from config import RETENTION_CONFIG
         repo = LogRepo(db)
         level = request.args.get("level") or None
         module = request.args.get("module") or None
@@ -2582,7 +2589,10 @@ def create_app() -> Flask:
         since = (now_ist() - timedelta(hours=int(since_h))) if since_h else None
         rows = repo.fetch(level=level, module=module, job_id=job_id,
                           since=since, search=search, limit=limit, offset=offset)
-        return jsonify({"logs": [_row(r) for r in rows]})
+        return jsonify({
+            "logs": [_row(r) for r in rows],
+            "retention_days": RETENTION_CONFIG["system_logs_keep_days"],
+        })
 
     @app.route("/api/logs/level-counts")
     @_with_db

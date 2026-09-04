@@ -1,0 +1,30 @@
+---
+description: Bootstrap and setup sync — read readmefirst.txt; keep deploy scripts aligned with schema/jobs
+alwaysApply: true
+---
+
+# Options Advisor — setup & bootstrap
+
+## User says "follow readmefirst.txt" (or fresh install / new laptop / new VM)
+
+1. Read **`readmefirst.txt`** at repo root and execute **Section 3** fully.
+2. Run `python scripts/validate_setup_sync.py` and `deploy/azure/Test-EnvironmentSetup.ps1`.
+3. Do not ask the user to paste long prompts — secrets and Azure Portal values only.
+
+## When adding tables, scheduler jobs, or deploy scripts
+
+Before finishing the task, read **`deploy/azure/MAINTAIN-SETUP.md`** and update every applicable row (schema, archive registry, config, scheduler, readmefirst, setup scripts, setup-manifest).
+
+Run `python scripts/validate_setup_sync.py` and fix failures.
+
+## Canonical sources
+
+| Concern | File |
+|---------|------|
+| Bootstrap entry | `readmefirst.txt` |
+| Greenfield install | `deploy/azure/setup-new-environment.ps1` |
+| Verification | `deploy/azure/Test-EnvironmentSetup.ps1`, `scripts/validate_setup_sync.py` |
+| Archive tables | `database/archive_registry.py` |
+| Table list | `database/schema.py` → `list_tables()` |
+
+Update **`readmefirst.txt` "Last updated"** date when bootstrap or automation schedule changes.
