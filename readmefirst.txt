@@ -124,8 +124,8 @@ SECTION 5 — AUTOMATED SCHEDULE (no daily user action)
   Laptop Mon-Fri 09:15       Task OptionsAdvisor-ArchiveMerge
                                pull-archive-and-merge.ps1
 
-  Log retention (VM delete):  system_logs 7d | job_log 7d | broker_orders 90d
-  Hot retention (VM archive):  hot_archive_keep_days = 365 (all tables, one window)
+  Log retention (VM delete):  system_logs 7d | job_log 7d
+  Hot retention (VM archive):  hot_archive_keep_days = 365 (all tables incl. broker orders)
 
 
 ================================================================================
@@ -145,8 +145,7 @@ SECTION 7 — DATABASE & ARCHIVE TABLES
   Schema source:     database/schema.py  (list_tables())
   Archive registry:  database/archive_registry.py  (ARCHIVE_TABLE_SPECS)
   Archive logic:     database/archive_repo.py, lifecycle/archive_orchestrator.py
-  Log tables (delete only, no _Archive): options_system_logs, options_job_log,
-                                         options_broker_orders
+  Log tables (delete only, no _Archive): options_system_logs, options_job_log
 
   Never archive: options_config, options_runtime_flags, options_lot_sizes,
                  options_expiry_calendar, options_events_calendar,

@@ -7355,7 +7355,7 @@ async function loadZerodhaExecutionLogs() {
     const data = await API('/api/zerodha/execution-logs?' + params);
     const retEl = $('#zerodha-log-retention');
     if (retEl) {
-      retEl.textContent = `Retention: ${data.retention_days} days (weekly cleanup)`;
+      retEl.textContent = `Retention: ${data.retention_days} days (hot DB; older archived weekly)`;
     }
     const groups = data.executions || [];
     if (!groups.length) {

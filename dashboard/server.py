@@ -703,7 +703,7 @@ _JOB_META: Dict[str, Dict[str, str]] = {
     "weekly_archive":     {"icon": "📦", "name": "Weekly Archive",
                             "description": "Move aged rows to *_Archive tables (Fri 09:30)."},
     "weekly_log_cleanup": {"icon": "🪵", "name": "Log Cleanup",
-                            "description": "Delete system/job/broker logs only (Fri 09:35)."},
+                            "description": "Delete system/job logs only (Fri 09:35)."},
     "archive_export":     {"icon": "💾", "name": "Archive Export",
                             "description": "Export pending *_Archive .bak before VM stop (Fri 15:36)."},
 }
@@ -2609,7 +2609,7 @@ def create_app() -> Flask:
         from database.models import TradeRepo
         from lifecycle.zerodha_execution_log import group_broker_orders
 
-        days = int(request.args.get("days", RETENTION_CONFIG["broker_orders_keep_days"]))
+        days = int(request.args.get("days", RETENTION_CONFIG["hot_archive_keep_days"]))
         limit = min(int(request.args.get("limit", 100)), 500)
         trade_id = (request.args.get("trade_id") or "").strip() or None
         suggestion_id = (request.args.get("suggestion_id") or "").strip() or None
@@ -2634,7 +2634,7 @@ def create_app() -> Flask:
             groups = groups[:limit]
 
         return jsonify({
-            "retention_days": RETENTION_CONFIG["broker_orders_keep_days"],
+            "retention_days": RETENTION_CONFIG["hot_archive_keep_days"],
             "since": since.isoformat(),
             "executions": groups,
         })

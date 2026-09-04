@@ -1134,8 +1134,8 @@ RETENTION_CONFIG = {
     "chain_5min_keep_days":       _HOT_ARCHIVE_DAYS,
     "atm_iv_5min_keep_days":      _HOT_ARCHIVE_DAYS,
     "trade_mtm_snapshot_history_keep_days": _HOT_ARCHIVE_DAYS,
-    # Zerodha broker order audit — delete only (not archived)
-    "broker_orders_keep_days": _env_int("OPT_BROKER_ORDERS_KEEP_DAYS", 90),
+    # Zerodha broker orders — archived via hot_archive_keep_days (legacy key for API)
+    "broker_orders_keep_days":    _HOT_ARCHIVE_DAYS,
 }
 
 

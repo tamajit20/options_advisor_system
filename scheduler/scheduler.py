@@ -562,14 +562,11 @@ def job_weekly_log_cleanup():
 
     def _cleanup(db: SQLServerConnection) -> int:
         from database.log_repo import LogRepo, JobLogRepo
-        from database.broker_order_repo import BrokerOrderRepo
         from database.models import TradeMtmSnapshotRepo
         today = today_ist()
         n = 0
         n += LogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["system_logs_keep_days"]))
         n += JobLogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["job_log_keep_days"]))
-        n += BrokerOrderRepo(db).delete_older_than(
-            today - _td(days=RETENTION_CONFIG["broker_orders_keep_days"]))
         mtm_repo = TradeMtmSnapshotRepo(db)
         n += mtm_repo.archive_non_active()
         db.commit()
@@ -602,7 +599,6 @@ def job_weekly_cleanup():
             ChainTimeseriesRepo, AtmIvTimeseriesRepo, TradeMtmSnapshotRepo,
         )
         from database.log_repo import LogRepo, JobLogRepo
-        from database.broker_order_repo import BrokerOrderRepo
         today = today_ist()
         n = 0
         n += FoEodRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["fo_bhav_keep_days"]))
@@ -616,8 +612,6 @@ def job_weekly_cleanup():
         n += AtmIvTimeseriesRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["atm_iv_5min_keep_days"]))
         n += LogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["system_logs_keep_days"]))
         n += JobLogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["job_log_keep_days"]))
-        n += BrokerOrderRepo(db).delete_older_than(
-            today - _td(days=RETENTION_CONFIG["broker_orders_keep_days"]))
         mtm_repo = TradeMtmSnapshotRepo(db)
         n += mtm_repo.archive_non_active()
         n += mtm_repo.delete_history_older_than(
