@@ -1111,29 +1111,30 @@ LOGGING_CONFIG = {
 
 
 # ---------------------------------------------------------------------------
-# Retention (weekly cleanup)
+# Retention (weekly cleanup + archive)
 # ---------------------------------------------------------------------------
+# hot_archive_keep_days — single hot window for ALL weekly_archive moves.
+# Log tables use the *_log* keys below (delete only, not archived).
+_HOT_ARCHIVE_DAYS = 365
+
 RETENTION_CONFIG = {
-    "fo_bhav_keep_days":          730,   # 2 years of F&O EOD
-    "spot_bhav_keep_days":        730,
-    "vix_keep_days":              3650,  # 10 years (cheap, useful for IV%ile)
-    "fii_keep_days":              730,
-    "iv_history_keep_days":       730,
-    "suggestions_keep_days":      1825,  # 5 years (audit)
-    "trades_keep_days":           1825,
-    "simulations_keep_days":      730,
-    "system_logs_keep_days":      7,     # weekly cleanup (Fri job)
-    "job_log_keep_days":          90,
-    "notifications_keep_days":    180,
-    # 5-min chain trajectory tables (Zerodha WS aggregator).
-    # ~450 rows/day per table (75 slots * 3 underlyings * 2 expiries).
-    # 180 days ~= 80K rows ~= 10 MB; cheap and gives enough history
-    # for the time-series replay backtester (future scope).
-    "chain_5min_keep_days":       180,
-    "atm_iv_5min_keep_days":      180,
-    # Hourly trade MTM snapshots (hot table); history kept with trades audit.
-    "trade_mtm_snapshot_history_keep_days": 1825,
-    # Zerodha broker order audit (`options_broker_orders`) — 3 months default.
+    "hot_archive_keep_days":      _HOT_ARCHIVE_DAYS,
+    # Legacy per-table keys (config UI compat); archive job uses hot_archive_keep_days only.
+    "fo_bhav_keep_days":          _HOT_ARCHIVE_DAYS,
+    "spot_bhav_keep_days":        _HOT_ARCHIVE_DAYS,
+    "vix_keep_days":              _HOT_ARCHIVE_DAYS,
+    "fii_keep_days":              _HOT_ARCHIVE_DAYS,
+    "iv_history_keep_days":       _HOT_ARCHIVE_DAYS,
+    "suggestions_keep_days":      _HOT_ARCHIVE_DAYS,
+    "trades_keep_days":           _HOT_ARCHIVE_DAYS,
+    "simulations_keep_days":      _HOT_ARCHIVE_DAYS,
+    "system_logs_keep_days":      7,     # weekly log cleanup (delete)
+    "job_log_keep_days":          7,
+    "notifications_keep_days":    _HOT_ARCHIVE_DAYS,
+    "chain_5min_keep_days":       _HOT_ARCHIVE_DAYS,
+    "atm_iv_5min_keep_days":      _HOT_ARCHIVE_DAYS,
+    "trade_mtm_snapshot_history_keep_days": _HOT_ARCHIVE_DAYS,
+    # Zerodha broker order audit — delete only (not archived)
     "broker_orders_keep_days": _env_int("OPT_BROKER_ORDERS_KEEP_DAYS", 90),
 }
 

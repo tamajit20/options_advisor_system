@@ -22,98 +22,101 @@ class ArchiveTableSpec:
     extra_where: Optional[str] = None
 
 
+ARCHIVE_RETENTION_KEY = "hot_archive_keep_days"
+
+
 ARCHIVE_TABLE_SPECS: List[ArchiveTableSpec] = [
     ArchiveTableSpec(
-        "options_fo_eod", "trade_date", "fo_bhav_keep_days",
+        "options_fo_eod", "trade_date", ARCHIVE_RETENTION_KEY,
         ("trade_date", "symbol", "expiry_date", "strike", "option_type"),
     ),
     ArchiveTableSpec(
-        "options_spot_eod", "trade_date", "spot_bhav_keep_days",
+        "options_spot_eod", "trade_date", ARCHIVE_RETENTION_KEY,
         ("trade_date", "symbol"),
     ),
     ArchiveTableSpec(
-        "options_vix_history", "trade_date", "vix_keep_days",
+        "options_vix_history", "trade_date", ARCHIVE_RETENTION_KEY,
         ("trade_date",),
     ),
     ArchiveTableSpec(
-        "options_fii_data", "trade_date", "fii_keep_days",
+        "options_fii_data", "trade_date", ARCHIVE_RETENTION_KEY,
         ("trade_date", "client_type"),
     ),
     ArchiveTableSpec(
-        "options_iv_history", "trade_date", "iv_history_keep_days",
+        "options_iv_history", "trade_date", ARCHIVE_RETENTION_KEY,
         ("trade_date", "symbol", "expiry_date", "strike", "option_type"),
     ),
     ArchiveTableSpec(
-        "options_suggestion_legs", "suggestion_id", "suggestions_keep_days",
+        "options_suggestion_legs", "suggestion_id", ARCHIVE_RETENTION_KEY,
         ("id",),
         child_of="options_suggestions",
         parent_key="suggestion_id",
     ),
     ArchiveTableSpec(
-        "options_suggestions", "generated_on", "suggestions_keep_days",
+        "options_suggestions", "generated_on", ARCHIVE_RETENTION_KEY,
         ("suggestion_id",),
         date_type="datetime",
     ),
     ArchiveTableSpec(
-        "options_trade_legs", "trade_id", "trades_keep_days",
+        "options_trade_legs", "trade_id", ARCHIVE_RETENTION_KEY,
         ("id",),
         child_of="options_trades",
         parent_key="trade_id",
     ),
     ArchiveTableSpec(
-        "options_trades", "closed_on", "trades_keep_days",
+        "options_trades", "closed_on", ARCHIVE_RETENTION_KEY,
         ("trade_id",),
         date_type="datetime",
         extra_where="status <> 'ACTIVE'",
     ),
     ArchiveTableSpec(
-        "options_simulation_legs", "suggestion_id", "simulations_keep_days",
+        "options_simulation_legs", "suggestion_id", ARCHIVE_RETENTION_KEY,
         ("id",),
         child_of="options_simulations",
         parent_key="suggestion_id",
     ),
     ArchiveTableSpec(
-        "options_simulations", "completed_on", "simulations_keep_days",
+        "options_simulations", "completed_on", ARCHIVE_RETENTION_KEY,
         ("suggestion_id",),
         date_type="date",
         extra_where="completed_on IS NOT NULL",
     ),
     ArchiveTableSpec(
-        "options_resuggestions", "generated_on", "suggestions_keep_days",
+        "options_resuggestions", "generated_on", ARCHIVE_RETENTION_KEY,
         ("id",),
         date_type="datetime",
     ),
     ArchiveTableSpec(
-        "options_notifications", "created_at", "notifications_keep_days",
+        "options_notifications", "created_at", ARCHIVE_RETENTION_KEY,
         ("id",),
         date_type="datetime",
     ),
     ArchiveTableSpec(
-        "options_chain_5min", "snapshot_at", "chain_5min_keep_days",
+        "options_chain_5min", "snapshot_at", ARCHIVE_RETENTION_KEY,
         ("snapshot_at", "symbol", "expiry_date"),
         date_type="datetime",
     ),
     ArchiveTableSpec(
-        "options_atm_iv_5min", "snapshot_at", "atm_iv_5min_keep_days",
+        "options_atm_iv_5min", "snapshot_at", ARCHIVE_RETENTION_KEY,
         ("snapshot_at", "symbol", "expiry_date"),
         date_type="datetime",
     ),
     ArchiveTableSpec(
-        "options_trade_mtm_snapshot_history", "archived_at", "trade_mtm_snapshot_history_keep_days",
+        "options_trade_mtm_snapshot_history", "archived_at", ARCHIVE_RETENTION_KEY,
         ("id",),
         date_type="datetime",
     ),
     ArchiveTableSpec(
-        "options_intraday_close_snapshot", "snapshot_date", "chain_5min_keep_days",
+        "options_intraday_close_snapshot", "snapshot_date", ARCHIVE_RETENTION_KEY,
         ("snapshot_date", "trade_id", "leg_order"),
     ),
     ArchiveTableSpec(
-        "options_trade_level_events", "event_at", "trade_mtm_snapshot_history_keep_days",
+        "options_trade_level_events", "event_at", ARCHIVE_RETENTION_KEY,
         ("id",),
         date_type="datetime",
     ),
     ArchiveTableSpec(
-        "options_em_calibration", "created_at", "suggestions_keep_days",
+        "options_em_calibration", "created_at", ARCHIVE_RETENTION_KEY,
         ("id",),
         date_type="datetime",
     ),

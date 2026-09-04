@@ -97,6 +97,8 @@ def main() -> int:
     for spec in ARCHIVE_TABLE_SPECS:
         if spec.retention_key not in RETENTION_CONFIG:
             errors.append(f"RETENTION_CONFIG missing key: {spec.retention_key}")
+    if "hot_archive_keep_days" not in RETENTION_CONFIG:
+        errors.append("RETENTION_CONFIG missing hot_archive_keep_days")
 
     for job in ("weekly_archive", "weekly_log_cleanup", "archive_export"):
         if job not in SCHEDULER_CONFIG.get("jobs", {}):

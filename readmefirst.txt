@@ -124,8 +124,8 @@ SECTION 5 — AUTOMATED SCHEDULE (no daily user action)
   Laptop Mon-Fri 09:15       Task OptionsAdvisor-ArchiveMerge
                                pull-archive-and-merge.ps1
 
-  Log retention (VM delete):  system_logs 7d | job_log 90d | broker_orders 90d
-  Hot retention (VM archive): see config.py RETENTION_CONFIG
+  Log retention (VM delete):  system_logs 7d | job_log 7d | broker_orders 90d
+  Hot retention (VM archive):  hot_archive_keep_days = 365 (all tables, one window)
 
 
 ================================================================================
