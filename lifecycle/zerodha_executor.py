@@ -44,6 +44,7 @@ from lifecycle.zerodha_execution_job import (
     update_job_progress,
 )
 from providers.zerodha.execution_checks import (
+    MarginCheckResult,
     build_order_margin_params,
     check_exposure_conflicts,
     check_margin_for_orders,
@@ -1071,6 +1072,10 @@ class ExecutionPreview:
     all_limits_in_band: bool
     limit_vetoes: List[str]
     spot_at_execution: Optional[float]
+    margin_required: Optional[float] = None
+    margin_available: Optional[float] = None
+    margin_ok: Optional[bool] = None
+    margin_message: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -1083,6 +1088,10 @@ class ExecutionPreview:
             "all_limits_in_band": self.all_limits_in_band,
             "limit_vetoes": self.limit_vetoes,
             "spot_at_execution": self.spot_at_execution,
+            "margin_required": self.margin_required,
+            "margin_available": self.margin_available,
+            "margin_ok": self.margin_ok,
+            "margin_message": self.margin_message,
         }
 
 
@@ -1157,7 +1166,8 @@ def _run_pre_trade_checks(
     mode: str = "entry",
     allow_existing_positions: bool = False,
     live_map: Optional[Dict[int, float]] = None,
-) -> None:
+    fallback_required: Optional[float] = None,
+) -> Optional[MarginCheckResult]:
     cfg = ZERODHA_EXECUTION_CONFIG
     txn_fn = (
         (lambda leg: _transaction_type_for_leg(leg, "entry"))
@@ -1181,7 +1191,9 @@ def _run_pre_trade_checks(
             product=str(cfg.get("product", "NRML")),
             variety=str(cfg.get("variety", "regular")),
         )
-        margin = check_margin_for_orders(facade, margin_params)
+        margin = check_margin_for_orders(
+            facade, margin_params, fallback_required=fallback_required,
+        )
         if not margin.ok:
             raise ZerodhaExecutionError(margin.message)
 
@@ -1191,6 +1203,8 @@ def _run_pre_trade_checks(
         )
         if not exposure.ok:
             raise ZerodhaExecutionError(exposure.message)
+        return margin
+    return None
 
 
 def _assert_execution_not_in_flight(
@@ -1231,7 +1245,7 @@ def _entry_context(
     db: SQLServerConnection,
     suggestion_id: str,
     leg_limits: Optional[Dict[int, float]],
-) -> Tuple[dict, List[dict], KiteExecutionFacade, InstrumentMaster, Dict[int, float], Dict[int, Instrument], List[dict], str]:
+) -> Tuple[dict, List[dict], KiteExecutionFacade, InstrumentMaster, Dict[int, float], Dict[int, Instrument], List[dict], str, Optional[MarginCheckResult]]:
     sug = SuggestionRepo(db)
     suggestion = sug.get(suggestion_id)
     if suggestion is None:
@@ -1259,11 +1273,21 @@ def _entry_context(
         )
     strategy = str(suggestion.get("strategy") or "")
     ordered = legs_in_execution_order(legs, strategy, mode="entry")
-    _run_pre_trade_checks(
+    # Defined-risk / debit: suggestion max_loss is a usable funds estimate if
+    # Kite basket margins are down. Jade theoretical loss is not.
+    fallback_required = None
+    if strategy != "JADE_LIZARD":
+        fallback_ml = suggestion.get("max_loss")
+        try:
+            fallback_required = abs(float(fallback_ml)) if fallback_ml is not None else None
+        except (TypeError, ValueError):
+            fallback_required = None
+    margin = _run_pre_trade_checks(
         facade, legs, inst_map, ordered, leg_limits, mode="entry",
         live_map=live_map,
+        fallback_required=fallback_required,
     )
-    return suggestion, legs, facade, master, live_map, inst_map, ordered, strategy
+    return suggestion, legs, facade, master, live_map, inst_map, ordered, strategy, margin
 
 
 def preview_suggestion_execution(
@@ -1275,7 +1299,7 @@ def preview_suggestion_execution(
 ) -> ExecutionPreview:
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
-    suggestion, legs, facade, _master, live_map, inst_map, ordered, strategy = (
+    suggestion, legs, facade, _master, live_map, inst_map, ordered, strategy, margin = (
         _entry_context(db, suggestion_id, leg_limits)
     )
     plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="entry", strategy=strategy)
@@ -1296,6 +1320,10 @@ def preview_suggestion_execution(
         all_limits_in_band=limit_gate.ok,
         limit_vetoes=limit_gate.vetoes,
         spot_at_execution=spot,
+        margin_required=margin.required if margin else None,
+        margin_available=margin.available if margin else None,
+        margin_ok=margin.ok if margin else None,
+        margin_message=margin.message if margin else None,
     )
 
 
@@ -1384,7 +1412,7 @@ def execute_suggestion_in_zerodha(
         raise ZerodhaExecutionError("Execution already in progress for this suggestion")
 
     try:
-        suggestion, legs, facade, master, live_map, inst_map, ordered, strategy = (
+        suggestion, legs, facade, master, live_map, inst_map, ordered, strategy, _margin = (
             _entry_context(db, suggestion_id, leg_limits)
         )
         plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="entry", strategy=strategy)
@@ -1548,6 +1576,8 @@ def execute_suggestion_in_zerodha_async(
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
     _assert_execution_not_in_flight(db, suggestion_id=suggestion_id)
+    # Fail before the job is queued if funds / live prices / gates fail.
+    _entry_context(db, suggestion_id, leg_limits)
 
     suggestion = SuggestionRepo(db).get(suggestion_id)
     if suggestion is None:

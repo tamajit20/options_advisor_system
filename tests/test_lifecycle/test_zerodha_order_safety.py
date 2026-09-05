@@ -195,6 +195,11 @@ def test_multi_leg_entry_order_and_side(mock_db, mocker):
     facade.ltp = kite.ltp
     facade.modify_order = kite.modify_order
     facade.cancel_order = kite.cancel_order
+    facade.basket_order_margins.return_value = {"final": {"total": 8000.0}}
+    facade.margins.return_value = {
+        "equity": {"available": {"live_balance": 100000.0}, "net": 100000.0},
+    }
+    facade.positions.return_value = {"net": []}
 
     mocker.patch("lifecycle.zerodha_executor._build_client", return_value=(facade, master))
     mocker.patch("lifecycle.zerodha_executor._refresh_leg_ltp", side_effect=lambda _f, _m, leg: 100.0)

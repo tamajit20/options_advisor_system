@@ -83,5 +83,10 @@ class KiteExecutionFacade:
     def order_margins(self, orders: list) -> Any:
         return self._kite.order_margins(list(orders))
 
+    def basket_order_margins(self, orders: list, *, consider_positions: bool = True) -> Any:
+        return self._kite.basket_order_margins(
+            list(orders), consider_positions=consider_positions,
+        )
+
     def positions(self) -> dict:
         return dict(self._kite.positions())

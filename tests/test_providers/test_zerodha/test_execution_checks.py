@@ -5,8 +5,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from providers.zerodha.execution_checks import (
+    _required_from_margin_response,
     build_order_margin_params,
     check_exposure_conflicts,
+    check_margin_for_orders,
 )
 from providers.zerodha.instruments import Instrument
 from datetime import date
@@ -84,3 +86,75 @@ def test_margin_params_reject_zero_qty():
             product="NRML",
             variety="regular",
         )
+
+
+def test_required_from_basket_final_total():
+    assert _required_from_margin_response({"final": {"total": 18450.5}}) == 18450.5
+    assert _required_from_margin_response({"data": {"initial": {"total": 100.0}}}) == 100.0
+    assert _required_from_margin_response([{"total": 10}, {"total": 5}]) == 15.0
+    assert _required_from_margin_response({}) is None
+
+
+def test_margin_blocks_when_available_below_required():
+    facade = MagicMock()
+    facade.basket_order_margins.return_value = {"final": {"total": 20000.0}}
+    facade.margins.return_value = {
+        "equity": {"available": {"live_balance": 5000.0}},
+    }
+    out = check_margin_for_orders(facade, [{"variety": "regular"}])
+    assert not out.ok
+    assert out.required == 20000.0
+    assert out.available == 5000.0
+    assert "Insufficient funds" in out.message
+
+
+def test_margin_ok_when_usable_covers_required_plus_buffer():
+    facade = MagicMock()
+    facade.basket_order_margins.return_value = {"final": {"total": 20000.0}}
+    facade.margins.return_value = {
+        "equity": {"available": {"live_balance": 25000.0}},
+    }
+    out = check_margin_for_orders(facade, [{"variety": "regular"}])
+    assert out.ok
+    assert out.required == 20000.0
+    assert out.available == 25000.0
+
+
+def test_margin_fail_closed_when_balance_unreadable():
+    facade = MagicMock()
+    facade.basket_order_margins.return_value = {"final": {"total": 20000.0}}
+    facade.margins.side_effect = RuntimeError("kite timeout")
+    out = check_margin_for_orders(facade, [{"variety": "regular"}])
+    assert not out.ok
+    assert "could not read Zerodha account balance" in out.message
+
+
+def test_margin_fail_closed_when_required_unknown():
+    facade = MagicMock()
+    facade.basket_order_margins.side_effect = RuntimeError("no basket")
+    facade.order_margins.side_effect = RuntimeError("no orders")
+    out = check_margin_for_orders(facade, [{"variety": "regular"}])
+    assert not out.ok
+    assert "could not estimate required margin" in out.message
+
+
+def test_margin_uses_fallback_when_kite_required_missing():
+    facade = MagicMock()
+    facade.basket_order_margins.return_value = {}
+    facade.margins.return_value = {
+        "equity": {"available": {"live_balance": 100000.0}},
+    }
+    out = check_margin_for_orders(
+        facade, [{"a": 1}, {"b": 2}], fallback_required=8000.0,
+    )
+    assert out.ok
+    assert out.required == 8000.0
+
+
+def test_margin_fail_closed_when_usable_funds_absent():
+    facade = MagicMock()
+    facade.basket_order_margins.return_value = {"final": {"total": 1000.0}}
+    facade.margins.return_value = {"equity": {"available": {}}}
+    out = check_margin_for_orders(facade, [{"variety": "regular"}])
+    assert not out.ok
+    assert "did not report usable funds" in out.message

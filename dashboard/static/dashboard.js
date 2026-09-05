@@ -624,8 +624,10 @@ function _renderZerodhaPreviewTable(preview) {
     preview.trade_id ? `Trade ${escapeHtml(preview.trade_id)}` : null,
     preview.spot_at_execution != null ? `Nifty spot \u20b9${fmt(preview.spot_at_execution)}` : null,
   ].filter(Boolean).join(' \u00b7 ');
+  const funds = _renderZerodhaFundsBlock(preview);
   return `${warn}
     ${meta ? `<div class="muted" style="font-size:.82rem;margin-bottom:8px">${meta}</div>` : ''}
+    ${funds}
     <div class="hist-legs-scroll">
       <table class="dt">
         <thead><tr>
@@ -637,13 +639,40 @@ function _renderZerodhaPreviewTable(preview) {
     </div>`;
 }
 
+function _renderZerodhaFundsBlock(preview) {
+  if (!preview) return '';
+  if (preview.margin_required == null && preview.margin_available == null
+      && preview.margin_ok == null && !preview.margin_message) {
+    return '';
+  }
+  const need = preview.margin_required != null ? `\u20b9${fmt(preview.margin_required)}` : '\u2014';
+  const have = preview.margin_available != null ? `\u20b9${fmt(preview.margin_available)}` : '\u2014';
+  const blocked = preview.margin_ok === false;
+  const note = preview.margin_message
+    || (blocked
+      ? 'Not enough funds in Zerodha to place these orders'
+      : 'Zerodha available balance covers this order (incl. buffer)');
+  return `
+    <div class="${blocked ? 'pending-close-alert' : ''}" style="margin:0 0 10px;padding:8px 10px;border:1px solid #2a3744;border-radius:6px">
+      <div><strong>Amount needed</strong> ${need} \u00b7 <strong>Zerodha available</strong> ${have}</div>
+      <div class="muted" style="font-size:.82rem;margin-top:4px">${escapeHtml(note)}</div>
+    </div>`;
+}
+
 function showZerodhaConfirmModal(preview, { title, submitLabel, onConfirm }) {
   const modal = _ensureZerodhaConfirmModal();
   _setZerodhaModalBody(title || 'Confirm Zerodha orders', _renderZerodhaPreviewTable(preview));
   const submit = document.getElementById('zerodha-confirm-submit');
   submit.hidden = false;
-  submit.disabled = false;
-  submit.textContent = submitLabel || 'Place orders';
+  const fundsBlocked = preview && preview.operation !== 'EXIT' && preview.margin_ok === false;
+  submit.disabled = !!fundsBlocked;
+  submit.textContent = fundsBlocked ? 'Insufficient funds' : (submitLabel || 'Place orders');
+  if (fundsBlocked) {
+    submit.onclick = null;
+    modal.hidden = false;
+    document.body.classList.add('sg-modal-open');
+    return;
+  }
   submit.onclick = async () => {
     submit.disabled = true;
     try {
@@ -1220,21 +1249,21 @@ function suggestionCapitalRequired(s, econ, baseQty, baseWidthTotal) {
       ?? (econ.ml != null ? parseFloat(econ.ml) : null)
       ?? (econ.np != null ? Math.abs(parseFloat(econ.np) * baseQty) : null);
     return {
-      label: 'Capital required',
+      label: 'Amount needed',
       key: 'capital_required',
       rs,
-      hint: 'Premium paid upfront to open the position',
+      hint: 'Premium you must have in Zerodha to buy this position',
     };
   }
   const rs = econ.ml != null ? parseFloat(econ.ml) : null;
   const grossWidth = baseWidthTotal > 0 ? baseWidthTotal : null;
   const creditRs = premium?.kind === 'received' ? premium.rs : null;
-  let hint = 'Approximate broker margin blocked for this defined-risk spread';
+  let hint = 'Approximate funds Zerodha blocks to open this spread (checked again before orders)';
   if (grossWidth != null && creditRs != null) {
-    hint = `Spread width ₹${fmt(grossWidth)} − credit ₹${fmt(creditRs)} (blocked by broker)`;
+    hint = `Spread width ₹${fmt(grossWidth)} − credit ₹${fmt(creditRs)} — funds Zerodha must show as available`;
   }
   return {
-    label: 'Margin required',
+    label: 'Amount needed',
     key: 'margin_required',
     rs,
     hint,
@@ -1381,12 +1410,12 @@ const TERM_HELP = {
     html: '<strong>Max loss</strong> — Worst case if the trade fully fails (defined-risk spreads) or premium paid (long options). Your risk cap for sizing.',
   },
   margin_required: {
-    label: 'Margin required',
-    html: '<strong>Margin required</strong> — Approximate funds your broker blocks to sell this defined-risk spread (spread width minus net credit received). Not an extra cash outlay on top of max loss.',
+    label: 'Amount needed',
+    html: '<strong>Amount needed</strong> — Approximate funds Zerodha must have available to open this defined-risk spread (spread width minus net credit). Live balance is re-checked before orders are placed.',
   },
   capital_required: {
-    label: 'Capital required',
-    html: '<strong>Capital required</strong> — Total premium you pay upfront to buy the options (debit strategies). Same as your maximum loss at entry.',
+    label: 'Amount needed',
+    html: '<strong>Amount needed</strong> — Premium you pay upfront to buy this position. Zerodha available cash is checked before orders are placed.',
   },
   est_net_max_profit: {
     label: 'Est. net at max profit',
@@ -5023,7 +5052,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     <div class="collapsible-preview">
       <span>PoP <strong>${fmtPct(econ.pop)}</strong></span>
       <span>Credit <strong>₹${fmt(econ.np)}</strong>/u</span>
-      ${capitalReq.rs != null ? `<span>${capitalReq.key === 'capital_required' ? 'Capital' : 'Margin'} <strong>₹${fmt(capitalReq.rs)}</strong></span>` : ''}
+      ${capitalReq.rs != null ? `<span>Amount needed <strong>₹${fmt(capitalReq.rs)}</strong></span>` : ''}
       <span>Max loss <strong>₹${fmt(econ.ml)}</strong></span>
       ${s.dte != null ? `<span>DTE <strong>${s.dte}</strong></span>` : ''}
     </div>`;

@@ -106,6 +106,15 @@ def _mock_kite_facade(mocker, mock_instrument):
     facade.modify_order = kite.modify_order
     facade.cancel_order = kite.cancel_order
     facade.instruments = MagicMock(return_value=[])
+    facade.basket_order_margins.return_value = {"final": {"total": 5000.0}}
+    facade.order_margins.return_value = [{"total": 5000.0}]
+    facade.margins.return_value = {
+        "equity": {
+            "available": {"live_balance": 100000.0, "cash": 100000.0},
+            "net": 100000.0,
+        },
+    }
+    facade.positions.return_value = {"net": []}
 
     master = MagicMock()
     master.get_option.return_value = mock_instrument
@@ -524,3 +533,65 @@ def test_preview_close_execution_reports_limit_vetoes(db_conn, mocker, mock_inst
     assert preview.operation == "EXIT"
     assert preview.all_limits_in_band is False
     assert preview.limit_vetoes
+
+
+def test_pre_trade_checks_block_insufficient_funds(mocker, mock_instrument):
+    from lifecycle.zerodha_executor import _run_pre_trade_checks
+    from providers.zerodha.execution_checks import MarginCheckResult
+
+    mocker.patch(
+        "lifecycle.zerodha_executor.build_order_margin_params",
+        return_value=[{"variety": "regular"}],
+    )
+    mocker.patch(
+        "lifecycle.zerodha_executor.check_margin_for_orders",
+        return_value=MarginCheckResult(
+            ok=False, required=20000.0, available=1000.0,
+            message="Insufficient funds in Zerodha: need ~₹21,000",
+        ),
+    )
+    with pytest.raises(ZerodhaExecutionError, match="Insufficient funds"):
+        _run_pre_trade_checks(
+            MagicMock(), [{"leg_order": 1, "action": "BUY"}],
+            {1: mock_instrument}, [{"leg_order": 1, "action": "BUY"}],
+            None, mode="entry", live_map={1: 100.0},
+        )
+
+
+def test_preview_includes_margin_snapshot(
+    db_conn, mocker, sample_leg, sample_suggestion, mock_instrument,
+):
+    from lifecycle.zerodha_executor import preview_suggestion_execution
+    from providers.zerodha.execution_checks import MarginCheckResult
+
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
+    mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
+    mocker.patch("lifecycle.zerodha_executor._circuit_breaker_on", return_value=False)
+    mocker.patch(
+        "lifecycle.zerodha_executor.validate_execution",
+        return_value=MagicMock(ok=True, reason=lambda: "OK"),
+    )
+    mocker.patch(
+        "lifecycle.zerodha_executor.validate_live_prices",
+        return_value=MagicMock(ok=True, reason=lambda: "OK"),
+    )
+    mocker.patch("lifecycle.zerodha_executor._build_client", return_value=(MagicMock(), MagicMock()))
+    mocker.patch(
+        "lifecycle.zerodha_executor._live_ltp_map",
+        return_value=({1: 100.0}, {1: mock_instrument}),
+    )
+    mocker.patch(
+        "lifecycle.zerodha_executor._run_pre_trade_checks",
+        return_value=MarginCheckResult(
+            ok=True, required=18450.0, available=120000.0,
+        ),
+    )
+    mocker.patch("lifecycle.zerodha_executor._spot_ltp", return_value=23010.0)
+    preview = preview_suggestion_execution(db_conn, "SUG-1")
+    body = preview.to_dict()
+    assert body["margin_required"] == 18450.0
+    assert body["margin_available"] == 120000.0
+    assert body["margin_ok"] is True

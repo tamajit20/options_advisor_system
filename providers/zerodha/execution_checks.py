@@ -37,10 +37,11 @@ class PositionReconcileResult:
     message: str = ""
 
 
-def _available_cash(margins: dict) -> float:
+def _available_cash(margins: dict) -> Optional[float]:
+    """Usable equity funds — same preference as account_snapshot (live_balance)."""
     eq = margins.get("equity") or {}
     avail = eq.get("available") or {}
-    for key in ("live_balance", "cash", "net"):
+    for key in ("live_balance", "cash"):
         val = avail.get(key)
         if val is not None:
             try:
@@ -53,44 +54,119 @@ def _available_cash(margins: dict) -> float:
             return float(net)
         except (TypeError, ValueError):
             pass
-    return 0.0
+    return None
+
+
+def _required_from_margin_response(resp: Any) -> Optional[float]:
+    """Parse Kite basket / order-margins payload for the rupee total."""
+    if resp is None:
+        return None
+    if isinstance(resp, dict):
+        data = resp.get("data")
+        if isinstance(data, dict) and (
+            "final" in data or "initial" in data or "total" in data
+        ):
+            return _required_from_margin_response(data)
+        for key in ("final", "initial"):
+            block = resp.get(key)
+            if isinstance(block, dict) and block.get("total") is not None:
+                try:
+                    return float(block["total"])
+                except (TypeError, ValueError):
+                    continue
+        if resp.get("total") is not None:
+            try:
+                return float(resp["total"])
+            except (TypeError, ValueError):
+                return None
+        return None
+    if isinstance(resp, list):
+        total = 0.0
+        found = False
+        for row in resp:
+            if not isinstance(row, dict) or row.get("total") is None:
+                continue
+            try:
+                total += float(row["total"])
+                found = True
+            except (TypeError, ValueError):
+                continue
+        return total if found else None
+    return None
 
 
 def check_margin_for_orders(
     facade: Any,
     order_params: List[dict],
+    *,
+    fallback_required: Optional[float] = None,
 ) -> MarginCheckResult:
-    """Estimate margin for planned orders via Kite ``order_margins``."""
+    """Estimate margin for planned orders and compare to usable Zerodha cash.
+
+    Fail-closed: if Kite cannot report required margin or available funds,
+    execution is blocked. Multi-leg structures use basket margins so hedge
+    benefit is counted; a single-leg order can use ``order_margins``.
+    """
     if not order_params:
         return MarginCheckResult(ok=True)
     if not ZERODHA_EXECUTION_CONFIG.get("margin_check_enabled", True):
         return MarginCheckResult(ok=True)
-    try:
-        resp = facade.order_margins(order_params)
-    except Exception as exc:
-        logger.warning("order_margins failed: %s", exc)
-        return MarginCheckResult(ok=True, message=f"margin check skipped: {exc}")
 
-    required = 0.0
-    if isinstance(resp, list):
-        for row in resp:
-            req = row.get("total") if isinstance(row, dict) else None
-            if req is not None:
-                required += float(req)
-    elif isinstance(resp, dict):
-        req = resp.get("total")
-        if req is not None:
-            required = float(req)
+    required: Optional[float] = None
+    errors: List[str] = []
+
+    if hasattr(facade, "basket_order_margins"):
+        try:
+            required = _required_from_margin_response(
+                facade.basket_order_margins(order_params)
+            )
+        except Exception as exc:
+            errors.append(f"basket_order_margins: {exc}")
+            logger.warning("basket_order_margins failed: %s", exc)
+
+    if required is None and len(order_params) == 1:
+        try:
+            required = _required_from_margin_response(
+                facade.order_margins(order_params)
+            )
+        except Exception as exc:
+            errors.append(f"order_margins: {exc}")
+            logger.warning("order_margins failed: %s", exc)
+
+    if required is None and fallback_required is not None:
+        try:
+            required = abs(float(fallback_required))
+        except (TypeError, ValueError):
+            required = None
+
+    if required is None:
+        detail = "; ".join(errors) if errors else "empty Kite margin response"
+        return MarginCheckResult(
+            ok=False,
+            message=(
+                "Execution blocked: could not estimate required margin from "
+                f"Zerodha ({detail})"
+            ),
+        )
 
     try:
         margins = facade.margins()
     except Exception as exc:
         return MarginCheckResult(
-            ok=True,
+            ok=False,
             required=required,
-            message=f"margin available unknown: {exc}",
+            message=(
+                "Execution blocked: could not read Zerodha account balance "
+                f"({exc})"
+            ),
         )
     available = _available_cash(margins)
+    if available is None:
+        return MarginCheckResult(
+            ok=False,
+            required=required,
+            message="Execution blocked: Zerodha did not report usable funds",
+        )
     buffer_pct = float(ZERODHA_EXECUTION_CONFIG.get("margin_buffer_pct", 5)) / 100.0
     need = required * (1.0 + buffer_pct)
     if available < need:
@@ -99,8 +175,9 @@ def check_margin_for_orders(
             required=required,
             available=available,
             message=(
-                f"Insufficient margin: need ~{need:,.0f} (incl. buffer), "
-                f"available {available:,.0f}"
+                f"Insufficient funds in Zerodha: need ~₹{need:,.0f} "
+                f"(required ₹{required:,.0f} + {buffer_pct * 100:.0f}% buffer), "
+                f"available ₹{available:,.0f}"
             ),
         )
     return MarginCheckResult(ok=True, required=required, available=available)
