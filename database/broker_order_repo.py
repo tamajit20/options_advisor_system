@@ -24,9 +24,11 @@ class BrokerOrderRepo:
             INSERT INTO options_broker_orders
               (operation, suggestion_id, trade_id, leg_order, kite_order_id,
                tradingsymbol, exchange, transaction_type, quantity, limit_price,
-               fill_price, status, tag, error_message, retry_count, created_at, updated_at)
+               fill_price, status, tag, error_message, retry_count,
+               filled_quantity, pending_quantity, status_message, order_type,
+               validity, execution_job_id, created_at, updated_at)
             OUTPUT INSERTED.id
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 row["operation"],
@@ -44,6 +46,12 @@ class BrokerOrderRepo:
                 row.get("tag"),
                 row.get("error_message"),
                 int(row.get("retry_count") or 0),
+                row.get("filled_quantity"),
+                row.get("pending_quantity"),
+                row.get("status_message"),
+                row.get("order_type"),
+                row.get("validity"),
+                row.get("execution_job_id"),
                 row.get("created_at"),
                 row.get("updated_at"),
             ],
@@ -61,6 +69,12 @@ class BrokerOrderRepo:
         fill_price: Optional[float] = None,
         error_message: Optional[str] = None,
         retry_count: Optional[int] = None,
+        filled_quantity: Optional[int] = None,
+        pending_quantity: Optional[int] = None,
+        status_message: Optional[str] = None,
+        order_type: Optional[str] = None,
+        validity: Optional[str] = None,
+        limit_price: Optional[float] = None,
         updated_at: Optional[datetime] = None,
     ) -> None:
         sets = ["status = ?", "updated_at = ?"]
@@ -77,6 +91,24 @@ class BrokerOrderRepo:
         if retry_count is not None:
             sets.append("retry_count = ?")
             params.append(retry_count)
+        if filled_quantity is not None:
+            sets.append("filled_quantity = ?")
+            params.append(filled_quantity)
+        if pending_quantity is not None:
+            sets.append("pending_quantity = ?")
+            params.append(pending_quantity)
+        if status_message is not None:
+            sets.append("status_message = ?")
+            params.append(status_message)
+        if order_type is not None:
+            sets.append("order_type = ?")
+            params.append(order_type)
+        if validity is not None:
+            sets.append("validity = ?")
+            params.append(validity)
+        if limit_price is not None:
+            sets.append("limit_price = ?")
+            params.append(limit_price)
         params.append(row_id)
         self.db.execute(
             f"UPDATE options_broker_orders SET {', '.join(sets)} WHERE id = ?",
@@ -163,6 +195,34 @@ class BrokerOrderRepo:
             "ORDER BY created_at DESC, id DESC",
             params,
         )
+
+    def by_job(self, job_id: int) -> List[dict]:
+        return self.db.fetch_all(
+            "SELECT * FROM options_broker_orders WHERE execution_job_id = ? "
+            "ORDER BY leg_order, id",
+            [job_id],
+        )
+
+    def rollback_complete_for_leg(
+        self,
+        *,
+        suggestion_id: Optional[str],
+        trade_id: Optional[str],
+        leg_order: int,
+    ) -> bool:
+        clauses = ["operation = 'ROLLBACK'", "leg_order = ?", "status = 'COMPLETE'"]
+        params: list = [leg_order]
+        if trade_id:
+            clauses.append("trade_id = ?")
+            params.append(trade_id)
+        elif suggestion_id:
+            clauses.append("suggestion_id = ?")
+            params.append(suggestion_id)
+        row = self.db.fetch_one(
+            f"SELECT TOP 1 1 AS x FROM options_broker_orders WHERE {' AND '.join(clauses)}",
+            params,
+        )
+        return row is not None
 
     def delete_older_than(self, cutoff: date) -> int:
         """Delete broker order audit rows with ``created_at`` before ``cutoff``."""

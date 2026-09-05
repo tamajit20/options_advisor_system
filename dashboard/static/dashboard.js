@@ -457,6 +457,30 @@ function _stopZerodhaInflightPoll(key) {
   }
 }
 
+function _awaitZerodhaExecutionJob(jobId, meta = {}) {
+  const deadline = Date.now() + 15 * 60 * 1000;
+  return (async () => {
+    while (Date.now() < deadline) {
+      const job = await API(`/api/zerodha-execution-jobs/${jobId}`);
+      if (job.status === 'COMPLETE') {
+        const result = job.result || {};
+        return {
+          trade_id: result.trade_id,
+          message: result.message || job.message,
+          leg_fills: result.leg_fills || [],
+          warnings: result.warnings || [],
+          account: null,
+        };
+      }
+      if (job.status === 'FAILED') {
+        throw new Error(job.error_message || job.message || 'Zerodha execution failed');
+      }
+      await new Promise(res => setTimeout(res, 1500));
+    }
+    throw new Error('Zerodha execution timed out — check broker orders');
+  })();
+}
+
 function _startZerodhaOrderPolling(pollUrl, preview, meta = {}) {
   const key = _zerodhaInflightKey({ ...meta, pollUrl });
   _stopZerodhaInflightPoll(key);
@@ -1158,6 +1182,13 @@ function premiumFromCreditTotal(totalCredit) {
   const n = parseFloat(totalCredit);
   if (!n || isNaN(n)) return null;
   return { rs: Math.abs(n), kind: n > 0 ? 'received' : 'paid' };
+}
+
+function structureQtyFromLegs(legs) {
+  if (!legs || !legs.length) return 0;
+  return Math.max(0, ...legs.map(l =>
+    (Number(l.lots_actual || l.lots) || 0) * (Number(l.lot_size) || 0)
+  ));
 }
 
 function premiumFromSuggestion(s) {
@@ -3511,7 +3542,7 @@ function renderExitPlan(s) {
     const dteStr = dte ? ` — around day ${Math.round(dte * 0.35)}–${Math.round(dte * 0.55)}` : '';
     rows.push({
       label: 'Profit target',
-      val: `close when ${pctLabel} of credit is captured (₹${fmt(target)}/unit retained)${dteStr}`,
+      val: `close when ${pctLabel} of credit is captured (₹${fmt(target)}/unit profit)${dteStr}`,
       key: true,
     });
   } else if (isDebit) {
@@ -5051,7 +5082,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       })()}
       <div><span class="k">Premium SL <span class="muted" style="font-size:.72rem">(1.5× credit)</span></span><br><span class="v econ-psl">₹${fmt((econ.np||0) * baseQty * 1.5)}<span class="pct-hint"> (150%)</span></span></div>
       <div><span class="k">Est. charges</span><br><span class="v econ-chg">₹${fmt(econ.chg)}</span></div>
-      <div><span class="k">Est. net P&amp;L</span><br><span class="v econ-npnl">${formatPnlWithPct(econ.npnl, sugPremium, { useGrossSign: false })}</span></div>
+      <div><span class="k">Est. net P&amp;L</span><br><span class="v econ-npnl">${econ.npnl != null ? formatPnlWithPct(econ.npnl, sugPremium, { useGrossSign: false }) : '—'}</span></div>
     </div>
     ${execOrderBanner(s.legs, s.strategy, 'entry')}
     <div class="legs-grid">${legsHtml}</div>
@@ -5448,6 +5479,9 @@ function bindSuggestionActions() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(execBody),
             });
+            if (r.async && r.job_id) {
+              r = await _awaitZerodhaExecutionJob(r.job_id, pollMeta);
+            }
           } catch (err) {
             _zerodhaModalExecutionError(err);
             throw err;
@@ -6085,6 +6119,9 @@ async function submitZerodhaClose(tradeId, btn, panel) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(execBody),
           });
+          if (r.async && r.job_id) {
+            r = await _awaitZerodhaExecutionJob(r.job_id, closeMeta);
+          }
         } catch (err) {
           _zerodhaModalExecutionError(err);
           throw err;
@@ -6126,8 +6163,9 @@ async function submitClose(tradeId, panel) {
       exit_time: new Date().toISOString(),
     };
   }).filter(e => e.exit_price != null);
-  if (!exits.length) {
-    toast('Enter at least one exit price', 'warn'); return;
+  const requiredRows = $$('.leg-exit-row[data-leg-order]', panel);
+  if (exits.length !== requiredRows.length) {
+    toast('Enter an exit price for every executed leg', 'warn'); return;
   }
 
   // ── 2-step confirm ────────────────────────────────────────────────────────
@@ -6368,13 +6406,17 @@ function renderTrade(t, expanded = false) {
     const tradePctLabel = `${Math.round(tradePct * 100)}%`;
     if (openExecLegs.length > 0) {
       const netCreditActual = t.net_credit_actual || 0;
-      const totalQty = openExecLegs.reduce((a, l) => a + ((l.lots_actual || l.lots || 1) * (l.lot_size || 1)), 0) || 1;
-      // Per-unit net credit = sum of (SELL fills) - sum of (BUY fills), averaged over legs
+      // One structure quantity — do not sum qty across every leg (that 4×'d ICs).
+      const structureQty = Math.max(...openExecLegs.map(
+        l => ((l.lots_actual || l.lots || 1) * (l.lot_size || 1))
+      )) || 1;
       let perUnitCredit = 0;
       openExecLegs.forEach(l => {
         perUnitCredit += (l.action === 'SELL' ? 1 : -1) * (l.fill_price || 0);
       });
-      const targetPct = perUnitCredit * tradePct * totalQty;
+      const targetPct = (netCreditActual
+        ? netCreditActual * tradePct
+        : perUnitCredit * tradePct * structureQty);
       const targetRows = openExecLegs.map(l => {
         const tc = legTargetClosePrice(l.action, l.fill_price, _tradeStrategy, _tradeDte);
         const capLabel = legTargetCloseCaption(l.action, _tradeStrategy, _tradeDte);
@@ -6394,14 +6436,14 @@ function renderTrade(t, expanded = false) {
       }).join('');
       let footer = '';
       if (isCreditTrade) {
-        footer = `<div class="target-exit-keep">Keep ~\u20b9${fmt(targetPct)} of the \u20b9${fmt(netCreditActual * totalQty)} total credit received</div>`;
+        footer = `<div class="target-exit-keep">Close when ~\u20b9${fmt(targetPct)} of the \u20b9${fmt(netCreditActual)} total credit is captured</div>`;
       } else if (isDebitTrade) {
         const debit = Math.abs(_netCr);
         const frac = isDebitSpreadStrategy(_tradeStrategy)
           ? debitSpreadTargetFraction()
           : longPremiumTargetMult(_tradeDte);
         const targetGain = Math.round(debit * frac * 10) / 10;
-        footer = `<div class="target-exit-keep">Close when position gains ~\u20b9${fmt(targetGain)}/unit (${Math.round(frac * 100)}% of \u20b9${fmt(debit)} debit paid)</div>`;
+        footer = `<div class="target-exit-keep">Close when position gains ~\u20b9${fmt(targetGain)} (${Math.round(frac * 100)}% of \u20b9${fmt(debit)} debit paid)</div>`;
       }
       const titleLabel = isDebitTrade
         ? `${tradePctLabel} debit gain target`
@@ -6547,7 +6589,7 @@ function renderTrade(t, expanded = false) {
       <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
     <div class="collapsible-preview">
-      ${_tradePremium ? `<span>${_tradePremium.kind === 'received' ? 'Premium received' : 'Premium paid'} <strong>\u20b9${fmt(_tradePremium.rs)}</strong></span>` : (t.net_credit_actual != null ? `<span>Entry <strong>\u20b9${fmt(t.net_credit_actual)}</strong>/u</span>` : '')}
+      ${_tradePremium ? `<span>${_tradePremium.kind === 'received' ? 'Premium received' : 'Premium paid'} <strong>\u20b9${fmt(_tradePremium.rs)}</strong></span>` : (t.net_credit_actual != null ? `<span>Entry <strong>\u20b9${fmt(t.net_credit_actual)}</strong></span>` : '')}
     </div>`;
   const bodyHtml = `
     ${renderTradeActionPanel(t)}
@@ -7204,7 +7246,7 @@ function renderHistorySuggestion(s) {
     ${s.net_credit_suggested != null ? `
     <div class="hcmp-grid">
       <div class="hcmp-header"><span>Economics (Suggested)</span></div>
-      <div class="hcmp-row"><span class="hcmp-key">Net credit</span><span class="hcmp-sug">₹${fmt(s.net_credit_suggested)}</span></div>
+      <div class="hcmp-row"><span class="hcmp-key">Net credit</span><span class="hcmp-sug">₹${fmt(s.net_credit_suggested)}/unit</span></div>
       ${s.max_profit != null ? `<div class="hcmp-row"><span class="hcmp-key">Max profit</span><span class="hcmp-sug">₹${fmt(s.max_profit)}</span></div>` : ''}
       ${s.max_loss != null ? `<div class="hcmp-row"><span class="hcmp-key">Max loss</span><span class="hcmp-sug">₹${fmt(s.max_loss)}</span></div>` : ''}
       ${s.stop_loss_level != null ? `<div class="hcmp-row"><span class="hcmp-key">Stop loss</span><span class="hcmp-sug">${fmt(s.stop_loss_level)}${escapeHtml(slLossPctSuffix(s.strategy, s.max_loss != null ? parseFloat(s.max_loss) : null))}</span></div>` : ''}
@@ -7281,7 +7323,12 @@ function renderHistoryTrade(t) {
         <span class="hcmp-col-head">Suggested</span>
         <span class="hcmp-col-head">Actual</span>
       </div>
-      ${cmp('Credit received',   r(s.net_credit),      r(t.net_credit_actual))}
+      ${cmp('Credit received',   (() => {
+        const qty = structureQtyFromLegs(s.legs) || structureQtyFromLegs(t.legs);
+        if (s.net_credit != null && qty > 0) return r(Number(s.net_credit) * qty);
+        if (s.net_credit != null) return r(s.net_credit) + '/unit';
+        return '—';
+      })(), r(t.net_credit_actual))}
       ${cmp('Max profit',        r(s.max_profit),      r(t.actual_max_profit))}
       ${cmp('Max loss',          r(s.max_loss),        r(t.actual_max_loss))}
       ${cmp('Gross P&amp;L',     '—',                  t.gross_pnl != null ? formatPnlWithPct(t.gross_pnl, premium, { useGrossSign: true }) : '—')}

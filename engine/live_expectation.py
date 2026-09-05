@@ -391,17 +391,21 @@ def assess_direction_fit(
         else:
             want = f"{name} flat or rallying"
     elif strat == "BULL_CALL_SPREAD":
-        key = lb if lb is not None else sc
+        # Profit when spot >= long call + debit (upper BE). Short call is the
+        # max-gain cap, not the breakeven.
+        key = ub if ub is not None else (bc + 0.0 if bc is not None else None)
         if key is not None:
             in_zone = spot_f >= key
-            want = f"{name} at or above ₹{key:,.0f}"
+            want = f"{name} at or above breakeven ₹{key:,.0f}"
         else:
             want = f"{name} to rally"
     elif strat == "BEAR_PUT_SPREAD":
-        key = ub if ub is not None else sp
+        # Profit when spot <= long put − debit (lower BE). Short put is the
+        # max-gain cap, not the breakeven.
+        key = lb if lb is not None else (bp + 0.0 if bp is not None else None)
         if key is not None:
             in_zone = spot_f <= key
-            want = f"{name} at or below ₹{key:,.0f}"
+            want = f"{name} at or below breakeven ₹{key:,.0f}"
         else:
             want = f"{name} to fall"
     else:
@@ -800,6 +804,22 @@ def _profit_zone_detail(
                 "be_side": "needs_breakout",
                 "be_distance_text": text,
             }
+        return {"be_side": "unknown"}
+
+    # Debit verticals: the live BE sits on the opposite side from credit spreads.
+    if strat == "BULL_CALL_SPREAD":
+        key = ub
+        if key is not None:
+            if spot_f >= key:
+                return _inside()
+            return _outside(pts=round(key - spot_f, 2), side="below_upper")
+        return {"be_side": "unknown"}
+    if strat == "BEAR_PUT_SPREAD":
+        key = lb
+        if key is not None:
+            if spot_f <= key:
+                return _inside()
+            return _outside(pts=round(spot_f - key, 2), side="above_lower")
         return {"be_side": "unknown"}
 
     # Directional bull: spot at/above lower breakeven (or short put level).

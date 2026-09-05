@@ -79,3 +79,9 @@ class KiteExecutionFacade:
         if segment:
             return dict(self._kite.margins(segment=segment))
         return dict(self._kite.margins())
+
+    def order_margins(self, orders: list) -> Any:
+        return self._kite.order_margins(list(orders))
+
+    def positions(self) -> dict:
+        return dict(self._kite.positions())

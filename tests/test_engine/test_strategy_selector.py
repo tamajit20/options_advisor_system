@@ -114,6 +114,12 @@ class TestMidIvRegime:
         assert result == "CALENDAR_SPREAD"
 
 
+class TestMissingIvRank:
+    def test_none_iv_rank_raises(self):
+        with pytest.raises(StrategyVeto, match="IV rank unavailable"):
+            select_strategy(iv_rank=None, trend="SIDEWAYS", indicators=_ind())
+
+
 class TestUnknownTrend:
     def test_writing_unknown_trend_raises(self):
         with pytest.raises(StrategyVeto):

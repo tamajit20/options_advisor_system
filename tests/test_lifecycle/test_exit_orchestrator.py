@@ -284,3 +284,15 @@ class TestExitNotificationSeverity:
         note = insert.call_args.args[0]
         assert note.severity == expected_sev
         assert note.notif_type == f"EXIT_{decision}"
+
+
+class TestPreEventNextSession:
+    def test_friday_checks_monday_not_saturday(self, mock_db, mocker):
+        friday = date(2026, 5, 1)
+        monday = date(2026, 5, 4)
+        ev = MagicMock()
+        ev.has_high_impact.return_value = False
+        mocker.patch.object(orch, "EventCalendarRepo", return_value=ev)
+        mocker.patch.object(orch.TradeRepo, "open_trades", return_value=[])
+        orch.run_exit_engine(mock_db, friday)
+        ev.has_high_impact.assert_called_once_with(monday, monday)

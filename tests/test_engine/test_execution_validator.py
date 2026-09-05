@@ -238,6 +238,20 @@ class TestStrikeDistance:
         assert not r.ok
         assert any("strike too close" in v for v in r.vetoes)
 
+    def test_iron_butterfly_atm_shorts_are_not_blocked(self):
+        # IB shorts ATM by design — the 1.5% buffer would veto every valid butterfly.
+        legs = [
+            {"leg_order": 1, "strike": 23000.0, "option_type": "CE", "action": "SELL"},
+            {"leg_order": 2, "strike": 23200.0, "option_type": "CE", "action": "BUY"},
+            {"leg_order": 3, "strike": 23000.0, "option_type": "PE", "action": "SELL"},
+            {"leg_order": 4, "strike": 22800.0, "option_type": "PE", "action": "BUY"},
+        ]
+        r = validate_execution(
+            _sug(strategy="IRON_BUTTERFLY"), legs, now=_NOW, today=_TODAY,
+        )
+        assert r.ok
+        assert r.details.get("strike_distance") == "skipped (ATM shorts are the structure)"
+
     def test_short_ce_well_above_spot_passes(self):
         # 23500 vs spot 23000 → 500 pts = 2.17% > 1.5%
         legs = [

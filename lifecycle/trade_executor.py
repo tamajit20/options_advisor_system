@@ -58,6 +58,49 @@ def _fills_from_suggested(legs: Sequence[dict]) -> list[TradeLegFill]:
     return out
 
 
+def _actual_max_profit(suggestion: dict, actual_net_credit: float) -> Optional[float]:
+    """Recompute rupee max-profit from fills; fall back to suggestion economics."""
+    sug_mp = suggestion.get("max_profit")
+    sug_ml = suggestion.get("max_loss")
+    try:
+        if actual_net_credit > 0:
+            return float(actual_net_credit)
+        if actual_net_credit < 0 and sug_mp is not None and sug_ml is not None:
+            width = float(sug_mp) + float(sug_ml)
+            return max(0.0, width - abs(actual_net_credit))
+    except (TypeError, ValueError):
+        pass
+    return sug_mp
+
+
+def _actual_max_loss(suggestion: dict, actual_net_credit: float) -> Optional[float]:
+    sug_mp = suggestion.get("max_profit")
+    sug_ml = suggestion.get("max_loss")
+    try:
+        if sug_mp is None or sug_ml is None:
+            return sug_ml
+        width = float(sug_mp) + float(sug_ml)
+        if actual_net_credit > 0:
+            return max(0.0, width - actual_net_credit)
+        if actual_net_credit < 0:
+            return abs(actual_net_credit)
+    except (TypeError, ValueError):
+        pass
+    return sug_ml
+
+
+def _require_positive_lot_size(legs: Sequence[dict], *, context: str) -> None:
+    for leg in legs:
+        try:
+            lot_size = int(leg.get("lot_size") or 0)
+        except (TypeError, ValueError):
+            lot_size = 0
+        if lot_size <= 0:
+            raise ValueError(
+                f"{context}: leg {leg.get('leg_order')} has missing or invalid lot_size"
+            )
+
+
 def _circuit_breaker_on(db: SQLServerConnection) -> bool:
     try:
         return RuntimeFlagsRepo(db).get_bool(
@@ -108,11 +151,29 @@ def mark_executed(
     if status != "PENDING":
         raise ValueError(f"Cannot execute suggestion with status {status}")
 
+    from database.broker_order_repo import BrokerOrderRepo
+    broker = BrokerOrderRepo(db)
+    pending_orders = broker.pending_for_suggestion(suggestion_id)
+    if pending_orders:
+        raise ValueError(
+            "Zerodha orders are already in flight for this suggestion — "
+            "wait or cancel on Kite before recording a manual fill"
+        )
+    orphans = broker.orphan_entry_fills(suggestion_id)
+    if orphans:
+        raise ValueError(
+            "Prior Zerodha entry fills exist without a recorded trade — "
+            "flatten on Kite before recording a manual fill"
+        )
+
+    cb_active = _circuit_breaker_on(db)
+    gate = validate_execution(
+        suggestion, legs, circuit_breaker_active=cb_active,
+    )
+    if cb_active and not gate.ok:
+        raise ValueError(f"Execution blocked: {gate.reason()}")
+
     if execute_at_suggested:
-        if _circuit_breaker_on(db):
-            raise ValueError(
-                "Execution blocked: daily P&L circuit breaker is active"
-            )
         fills = _fills_from_suggested(legs)
         if not fills:
             raise ValueError("No suggested prices on legs — cannot record at suggested values")
@@ -122,39 +183,33 @@ def mark_executed(
             spot_at_execution = float(suggestion["spot_at_generation"])
         if actual_stop_loss_level is None:
             actual_stop_loss_level = suggestion.get("stop_loss_level")
-        gate_passed = False
-    elif skip_execution_gate:
-        if _circuit_breaker_on(db):
-            raise ValueError(
-                "Execution blocked: daily P&L circuit breaker is active"
-            )
-        if not has_executed_fills:
+        has_executed_fills = True
+    elif not has_executed_fills:
+        if skip_execution_gate:
             raise ValueError("Enter a fill price for at least one leg before Execute")
+        sug.update_status(suggestion_id, "IGNORED")
+        db.commit()
+        logger.info("Suggestion %s marked IGNORED — no fills", suggestion_id)
+        return None
+    elif skip_execution_gate:
         if spot_at_execution is None and suggestion.get("spot_at_generation") is not None:
             spot_at_execution = float(suggestion["spot_at_generation"])
         if actual_stop_loss_level is None:
             actual_stop_loss_level = suggestion.get("stop_loss_level")
+
+    if gate.ok:
+        # Client skip / execute-at-suggested must not bypass a passing gate.
+        gate_passed = True
+    elif cb_active:
+        raise ValueError(f"Execution blocked: {gate.reason()}")
+    elif execute_at_suggested or skip_execution_gate:
+        # Stale / vetoed UI: record fills (suggested or typed) with gate_passed=False.
         gate_passed = False
     else:
-        if not has_executed_fills:
-            sug.update_status(suggestion_id, "IGNORED")
-            db.commit()
-            logger.info("Suggestion %s marked IGNORED — no fills", suggestion_id)
-            return None
-
-        cb_active = _circuit_breaker_on(db)
-
-        # Centralized pre-execution gate. ValueError lets the dashboard
-        # route surface a 400 with the exact veto reasons.
-        gate = validate_execution(
-            suggestion, legs, circuit_breaker_active=cb_active,
+        logger.warning(
+            "Execution blocked for %s: %s", suggestion_id, gate.reason()
         )
-        if not gate.ok:
-            logger.warning(
-                "Execution blocked for %s: %s", suggestion_id, gate.reason()
-            )
-            raise ValueError(f"Execution blocked: {gate.reason()}")
-        gate_passed = True
+        raise ValueError(f"Execution blocked: {gate.reason()}")
 
     executed_on = now_ist()
     for f in fills:
@@ -175,6 +230,8 @@ def mark_executed(
             actual_net_credit += sign * f.fill_price * lots_used * (leg["lot_size"] or 0)
         else:
             not_executed_legs.append(leg)
+
+    _require_positive_lot_size(executed_legs, context="mark_executed")
 
     if not executed_legs:
         # Should not happen — empty fills handled above.
@@ -215,8 +272,8 @@ def mark_executed(
         "executed_on":     executed_on,
         "position_type":   position_type,
         "net_credit_actual": actual_net_credit,
-        "actual_max_profit":      suggestion.get("max_profit"),
-        "actual_max_loss":        suggestion.get("max_loss"),
+        "actual_max_profit":      _actual_max_profit(suggestion, actual_net_credit),
+        "actual_max_loss":        _actual_max_loss(suggestion, actual_net_credit),
         "actual_upper_breakeven": suggestion.get("upper_breakeven"),
         "actual_lower_breakeven": suggestion.get("lower_breakeven"),
         "actual_stop_loss_level": actual_stop_loss_level if actual_stop_loss_level is not None else suggestion.get("stop_loss_level"),
@@ -303,8 +360,10 @@ def supplement_trade(
 
     fills_by_order = {f.leg_order: f for f in fills}
 
-    # Apply new fills
+    # Apply new fills — never overwrite a leg that is already executed.
     for leg in all_legs:
+        if leg.get("executed"):
+            continue
         f = fills_by_order.get(leg["leg_order"])
         if f and f.executed and f.fill_price is not None:
             lots_actual = (f.lots_override if f.lots_override else leg["lots"]) or None
@@ -326,6 +385,8 @@ def supplement_trade(
             new_credit += sign * float(leg["fill_price"] or 0) * int(lots_used) * int(leg["lot_size"] or 0)
         else:
             not_executed_updated.append(leg)
+
+    _require_positive_lot_size(executed_updated, context="supplement_trade")
 
     # Reclassify position
     state = diagnose(executed_updated, not_executed_updated)
@@ -354,6 +415,7 @@ def supplement_trade(
     broken_json = (json.dumps({"state": state, "options": broken_options})
                    if state != "FULL" else None)
     trd.update_position(trade_id, new_credit, position_type, broken_json)
+    db.commit()
 
 
 def close_trade_with_fills(
@@ -378,6 +440,10 @@ def close_trade_with_fills(
     trade = trd.get(trade_id)
     if trade is None:
         raise ValueError(f"Unknown trade: {trade_id}")
+    if str(trade.get("status") or "").upper() in ("CLOSED", "VOID", "EXPIRED"):
+        raise ValueError(
+            f"Trade status is {trade.get('status')!r} — cannot close again"
+        )
 
     all_legs = trd.legs_with_suggestion_info(trade_id)
     executed_legs = [l for l in all_legs if l["executed"]]
@@ -385,6 +451,16 @@ def close_trade_with_fills(
         raise ValueError(f"Trade {trade_id} has no executed legs to close")
 
     exits_by_order = {e["leg_order"]: e for e in exits}
+    missing = [
+        int(l["leg_order"]) for l in executed_legs
+        if exits_by_order.get(l["leg_order"]) is None
+        or exits_by_order[l["leg_order"]].get("exit_price") is None
+    ]
+    if missing:
+        raise ValueError(
+            "Close requires an exit price for every executed leg — missing "
+            f"leg(s) {', '.join(str(lo) for lo in missing)}"
+        )
     gross_pnl = 0.0
     txn_legs: list = []  # all actual buy/sell transactions for charge calculation
 

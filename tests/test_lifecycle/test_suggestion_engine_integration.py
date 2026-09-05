@@ -262,6 +262,64 @@ class TestJadeLizardVeto:
                 strategy_override="JADE_LIZARD",
             )
 
+    def test_jade_lizard_accepted_when_net_credit_covers_call_width(self, mocker):
+        """Valid Jade Lizard (credit/share ≥ call-spread width) is not upside-vetoed.
+
+        The previous guard divided net_premium() by lots×lot_size even though
+        net_premium is already per-share — that vetoed every constructible JL.
+        """
+        from contracts import SuggestionLeg
+        expiry = date(2026, 5, 29)
+
+        def _leg(order, strike, ot, action, px, hedge=None):
+            return SuggestionLeg(
+                leg_order=order,
+                hedge_pair_leg=hedge,
+                symbol="NIFTY",
+                expiry_date=expiry,
+                strike=strike,
+                option_type=ot,
+                action=action,
+                lots=1,
+                lot_size=75,
+                suggested_price=px,
+                suggested_price_low=px * 0.98,
+                suggested_price_high=px * 1.02,
+                leg_purpose_note="test",
+            )
+
+        # Call width 200 pts; credit 220 ≥ 200.
+        fat_legs = [
+            _leg(1, 22700.0, "PE", "SELL", 180.0),
+            _leg(2, 23100.0, "CE", "SELL", 50.0, 3),
+            _leg(3, 23300.0, "CE", "BUY", 10.0, 2),
+        ]
+        mocker.patch(
+            "engine.strategy_selector.leg_builder.build_jade_lizard",
+            return_value=fat_legs,
+        )
+        sug = assemble_suggestion(
+            suggestion_id="SUG-JL-OK",
+            underlying="NIFTY",
+            expiry=expiry,
+            expiry_type="Weekly",
+            dte=14,
+            spot=23000.0,
+            chain=_chain(),
+            indicators=_indicators(trend="BULLISH", iv_premium=1.3, adx=20.0),
+            confidence=_conf_result(True),
+            iv_rank=55.0,
+            atm_iv=0.25,
+            lots=1,
+            lot_size=75,
+            strategy_override="JADE_LIZARD",
+        )
+        assert sug.strategy == "JADE_LIZARD"
+        assert sug.economics.net_credit == pytest.approx(220.0)
+        assert sug.strategy_veto_reason is None or "upside risk" not in (
+            sug.strategy_veto_reason or ""
+        )
+
 
 # ---------------------------------------------------------------------------
 # C1d: Confidence gate failure → no suggestion

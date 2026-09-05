@@ -351,6 +351,60 @@ class TestLiveTradeOutlook:
         assert fit["direction_fit"] == "against"
         assert "rally" in fit["direction_label"].lower() or fit["direction_fit"] == "against"
 
+    def test_bull_call_spread_uses_upper_breakeven(self):
+        legs = [
+            {"leg_order": 1, "action": "BUY", "strike": 23000.0, "option_type": "CE",
+             "fill_price": 150.0, "lots": 1, "lot_size": 50},
+            {"leg_order": 2, "action": "SELL", "strike": 23200.0, "option_type": "CE",
+             "fill_price": 70.0, "lots": 1, "lot_size": 50},
+        ]
+        # Debit 80 → upper BE = 23080. Spot 23100 is in the profit zone.
+        fit = assess_direction_fit(
+            strategy="BULL_CALL_SPREAD",
+            underlying="NIFTY",
+            spot=23100.0,
+            upper_be=23080.0,
+            lower_be=22800.0,
+            legs=legs,
+        )
+        assert fit["direction_fit"] == "aligned"
+        fit_out = assess_direction_fit(
+            strategy="BULL_CALL_SPREAD",
+            underlying="NIFTY",
+            spot=23000.0,
+            upper_be=23080.0,
+            lower_be=22800.0,
+            legs=legs,
+        )
+        assert fit_out["direction_fit"] == "against"
+
+    def test_bear_put_spread_uses_lower_breakeven(self):
+        legs = [
+            {"leg_order": 1, "action": "BUY", "strike": 23000.0, "option_type": "PE",
+             "fill_price": 150.0, "lots": 1, "lot_size": 50},
+            {"leg_order": 2, "action": "SELL", "strike": 22800.0, "option_type": "PE",
+             "fill_price": 70.0, "lots": 1, "lot_size": 50},
+        ]
+        # Debit 80 → lower BE = 22920. Spot 22850 is in the profit zone.
+        fit = assess_direction_fit(
+            strategy="BEAR_PUT_SPREAD",
+            underlying="NIFTY",
+            spot=22850.0,
+            upper_be=23200.0,
+            lower_be=22920.0,
+            legs=legs,
+        )
+        assert fit["direction_fit"] == "aligned"
+        fit_out = assess_direction_fit(
+            strategy="BEAR_PUT_SPREAD",
+            underlying="NIFTY",
+            spot=23000.0,
+            upper_be=23200.0,
+            lower_be=22920.0,
+            legs=legs,
+        )
+        assert fit_out["direction_fit"] == "against"
+
     def test_direction_against_for_bull_put_below_short_strike(self):
         legs = [
             {"leg_order": 1, "action": "SELL", "strike": 23200.0, "option_type": "PE",
@@ -405,6 +459,26 @@ class TestProfitZoneDetail:
         )
         assert out["profit_zone_side"] == "inside"
         assert out["profit_zone_text"] == "Inside profit zone"
+
+    def test_bull_call_below_upper_needs_rally(self):
+        out = _profit_zone_detail(
+            strategy="BULL_CALL_SPREAD",
+            spot=23000.0,
+            lower_be=22800.0,
+            upper_be=23080.0,
+        )
+        assert out["profit_zone_side"] == "below_upper"
+        assert out["profit_zone_pts"] == pytest.approx(80.0, abs=0.01)
+
+    def test_bear_put_above_lower_needs_decline(self):
+        out = _profit_zone_detail(
+            strategy="BEAR_PUT_SPREAD",
+            spot=23000.0,
+            lower_be=22920.0,
+            upper_be=23200.0,
+        )
+        assert out["profit_zone_side"] == "above_lower"
+        assert out["profit_zone_pts"] == pytest.approx(80.0, abs=0.01)
 
     def test_iron_condor_above_upper_needs_decline(self):
         out = _profit_zone_detail(

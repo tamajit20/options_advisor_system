@@ -156,6 +156,32 @@ class TestSupplementTrade:
                                    fill_time=datetime(2026, 5, 4, 10, 0))]
         te.supplement_trade(mock_db, "TRD-1", new_fills)
         upd.assert_called_once()
+        mock_db.commit.assert_called()
+
+    def test_does_not_overwrite_already_executed_leg(self, mock_db, mocker, fake_legs):
+        mocker.patch("lifecycle.trade_executor.TradeRepo.get",
+                     return_value={"trade_id": "TRD-1"})
+        legs_with_state = [
+            {**l, "executed": (l["leg_order"] in (1, 3)),
+             "fill_price": 50.0 if l["leg_order"] in (1, 3) else None,
+             "lots_actual": l["lots"] if l["leg_order"] in (1, 3) else None}
+            for l in fake_legs
+        ]
+        mocker.patch("lifecycle.trade_executor.TradeRepo.legs_with_suggestion_info",
+                     return_value=legs_with_state)
+        upd_fill = mocker.patch("lifecycle.trade_executor.TradeRepo.update_leg_fill")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.update_position")
+        # Try to overwrite executed leg 1 and also fill pending leg 2
+        fills = [
+            TradeLegFill(leg_order=1, executed=True, fill_price=99.0,
+                         fill_time=datetime(2026, 5, 4, 10, 0)),
+            TradeLegFill(leg_order=2, executed=True, fill_price=30.0,
+                         fill_time=datetime(2026, 5, 4, 10, 0)),
+        ]
+        te.supplement_trade(mock_db, "TRD-1", fills)
+        updated_orders = [c.args[1] for c in upd_fill.call_args_list]
+        assert 1 not in updated_orders
+        assert 2 in updated_orders
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +229,90 @@ class TestCloseTradeWithFills:
         # BUY:  -(25-12.5)*75 = -937.5 × 2 = -1875
         # gross = 3750 - 1875 = 1875
         assert gross == pytest.approx(1875.0)
+
+    def test_rejects_already_closed_trade(self, mock_db, mocker):
+        mocker.patch("lifecycle.trade_executor.TradeRepo.get",
+                     return_value={"trade_id": "TRD-1", "status": "CLOSED"})
+        with pytest.raises(ValueError, match="cannot close again"):
+            te.close_trade_with_fills(
+                mock_db, "TRD-1",
+                [{"leg_order": 1, "exit_price": 10.0, "exit_time": None}],
+            )
+
+    def test_requires_exit_for_every_executed_leg(self, mock_db, mocker, fake_legs):
+        mocker.patch("lifecycle.trade_executor.TradeRepo.get",
+                     return_value={"trade_id": "TRD-1", "status": "ACTIVE"})
+        legs_open = [
+            {**l, "executed": True, "fill_price": 50.0, "lots_actual": l["lots"]}
+            for l in fake_legs
+        ]
+        mocker.patch("lifecycle.trade_executor.TradeRepo.legs_with_suggestion_info",
+                     return_value=legs_open)
+        with pytest.raises(ValueError, match="every executed leg"):
+            te.close_trade_with_fills(
+                mock_db, "TRD-1",
+                [{"leg_order": 1, "exit_price": 25.0, "exit_time": None}],
+            )
+
+    @pytest.mark.parametrize("status", ["VOID", "EXPIRED"])
+    def test_rejects_void_or_expired_trade(self, mock_db, mocker, status):
+        mocker.patch("lifecycle.trade_executor.TradeRepo.get",
+                     return_value={"trade_id": "TRD-1", "status": status})
+        with pytest.raises(ValueError, match="cannot close again"):
+            te.close_trade_with_fills(
+                mock_db, "TRD-1",
+                [{"leg_order": 1, "exit_price": 10.0, "exit_time": None}],
+            )
+
+    def test_close_after_kite_flatten_is_not_blocked(self, mock_db, mocker, fake_legs):
+        """Closing on Kite then recording exits here must still work.
+
+        COMPLETE (or even leftover OPEN) broker rows are ignored — close never
+        consults options_broker_orders.
+        """
+        mocker.patch("lifecycle.trade_executor.TradeRepo.get",
+                     return_value={"trade_id": "TRD-1", "status": "ACTIVE"})
+        prices = {1: 50.0, 2: 25.0, 3: 50.0, 4: 25.0}
+        legs_open = [
+            {**l, "executed": True, "fill_price": prices[l["leg_order"]],
+             "lots_actual": l["lots"]} for l in fake_legs
+        ]
+        mocker.patch("lifecycle.trade_executor.TradeRepo.legs_with_suggestion_info",
+                     return_value=legs_open)
+        mocker.patch("lifecycle.trade_executor.TradeRepo.update_leg_exit")
+        close = mocker.patch("lifecycle.trade_executor.TradeRepo.close_trade")
+        mock_db.fetch_all.return_value = [
+            {"status": "COMPLETE", "operation": "ENTRY", "trade_id": "TRD-1"},
+            {"status": "COMPLETE", "operation": "EXIT", "trade_id": "TRD-1"},
+        ]
+        exits = [
+            {"leg_order": i, "exit_price": 20.0, "exit_time": datetime(2026, 5, 7, 15, 0)}
+            for i in (1, 2, 3, 4)
+        ]
+        te.close_trade_with_fills(mock_db, "TRD-1", exits)
+        close.assert_called_once()
+        mock_db.commit.assert_called()
+
+    def test_close_not_blocked_when_kite_orders_still_open(
+        self, mock_db, mocker, fake_legs,
+    ):
+        mocker.patch("lifecycle.trade_executor.TradeRepo.get",
+                     return_value={"trade_id": "TRD-1", "status": "ACTIVE"})
+        legs_open = [
+            {**l, "executed": True, "fill_price": 50.0, "lots_actual": l["lots"]}
+            for l in fake_legs
+        ]
+        mocker.patch("lifecycle.trade_executor.TradeRepo.legs_with_suggestion_info",
+                     return_value=legs_open)
+        mocker.patch("lifecycle.trade_executor.TradeRepo.update_leg_exit")
+        close = mocker.patch("lifecycle.trade_executor.TradeRepo.close_trade")
+        mock_db.fetch_all.return_value = [{"status": "OPEN", "operation": "EXIT"}]
+        exits = [
+            {"leg_order": i, "exit_price": 20.0, "exit_time": None}
+            for i in (1, 2, 3, 4)
+        ]
+        te.close_trade_with_fills(mock_db, "TRD-1", exits)
+        close.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +572,108 @@ class TestActualNetCreditComputation:
         # SELL = +1, BUY = -1
         # net = (60 + 55 - 30 - 25) × 75 = 60 × 75 = 4500
         assert call_arg["net_credit_actual"] == pytest.approx(4500.0)
+        # Credit trade: max profit = actual credit; max loss = suggested width − credit
+        assert call_arg["actual_max_profit"] == pytest.approx(4500.0)
+        assert call_arg["actual_max_loss"] == pytest.approx(15500.0)
+
+    def test_blocks_manual_fill_when_zerodha_orders_in_flight(
+        self, mock_db, mocker, fake_suggestion, fake_legs
+    ):
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        mock_db.fetch_all.return_value = [{"id": 1, "status": "OPEN"}]
+        fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
+                              fill_time=datetime(2026, 5, 4, 9, 30))
+                 for i in (1, 2, 3, 4)]
+        with pytest.raises(ValueError, match="already in flight"):
+            te.mark_executed(mock_db, "SUG-X", fills)
+
+    def test_blocks_manual_fill_when_orphan_entry_fills_exist(
+        self, mock_db, mocker, fake_suggestion, fake_legs
+    ):
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        mocker.patch(
+            "database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion",
+            return_value=[],
+        )
+        mocker.patch(
+            "database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills",
+            return_value=[{"id": 1, "status": "COMPLETE", "trade_id": None}],
+        )
+        fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
+                              fill_time=datetime(2026, 5, 4, 9, 30))
+                 for i in (1, 2, 3, 4)]
+        with pytest.raises(ValueError, match="without a recorded trade"):
+            te.mark_executed(mock_db, "SUG-X", fills)
+
+    def test_completed_booked_kite_orders_do_not_block_manual_fill(
+        self, mock_db, mocker, fake_suggestion, fake_legs
+    ):
+        """COMPLETE rows with a trade_id are not in-flight and not orphans."""
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.update_status")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.next_trade_id",
+                     return_value="TRD-KITE")
+        ins = mocker.patch("lifecycle.trade_executor.TradeRepo.insert")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.insert_legs")
+        mocker.patch(
+            "database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion",
+            return_value=[],
+        )
+        mocker.patch(
+            "database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills",
+            return_value=[],
+        )
+        fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
+                              fill_time=datetime(2026, 5, 4, 9, 30))
+                 for i in (1, 2, 3, 4)]
+        tid = te.mark_executed(mock_db, "SUG-X", fills)
+        assert tid == "TRD-KITE"
+        assert ins.called
+
+    def test_ignore_not_blocked_by_open_kite_orders(
+        self, mock_db, mocker, fake_suggestion, fake_legs
+    ):
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        update_status = mocker.patch(
+            "lifecycle.trade_executor.SuggestionRepo.update_status")
+        mock_db.fetch_all.return_value = [{"status": "OPEN"}]
+        result = te.mark_executed(mock_db, "SUG-X", [])
+        assert result is None
+        update_status.assert_called_with("SUG-X", "IGNORED")
+
+
+class TestActualMaxEconomics:
+    def test_credit_uses_actual_credit(self):
+        sug = {"max_profit": 6000.0, "max_loss": 14000.0}
+        assert te._actual_max_profit(sug, 4500.0) == pytest.approx(4500.0)
+        assert te._actual_max_loss(sug, 4500.0) == pytest.approx(15500.0)
+
+    def test_debit_scales_from_suggested_width(self):
+        sug = {"max_profit": 12000.0, "max_loss": 3000.0}
+        assert te._actual_max_profit(sug, -4000.0) == pytest.approx(11000.0)
+        assert te._actual_max_loss(sug, -4000.0) == pytest.approx(4000.0)
+
+    def test_zero_credit_keeps_suggestion_values(self):
+        sug = {"max_profit": 6000.0, "max_loss": 14000.0}
+        assert te._actual_max_profit(sug, 0.0) == 6000.0
+        assert te._actual_max_loss(sug, 0.0) == 14000.0
+
+    def test_missing_suggestion_economics(self):
+        assert te._actual_max_profit({}, 100.0) == pytest.approx(100.0)
+        assert te._actual_max_loss({}, 100.0) is None
+        assert te._actual_max_profit({"max_profit": 1.0}, -50.0) == 1.0
 
 
 class TestLotsOverride:
@@ -496,3 +708,81 @@ class TestLotsOverride:
         # BUY:  -(30*1 + 25*1)*75 = -55×75 = -4125
         expected = (60 * 2 + 55 * 2 - 30 * 1 - 25 * 1) * 75
         assert call_arg["net_credit_actual"] == pytest.approx(float(expected))
+
+
+class TestExecutionFlagsAndLotSize:
+    def test_execute_at_suggested_records_gate_passed_when_gate_ok(
+        self, mock_db, mocker, fake_suggestion, fake_legs,
+    ):
+        legs = [{**leg, "suggested_price": 50.0} for leg in fake_legs]
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=legs)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.update_status")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.next_trade_id",
+                     return_value="TRD-GATE-OK")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.insert")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.insert_legs")
+        mocker.patch(
+            "lifecycle.trade_executor.RuntimeFlagsRepo.get_bool",
+            return_value=False,
+        )
+        prov = mocker.patch(
+            "lifecycle.trade_executor.TradeRepo.write_execution_provenance",
+        )
+        tid = te.mark_executed(
+            mock_db, "SUG-X", [], execute_at_suggested=True,
+        )
+        assert tid == "TRD-GATE-OK"
+        assert prov.call_args.kwargs.get("gate_passed") is True
+
+    def test_skip_flag_ignored_when_gate_ok(
+        self, mock_db, mocker, fake_suggestion, fake_legs,
+    ):
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.update_status")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.next_trade_id",
+                     return_value="TRD-SKIP-OK")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.insert")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.insert_legs")
+        mocker.patch(
+            "lifecycle.trade_executor.RuntimeFlagsRepo.get_bool",
+            return_value=False,
+        )
+        prov = mocker.patch(
+            "lifecycle.trade_executor.TradeRepo.write_execution_provenance",
+        )
+        fills = [
+            TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
+                         fill_time=datetime(2026, 5, 4, 9, 30))
+            for i in (1, 2, 3, 4)
+        ]
+        tid = te.mark_executed(
+            mock_db, "SUG-X", fills, skip_execution_gate=True,
+        )
+        assert tid == "TRD-SKIP-OK"
+        assert prov.call_args.kwargs.get("gate_passed") is True
+
+    def test_rejects_zero_lot_size(
+        self, mock_db, mocker, fake_suggestion, fake_legs,
+    ):
+        legs = [{**leg, "lot_size": 0} for leg in fake_legs]
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=legs)
+        mocker.patch(
+            "lifecycle.trade_executor.RuntimeFlagsRepo.get_bool",
+            return_value=False,
+        )
+        fills = [
+            TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
+                         fill_time=datetime(2026, 5, 4, 9, 30))
+            for i in (1, 2, 3, 4)
+        ]
+        with pytest.raises(ValueError, match="lot_size"):
+            te.mark_executed(mock_db, "SUG-X", fills)

@@ -97,8 +97,8 @@ class TestSelectStrategyMidRegime:
 
 # ---------------------------------------------------------------------------
 def _all_pass_confidence():
-    checks = [ConfidenceCheck(label=f"c{i}", status="PASS", detail="") for i in range(7)]
-    return ConfidenceResult(checks=checks, failed_reasons=[], score=7, total=7,
+    checks = [ConfidenceCheck(label=f"c{i}", status="PASS", detail="") for i in range(8)]
+    return ConfidenceResult(checks=checks, failed_reasons=[], score=8, total=8,
                             all_passed=True)
 
 
@@ -218,6 +218,7 @@ class TestPerStrategyIvPremiumCap:
             strategy_override="LONG_STRADDLE",
         )
         assert sug.strategy == "LONG_STRADDLE"
+        assert sug.economics.estimated_net_pnl is None
 
     def test_long_call_vetoed_above_cap(self, sample_chain):
         ind = self._ind(iv_premium=1.30, trend="BULLISH")

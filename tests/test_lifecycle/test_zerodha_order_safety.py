@@ -9,6 +9,7 @@ from lifecycle.zerodha_executor import (
     ZerodhaExecutionError,
     _assert_instrument_matches_leg,
     _build_leg_plans,
+    _kite_order_is_dead,
     _transaction_type_for_leg,
     execute_suggestion_in_zerodha,
 )
@@ -47,6 +48,45 @@ def _leg(lo: int, action: str, opt: str, strike: float = 23000.0) -> dict:
     }
 
 
+def test_rollback_reverses_first_leg_partial_when_completed_empty(mocker):
+    from lifecycle.zerodha_executor import (
+        LegFillOutcome,
+        _rollback_filled_legs,
+    )
+    from utils import now_ist
+
+    facade = MagicMock()
+    db = MagicMock()
+    reverse = mocker.patch("lifecycle.zerodha_executor._reverse_partial_leg")
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.rollback_complete_for_leg",
+        return_value=False,
+    )
+    leg = _leg(1, "BUY", "CE")
+    inst = _inst("CE")
+    partial = LegFillOutcome(
+        leg_order=1,
+        fill_price=99.0,
+        fill_time=now_ist(),
+        kite_order_id="OID-P",
+        broker_row_id=1,
+        filled_quantity=25,
+        planned_quantity=50,
+    )
+    _rollback_filled_legs(
+        facade, db,
+        suggestion_id="SUG-1",
+        trade_id=None,
+        legs_by_order={1: leg},
+        completed=[],
+        mode="entry",
+        inst_map={1: inst},
+        partial_on_fail=partial,
+    )
+    reverse.assert_called_once()
+    assert reverse.call_args.kwargs["partial"].filled_quantity == 25
+
+
 class TestTransactionType:
     def test_entry_uses_leg_action(self):
         assert _transaction_type_for_leg(_leg(1, "BUY", "CE"), "entry") == "BUY"
@@ -63,6 +103,18 @@ class TestTransactionType:
     def test_invalid_action_rejected(self):
         with pytest.raises(ZerodhaExecutionError, match="invalid action"):
             _transaction_type_for_leg(_leg(1, "HOLD", "CE"), "entry")
+
+
+class TestDeadOrderRetry:
+    def test_rejected_order_is_dead(self):
+        facade = MagicMock()
+        facade.order_history.return_value = [{"status": "REJECTED"}]
+        assert _kite_order_is_dead(facade, "OID-1") is True
+
+    def test_open_order_is_not_dead(self):
+        facade = MagicMock()
+        facade.order_history.return_value = [{"status": "OPEN"}]
+        assert _kite_order_is_dead(facade, "OID-1") is False
 
 
 class TestInstrumentMatch:

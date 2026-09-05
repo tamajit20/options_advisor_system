@@ -145,6 +145,47 @@ def _assemble_sized_suggestion(
     return sug
 
 
+def _append_ic_ib_companions(
+    *,
+    primary: Suggestion,
+    suggestions: List[Suggestion],
+    existing_names: list,
+    assemble_kw: dict,
+    sug_repo: SuggestionRepo,
+    id_date: date,
+    provenance,
+    db: SQLServerConnection,
+) -> None:
+    """BPS/BCS companions for IC/IB — cheaper one-side versions of the wings."""
+    if primary.strategy not in ("IRON_CONDOR", "IRON_BUTTERFLY"):
+        return
+    for companion_strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
+        try:
+            comp_id = sug_repo.next_suggestion_id(id_date)
+            comp = assemble_suggestion(
+                suggestion_id=comp_id,
+                lots=1,
+                companion_mode=True,
+                strategy_override=companion_strategy,
+                **{k: v for k, v in assemble_kw.items()
+                   if k not in ("strategy_override", "companion_mode",
+                                "lots", "suggestion_id")},
+            )
+            comp.pricing_provenance = provenance
+            suggestions.append(comp)
+            existing_names.append(comp.trade_name)
+            _attach_em_calibration_warning(db, comp)
+            logger.info(
+                "Companion suggestion %s (%s) generated alongside %s",
+                comp.trade_name, companion_strategy, primary.trade_name,
+            )
+        except StrategyVeto as veto:
+            logger.debug(
+                "Companion %s veto for %s %s: %s",
+                companion_strategy, primary.underlying, primary.expiry_date, veto,
+            )
+
+
 def _attach_em_calibration_warning(db: SQLServerConnection, sug: Suggestion) -> None:
     """Look up the (underlying, dte_band) calibration cohort for ``sug`` and
     attach a warning string when the median realised/expected deviates
@@ -725,9 +766,19 @@ def _evaluate_underlying(
         )
 
         if use_indicators.trend == "SIDEWAYS":
+            if iv_rank is None:
+                no_suggestions.append(NoSuggestion(
+                    generated_on=now_ist(),
+                    underlying=symbol,
+                    confidence=use_confidence,
+                    reason=f"[{expiry_type} {use_expiry}] IV rank unavailable "
+                           f"— cannot pick a sideways regime pair",
+                ))
+                continue
             range_strat, breakout_strat = resolve_regime_pair_strategies(
-                iv_rank=float(iv_rank or 0.0),
+                iv_rank=float(iv_rank),
                 has_long_vol_catalyst=_has_lv_catalyst,
+                iv_premium=getattr(use_indicators, "iv_premium", None),
             )
             pair_specs: list[tuple[str, str]] = [("range", range_strat)]
             pairing = breakout_strat is not None
@@ -850,6 +901,16 @@ def _evaluate_underlying(
             if built_pair:
                 for sug, _ptype in built_pair:
                     suggestions.append(sug)
+                    _append_ic_ib_companions(
+                        primary=sug,
+                        suggestions=suggestions,
+                        existing_names=existing_names,
+                        assemble_kw=_assemble_kw,
+                        sug_repo=sug_repo,
+                        id_date=_id_date,
+                        provenance=provenance,
+                        db=db,
+                    )
                 continue
 
             no_suggestions.append(NoSuggestion(
@@ -880,53 +941,20 @@ def _evaluate_underlying(
                 reason=f"[{expiry_type} {use_expiry}] Strategy veto: {veto}",
             ))
 
-        # When the primary is IC or IB, also generate BPS and BCS as cheaper
-        # companion suggestions (half the margin — same put/call sides individually).
-        if primary_suggestion is not None and primary_suggestion.strategy in (
-            "IRON_CONDOR", "IRON_BUTTERFLY"
-        ):
-            assert indicators.trend == "SIDEWAYS", (
-                f"BUG: IC/IB generated for non-SIDEWAYS trend '{indicators.trend}' "
-                f"on {symbol} — check strategy_selector.select_strategy()"
+        # Directional / leftover path. IC/IB companions for high-IV sideways
+        # are generated in the writing-only branch above (that path continues
+        # before we get here).
+        if primary_suggestion is not None:
+            _append_ic_ib_companions(
+                primary=primary_suggestion,
+                suggestions=suggestions,
+                existing_names=existing_names,
+                assemble_kw=_assemble_kw,
+                sug_repo=sug_repo,
+                id_date=_id_date,
+                provenance=provenance,
+                db=db,
             )
-            for companion_strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
-                try:
-                    comp_id = sug_repo.next_suggestion_id(_id_date)
-                    comp = assemble_suggestion(
-                        suggestion_id=comp_id,
-                        underlying=symbol,
-                        expiry=expiry,
-                        expiry_type=expiry_type,
-                        dte=entry_dte,
-                        spot=spot,
-                        chain=chain,
-                        indicators=indicators,
-                        confidence=confidence,
-                        iv_rank=iv_rank,
-                        atm_iv=atm_iv,
-                        lots=1,
-                        lot_size=lot_size,
-                        existing_trade_names=existing_names,
-                        generated_on=now_ist(),
-                        strategy_override=companion_strategy,
-                        companion_mode=True,
-                        execution_window=execution_window,
-                        data_date=trade_date,
-                        entry_date=entry_day,
-                        spot_data_date=actual_spot_date,
-                        fii_data_date=actual_fii_date,
-                        vix_data_date=actual_vix_date,
-                        oi_pcr_change=indicators.oi_pcr_change,
-                    )
-                    comp.pricing_provenance = provenance
-                    suggestions.append(comp)
-                    existing_names.append(comp.trade_name)
-                    _attach_em_calibration_warning(db, comp)
-                    logger.info("Companion suggestion %s (%s) generated alongside %s",
-                                comp.trade_name, companion_strategy, primary_suggestion.trade_name)
-                except StrategyVeto as veto:
-                    logger.debug("Companion %s veto for %s %s: %s",
-                                 companion_strategy, symbol, expiry, veto)
 
     return suggestions, no_suggestions  # always returns tuple — never None
 

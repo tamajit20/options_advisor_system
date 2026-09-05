@@ -1716,8 +1716,10 @@ def create_app() -> Flask:
         from lifecycle.zerodha_executor import (
             ZerodhaExecutionError,
             execute_suggestion_in_zerodha,
+            execute_suggestion_in_zerodha_async,
             zerodha_execution_ready,
         )
+        from config import ZERODHA_EXECUTION_CONFIG
         if not zerodha_execution_ready(db):
             return jsonify({
                 "error": (
@@ -1730,7 +1732,25 @@ def create_app() -> Flask:
         from lifecycle.zerodha_executor import parse_leg_limits
         leg_limits = parse_leg_limits(payload.get("leg_limits"))
         ack_oob = bool(payload.get("ack_out_of_band"))
+        use_async = payload.get("async")
+        if use_async is None:
+            use_async = bool(ZERODHA_EXECUTION_CONFIG.get("async_execution_default", True))
+        else:
+            use_async = bool(use_async)
         try:
+            if use_async:
+                outcome = execute_suggestion_in_zerodha_async(
+                    db, sid,
+                    spot_at_execution=float(spot_raw) if spot_raw is not None else None,
+                    leg_limits=leg_limits or None,
+                    ack_out_of_band=ack_oob,
+                )
+                return jsonify({
+                    "ok": True,
+                    "async": True,
+                    "job_id": outcome.job_id,
+                    "message": outcome.message,
+                }), 202
             outcome = execute_suggestion_in_zerodha(
                 db, sid,
                 spot_at_execution=float(spot_raw) if spot_raw is not None else None,
@@ -1744,19 +1764,25 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 500
         return jsonify({
             "ok": True,
+            "async": False,
             "trade_id": outcome.trade_id,
             "message": outcome.message,
+            "warnings": outcome.warnings,
+            "job_id": outcome.job_id,
             "leg_fills": [
                 {
                     "leg_order": f.leg_order,
                     "fill_price": f.fill_price,
                     "fill_time": f.fill_time.isoformat(),
                     "kite_order_id": f.kite_order_id,
+                    "filled_quantity": f.filled_quantity,
                 }
                 for f in outcome.leg_fills
             ],
             "account": _zerodha_account_for_api(force_refresh=True),
         })
+
+    @app.route("/api/suggestion/<sid>/zerodha-orders")
     @_with_db
     def api_zerodha_orders_for_suggestion(db: SQLServerConnection, sid: str):
         """Live broker-order status for in-flight Zerodha entry execution."""
@@ -1937,8 +1963,10 @@ def create_app() -> Flask:
         from lifecycle.zerodha_executor import (
             ZerodhaExecutionError,
             close_trade_in_zerodha,
+            close_trade_in_zerodha_async,
             zerodha_execution_ready,
         )
+        from config import ZERODHA_EXECUTION_CONFIG
         if not zerodha_execution_ready(db):
             return jsonify({
                 "error": (
@@ -1950,7 +1978,24 @@ def create_app() -> Flask:
         from lifecycle.zerodha_executor import parse_leg_limits
         leg_limits = parse_leg_limits(payload.get("leg_limits"))
         ack_oob = bool(payload.get("ack_out_of_band"))
+        use_async = payload.get("async")
+        if use_async is None:
+            use_async = bool(ZERODHA_EXECUTION_CONFIG.get("async_execution_default", True))
+        else:
+            use_async = bool(use_async)
         try:
+            if use_async:
+                outcome = close_trade_in_zerodha_async(
+                    db, trade_id,
+                    leg_limits=leg_limits or None,
+                    ack_out_of_band=ack_oob,
+                )
+                return jsonify({
+                    "ok": True,
+                    "async": True,
+                    "job_id": outcome.job_id,
+                    "message": outcome.message,
+                }), 202
             outcome = close_trade_in_zerodha(
                 db, trade_id,
                 leg_limits=leg_limits or None,
@@ -1963,14 +2008,17 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 500
         return jsonify({
             "ok": True,
+            "async": False,
             "trade_id": outcome.trade_id,
             "message": outcome.message,
+            "warnings": outcome.warnings,
             "leg_fills": [
                 {
                     "leg_order": f.leg_order,
                     "fill_price": f.fill_price,
                     "fill_time": f.fill_time.isoformat(),
                     "kite_order_id": f.kite_order_id,
+                    "filled_quantity": f.filled_quantity,
                 }
                 for f in outcome.leg_fills
             ],
@@ -1998,6 +2046,57 @@ def create_app() -> Flask:
             "overall_status": overall,
             "filled_count": filled,
             "total_orders": len(rows),
+        })
+
+    @app.route("/api/zerodha-execution-jobs/<int:job_id>")
+    @_with_db
+    def api_zerodha_execution_job(db: SQLServerConnection, job_id: int):
+        from lifecycle.zerodha_execution_job import job_status_dict
+        row = job_status_dict(db, job_id)
+        if row is None:
+            return jsonify({"error": "Job not found"}), 404
+        return jsonify(row)
+
+    @app.route("/api/trades/<trade_id>/zerodha-supplement", methods=["POST"])
+    @_with_db
+    def api_zerodha_supplement(db: SQLServerConnection, trade_id: str):
+        auth_block = _zerodha_execution_auth_required()
+        if auth_block is not None:
+            return auth_block
+        from lifecycle.zerodha_executor import (
+            ZerodhaExecutionError,
+            execute_supplement_in_zerodha,
+            parse_leg_limits,
+            zerodha_execution_ready,
+        )
+        if not zerodha_execution_ready(db):
+            return jsonify({"error": "Zerodha execution is not ready"}), 403
+        payload = request.get_json(silent=True) or {}
+        leg_limits = parse_leg_limits(payload.get("leg_limits"))
+        ack_oob = bool(payload.get("ack_out_of_band"))
+        try:
+            outcome = execute_supplement_in_zerodha(
+                db, trade_id,
+                leg_limits=leg_limits or None,
+                ack_out_of_band=ack_oob,
+            )
+        except ZerodhaExecutionError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({
+            "ok": True,
+            "trade_id": outcome.trade_id,
+            "message": outcome.message,
+            "warnings": outcome.warnings,
+            "leg_fills": [
+                {
+                    "leg_order": f.leg_order,
+                    "fill_price": f.fill_price,
+                    "fill_time": f.fill_time.isoformat(),
+                    "kite_order_id": f.kite_order_id,
+                }
+                for f in outcome.leg_fills
+            ],
+            "account": _zerodha_account_for_api(force_refresh=True),
         })
 
     @app.route("/api/trades/<trade_id>", methods=["DELETE"])

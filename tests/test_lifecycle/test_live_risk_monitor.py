@@ -1007,6 +1007,17 @@ class TestEventEvePreBreach:
                  if c.kwargs.get("notif_type") == "PRE_BREACH_WARNING"]
         assert len(warns) == 0
 
+    def test_friday_queries_next_trading_day(self):
+        friday = datetime(2026, 5, 1, 11, 0)
+        _m, _n, bus, state, events_repo = self._build(
+            has_event_tomorrow=False, clock_at=friday,
+        )
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 100.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 100.0))
+        events_repo.has_high_impact.assert_called_with(
+            date(2026, 5, 4), date(2026, 5, 4),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Level breach transition log (ENTER / EXIT)
@@ -1173,3 +1184,39 @@ def test_calendar_spread_mtm_uses_distinct_expiries():
     assert "BANKNIFTY|2026-09-30|56000.0|CE" in keys
     assert captured[-1]["leg_ltps"]["BANKNIFTY|2026-08-28|56000.0|CE"] == pytest.approx(180.0)
     assert captured[-1]["leg_ltps"]["BANKNIFTY|2026-09-30|56000.0|CE"] == pytest.approx(480.0)
+
+
+def test_jade_spot_stop_uses_one_structure_qty():
+    """Jade downside stop is short_put − 0.5×credit/share.
+
+    entry_net_credit is total ₹. Dividing by the sum of qty across all three
+    legs would shrink credit/share 3× and trip the stop too early.
+    """
+    expiry = date(2026, 5, 28)
+    legs = [
+        _LegRef(
+            leg_order=1, action="SELL", strike=22700.0, option_type="PE",
+            fill_price=180.0, lots=1, lot_size=75,
+            key=("NIFTY", expiry, 22700.0, "PE"),
+        ),
+        _LegRef(
+            leg_order=2, action="SELL", strike=23100.0, option_type="CE",
+            fill_price=50.0, lots=1, lot_size=75,
+            key=("NIFTY", expiry, 23100.0, "CE"),
+        ),
+        _LegRef(
+            leg_order=3, action="BUY", strike=23300.0, option_type="CE",
+            fill_price=10.0, lots=1, lot_size=75,
+            key=("NIFTY", expiry, 23300.0, "CE"),
+        ),
+    ]
+    state = _TradeState(
+        trade_id="T-JL", trade_name="Jade",
+        strategy="JADE_LIZARD", underlying="NIFTY", expiry=expiry,
+        entry_net_credit=16500.0,  # 220/share × 75
+        max_profit=16500.0, max_loss=8000.0,
+        sl_level=None, legs=legs,
+    )
+    # stop = 22700 − 110 = 22590
+    assert LiveRiskMonitor._spot_breached(state, 22620.0) is False
+    assert LiveRiskMonitor._spot_breached(state, 22580.0) is True

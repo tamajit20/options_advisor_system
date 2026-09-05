@@ -441,6 +441,18 @@ class KiteWSRunner:
         for cb_name in ("on_reconnect", "on_noreconnect"):
             if hasattr(t, cb_name):
                 setattr(t, cb_name, self._on_kite_reconnect)
+        if hasattr(t, "on_order_update"):
+            t.on_order_update = self._on_order_update
+
+    def _on_order_update(self, ws, data) -> None:  # noqa: ARG002
+        """Kite order postbacks — shared file for dashboard execution polling."""
+        if not isinstance(data, dict):
+            return
+        try:
+            from providers.zerodha.order_updates import persist_order_update
+            persist_order_update(data)
+        except Exception:
+            logger.exception("order postback persist failed")
 
     def _connect_blocking(self) -> None:
         """Run the WS in this thread. `KiteTicker.connect()` blocks until

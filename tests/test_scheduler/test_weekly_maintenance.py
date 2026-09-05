@@ -54,6 +54,9 @@ class TestWeeklyLogCleanup:
         mocker.patch("database.log_repo.LogRepo", return_value=log_repo)
         mocker.patch("database.log_repo.JobLogRepo", return_value=job_log_repo)
         mocker.patch("database.models.TradeMtmSnapshotRepo", return_value=mtm_repo)
+        job_repo = MagicMock()
+        job_repo.delete_older_than.return_value = 0
+        mocker.patch("database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo", return_value=job_repo)
         broker_cls = mocker.patch("database.broker_order_repo.BrokerOrderRepo")
 
         sched.job_weekly_log_cleanup()
@@ -64,6 +67,7 @@ class TestWeeklyLogCleanup:
         assert log_repo.delete_older_than.call_count == 1
         assert job_log_repo.delete_older_than.call_count == 1
         mtm_repo.archive_non_active.assert_called_once()
+        job_repo.delete_older_than.assert_called_once()
         broker_cls.assert_not_called()
         patched_db.commit.assert_called_once()
 

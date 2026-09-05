@@ -278,19 +278,19 @@ STRATEGY_CONFIG = {
     # Confidence — tiered gating
     # Hard gate (DTE): any FAIL = no suggestion regardless of score
     # Soft gates (IV Rank, VIX, PCR, OI Walls, Trend, IV premium, FII): SOFT_FAIL
-    #   if condition not met; trade proceeds if at least soft_gate_min_pass of 7 pass.
+    #   if condition not met; trade proceeds if at least soft_gate_min_pass of 8 pass.
     # Event gate: SOFT_FAIL warning only — not counted in the soft-gate tally.
     "confidence_min_pass_count": 7,     # legacy — no longer used by engine
-    "soft_gate_min_pass": 5,            # need ≥5 of 7 soft gates to pass
+    "soft_gate_min_pass": 5,            # need ≥5 of 8 soft gates to pass
 
-    # Phase 3: per-strategy soft-gate minimum (Naked longs are the riskiest —
-    # require all 7 soft gates. Debit / uncapped — 6/7. Spreads default to 5/7.)
+    # Phase 3: per-strategy soft-gate minimum (8 soft gates in confidence.evaluate).
+    # Naked longs require all 8. Debit / uncapped / jade allow one miss.
     "strategy_min_soft_pass": {
-        "LONG_CALL":      7,
-        "LONG_PUT":       7,
-        "LONG_STRADDLE":  6,
-        "LONG_STRANGLE":  6,
-        "JADE_LIZARD":    6,
+        "LONG_CALL":      8,
+        "LONG_PUT":       8,
+        "LONG_STRADDLE":  7,
+        "LONG_STRANGLE":  7,
+        "JADE_LIZARD":    7,
     },
 
     # IV premium vs realised volatility (HV-20) thresholds — REGIME-WIDE GATE
@@ -1061,8 +1061,24 @@ ZERODHA_EXECUTION_CONFIG = {
     "order_max_retries": _env_int("OPT_ZERODHA_ORDER_MAX_RETRIES", 3),
     # LIMIT price offset from LTP: BUY pays up, SELL accepts less (better fill odds).
     "limit_slippage_pct": float(_env("OPT_ZERODHA_LIMIT_SLIPPAGE_PCT", "0.5")),
+    "limit_slip_walk_per_retry": float(_env("OPT_ZERODHA_SLIP_WALK", "0.25")),
+    "use_bid_ask_pricing": _env_bool("OPT_ZERODHA_USE_BID_ASK", True),
     "product": _env("OPT_ZERODHA_ORDER_PRODUCT", "NRML"),
     "variety": _env("OPT_ZERODHA_ORDER_VARIETY", "regular"),
+    "order_validity_entry": _env("OPT_ZERODHA_VALIDITY_ENTRY", "DAY"),
+    "order_validity_close": _env("OPT_ZERODHA_VALIDITY_CLOSE", "DAY"),
+    "order_validity_rollback": _env("OPT_ZERODHA_VALIDITY_ROLLBACK", "IOC"),
+    "rollback_limit_slippage_pct": float(_env("OPT_ZERODHA_ROLLBACK_SLIP_PCT", "1.0")),
+    "rollback_max_retries": _env_int("OPT_ZERODHA_ROLLBACK_MAX_RETRIES", 2),
+    "rollback_allow_market": _env_bool("OPT_ZERODHA_ROLLBACK_ALLOW_MARKET", True),
+    "close_allow_market": _env_bool("OPT_ZERODHA_CLOSE_ALLOW_MARKET", False),
+    "margin_check_enabled": _env_bool("OPT_ZERODHA_MARGIN_CHECK", True),
+    "margin_buffer_pct": float(_env("OPT_ZERODHA_MARGIN_BUFFER_PCT", "5")),
+    "exposure_check_enabled": _env_bool("OPT_ZERODHA_EXPOSURE_CHECK", True),
+    "position_reconcile_enabled": _env_bool("OPT_ZERODHA_POSITION_RECONCILE", True),
+    "use_ws_order_updates": _env_bool("OPT_ZERODHA_WS_ORDER_UPDATES", True),
+    "async_execution_default": _env_bool("OPT_ZERODHA_ASYNC_DEFAULT", True),
+    "execution_job_retention_days": _env_int("OPT_ZERODHA_JOB_RETENTION_DAYS", 30),
 }
 
 
@@ -1136,6 +1152,7 @@ RETENTION_CONFIG = {
     "trade_mtm_snapshot_history_keep_days": _HOT_ARCHIVE_DAYS,
     # Zerodha broker orders — archived via hot_archive_keep_days (legacy key for API)
     "broker_orders_keep_days":    _HOT_ARCHIVE_DAYS,
+    "zerodha_execution_jobs_keep_days": 30,
 }
 
 

@@ -62,10 +62,9 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
     # Pre-event check (S1): if tomorrow is a high-impact event day, trades that are
     # HOLD today should be downgraded to EXIT_TOMORROW so the user closes before
     # the overnight gap risk materialises.
-    from datetime import timedelta
-    tomorrow = trade_date + timedelta(days=1)
-    day_after = tomorrow + timedelta(days=1)
-    _has_event_tomorrow = event_repo.has_high_impact(tomorrow, day_after)
+    from lifecycle.suggestion_engine import _next_trading_day
+    next_session = _next_trading_day(trade_date)
+    _has_event_tomorrow = event_repo.has_high_impact(next_session, next_session)
     _credit_strategies = frozenset({
         "IRON_CONDOR", "IRON_BUTTERFLY", "BULL_PUT_SPREAD", "BEAR_CALL_SPREAD",
         "JADE_LIZARD",
@@ -181,8 +180,9 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
                 trade_id=trade_id,
                 decision="EXIT_TOMORROW",
                 reason=(
-                    "HIGH-impact event scheduled for tomorrow — consider exiting today "
-                    "to avoid overnight gap risk on this short-premium position"
+                    f"HIGH-impact event scheduled for {next_session.isoformat()} "
+                    "(next session) — consider exiting today to avoid overnight "
+                    "gap risk on this short-premium position"
                 ),
                 as_of=_now_ist_fn(),
             )

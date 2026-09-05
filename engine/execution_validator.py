@@ -255,12 +255,18 @@ def validate_execution(
                 )
 
     # 5. Strike-distance ----------------------------------------------------
+    # Iron butterfly shorts ATM by design — the buffer rule would make every
+    # IB suggestion unexecutable. Other short-premium structures stay gated.
+    strategy = str(suggestion.get("strategy") or "").upper()
     buf_pct = float(
         STRATEGY_CONFIG.get("min_short_strike_buffer_pct", 1.5)
     )
     spot = suggestion.get("spot_at_generation")
     short_legs = [l for l in legs if str(l.get("action", "")).upper() == "SELL"]
-    if not short_legs:
+    if strategy == "IRON_BUTTERFLY":
+        details["strike_distance"] = "skipped (ATM shorts are the structure)"
+        short_legs = []
+    elif not short_legs:
         details["strike_distance"] = "no short legs"
     elif spot is None:
         warnings.append(

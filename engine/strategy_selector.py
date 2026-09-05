@@ -22,7 +22,7 @@ a `NoSuggestion`.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Iterable, List, Mapping, Sequence
+from typing import Iterable, List, Mapping, Optional, Sequence
 
 from config import STRATEGY_CONFIG
 from contracts import (
@@ -71,7 +71,7 @@ def _long_vol_qualified(
 
 def select_strategy(
     *,
-    iv_rank: float,
+    iv_rank: Optional[float],
     trend: str,
     indicators: MarketIndicators,
     has_long_vol_catalyst: bool = False,
@@ -83,6 +83,9 @@ def select_strategy(
         Trend      : BULLISH | BEARISH | SIDEWAYS
         Conviction : STRONG | MILD   (from PCR thresholds)
     """
+    if iv_rank is None:
+        raise StrategyVeto("IV rank unavailable — cannot select a strategy")
+
     iv_writing_min   = STRATEGY_CONFIG["iv_rank_writing_min"]
     iv_buying_max    = STRATEGY_CONFIG["iv_rank_buying_max"]
     iv_butterfly_min = STRATEGY_CONFIG.get("iv_rank_butterfly_min",   70.0)
@@ -333,12 +336,14 @@ def assemble_suggestion(
     strat_overrides = STRATEGY_CONFIG.get("strategy_min_soft_pass", {}) or {}
     required = strat_overrides.get(strategy)
     if required is not None:
-        # Soft gates are checks[:7] in confidence.evaluate (gates 1–7).
-        soft_checks = list(confidence.checks)[:7]
+        # Soft gates are checks[:8] in confidence.evaluate (gates 1–8, incl. OI).
+        soft_total = 8
+        soft_checks = list(confidence.checks)[:soft_total]
         soft_pass_count = sum(1 for c in soft_checks if c.status not in ("FAIL", "SOFT_FAIL"))
         if soft_pass_count < required:
             _entry_veto(
-                f"{strategy} requires {required}/7 soft gates, got {soft_pass_count}/7",
+                f"{strategy} requires {required}/{soft_total} soft gates, "
+                f"got {soft_pass_count}/{soft_total}",
                 collected_vetoes, defer=defer_entry_vetoes,
             )
 
@@ -511,15 +516,10 @@ def assemble_suggestion(
         call_sells = [l for l in call_legs if l.action == "SELL"]
         call_buys  = [l for l in call_legs if l.action == "BUY"]
         if call_sells and call_buys:
-            # cs_width per share = strike difference (points are per share for index options)
+            # Both values are per-share points. net_premium() does NOT multiply
+            # by lots × lot_size — do not divide again (that vetoed every valid JL).
             cs_width_pts = abs(call_buys[0].strike - call_sells[0].strike)
-            # np_per_share: total net (credit minus debit) across all legs, per lot_size unit.
-            # For the guard we need credit per share (per lot_size unit).
-            # net_premium() returns sign×price×lots×lot_size summed. Divide by (lots×lot_size)
-            # to get the per-share figure. Use any leg's lots/lot_size as the reference.
-            ref_lots = legs[0].lots or 1
-            ref_lot_size = legs[0].lot_size or 75
-            net_credit_per_share = np_per_share / (ref_lots * ref_lot_size)
+            net_credit_per_share = np_per_share
             if net_credit_per_share < cs_width_pts:
                 _entry_veto(
                     f"JADE_LIZARD: net credit/share {net_credit_per_share:.1f} < call spread "
@@ -596,7 +596,10 @@ def assemble_suggestion(
         max_profit_rs = max_profit_ps * (legs[0].lot_size if legs else 1) * (legs[0].lots if legs else 1)
     max_loss_rs = max_loss_ps * (legs[0].lot_size if legs else 1) * (legs[0].lots if legs else 1)
 
-    estimated_net_pnl = (max_profit_rs if max_profit_rs != float("inf") else 0.0) - charges.total
+    if max_profit_rs == float("inf"):
+        estimated_net_pnl = None
+    else:
+        estimated_net_pnl = round(max_profit_rs - charges.total, 2)
 
     economics = SuggestionEconomics(
         net_credit=round(np_per_share, 2),  # per-unit (per-share) net credit/debit
@@ -607,7 +610,7 @@ def assemble_suggestion(
         stop_loss_level=_stop_loss_level_for_db(legs, strategy, np_per_share),
         probability_of_profit=round(pop, 1),
         estimated_charges=charges,
-        estimated_net_pnl=round(estimated_net_pnl, 2),
+        estimated_net_pnl=estimated_net_pnl,
     )
 
     # Numeric edge score (issue #10) — display + ranking only, never gates.

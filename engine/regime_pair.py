@@ -48,17 +48,28 @@ def resolve_regime_pair_strategies(
     *,
     iv_rank: float,
     has_long_vol_catalyst: bool = False,
+    iv_premium: Optional[float] = None,
 ) -> Tuple[str, Optional[str]]:
     """Pick (range_strategy, breakout_strategy) for a sideways market.
 
     Breakout leg is omitted when IV is already elevated (writing regime) —
     options are expensive and a long-vol bet is structurally weak.
+
+    Iron Butterfly matches ``select_strategy``: high IV rank **and** IV/HV
+    at or above ``iv_butterfly_min_premium``. Missing/low premium → Condor.
     """
     writing_min = float(STRATEGY_CONFIG["iv_rank_writing_min"])
     butterfly_min = float(STRATEGY_CONFIG.get("iv_rank_butterfly_min", 70.0))
+    butterfly_min_prem = float(
+        STRATEGY_CONFIG.get("iv_butterfly_min_premium", 1.40)
+    )
 
     if iv_rank > writing_min:
-        if iv_rank > butterfly_min:
+        if (
+            iv_rank > butterfly_min
+            and iv_premium is not None
+            and iv_premium >= butterfly_min_prem
+        ):
             return "IRON_BUTTERFLY", None
         return "IRON_CONDOR", None
 

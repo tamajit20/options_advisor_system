@@ -892,6 +892,60 @@ _TABLE_DDL: List[str] = [
     )
     ALTER TABLE options_trade_mtm_snapshot_history ADD outlook_json NVARCHAR(MAX) NULL
     """,
+
+    # ---------------- Zerodha broker orders — extended audit columns ----------------
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_broker_orders') AND name = 'filled_quantity')
+    ALTER TABLE options_broker_orders ADD filled_quantity INT NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_broker_orders') AND name = 'pending_quantity')
+    ALTER TABLE options_broker_orders ADD pending_quantity INT NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_broker_orders') AND name = 'status_message')
+    ALTER TABLE options_broker_orders ADD status_message NVARCHAR(500) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_broker_orders') AND name = 'order_type')
+    ALTER TABLE options_broker_orders ADD order_type NVARCHAR(10) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_broker_orders') AND name = 'validity')
+    ALTER TABLE options_broker_orders ADD validity NVARCHAR(10) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_broker_orders') AND name = 'execution_job_id')
+    ALTER TABLE options_broker_orders ADD execution_job_id BIGINT NULL
+    """,
+
+    """
+    IF OBJECT_ID('options_zerodha_execution_jobs', 'U') IS NULL
+    CREATE TABLE options_zerodha_execution_jobs (
+        id                 BIGINT IDENTITY(1,1) PRIMARY KEY,
+        operation          NVARCHAR(20)  NOT NULL,
+        suggestion_id      NVARCHAR(40)  NULL,
+        trade_id           NVARCHAR(40)  NULL,
+        status             NVARCHAR(20)  NOT NULL DEFAULT 'PENDING',
+        current_leg_order  INT           NULL,
+        total_legs         INT           NOT NULL DEFAULT 0,
+        filled_legs        INT           NOT NULL DEFAULT 0,
+        message            NVARCHAR(500) NULL,
+        error_message      NVARCHAR(500) NULL,
+        result_json        NVARCHAR(MAX) NULL,
+        created_at         DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        updated_at         DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        completed_at       DATETIME2(0)  NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_zerodha_jobs_sugg ON options_zerodha_execution_jobs (suggestion_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS IX_options_zerodha_jobs_trade ON options_zerodha_execution_jobs (trade_id, created_at)",
 ]
 
 
@@ -1075,6 +1129,7 @@ def list_tables() -> List[str]:
         "options_config",
         "options_notifications",
         "options_broker_orders",
+        "options_zerodha_execution_jobs",
         "options_runtime_flags",
         "options_intraday_close_snapshot",
         "options_trade_mtm_snapshot",

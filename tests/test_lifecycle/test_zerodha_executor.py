@@ -13,6 +13,7 @@ from lifecycle.zerodha_executor import (
     ZerodhaExecutionError,
     close_trade_in_zerodha,
     execute_suggestion_in_zerodha,
+    execute_supplement_in_zerodha,
     preview_close_execution,
     trade_execution_channel,
     zerodha_execution_enabled,
@@ -30,6 +31,18 @@ def db_conn():
     db.commit = MagicMock()
     db.execute = MagicMock(return_value=MagicMock(close=MagicMock()))
     return db
+
+
+@pytest.fixture(autouse=True)
+def _no_inflight_execution_jobs(mocker):
+    """MagicMock DB makes job lookups truthy unless explicitly stubbed."""
+    job_repo = MagicMock()
+    job_repo.running_for_suggestion.return_value = None
+    job_repo.running_for_trade.return_value = None
+    mocker.patch(
+        "database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo",
+        return_value=job_repo,
+    )
 
 
 @pytest.fixture
@@ -159,13 +172,16 @@ def test_trade_execution_channel_manual(db_conn, mocker):
     assert ch == EXECUTION_CHANNEL_MANUAL
 
 
-def test_validate_execution_receives_circuit_breaker_flag(db_conn, mocker, sample_leg, sample_suggestion):
+def test_validate_execution_receives_circuit_breaker_flag(
+    db_conn, mocker, sample_leg, sample_suggestion, mock_instrument,
+):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
     mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
     mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
     mocker.patch("lifecycle.zerodha_executor._circuit_breaker_on", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor._run_pre_trade_checks")
     validate = mocker.patch(
         "lifecycle.zerodha_executor.validate_execution",
         return_value=MagicMock(ok=True, reason=lambda: "OK"),
@@ -442,6 +458,48 @@ def test_close_trade_happy_path(db_conn, mocker, mock_instrument):
     assert out.ok
     assert out.trade_id == "TRD-1"
     close.assert_called_once()
+
+
+def test_supplement_rejects_live_prices_out_of_band(
+    db_conn, mocker, mock_instrument, sample_leg,
+):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    filled = {**sample_leg, "leg_order": 1, "executed": True, "fill_price": 100.0}
+    pending = {**sample_leg, "leg_order": 2, "executed": False}
+    mocker.patch("database.models.TradeRepo.get", return_value={
+        "trade_id": "TRD-1", "suggestion_id": "SUG-1",
+    })
+    mocker.patch(
+        "database.models.TradeRepo.legs_with_suggestion_info",
+        return_value=[filled, pending],
+    )
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.pending_for_trade",
+        return_value=[],
+    )
+    mocker.patch(
+        "database.models.SuggestionRepo.get",
+        return_value={"strategy": "IRON_CONDOR"},
+    )
+    _mock_kite_facade(mocker, mock_instrument)
+    mocker.patch(
+        "lifecycle.zerodha_executor._live_ltp_map",
+        return_value=({2: 100.0}, {2: mock_instrument}),
+    )
+    mocker.patch("lifecycle.zerodha_executor._run_pre_trade_checks")
+    mocker.patch(
+        "lifecycle.zerodha_executor._build_leg_plans",
+        return_value=[MagicMock(leg_order=2, transaction_type="BUY")],
+    )
+    mocker.patch("lifecycle.zerodha_executor._enforce_limit_band")
+    mocker.patch(
+        "lifecycle.zerodha_executor.validate_live_prices",
+        return_value=MagicMock(ok=False, reason=lambda: "CE slipped"),
+    )
+    place = mocker.patch("lifecycle.zerodha_executor._place_and_monitor_leg")
+    with pytest.raises(ZerodhaExecutionError, match="Live prices out of band"):
+        execute_supplement_in_zerodha(db_conn, "TRD-1")
+    place.assert_not_called()
 
 
 def test_preview_close_execution_reports_limit_vetoes(db_conn, mocker, mock_instrument):

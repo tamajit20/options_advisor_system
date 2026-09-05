@@ -28,6 +28,7 @@ REQUIRED_SCRIPTS = [
 LOG_TABLES = frozenset({
     "options_system_logs",
     "options_job_log",
+    "options_zerodha_execution_jobs",
 })
 
 NEVER_ARCHIVE = frozenset({

@@ -102,7 +102,7 @@ def test_zerodha_execute_success(exec_client, mocker):
     )
     resp = exec_client.post(
         "/api/suggestion/SUG-1/zerodha-execute",
-        json={},
+        json={"async": False},
         headers={"X-API-Key": "test-secret-key"},
     )
     assert resp.status_code == 200
@@ -126,7 +126,7 @@ def test_zerodha_execute_returns_400_on_execution_error(exec_client, mocker):
     )
     resp = exec_client.post(
         "/api/suggestion/SUG-1/zerodha-execute",
-        json={},
+        json={"async": False},
         headers={"X-API-Key": "test-secret-key"},
     )
     assert resp.status_code == 400

@@ -569,6 +569,10 @@ def job_weekly_log_cleanup():
         n += JobLogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["job_log_keep_days"]))
         mtm_repo = TradeMtmSnapshotRepo(db)
         n += mtm_repo.archive_non_active()
+        from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
+        n += ZerodhaExecutionJobRepo(db).delete_older_than(
+            today - _td(days=RETENTION_CONFIG["zerodha_execution_jobs_keep_days"])
+        )
         db.commit()
         return n
 

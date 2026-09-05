@@ -241,7 +241,7 @@ class SuggestionEconomics:
     stop_loss_level:       Optional[float]
     probability_of_profit: float       # 0–100
     estimated_charges:     ChargeBreakdown
-    estimated_net_pnl:     float       # max_profit − total charges (best-case net)
+    estimated_net_pnl:     Optional[float]  # max_profit − charges; None if max profit unbounded
     # Numeric edge score 0–100 (display + ranking only; never gates).
     # Components keyed by weight name in STRATEGY_CONFIG["edge_score_weights"].
     edge_score:            float = 0.0

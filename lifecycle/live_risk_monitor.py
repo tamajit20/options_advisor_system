@@ -862,7 +862,9 @@ class LiveRiskMonitor:
             )
             for i, l in enumerate(state.legs)
         ]
-        qty = sum(l.lots * l.lot_size for l in state.legs) or 1
+        # entry_net_credit is whole-structure ₹ — divide by one structure
+        # quantity, not the sum across every leg (that 3–4×'d multi-leg trades).
+        qty = max((l.lots * l.lot_size for l in state.legs), default=0) or 1
         np_ps = state.entry_net_credit / qty if qty else 0.0
         return spot_stop_breached(
             strategy=state.strategy or "",
@@ -1490,7 +1492,7 @@ class LiveRiskMonitor:
 
         Falls back to the standard ``pre_breach_fraction`` unless an
         ``events_repo`` was supplied AND it reports a HIGH-impact event
-        scheduled for tomorrow (today + 1). In that case the tighter
+        scheduled for the next trading session. In that case the tighter
         ``event_eve_pre_breach_fraction`` applies for short-premium trades
         only when ``event_eve_credit_only`` is enabled. Cached per IST day."""
         if self._events_repo is None:
@@ -1499,9 +1501,10 @@ class LiveRiskMonitor:
         cached_day, has_event = self._event_eve_cache
         if cached_day != today:
             try:
-                tomorrow = today + timedelta(days=1)
+                from lifecycle.suggestion_engine import _next_trading_day
+                next_session = _next_trading_day(today)
                 has_event = bool(
-                    self._events_repo.has_high_impact(tomorrow, tomorrow))
+                    self._events_repo.has_high_impact(next_session, next_session))
             except Exception:
                 logger.exception("LiveRiskMonitor: events_repo lookup failed")
                 has_event = False

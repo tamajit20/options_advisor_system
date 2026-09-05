@@ -421,6 +421,85 @@ class TestEvaluateUnderlying:
         )
         assert sugs == [] and ns == []
 
+    def _patch_eval_to_confidence(self, mocker, *, trend: str):
+        from contracts import ConfidenceCheck, ConfidenceResult, MarketIndicators
+
+        mocker.patch(
+            "lifecycle.suggestion_engine.SpotEodRepo.for_date",
+            return_value={"close_price": 23000.0, "trade_date": date(2026, 4, 30)},
+        )
+        mocker.patch(
+            "lifecycle.suggestion_engine._pick_expiries_in_band",
+            return_value=[(date(2026, 5, 14), "Weekly")],
+        )
+        mocker.patch("lifecycle.suggestion_engine.SpotEodRepo.history", return_value=[])
+        mocker.patch("lifecycle.suggestion_engine.VixRepo.history", return_value=[])
+        mocker.patch(
+            "lifecycle.suggestion_engine.EventCalendarRepo.has_high_impact",
+            return_value=False,
+        )
+        mocker.patch(
+            "lifecycle.suggestion_engine.EventCalendarRepo.first_high_impact_event",
+            return_value=None,
+        )
+        mocker.patch("lifecycle.suggestion_engine.EventCalendarRepo.count_all", return_value=0)
+        mocker.patch("lifecycle.suggestion_engine.LotSizeRepo.for_symbol", return_value=75)
+        mocker.patch("lifecycle.suggestion_engine.TradeRepo.open_trades", return_value=[])
+        mocker.patch("lifecycle.suggestion_engine.FiiRepo.for_date", return_value=[])
+        mocker.patch(
+            "lifecycle.suggestion_engine.IvHistoryRepo.latest_for",
+            return_value=[{
+                "expiry_date": date(2026, 5, 14),
+                "atm_iv": 0.18,
+                "iv_rank": None,
+            }],
+        )
+        mocker.patch(
+            "lifecycle.suggestion_engine.FoEodRepo.get_chain",
+            return_value=[{"strike": 23000.0, "option_type": "CE", "close_price": 100.0}],
+        )
+        mocker.patch("lifecycle.suggestion_engine.stamp_eod_rows")
+        mocker.patch(
+            "lifecycle.suggestion_engine.SuggestionRepo.next_suggestion_id",
+            return_value="SUG-1",
+        )
+        mocker.patch(
+            "lifecycle.suggestion_engine.build_indicators",
+            return_value=MarketIndicators(
+                symbol="NIFTY", as_of=date(2026, 4, 30), spot=23000.0,
+                pcr=1.0, max_pain=23000.0, atr_14=150.0, trend=trend,
+                vix_close=15.0, vix_regime="STABLE",
+                oi_walls_call=[], oi_walls_put=[], expected_move=300.0,
+                hv_20=0.12, iv_premium=1.2, fii_net_futures=0.0,
+            ),
+        )
+        mocker.patch(
+            "lifecycle.suggestion_engine.evaluate_confidence",
+            return_value=ConfidenceResult(
+                score=9, total=9, all_passed=True,
+                checks=[ConfidenceCheck(label="t", status="PASS", detail="ok")],
+                failed_reasons=[],
+            ),
+        )
+
+    def test_sideways_without_iv_rank_records_no_suggestion(self, mock_db, mocker):
+        self._patch_eval_to_confidence(mocker, trend="SIDEWAYS")
+        sugs, ns = se._evaluate_underlying(
+            mock_db, "NIFTY", date(2026, 4, 30), date(2026, 5, 1), "x",
+        )
+        assert sugs == []
+        assert ns
+        assert any("IV rank unavailable" in n.reason for n in ns)
+
+    def test_directional_without_iv_rank_records_strategy_veto(self, mock_db, mocker):
+        self._patch_eval_to_confidence(mocker, trend="BULLISH")
+        sugs, ns = se._evaluate_underlying(
+            mock_db, "NIFTY", date(2026, 4, 30), date(2026, 5, 1), "x",
+        )
+        assert sugs == []
+        assert ns
+        assert any("IV rank unavailable" in n.reason for n in ns)
+
 
 # ---------------------------------------------------------------------------
 class TestPickExpiriesInBandEntryDay:
@@ -543,3 +622,58 @@ class TestRunLiveSuggestionEngine:
                      side_effect=RuntimeError("provider down"))
         # Should not raise; returns 0
         assert se.run_live_suggestion_engine(mock_db, provider=p) == 0
+
+
+class TestIcIbCompanions:
+    def test_skips_non_ic_ib(self, mocker):
+        assemble = mocker.patch("lifecycle.suggestion_engine.assemble_suggestion")
+        primary = MagicMock(strategy="BULL_CALL_SPREAD")
+        se._append_ic_ib_companions(
+            primary=primary,
+            suggestions=[],
+            existing_names=[],
+            assemble_kw={"underlying": "NIFTY"},
+            sug_repo=MagicMock(),
+            id_date=date(2026, 5, 4),
+            provenance=None,
+            db=MagicMock(),
+        )
+        assemble.assert_not_called()
+
+    def test_builds_bps_and_bcs_for_iron_condor(self, mocker):
+        mocker.patch(
+            "lifecycle.suggestion_engine._attach_em_calibration_warning",
+        )
+        bps = MagicMock(trade_name="N-BPS")
+        bcs = MagicMock(trade_name="N-BCS")
+        assemble = mocker.patch(
+            "lifecycle.suggestion_engine.assemble_suggestion",
+            side_effect=[bps, bcs],
+        )
+        repo = MagicMock()
+        repo.next_suggestion_id.side_effect = ["SUG-C1", "SUG-C2"]
+        out = []
+        names = ["N-IC"]
+        primary = MagicMock(
+            strategy="IRON_CONDOR",
+            trade_name="N-IC",
+            underlying="NIFTY",
+            expiry_date=date(2026, 5, 14),
+        )
+        se._append_ic_ib_companions(
+            primary=primary,
+            suggestions=out,
+            existing_names=names,
+            assemble_kw={"underlying": "NIFTY", "lot_size": 75},
+            sug_repo=repo,
+            id_date=date(2026, 5, 4),
+            provenance=None,
+            db=MagicMock(),
+        )
+        assert [s.trade_name for s in out] == ["N-BPS", "N-BCS"]
+        assert names == ["N-IC", "N-BPS", "N-BCS"]
+        overrides = [
+            c.kwargs.get("strategy_override") for c in assemble.call_args_list
+        ]
+        assert overrides == ["BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"]
+        assert all(c.kwargs.get("companion_mode") is True for c in assemble.call_args_list)

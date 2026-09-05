@@ -139,8 +139,20 @@ def test_complete_pair_breakout_vetoed_still_two_rows():
 
 
 def test_resolve_very_high_iv_butterfly_omits_breakout():
-    r, b = resolve_regime_pair_strategies(iv_rank=75.0)
+    r, b = resolve_regime_pair_strategies(iv_rank=75.0, iv_premium=1.50)
     assert r == "IRON_BUTTERFLY"
+    assert b is None
+
+
+def test_resolve_high_rank_low_premium_falls_back_to_condor():
+    r, b = resolve_regime_pair_strategies(iv_rank=75.0, iv_premium=1.20)
+    assert r == "IRON_CONDOR"
+    assert b is None
+
+
+def test_resolve_high_rank_missing_premium_falls_back_to_condor():
+    r, b = resolve_regime_pair_strategies(iv_rank=75.0, iv_premium=None)
+    assert r == "IRON_CONDOR"
     assert b is None
 
 
