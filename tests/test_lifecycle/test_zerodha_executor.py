@@ -175,6 +175,10 @@ def test_validate_execution_receives_circuit_breaker_flag(db_conn, mocker, sampl
         return_value=MagicMock(ok=True, reason=lambda: "OK"),
     )
     mocker.patch("lifecycle.zerodha_executor._build_client", return_value=(MagicMock(), MagicMock()))
+    mocker.patch(
+        "lifecycle.zerodha_executor._live_ltp_map",
+        return_value=({1: 100.0}, {1: mock_instrument}),
+    )
     from lifecycle.zerodha_executor import _entry_context
 
     _entry_context(db_conn, "SUG-1", None)
@@ -364,7 +368,29 @@ def test_close_trade_rolls_back_when_second_leg_fails(db_conn, mocker, mock_inst
     mocker.patch("database.models.SuggestionRepo.get", return_value={"strategy": "LONG_STRADDLE"})
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_trade", return_value=[])
     mocker.patch("lifecycle.zerodha_executor._enforce_limit_band")
-    _mock_kite_facade(mocker, mock_instrument)
+    inst_ce = mock_instrument
+    inst_pe = Instrument(
+        instrument_token=2,
+        exchange_token=2,
+        tradingsymbol="NIFTY26MAY23000PE",
+        name="NIFTY",
+        expiry=date(2026, 5, 28),
+        strike=23000.0,
+        tick_size=0.05,
+        lot_size=50,
+        instrument_type="PE",
+        segment="NFO-OPT",
+        exchange="NFO",
+    )
+    kite, facade, master = _mock_kite_facade(mocker, mock_instrument)
+    master.get_option.side_effect = lambda sym, exp, strike, opt: (
+        inst_pe if opt == "PE" else inst_ce
+    )
+    kite.ltp.return_value = {
+        "NFO:NIFTY26MAY23000CE": {"last_price": 100.0},
+        "NFO:NIFTY26MAY23000PE": {"last_price": 90.0},
+        "NSE:NIFTY 50": {"last_price": 23010},
+    }
 
     calls = {"n": 0}
 

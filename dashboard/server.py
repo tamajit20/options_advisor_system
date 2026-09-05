@@ -108,7 +108,19 @@ def kite_console_redirect_url() -> str:
     return zerodha_callback_url()
 
 
-def _zerodha_status_payload(db: Optional["SQLServerConnection"] = None) -> dict:
+def _zerodha_account_for_api(*, force_refresh: bool = False) -> dict:
+    from providers.zerodha.account_snapshot import fetch_account_snapshot, invalidate_account_cache
+
+    if force_refresh:
+        invalidate_account_cache()
+    return fetch_account_snapshot(force_refresh=force_refresh)
+
+
+def _zerodha_status_payload(
+    db: Optional["SQLServerConnection"] = None,
+    *,
+    refresh_account: bool = False,
+) -> dict:
     from providers.zerodha.session import is_token_valid, load_session, token_valid_until
     from lifecycle.zerodha_executor import (
         zerodha_execution_config_enabled,
@@ -152,9 +164,13 @@ def _zerodha_status_payload(db: Optional["SQLServerConnection"] = None) -> dict:
             "user_id": None,
             "generated_at": None,
             "valid_until": None,
+            "account": {"available": False, "reason": "no_valid_session"},
         }
     until = token_valid_until(s)
-    return {
+    force_account = refresh_account
+    if has_request_context() and request.args.get("refresh_account") == "1":
+        force_account = True
+    payload = {
         **base,
         "has_session": True,
         "valid": bool(is_token_valid(s)),
@@ -162,6 +178,11 @@ def _zerodha_status_payload(db: Optional["SQLServerConnection"] = None) -> dict:
         "generated_at": s.generated_at.isoformat(),
         "valid_until": until.isoformat() if until else None,
     }
+    if payload["valid"]:
+        payload["account"] = _zerodha_account_for_api(force_refresh=force_account)
+    else:
+        payload["account"] = {"available": False, "reason": "session_expired"}
+    return payload
 
 
 def _zerodha_execution_ready(db: SQLServerConnection) -> bool:
@@ -1475,7 +1496,7 @@ def create_app() -> Flask:
         except Exception as exc:  # noqa: BLE001
             logger.exception("zerodha exchange failed")
             return jsonify({"ok": False, "error": str(exc)}), 500
-            ws_wake = {"ok": True, "action": "session_saved"}
+        ws_wake = {"ok": True, "action": "session_saved"}
         try:
             from providers.zerodha.ws_runner_control import ensure_ws_runner_running
             ws_wake = ensure_ws_runner_running()
@@ -1486,6 +1507,7 @@ def create_app() -> Flask:
             "user_id": session.user_id,
             "generated_at": session.generated_at.isoformat(),
             "ws_runner": ws_wake,
+            "account": _zerodha_account_for_api(force_refresh=True),
         })
 
     @app.route("/api/zerodha/status")
@@ -1501,7 +1523,9 @@ def create_app() -> Flask:
         waiting state within ~5 seconds. No manual docker restart is needed.
         """
         from providers.zerodha.session import clear_session
+        from providers.zerodha.account_snapshot import invalidate_account_cache
         removed = clear_session()
+        invalidate_account_cache()
         return jsonify({
             "ok": True,
             "removed": bool(removed),
@@ -1731,9 +1755,8 @@ def create_app() -> Flask:
                 }
                 for f in outcome.leg_fills
             ],
+            "account": _zerodha_account_for_api(force_refresh=True),
         })
-
-    @app.route("/api/suggestion/<sid>/zerodha-orders")
     @_with_db
     def api_zerodha_orders_for_suggestion(db: SQLServerConnection, sid: str):
         """Live broker-order status for in-flight Zerodha entry execution."""
@@ -1951,6 +1974,7 @@ def create_app() -> Flask:
                 }
                 for f in outcome.leg_fills
             ],
+            "account": _zerodha_account_for_api(force_refresh=True),
         })
 
     @app.route("/api/trades/<trade_id>/zerodha-orders")

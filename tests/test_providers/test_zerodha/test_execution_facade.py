@@ -36,3 +36,20 @@ def test_place_order_proxies(facade, kite_mock):
 def test_order_history_proxies(facade, kite_mock):
     kite_mock.order_history.return_value = [{"status": "COMPLETE"}]
     assert facade.order_history("12345")[0]["status"] == "COMPLETE"
+
+
+def test_profile_proxies(facade, kite_mock):
+    kite_mock.profile.return_value = {"user_id": "AB1234", "user_name": "Test"}
+    out = facade.profile()
+    assert out["user_id"] == "AB1234"
+    kite_mock.profile.assert_called_once()
+
+
+def test_margins_proxies(facade, kite_mock):
+    kite_mock.margins.return_value = {"equity": {"net": 1000}}
+    out = facade.margins()
+    assert out["equity"]["net"] == 1000
+    kite_mock.margins.assert_called_once_with()
+
+    facade.margins("equity")
+    kite_mock.margins.assert_called_with(segment="equity")

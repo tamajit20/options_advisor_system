@@ -5477,6 +5477,8 @@ function bindSuggestionActions() {
             submit.onclick = () => _closeZerodhaConfirmModal();
           }
           toast(r.message || `Trade ${r.trade_id} created in Zerodha`, 'ok');
+          if (r.account) _applyZerodhaAccountUi(r.account, { valid: true, user_id: r.account.user_id });
+          loadZerodhaStatus(true);
           loadSuggestion();
           loadTrades();
           return true;
@@ -6100,6 +6102,8 @@ async function submitZerodhaClose(tradeId, btn, panel) {
           submit.onclick = () => _closeZerodhaConfirmModal();
         }
         toast(r.message || `Trade ${tradeId} closed in Zerodha`, 'ok');
+        if (r.account) _applyZerodhaAccountUi(r.account, { valid: true, user_id: r.account.user_id });
+        loadZerodhaStatus(true);
         loadTrades();
         return true;
       },
@@ -8397,7 +8401,90 @@ refreshGlobalBanners();
 ensureAlertsStream();
 
 // ---------------- Zerodha session card ----------------
-async function loadZerodhaStatus() {
+function _fmtZerodhaMoney(n) {
+  if (n == null || Number.isNaN(Number(n))) return '—';
+  return '₹' + fmt(Number(n));
+}
+
+function _applyZerodhaAccountUi(account, d) {
+  const panel = document.getElementById('zerodha-account-panel');
+  const chip = document.getElementById('zerodha-profile-chip');
+  const headerBtn = document.getElementById('zerodha-login-btn');
+
+  if (!account || !account.available) {
+    if (panel) {
+      panel.hidden = true;
+      panel.innerHTML = '';
+    }
+    if (chip) chip.hidden = true;
+    return;
+  }
+
+  const name = account.user_name || d?.user_id || '';
+  const usable = account.usable_balance;
+  const cash = account.available_cash;
+  const net = account.net;
+  const equity = account.equity || {};
+
+  if (chip) {
+    chip.hidden = false;
+    chip.textContent = usable != null
+      ? `${_fmtZerodhaMoney(usable)} avail`
+      : (name || 'Zerodha');
+    chip.title = [
+      name,
+      usable != null ? `Usable: ${_fmtZerodhaMoney(usable)}` : null,
+      cash != null ? `Cash: ${_fmtZerodhaMoney(cash)}` : null,
+      net != null ? `Net: ${_fmtZerodhaMoney(net)}` : null,
+    ].filter(Boolean).join(' · ');
+  }
+
+  if (headerBtn && d?.valid && name) {
+    const untilTip = d.valid_until ? ` until ${d.valid_until.slice(0, 16)}` : '';
+    headerBtn.title = `${name} (${d.user_id || ''})${untilTip}` +
+      (usable != null ? ` · ${_fmtZerodhaMoney(usable)} usable` : '');
+  }
+
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = `
+    <div><strong>${escapeHtml(name)}</strong>
+      ${account.email ? `<span class="muted"> · ${escapeHtml(account.email)}</span>` : ''}
+    </div>
+    <div class="zerodha-account-grid">
+      <div class="zerodha-account-item">
+        <label>Usable balance</label>
+        <strong>${escapeHtml(_fmtZerodhaMoney(usable))}</strong>
+      </div>
+      <div class="zerodha-account-item">
+        <label>Available cash</label>
+        <strong>${escapeHtml(_fmtZerodhaMoney(cash))}</strong>
+      </div>
+      <div class="zerodha-account-item">
+        <label>Net (equity)</label>
+        <strong>${escapeHtml(_fmtZerodhaMoney(net))}</strong>
+      </div>
+      <div class="zerodha-account-item">
+        <label>Utilised (debits)</label>
+        <strong>${escapeHtml(_fmtZerodhaMoney(equity.utilised_debits))}</strong>
+      </div>
+      <div class="zerodha-account-item">
+        <label>Span margin</label>
+        <strong>${escapeHtml(_fmtZerodhaMoney(equity.utilised_span))}</strong>
+      </div>
+      <div class="zerodha-account-item">
+        <label>Option premium</label>
+        <strong>${escapeHtml(_fmtZerodhaMoney(equity.utilised_option_premium))}</strong>
+      </div>
+    </div>
+    <div class="zerodha-account-meta">
+      Broker: ${escapeHtml(account.broker || 'Zerodha')}
+      ${account.fetched_at ? ` · updated ${escapeHtml(account.fetched_at)}` : ''}
+      ${account.cached ? ' · cached' : ''}
+    </div>`;
+}
+
+async function loadZerodhaStatus(refreshAccount = false) {
   const el = document.getElementById('zerodha-status');
   const headerBtn = document.getElementById('zerodha-login-btn');
   const headerIcon = document.getElementById('zerodha-login-icon');
@@ -8409,7 +8496,10 @@ async function loadZerodhaStatus() {
     headerBtn.removeAttribute('target');
   }
   try {
-    const r = await fetch('/api/zerodha/status');
+    const statusUrl = refreshAccount
+      ? '/api/zerodha/status?refresh_account=1'
+      : '/api/zerodha/status';
+    const r = await fetch(statusUrl);
     const d = await r.json();
     _zerodhaHasSession = !!d.has_session;
     _zerodhaValid = !!d.valid;
@@ -8483,8 +8573,11 @@ async function loadZerodhaStatus() {
           'Re-login required (token resets daily at 06:00 IST).';
       }
     }
+    _applyZerodhaAccountUi(d.account, d);
   } catch (e) {
     if (el) el.textContent = 'Status unavailable: ' + e;
+    const chip = document.getElementById('zerodha-profile-chip');
+    if (chip) chip.hidden = true;
   }
 }
 

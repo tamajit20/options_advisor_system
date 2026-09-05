@@ -204,6 +204,56 @@ def _as_date(v) -> Optional[date]:
         return None
 
 
+def _normalize_side(action: str, *, leg_order: int) -> str:
+    txn = str(action or "").strip().upper()
+    if txn not in ("BUY", "SELL"):
+        raise ZerodhaExecutionError(
+            f"leg {leg_order}: invalid action {action!r} (must be BUY or SELL)"
+        )
+    return txn
+
+
+def _transaction_type_for_leg(leg: dict, mode: str) -> str:
+    """Single source for Kite ``transaction_type`` from leg ``action`` + mode."""
+    lo = int(leg["leg_order"])
+    orig = _normalize_side(str(leg.get("action") or ""), leg_order=lo)
+    m = str(mode or "").lower()
+    if m in ("close", "exit"):
+        return "BUY" if orig == "SELL" else "SELL"
+    if m == "entry":
+        return orig
+    if m == "rollback":
+        return "SELL" if orig == "BUY" else "BUY"
+    raise ZerodhaExecutionError(f"leg {lo}: unknown execution mode {mode!r}")
+
+
+def _assert_instrument_matches_leg(leg: dict, inst: Instrument) -> None:
+    """Fail closed if resolved Kite instrument does not match DB leg identity."""
+    lo = int(leg["leg_order"])
+    opt = str(leg.get("option_type") or "").upper()
+    if opt and inst.instrument_type.upper() != opt:
+        raise ZerodhaExecutionError(
+            f"leg {lo}: option type mismatch — expected {opt}, "
+            f"got {inst.tradingsymbol} ({inst.instrument_type})"
+        )
+    strike = float(leg["strike"])
+    if abs(inst.strike - strike) > 0.001:
+        raise ZerodhaExecutionError(
+            f"leg {lo}: strike mismatch — expected {strike}, "
+            f"got {inst.tradingsymbol} ({inst.strike})"
+        )
+    sym = str(leg.get("symbol") or leg.get("underlying") or "NIFTY").upper()
+    if inst.name.upper() != sym:
+        raise ZerodhaExecutionError(
+            f"leg {lo}: symbol mismatch — expected {sym}, got {inst.name}"
+        )
+    exp = _as_date(leg.get("expiry_date") or leg.get("expiry"))
+    if exp and inst.expiry and inst.expiry != exp:
+        raise ZerodhaExecutionError(
+            f"leg {lo}: expiry mismatch — expected {exp}, got {inst.expiry}"
+        )
+
+
 def _resolve_instrument(leg: dict, master: InstrumentMaster) -> Instrument:
     sym = str(leg.get("symbol") or leg.get("underlying") or "NIFTY").upper()
     expiry = _as_date(leg.get("expiry_date") or leg.get("expiry"))
@@ -220,6 +270,7 @@ def _resolve_instrument(leg: dict, master: InstrumentMaster) -> Instrument:
             f"leg {leg.get('leg_order')}: instrument not found for "
             f"{sym} {expiry} {strike} {opt}"
         )
+    _assert_instrument_matches_leg(leg, inst)
     return inst
 
 
@@ -341,8 +392,18 @@ def _place_and_monitor_leg(
     suggestion_id: Optional[str],
     trade_id: Optional[str],
     user_limit_price: Optional[float] = None,
+    expected_transaction_type: Optional[str] = None,
 ) -> LegFillOutcome:
     cfg = ZERODHA_EXECUTION_CONFIG
+    lo = int(leg["leg_order"])
+    txn = str(transaction_type or "").strip().upper()
+    if txn not in ("BUY", "SELL"):
+        raise ZerodhaExecutionError(f"leg {lo}: invalid transaction_type {transaction_type!r}")
+    if expected_transaction_type and txn != expected_transaction_type.upper():
+        raise ZerodhaExecutionError(
+            f"leg {lo}: refused order — expected {expected_transaction_type}, got {txn}"
+        )
+    _assert_instrument_matches_leg(leg, inst)
     lots = int(leg.get("lots_actual") or leg.get("lots") or 1)
     qty = lots * int(inst.lot_size or leg.get("lot_size") or 0)
     if qty <= 0:
@@ -495,6 +556,7 @@ def _rollback_filled_legs(
     legs_by_order: Dict[int, dict],
     completed: List[LegFillOutcome],
     mode: str,
+    inst_map: Optional[Dict[int, Instrument]] = None,
 ) -> List[int]:
     """Best-effort reverse orders for legs already filled before a failure."""
     if not completed:
@@ -503,18 +565,21 @@ def _rollback_filled_legs(
         "Rolling back %d filled leg(s) (%s) for suggestion=%s trade=%s",
         len(completed), mode, suggestion_id, trade_id,
     )
-    master = InstrumentMaster(loader=lambda: facade.instruments("NFO"))
-    master.refresh_if_stale()
+    master: Optional[InstrumentMaster] = None
     failed: List[int] = []
     for fill in reversed(completed):
         leg = legs_by_order[fill.leg_order]
-        inst = _resolve_instrument(leg, master)
-        orig_txn = "BUY" if str(leg.get("action", "")).upper() == "BUY" else "SELL"
+        lo = int(leg["leg_order"])
+        inst = (inst_map or {}).get(lo)
+        if inst is None:
+            if master is None:
+                _, master = _build_client()
+            inst = _resolve_instrument(leg, master)
         if mode == "exit":
-            close_txn = "BUY" if orig_txn == "SELL" else "SELL"
+            close_txn = _transaction_type_for_leg(leg, "close")
             reverse_txn = "SELL" if close_txn == "BUY" else "BUY"
         else:
-            reverse_txn = "SELL" if orig_txn == "BUY" else "BUY"
+            reverse_txn = _transaction_type_for_leg(leg, "rollback")
         key = _kite_symbol_key(inst)
         ltp = _fetch_ltps(facade, [key]).get(key)
         if ltp is None:
@@ -531,6 +596,7 @@ def _rollback_filled_legs(
                 ltp=ltp,
                 suggestion_id=suggestion_id,
                 trade_id=trade_id,
+                expected_transaction_type=reverse_txn,
             )
         except Exception:
             logger.exception(
@@ -561,6 +627,7 @@ def _rollback_entry_legs(
     suggestion_id: str,
     legs_by_order: Dict[int, dict],
     completed: List[LegFillOutcome],
+    inst_map: Optional[Dict[int, Instrument]] = None,
 ) -> None:
     _rollback_filled_legs(
         facade, db,
@@ -569,6 +636,7 @@ def _rollback_entry_legs(
         legs_by_order=legs_by_order,
         completed=completed,
         mode="entry",
+        inst_map=inst_map,
     )
 
 
@@ -580,6 +648,7 @@ def _rollback_close_legs(
     suggestion_id: Optional[str],
     legs_by_order: Dict[int, dict],
     completed: List[LegFillOutcome],
+    inst_map: Optional[Dict[int, Instrument]] = None,
 ) -> None:
     _rollback_filled_legs(
         facade, db,
@@ -588,6 +657,7 @@ def _rollback_close_legs(
         legs_by_order=legs_by_order,
         completed=completed,
         mode="exit",
+        inst_map=inst_map,
     )
 
 
@@ -733,10 +803,9 @@ def _build_leg_plans(
         if ltp is None:
             raise ZerodhaExecutionError(f"leg {lo}: live price unavailable")
         if mode == "close":
-            orig = str(leg.get("action") or "").upper()
-            txn = "BUY" if orig == "SELL" else "SELL"
+            txn = _transaction_type_for_leg(leg, "close")
         else:
-            txn = str(leg.get("action") or "").upper()
+            txn = _transaction_type_for_leg(leg, "entry")
         user_lim = (leg_limits or {}).get(lo)
         auto = user_lim is None
         limit_px = _resolve_limit_price(ltp, txn, inst, user_lim)
@@ -893,7 +962,11 @@ def execute_suggestion_in_zerodha(
                         f"Live prices out of band before leg {lo}: {price_gate.reason()}"
                     )
                 plan = plan_by_order[lo]
-                txn = plan.transaction_type
+                txn = _transaction_type_for_leg(leg, "entry")
+                if txn != plan.transaction_type:
+                    raise ZerodhaExecutionError(
+                        f"leg {lo}: preview/execute mismatch ({plan.transaction_type} vs {txn})"
+                    )
                 user_lim = (leg_limits or {}).get(lo)
                 outcome = _place_and_monitor_leg(
                     db, facade,
@@ -905,6 +978,7 @@ def execute_suggestion_in_zerodha(
                     suggestion_id=suggestion_id,
                     trade_id=None,
                     user_limit_price=user_lim,
+                    expected_transaction_type=txn,
                 )
                 completed.append(outcome)
         except Exception:
@@ -913,6 +987,7 @@ def execute_suggestion_in_zerodha(
                 suggestion_id=suggestion_id,
                 legs_by_order=legs_by_order,
                 completed=completed,
+                inst_map=inst_map,
             )
             raise
 
@@ -947,6 +1022,7 @@ def execute_suggestion_in_zerodha(
                 suggestion_id=suggestion_id,
                 legs_by_order=legs_by_order,
                 completed=completed,
+                inst_map=inst_map,
             )
             raise
         if trade_id is None:
@@ -955,6 +1031,7 @@ def execute_suggestion_in_zerodha(
                 suggestion_id=suggestion_id,
                 legs_by_order=legs_by_order,
                 completed=completed,
+                inst_map=inst_map,
             )
             raise ZerodhaExecutionError("Trade was not created after fills")
 
@@ -1088,7 +1165,12 @@ def close_trade_in_zerodha(
                 ltp = _refresh_leg_ltp(facade, inst_map, leg)
                 live_map[lo] = ltp
                 plan = plan_by_order[lo]
-                close_txn = plan.transaction_type
+                close_txn = _transaction_type_for_leg(leg, "close")
+                if close_txn != plan.transaction_type:
+                    raise ZerodhaExecutionError(
+                        f"leg {lo}: close preview/execute mismatch "
+                        f"({plan.transaction_type} vs {close_txn})"
+                    )
                 user_lim = (leg_limits or {}).get(lo)
                 outcome = _place_and_monitor_leg(
                     db, facade,
@@ -1100,6 +1182,7 @@ def close_trade_in_zerodha(
                     suggestion_id=trade.get("suggestion_id"),
                     trade_id=trade_id,
                     user_limit_price=user_lim,
+                    expected_transaction_type=close_txn,
                 )
                 completed.append(outcome)
         except Exception:
@@ -1109,6 +1192,7 @@ def close_trade_in_zerodha(
                 suggestion_id=trade.get("suggestion_id"),
                 legs_by_order=legs_by_order,
                 completed=completed,
+                inst_map=inst_map,
             )
             raise
 

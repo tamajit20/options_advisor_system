@@ -71,3 +71,11 @@ class KiteExecutionFacade:
 
     def quote(self, keys) -> dict:
         return self._kite.quote(list(keys))
+
+    def profile(self) -> dict:
+        return dict(self._kite.profile())
+
+    def margins(self, segment: Optional[str] = None) -> dict:
+        if segment:
+            return dict(self._kite.margins(segment=segment))
+        return dict(self._kite.margins())

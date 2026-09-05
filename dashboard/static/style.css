@@ -2801,6 +2801,50 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 }
 .wsmon-config-hint { margin-top: .4rem; font-size: .82rem; }
 
+.zerodha-profile-chip {
+  font-size: .72rem;
+  padding: .2rem .45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border, #2a3744);
+  background: var(--surface-alt, rgba(255,255,255,.04));
+  color: var(--text-dim, #94a3b8);
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zerodha-account-panel {
+  margin-top: .65rem;
+  padding: .65rem .75rem;
+  border: 1px solid var(--border, #2a3744);
+  border-radius: 8px;
+  background: var(--surface-alt, rgba(255,255,255,.03));
+  font-size: .84rem;
+}
+.zerodha-account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: .45rem .75rem;
+  margin-top: .45rem;
+}
+.zerodha-account-item label {
+  display: block;
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--text-dim, #94a3b8);
+  margin-bottom: .1rem;
+}
+.zerodha-account-item strong {
+  font-size: .92rem;
+  font-variant-numeric: tabular-nums;
+}
+.zerodha-account-meta {
+  margin-top: .45rem;
+  font-size: .75rem;
+  color: var(--text-dim, #94a3b8);
+}
+
 .apps-runtime-grid { display: grid; gap: 12px; max-width: 640px; }
 .apps-runtime-row {
   display: grid;

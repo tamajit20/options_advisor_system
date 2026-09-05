@@ -43,6 +43,7 @@
     <div id="global-banners" class="global-banners" aria-live="polite" hidden></div>
   </div>
   <div class="header-actions">
+    <span id="zerodha-profile-chip" class="zerodha-profile-chip" hidden aria-label="Zerodha account balance"></span>
     <a id="zerodha-login-btn" class="icon-btn" href="/zerodha/login"
        title="Zerodha login (daily token refresh)"
        aria-label="Zerodha login">
@@ -302,6 +303,7 @@
       <div id="zerodha-session-card" class="card wsmon-config-card">
         <h3 class="wsmon-config-title">Zerodha Session</h3>
         <div id="zerodha-status" class="muted">Checking…</div>
+        <div id="zerodha-account-panel" class="zerodha-account-panel" hidden></div>
         <div id="zerodha-https-warning" class="wsmon-config-hint" style="display:none;color:#b45309;margin:.5rem 0;">
           Azure / HTTP deploy — use <strong>manual paste</strong> below (Kite requires HTTPS for public URLs).
         </div>
