@@ -130,12 +130,16 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
             tl = by_order.get(sl["leg_order"])
             if not tl or not tl.get("executed"):
                 continue
+            try:
+                lots = int(tl.get("lots_actual") or sl["lots"] or 0)
+            except (TypeError, ValueError):
+                lots = int(sl["lots"] or 0)
             legs_for_engine.append({
                 "leg_order":   sl["leg_order"],
                 "action":      sl["action"],
                 "strike":      float(sl["strike"]),
                 "option_type": sl["option_type"],
-                "lots":        sl["lots"],
+                "lots":        lots,
                 "lot_size":    sl["lot_size"],
                 "fill_price":  tl.get("fill_price"),
                 "expiry_date": sl["expiry_date"],

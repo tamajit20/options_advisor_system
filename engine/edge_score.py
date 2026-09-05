@@ -137,7 +137,7 @@ def _confidence_score(strategy: str, confidence: ConfidenceResult) -> float:
     soft_total = 8  # gates 1–8 in confidence.evaluate (incl. OI change)
     soft_passed = sum(
         1 for c in list(confidence.checks)[:soft_total]
-        if c.status not in ("FAIL", "SOFT_FAIL")
+        if c.status == "PASS"
     )
     headroom = max(0, soft_passed - required)
     max_headroom = max(1, soft_total - required)

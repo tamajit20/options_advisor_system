@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import copy
 import os
-from datetime import time as _time
+from datetime import date, time as _time
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -242,6 +242,28 @@ NSE_CONFIG = {
         "Referer":         "https://www.nseindia.com",
     },
 }
+
+
+# NSE equity + F&O weekday closures (weekends are skipped separately).
+# Source: NSE holiday circular for calendar year 2026.
+NSE_MARKET_HOLIDAYS = frozenset({
+    date(2026, 1, 15),
+    date(2026, 1, 26),
+    date(2026, 3, 3),
+    date(2026, 3, 26),
+    date(2026, 3, 31),
+    date(2026, 4, 3),
+    date(2026, 4, 14),
+    date(2026, 5, 1),
+    date(2026, 5, 28),
+    date(2026, 6, 26),
+    date(2026, 9, 14),
+    date(2026, 10, 2),
+    date(2026, 10, 20),
+    date(2026, 11, 10),
+    date(2026, 11, 24),
+    date(2026, 12, 25),
+})
 
 
 # ---------------------------------------------------------------------------

@@ -405,6 +405,52 @@ class TestLiveTradeOutlook:
         )
         assert fit_out["direction_fit"] == "against"
 
+    def test_bull_call_fallback_adds_debit_to_long_strike(self):
+        legs = [
+            {"leg_order": 1, "action": "BUY", "strike": 23000.0, "option_type": "CE",
+             "fill_price": 150.0, "lots": 1, "lot_size": 50},
+            {"leg_order": 2, "action": "SELL", "strike": 23200.0, "option_type": "CE",
+             "fill_price": 70.0, "lots": 1, "lot_size": 50},
+        ]
+        # Debit 80 → BE 23080. Spot 23050 is still below BE (would look aligned
+        # if fallback used the long strike alone).
+        fit = assess_direction_fit(
+            strategy="BULL_CALL_SPREAD",
+            underlying="NIFTY",
+            spot=23050.0,
+            upper_be=None,
+            lower_be=None,
+            legs=legs,
+        )
+        assert fit["direction_fit"] == "against"
+        fit_in = assess_direction_fit(
+            strategy="BULL_CALL_SPREAD",
+            underlying="NIFTY",
+            spot=23100.0,
+            upper_be=None,
+            lower_be=None,
+            legs=legs,
+        )
+        assert fit_in["direction_fit"] == "aligned"
+
+    def test_bear_put_fallback_subtracts_debit_from_long_strike(self):
+        legs = [
+            {"leg_order": 1, "action": "BUY", "strike": 23000.0, "option_type": "PE",
+             "fill_price": 150.0, "lots": 1, "lot_size": 50},
+            {"leg_order": 2, "action": "SELL", "strike": 22800.0, "option_type": "PE",
+             "fill_price": 70.0, "lots": 1, "lot_size": 50},
+        ]
+        # Debit 80 → BE 22920. Spot 22950 is still above BE.
+        fit = assess_direction_fit(
+            strategy="BEAR_PUT_SPREAD",
+            underlying="NIFTY",
+            spot=22950.0,
+            upper_be=None,
+            lower_be=None,
+            legs=legs,
+        )
+        assert fit["direction_fit"] == "against"
+
     def test_direction_against_for_bull_put_below_short_strike(self):
         legs = [
             {"leg_order": 1, "action": "SELL", "strike": 23200.0, "option_type": "PE",

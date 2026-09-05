@@ -339,7 +339,7 @@ def assemble_suggestion(
         # Soft gates are checks[:8] in confidence.evaluate (gates 1–8, incl. OI).
         soft_total = 8
         soft_checks = list(confidence.checks)[:soft_total]
-        soft_pass_count = sum(1 for c in soft_checks if c.status not in ("FAIL", "SOFT_FAIL"))
+        soft_pass_count = sum(1 for c in soft_checks if c.status == "PASS")
         if soft_pass_count < required:
             _entry_veto(
                 f"{strategy} requires {required}/{soft_total} soft gates, "
@@ -540,12 +540,18 @@ def assemble_suggestion(
     cw_default = STRATEGY_CONFIG.get("min_credit_to_width_ratio", 0.20)
     cw_overrides = STRATEGY_CONFIG.get("strategy_min_credit_to_width_ratio", {}) or {}
     min_cw_ratio = float(cw_overrides.get(strategy, cw_default))
-    spread_w_for_grade = leg_builder.spread_width(legs)
+    spread_w_for_grade = leg_builder.spread_width(legs, strategy)
+    # Jade risk width includes the naked put; keep the ratio veto on the
+    # defined-risk call wing so a valid Jade is not rejected at 25% of ~23k.
+    spread_w_for_veto = (
+        leg_builder.spread_width(legs) if strategy == "JADE_LIZARD"
+        else spread_w_for_grade
+    )
     if strategy in _CREDIT_STRATEGIES:
-        if spread_w_for_grade > 0 and np_per_share < min_cw_ratio * spread_w_for_grade:
+        if spread_w_for_veto > 0 and np_per_share < min_cw_ratio * spread_w_for_veto:
             _entry_veto(
-                f"Credit-to-width ratio too low: {np_per_share:.1f}/{spread_w_for_grade:.0f} = "
-                f"{np_per_share/spread_w_for_grade*100:.1f}% < {min_cw_ratio*100:.0f}% minimum",
+                f"Credit-to-width ratio too low: {np_per_share:.1f}/{spread_w_for_veto:.0f} = "
+                f"{np_per_share/spread_w_for_veto*100:.1f}% < {min_cw_ratio*100:.0f}% minimum",
                 collected_vetoes, defer=defer_entry_vetoes,
             )
 

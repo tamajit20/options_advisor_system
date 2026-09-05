@@ -14,6 +14,9 @@ from lifecycle import trade_executor as te
 def fake_suggestion():
     return {
         "trade_name": "N-IC-1",
+        "strategy": "IRON_CONDOR",
+        "underlying": "NIFTY",
+        "expiry_date": "2026-05-14",
         "max_profit": 6000.0, "max_loss": 14000.0,
         "upper_breakeven": 23300.0, "lower_breakeven": 22700.0,
         "stop_loss_level": 23250.0,
@@ -361,6 +364,23 @@ class TestCircuitBreakerBlocks:
                 mock_db, "SUG-X", [], execute_at_suggested=True,
             )
 
+    def test_fail_closed_when_flag_unreadable(
+        self, mock_db, mocker, fake_suggestion, fake_legs
+    ):
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        mocker.patch(
+            "lifecycle.trade_executor.RuntimeFlagsRepo.get_bool",
+            side_effect=RuntimeError("db down"),
+        )
+        fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
+                              fill_time=datetime(2026, 5, 4, 9, 30))
+                 for i in (1, 2, 3, 4)]
+        with pytest.raises(ValueError, match="circuit-breaker flag could not be read"):
+            te.mark_executed(mock_db, "SUG-X", fills)
+
     def test_execute_at_suggested_skips_stale_gate(
         self, mock_db, mocker, fake_legs,
     ):
@@ -575,6 +595,9 @@ class TestActualNetCreditComputation:
         # Credit trade: max profit = actual credit; max loss = suggested width − credit
         assert call_arg["actual_max_profit"] == pytest.approx(4500.0)
         assert call_arg["actual_max_loss"] == pytest.approx(15500.0)
+        # Fill BEs: net credit/share 60 → short call 23500+60, short put 22500-60
+        assert call_arg["actual_upper_breakeven"] == pytest.approx(23560.0)
+        assert call_arg["actual_lower_breakeven"] == pytest.approx(22440.0)
 
     def test_blocks_manual_fill_when_zerodha_orders_in_flight(
         self, mock_db, mocker, fake_suggestion, fake_legs
@@ -674,6 +697,16 @@ class TestActualMaxEconomics:
         assert te._actual_max_profit({}, 100.0) == pytest.approx(100.0)
         assert te._actual_max_loss({}, 100.0) is None
         assert te._actual_max_profit({"max_profit": 1.0}, -50.0) == 1.0
+
+    def test_debit_width_scales_with_lots(self):
+        sug = {"max_profit": 12000.0, "max_loss": 3000.0}
+        assert te._actual_max_profit(sug, -8000.0, width_scale=2.0) == pytest.approx(22000.0)
+        assert te._actual_max_loss(sug, -8000.0, width_scale=2.0) == pytest.approx(8000.0)
+
+    def test_credit_width_scales_with_lots(self):
+        sug = {"max_profit": 6000.0, "max_loss": 14000.0}
+        assert te._actual_max_profit(sug, 9000.0, width_scale=2.0) == pytest.approx(9000.0)
+        assert te._actual_max_loss(sug, 9000.0, width_scale=2.0) == pytest.approx(31000.0)
 
 
 class TestLotsOverride:

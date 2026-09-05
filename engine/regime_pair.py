@@ -52,11 +52,15 @@ def resolve_regime_pair_strategies(
 ) -> Tuple[str, Optional[str]]:
     """Pick (range_strategy, breakout_strategy) for a sideways market.
 
-    Breakout leg is omitted when IV is already elevated (writing regime) —
-    options are expensive and a long-vol bet is structurally weak.
+    Breakout leg is omitted in the writing regime unless a long-vol
+    catalyst is present — options are expensive, so a long-vol bet is
+    structurally weak without a scheduled event.
 
     Iron Butterfly matches ``select_strategy``: high IV rank **and** IV/HV
     at or above ``iv_butterfly_min_premium``. Missing/low premium → Condor.
+
+    Low / mid IV: catalyst prefers a long strangle (wings already cheap);
+    otherwise a long straddle.
     """
     writing_min = float(STRATEGY_CONFIG["iv_rank_writing_min"])
     butterfly_min = float(STRATEGY_CONFIG.get("iv_rank_butterfly_min", 70.0))
@@ -70,13 +74,13 @@ def resolve_regime_pair_strategies(
             and iv_premium is not None
             and iv_premium >= butterfly_min_prem
         ):
-            return "IRON_BUTTERFLY", None
-        return "IRON_CONDOR", None
+            range_strat = "IRON_BUTTERFLY"
+        else:
+            range_strat = "IRON_CONDOR"
+        breakout = "LONG_STRANGLE" if has_long_vol_catalyst else None
+        return range_strat, breakout
 
-    # Low / mid IV — calendar for range, straddle for breakout attempt.
-    breakout = "LONG_STRADDLE"
-    if has_long_vol_catalyst:
-        breakout = "LONG_STRADDLE"
+    breakout = "LONG_STRANGLE" if has_long_vol_catalyst else "LONG_STRADDLE"
     return "CALENDAR_SPREAD", breakout
 
 

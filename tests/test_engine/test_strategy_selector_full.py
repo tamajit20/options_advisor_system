@@ -108,6 +108,13 @@ def _failing_confidence():
                             total=7, all_passed=False)
 
 
+def _pass_warn_confidence():
+    checks = [ConfidenceCheck(label=f"c{i}", status="PASS", detail="") for i in range(7)]
+    checks.append(ConfidenceCheck(label="c7", status="PASS_WARN", detail="missing"))
+    return ConfidenceResult(checks=checks, failed_reasons=[], score=7, total=8,
+                            all_passed=True)
+
+
 class TestAssembleSuggestion:
     def test_vetoes_when_confidence_failed(self, sample_chain, sample_indicators):
         with pytest.raises(StrategyVeto, match="Confidence"):
@@ -175,6 +182,19 @@ class TestAssembleSuggestion:
         # plain_english should mention the strategy and entry section
         assert "ENTRY" in sug.plain_english
         assert "TIMELINE" in sug.plain_english
+
+    def test_long_call_pass_warn_does_not_count_as_soft_pass(self, sample_chain):
+        ind = _make_indicators(trend="BULLISH", pcr=0.40, iv_premium=0.85)
+        with pytest.raises(StrategyVeto, match="requires 8/8"):
+            ss.assemble_suggestion(
+                suggestion_id="S-LC-WARN", underlying="NIFTY",
+                expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=sample_chain,
+                indicators=ind,
+                confidence=_pass_warn_confidence(),
+                iv_rank=15.0, atm_iv=0.18, lots=1, lot_size=75,
+                strategy_override="LONG_CALL",
+            )
 
 
 # ---------------------------------------------------------------------------

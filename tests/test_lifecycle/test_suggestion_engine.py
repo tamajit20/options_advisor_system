@@ -104,7 +104,7 @@ class TestNextTradingDay:
         assert se._next_trading_day(date(2026, 5, 4)) == date(2026, 5, 5)
 
     def test_friday_to_monday(self):
-        # 1 May 2026 is Friday
+        # 1 May 2026 is Friday (also Maharashtra Day). Next session is Monday 4 May.
         assert se._next_trading_day(date(2026, 5, 1)) == date(2026, 5, 4)
 
     def test_saturday_to_monday(self):
@@ -112,6 +112,14 @@ class TestNextTradingDay:
 
     def test_sunday_to_monday(self):
         assert se._next_trading_day(date(2026, 5, 3)) == date(2026, 5, 4)
+
+    def test_skips_maharashtra_day(self):
+        # Thursday 30 Apr → skip Friday 1 May holiday and weekend → Monday 4 May
+        assert se._next_trading_day(date(2026, 4, 30)) == date(2026, 5, 4)
+
+    def test_skips_ganesh_chaturthi(self):
+        # Friday 11 Sep → skip weekend and Monday 14 Sep holiday → Tuesday 15 Sep
+        assert se._next_trading_day(date(2026, 9, 11)) == date(2026, 9, 15)
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +667,7 @@ class TestIcIbCompanions:
             trade_name="N-IC",
             underlying="NIFTY",
             expiry_date=date(2026, 5, 14),
+            legs=[MagicMock(lots=2), MagicMock(lots=2), MagicMock(lots=2), MagicMock(lots=2)],
         )
         se._append_ic_ib_companions(
             primary=primary,
@@ -677,3 +686,4 @@ class TestIcIbCompanions:
         ]
         assert overrides == ["BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"]
         assert all(c.kwargs.get("companion_mode") is True for c in assemble.call_args_list)
+        assert all(c.kwargs.get("lots") == 2 for c in assemble.call_args_list)

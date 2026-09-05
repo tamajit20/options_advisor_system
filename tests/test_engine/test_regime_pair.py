@@ -63,6 +63,20 @@ def test_resolve_low_iv_both_legs():
     assert b == "LONG_STRADDLE"
 
 
+def test_resolve_low_iv_catalyst_uses_strangle():
+    r, b = resolve_regime_pair_strategies(iv_rank=20.0, has_long_vol_catalyst=True)
+    assert r == "CALENDAR_SPREAD"
+    assert b == "LONG_STRANGLE"
+
+
+def test_resolve_high_iv_catalyst_emits_breakout_strangle():
+    r, b = resolve_regime_pair_strategies(
+        iv_rank=60.0, has_long_vol_catalyst=True,
+    )
+    assert r == "IRON_CONDOR"
+    assert b == "LONG_STRANGLE"
+
+
 def test_pick_preferred_range_on_higher_pop():
     range_sug = _sug("CALENDAR_SPREAD", pop=55.0, edge=40.0)
     breakout_sug = _sug("LONG_STRADDLE", pop=35.0, edge=45.0)

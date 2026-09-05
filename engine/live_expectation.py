@@ -56,6 +56,21 @@ def _as_float(value: Any) -> Optional[float]:
     return n
 
 
+def _net_premium_per_share(legs: Sequence[Mapping[str, Any] | Any]) -> Optional[float]:
+    """Per-share net premium from fill or suggested prices. Credit is positive."""
+    total = 0.0
+    n = 0
+    for raw in legs or []:
+        getter = raw.get if isinstance(raw, Mapping) else lambda k, d=None: getattr(raw, k, d)
+        px = _as_float(getter("fill_price") or getter("suggested_price"))
+        if px is None:
+            continue
+        action = str(getter("action") or "").upper()
+        total += px if action == "SELL" else -px
+        n += 1
+    return total if n else None
+
+
 def normalize_atm_iv(raw: Any) -> Optional[float]:
     """Return IV as a decimal (0.18). Values > 2 are treated as percent."""
     iv = _as_float(raw)
@@ -146,7 +161,7 @@ def legs_from_fills(
             strike=float(getter("strike") or 0.0),
             option_type=str(getter("option_type") or "").upper(),
             action=str(getter("action") or "").upper(),
-            lots=int(getter("lots") or 1),
+            lots=int(getter("lots_actual") or getter("lots") or 1),
             lot_size=int(getter("lot_size") or 0),
             suggested_price=fill,
             suggested_price_low=fill,
@@ -393,7 +408,11 @@ def assess_direction_fit(
     elif strat == "BULL_CALL_SPREAD":
         # Profit when spot >= long call + debit (upper BE). Short call is the
         # max-gain cap, not the breakeven.
-        key = ub if ub is not None else (bc + 0.0 if bc is not None else None)
+        key = ub
+        if key is None and bc is not None:
+            np_ = _net_premium_per_share(legs)
+            debit = max(-(np_ or 0.0), 0.0)
+            key = bc + debit
         if key is not None:
             in_zone = spot_f >= key
             want = f"{name} at or above breakeven ₹{key:,.0f}"
@@ -402,7 +421,11 @@ def assess_direction_fit(
     elif strat == "BEAR_PUT_SPREAD":
         # Profit when spot <= long put − debit (lower BE). Short put is the
         # max-gain cap, not the breakeven.
-        key = lb if lb is not None else (bp + 0.0 if bp is not None else None)
+        key = lb
+        if key is None and bp is not None:
+            np_ = _net_premium_per_share(legs)
+            debit = max(-(np_ or 0.0), 0.0)
+            key = bp - debit
         if key is not None:
             in_zone = spot_f <= key
             want = f"{name} at or below breakeven ₹{key:,.0f}"

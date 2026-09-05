@@ -23,7 +23,7 @@ import logging
 from datetime import date, datetime, time, timedelta
 from typing import List, Optional
 
-from config import STRATEGY_CONFIG
+from config import NSE_MARKET_HOLIDAYS, STRATEGY_CONFIG
 from contracts import (
     ConfidenceResult,
     MarketIndicators,
@@ -162,9 +162,19 @@ def _append_ic_ib_companions(
     for companion_strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
         try:
             comp_id = sug_repo.next_suggestion_id(id_date)
+            primary_lots = 1
+            try:
+                primary_lots = max(
+                    (int(getattr(l, "lots", 0) or 0) for l in (primary.legs or [])),
+                    default=1,
+                )
+            except (TypeError, ValueError):
+                primary_lots = 1
+            if primary_lots < 1:
+                primary_lots = 1
             comp = assemble_suggestion(
                 suggestion_id=comp_id,
-                lots=1,
+                lots=primary_lots,
                 companion_mode=True,
                 strategy_override=companion_strategy,
                 **{k: v for k, v in assemble_kw.items()
@@ -289,13 +299,13 @@ def _execution_window(entry_day: date, now: datetime) -> str:
 
 
 def _next_trading_day(d: date) -> date:
-    """Return the next weekday after `d` (skips Sat/Sun).
-    Used to compute entry DTE: suggestions generated on Friday evening
-    are entered Monday morning (+3 cal days), not Tuesday (+1).
-    NSE holidays are not considered here — DTE is approximate anyway.
+    """Return the next NSE session after `d` (skips Sat/Sun and holidays).
+
+    Used for entry DTE and event-eve checks: Friday evening suggestions
+    enter Monday (or Tuesday if Monday is a holiday), not the next calendar day.
     """
     nxt = d + timedelta(days=1)
-    while nxt.weekday() >= 5:   # 5=Sat, 6=Sun
+    while nxt.weekday() >= 5 or nxt in NSE_MARKET_HOLIDAYS:
         nxt += timedelta(days=1)
     return nxt
 

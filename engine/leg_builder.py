@@ -458,15 +458,27 @@ def net_premium(legs: Sequence[SuggestionLeg]) -> float:
     return total
 
 
-def spread_width(legs: Sequence[SuggestionLeg]) -> float:
-    """Maximum width across paired hedge legs of the same option type+action axis."""
+def spread_width(legs: Sequence[SuggestionLeg], strategy: str = "") -> float:
+    """Maximum width across paired hedge legs of the same option type+action axis.
+
+    Jade Lizard risk width is ``max(call_spread, short_put)`` — that equals
+    ``max_loss + credit`` and is the honest grade/display width. The 20–25%
+    credit-to-width *veto* must keep using the call-spread-only width
+    (``strategy=""``) or every Jade would fail.
+    """
     if not legs:
         return 0.0
-    # Group by option_type
-    widths: List[float] = []
     by_type: dict[str, list[SuggestionLeg]] = {"CE": [], "PE": []}
     for leg in legs:
         by_type[leg.option_type].append(leg)
+    if (strategy or "").upper() == "JADE_LIZARD":
+        short_put = next((l.strike for l in by_type["PE"] if l.action == "SELL"), None)
+        short_call = next((l.strike for l in by_type["CE"] if l.action == "SELL"), None)
+        long_call = next((l.strike for l in by_type["CE"] if l.action == "BUY"), None)
+        call_width = abs(long_call - short_call) if (long_call and short_call) else 0.0
+        put_risk = float(short_put) if short_put is not None else 0.0
+        return max(call_width, put_risk)
+    widths: List[float] = []
     for opts in by_type.values():
         if not opts:
             continue

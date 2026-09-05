@@ -58,7 +58,37 @@ def _fills_from_suggested(legs: Sequence[dict]) -> list[TradeLegFill]:
     return out
 
 
-def _actual_max_profit(suggestion: dict, actual_net_credit: float) -> Optional[float]:
+def _fill_width_scale(
+    suggestion_legs: Sequence[dict],
+    executed_legs: Sequence[dict],
+) -> float:
+    """fill qty / suggestion qty from max(lots × lot_size). Default 1.0."""
+    def _max_qty(rows: Sequence[dict], lots_key: str) -> int:
+        best = 0
+        for row in rows:
+            lots = row.get(lots_key)
+            if lots is None:
+                lots = row.get("lots") or 0
+            try:
+                qty = int(lots) * int(row.get("lot_size") or 0)
+            except (TypeError, ValueError):
+                continue
+            if qty > best:
+                best = qty
+        return best
+
+    sug_qty = _max_qty(suggestion_legs, "lots")
+    fill_qty = _max_qty(executed_legs, "lots_actual")
+    if sug_qty <= 0 or fill_qty <= 0:
+        return 1.0
+    return fill_qty / sug_qty
+
+
+def _actual_max_profit(
+    suggestion: dict,
+    actual_net_credit: float,
+    width_scale: float = 1.0,
+) -> Optional[float]:
     """Recompute rupee max-profit from fills; fall back to suggestion economics."""
     sug_mp = suggestion.get("max_profit")
     sug_ml = suggestion.get("max_loss")
@@ -66,20 +96,24 @@ def _actual_max_profit(suggestion: dict, actual_net_credit: float) -> Optional[f
         if actual_net_credit > 0:
             return float(actual_net_credit)
         if actual_net_credit < 0 and sug_mp is not None and sug_ml is not None:
-            width = float(sug_mp) + float(sug_ml)
+            width = (float(sug_mp) + float(sug_ml)) * float(width_scale)
             return max(0.0, width - abs(actual_net_credit))
     except (TypeError, ValueError):
         pass
     return sug_mp
 
 
-def _actual_max_loss(suggestion: dict, actual_net_credit: float) -> Optional[float]:
+def _actual_max_loss(
+    suggestion: dict,
+    actual_net_credit: float,
+    width_scale: float = 1.0,
+) -> Optional[float]:
     sug_mp = suggestion.get("max_profit")
     sug_ml = suggestion.get("max_loss")
     try:
         if sug_mp is None or sug_ml is None:
             return sug_ml
-        width = float(sug_mp) + float(sug_ml)
+        width = (float(sug_mp) + float(sug_ml)) * float(width_scale)
         if actual_net_credit > 0:
             return max(0.0, width - actual_net_credit)
         if actual_net_credit < 0:
@@ -87,6 +121,45 @@ def _actual_max_loss(suggestion: dict, actual_net_credit: float) -> Optional[flo
     except (TypeError, ValueError):
         pass
     return sug_ml
+
+
+def _actual_breakevens(
+    suggestion: dict,
+    executed_legs: Sequence[dict],
+) -> tuple[Optional[float], Optional[float]]:
+    """Recompute BEs from fill prices; fall back to suggestion BEs."""
+    fallback = (suggestion.get("upper_breakeven"), suggestion.get("lower_breakeven"))
+    strategy = suggestion.get("strategy") or ""
+    if not strategy or not executed_legs:
+        return fallback
+    try:
+        from engine.exit_pricing import expiry_date as _parse_expiry
+        from engine.leg_builder import breakevens
+        from engine.live_expectation import legs_from_fills
+
+        exp = _parse_expiry(suggestion.get("expiry_date"))
+        if exp is None:
+            exp = _parse_expiry(executed_legs[0].get("expiry_date"))
+        if exp is None:
+            exp = today_ist()
+        underlying = str(
+            suggestion.get("underlying")
+            or executed_legs[0].get("symbol")
+            or ""
+        )
+        fill_rows = []
+        for row in executed_legs:
+            copied = dict(row)
+            if copied.get("lots_actual"):
+                copied["lots"] = copied["lots_actual"]
+            fill_rows.append(copied)
+        fill_legs = legs_from_fills(fill_rows, underlying=underlying, expiry=exp)
+        ub, lb = breakevens(fill_legs, strategy)
+        if ub is not None or lb is not None:
+            return ub, lb
+    except Exception:
+        logger.debug("trade_executor: fill breakeven recompute failed", exc_info=True)
+    return fallback
 
 
 def _require_positive_lot_size(legs: Sequence[dict], *, context: str) -> None:
@@ -107,9 +180,10 @@ def _circuit_breaker_on(db: SQLServerConnection) -> bool:
             FLAG_CIRCUIT_BREAKER_ACTIVE, default=False,
         )
     except Exception:
-        logger.debug("trade_executor: circuit_breaker flag read failed",
-                     exc_info=True)
-        return False
+        logger.exception("trade_executor: circuit_breaker flag read failed")
+        raise ValueError(
+            "Execution blocked: circuit-breaker flag could not be read"
+        ) from None
 
 
 def mark_executed(
@@ -224,9 +298,13 @@ def mark_executed(
     for leg in legs:
         f = fills_by_order.get(leg["leg_order"])
         if f and f.executed and f.fill_price is not None:
-            executed_legs.append({**leg, "fill_price": f.fill_price})
-            sign = 1.0 if leg["action"] == "SELL" else -1.0
             lots_used = (f.lots_override if f and f.lots_override else leg["lots"]) or 0
+            executed_legs.append({
+                **leg,
+                "fill_price": f.fill_price,
+                "lots_actual": lots_used,
+            })
+            sign = 1.0 if leg["action"] == "SELL" else -1.0
             actual_net_credit += sign * f.fill_price * lots_used * (leg["lot_size"] or 0)
         else:
             not_executed_legs.append(leg)
@@ -264,6 +342,9 @@ def mark_executed(
                             spot=0.0, current_chain=[])
         ]
 
+    width_scale = _fill_width_scale(legs, executed_legs)
+    actual_ub, actual_lb = _actual_breakevens(suggestion, executed_legs)
+
     trade_id = trd.next_trade_id(today_ist())
     trd.insert({
         "trade_id":        trade_id,
@@ -272,10 +353,14 @@ def mark_executed(
         "executed_on":     executed_on,
         "position_type":   position_type,
         "net_credit_actual": actual_net_credit,
-        "actual_max_profit":      _actual_max_profit(suggestion, actual_net_credit),
-        "actual_max_loss":        _actual_max_loss(suggestion, actual_net_credit),
-        "actual_upper_breakeven": suggestion.get("upper_breakeven"),
-        "actual_lower_breakeven": suggestion.get("lower_breakeven"),
+        "actual_max_profit":      _actual_max_profit(
+            suggestion, actual_net_credit, width_scale=width_scale,
+        ),
+        "actual_max_loss":        _actual_max_loss(
+            suggestion, actual_net_credit, width_scale=width_scale,
+        ),
+        "actual_upper_breakeven": actual_ub,
+        "actual_lower_breakeven": actual_lb,
         "actual_stop_loss_level": actual_stop_loss_level if actual_stop_loss_level is not None else suggestion.get("stop_loss_level"),
         "spot_at_execution": spot_at_execution,
         "status":          "ACTIVE",

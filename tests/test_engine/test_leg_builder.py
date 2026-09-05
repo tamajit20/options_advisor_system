@@ -239,6 +239,15 @@ class TestEconomicsPrimitives:
         # Each side width = 100, max = 100
         assert spread_width(legs) == 100.0
 
+    def test_spread_width_jade_uses_naked_put_risk(self, make_leg):
+        legs = [
+            make_leg(1, 22700, "PE", "SELL"),
+            make_leg(2, 23150, "CE", "SELL"),
+            make_leg(3, 23300, "CE", "BUY"),
+        ]
+        assert spread_width(legs) == 150.0
+        assert spread_width(legs, "JADE_LIZARD") == 22700.0
+
     def test_max_profit_loss_iron_condor(self, make_leg):
         legs = [
             make_leg(1, 22800, "PE", "SELL", price=50),

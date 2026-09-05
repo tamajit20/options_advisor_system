@@ -85,6 +85,23 @@ class TestRunExitEngine:
         assert call_args[0][1] == "ACTIVE"
         assert call_args[0][2] == "OPEN"
 
+    def test_uses_lots_actual_for_engine(self, mock_db, mocker):
+        mocker.patch.object(orch.TradeRepo, "open_trades", return_value=[_open_trade()])
+        mocker.patch.object(orch.TradeRepo, "legs", return_value=[
+            {"leg_order": 1, "executed": 1, "fill_price": 50.0, "lots_actual": 3},
+            {"leg_order": 2, "executed": 1, "fill_price": 20.0, "lots_actual": 3},
+        ])
+        mock_db.fetch_all.return_value = _sug_legs()
+        mock_db.fetch_one.return_value = {"strategy": "BEAR_CALL_SPREAD"}
+        mocker.patch.object(orch.FoEodRepo, "get_chain", return_value=_chain())
+        eval_mock = mocker.patch(
+            "lifecycle.exit_orchestrator.evaluate_exit",
+            return_value=MagicMock(decision="HOLD", reason="ok"),
+        )
+        orch.run_exit_engine(mock_db, date(2026, 5, 4))
+        engine_legs = eval_mock.call_args.kwargs["legs"]
+        assert [leg["lots"] for leg in engine_legs] == [3, 3]
+
     def test_skips_legs_that_were_not_filled(self, mock_db, mocker):
         """If all legs are unfilled, evaluate_exit must not be called."""
         mocker.patch.object(orch.TradeRepo, "open_trades", return_value=[_open_trade()])
