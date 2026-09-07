@@ -657,12 +657,18 @@ function _renderZerodhaExecutionResult(preview, result) {
 }
 
 function _renderZerodhaPreviewTable(preview) {
+  const isClose = String(preview.operation || '').toUpperCase() === 'EXIT';
+  const showBand = !isClose;
   const legs = preview.legs || [];
   const rows = legs.map(l => {
     const band = (l.band_lo != null && l.band_hi != null)
       ? `\u20b9${fmt(l.band_lo)}\u2013\u20b9${fmt(l.band_hi)}` : '\u2014';
     const bandCls = l.in_band ? 'tag-ok' : 'tag-err';
     const bandLbl = l.in_band ? 'In band' : 'Out of band';
+    const bandCells = showBand
+      ? `<td class="num">${band}</td>
+         <td><span class="tag tag-sm ${bandCls}">${bandLbl}</span></td>`
+      : '';
     return `<tr>
       <td class="num">${l.execution_step || l.leg_order}</td>
       <td><span class="tag tag-sm">${escapeHtml(l.transaction_type || l.action || '')}</span></td>
@@ -670,11 +676,10 @@ function _renderZerodhaPreviewTable(preview) {
       <td class="num">${l.quantity != null ? l.quantity : ''}</td>
       <td class="num">\u20b9${fmt(l.ltp)}</td>
       <td class="num"><strong>\u20b9${fmt(l.limit_price)}</strong>${l.auto_priced ? ' <span class="muted" style="font-size:.72rem">auto</span>' : ''}</td>
-      <td class="num">${band}</td>
-      <td><span class="tag tag-sm ${bandCls}">${bandLbl}</span></td>
+      ${bandCells}
     </tr>`;
   }).join('');
-  const warn = !preview.all_limits_in_band ? `
+  const warn = (!isClose && !preview.all_limits_in_band) ? `
     <div class="pending-close-alert" style="margin-bottom:10px">
       <strong>Outside suggestion price band.</strong>
       ${(preview.limit_vetoes || []).map(v => escapeHtml(v)).join('<br>')}
@@ -688,6 +693,9 @@ function _renderZerodhaPreviewTable(preview) {
     preview.spot_at_execution != null ? `Nifty spot \u20b9${fmt(preview.spot_at_execution)}` : null,
   ].filter(Boolean).join(' \u00b7 ');
   const funds = _renderZerodhaFundsBlock(preview);
+  const bandHeaders = showBand
+    ? '<th class="num">Suggested band</th><th>Band check</th>'
+    : '';
   return `${warn}
     ${meta ? `<div class="muted" style="font-size:.82rem;margin-bottom:8px">${meta}</div>` : ''}
     ${funds}
@@ -695,7 +703,7 @@ function _renderZerodhaPreviewTable(preview) {
       <table class="dt">
         <thead><tr>
           <th class="num">Step</th><th>Side</th><th>Symbol</th><th class="num">Qty</th>
-          <th class="num">Live LTP</th><th class="num">LIMIT to place</th><th class="num">Suggested band</th><th>Band check</th>
+          <th class="num">Live LTP</th><th class="num">LIMIT to place</th>${bandHeaders}
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -6416,17 +6424,15 @@ async function submitZerodhaClose(tradeId, btn, panel) {
       throw new Error('Close preview returned no legs');
     }
     showZerodhaConfirmModal(preview, {
-      title: preview.all_limits_in_band
-        ? 'Confirm Zerodha close orders'
-        : 'Warning: close limits outside suggestion band',
-      submitLabel: preview.all_limits_in_band ? 'Place close orders' : 'Proceed anyway',
+      title: 'Confirm Zerodha close orders',
+      submitLabel: 'Place close orders',
       onConfirm: async () => {
         _setZerodhaModalBody('Closing in Zerodha…', _renderZerodhaExecutionProgress(preview));
         const submit = document.getElementById('zerodha-confirm-submit');
         if (submit) submit.hidden = true;
         const closeMeta = { tradeId, label: `Close ${tradeId}`, claimStrip: true };
         _setZerodhaModalOwner(closeMeta);
-        const execBody = { ...body, ack_out_of_band: !preview.all_limits_in_band };
+        const execBody = { ...body };
         const stopPoll = _startZerodhaOrderPolling(
           `/api/trades/${tradeId}/zerodha-orders`,
           preview,

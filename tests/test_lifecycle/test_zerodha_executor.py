@@ -572,7 +572,7 @@ def test_supplement_rejects_live_prices_out_of_band(
     place.assert_not_called()
 
 
-def test_preview_close_execution_reports_limit_vetoes(db_conn, mocker, mock_instrument):
+def test_preview_close_execution_ignores_entry_price_band(db_conn, mocker, mock_instrument):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
     leg = {
         "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
@@ -592,8 +592,8 @@ def test_preview_close_execution_reports_limit_vetoes(db_conn, mocker, mock_inst
 
     preview = preview_close_execution(db_conn, "TRD-1")
     assert preview.operation == "EXIT"
-    assert preview.all_limits_in_band is False
-    assert preview.limit_vetoes
+    assert preview.all_limits_in_band is True
+    assert preview.limit_vetoes == []
 
 
 def test_pre_trade_checks_block_insufficient_funds(mocker, mock_instrument):

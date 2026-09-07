@@ -1217,7 +1217,12 @@ def _build_leg_plans(
         qty = lots * int(inst.lot_size or leg.get("lot_size") or 0)
         if qty <= 0:
             raise ZerodhaExecutionError(f"leg {lo}: invalid quantity")
-        sug, blo, bhi = _leg_band_fields(leg)
+        if mode == "close":
+            sug, blo, bhi = None, None, None
+            in_band = True
+        else:
+            sug, blo, bhi = _leg_band_fields(leg)
+            in_band = leg_limit_in_band(leg, limit_px)
         plans.append(LegExecutionPlan(
             leg_order=lo,
             execution_step=order_map.get(lo, 1),
@@ -1234,7 +1239,7 @@ def _build_leg_plans(
             suggested_price=sug,
             band_lo=blo,
             band_hi=bhi,
-            in_band=leg_limit_in_band(leg, limit_px),
+            in_band=in_band,
         ))
     return plans
 
@@ -1759,8 +1764,6 @@ def preview_close_execution(
         strategy = str((sug_row or {}).get("strategy") or "")
     ordered = legs_in_execution_order(open_exits, strategy, mode="close")
     plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="close", strategy=strategy)
-    limit_map = {p.leg_order: p.limit_price for p in plans}
-    limit_gate = validate_limit_prices(open_exits, limit_map)
     return ExecutionPreview(
         operation="EXIT",
         suggestion_id=trade.get("suggestion_id"),
@@ -1768,8 +1771,8 @@ def preview_close_execution(
         trade_name=trade.get("trade_name"),
         strategy=strategy or None,
         legs=plans,
-        all_limits_in_band=limit_gate.ok,
-        limit_vetoes=limit_gate.vetoes,
+        all_limits_in_band=True,
+        limit_vetoes=[],
         spot_at_execution=None,
     )
 
@@ -1782,6 +1785,8 @@ def close_trade_in_zerodha(
     ack_out_of_band: bool = False,
     execution_job_id: Optional[int] = None,
 ) -> ExecutionOutcome:
+    # Entry suggestion bands do not apply when flattening a live trade.
+    _ = ack_out_of_band
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError(
             "Zerodha execution is disabled — enable OPT_ZERODHA_EXECUTION_ENABLED "
@@ -1835,13 +1840,6 @@ def close_trade_in_zerodha(
         )
         plans = _build_leg_plans(
             ordered, inst_map, live_map, leg_limits, mode="close", strategy=strategy,
-        )
-        system_plans = (
-            _build_leg_plans(ordered, inst_map, live_map, None, mode="close", strategy=strategy)
-            if leg_limits else None
-        )
-        _enforce_limit_band(
-            open_exits, plans, ack_out_of_band=ack_out_of_band, system_plans=system_plans,
         )
         completed: List[LegFillOutcome] = []
         legs_by_order = {int(l["leg_order"]): l for l in open_exits}
