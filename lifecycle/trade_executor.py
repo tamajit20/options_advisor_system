@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from config import STRATEGY_CONFIG
 from contracts import TradeLegFill
@@ -38,9 +38,20 @@ from database.runtime_flags import FLAG_CIRCUIT_BREAKER_ACTIVE, RuntimeFlagsRepo
 from engine.broken_trade_advisor import advise, diagnose
 from engine.charges import estimate_charges_per_txn
 from engine.execution_validator import validate_execution
+from engine.stop_loss_levels import adjust_stop_for_execution_spot
 from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
+
+
+def _opt_float(value: Any) -> Optional[float]:
+    """SQL Server hands back Decimal; spot maths needs plain floats."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _check_lots_override(value: Optional[int]) -> None:
@@ -281,10 +292,6 @@ def mark_executed(
             raise ValueError("No suggested prices on legs — cannot record at suggested values")
         if len(fills) != len(legs):
             raise ValueError("Every leg must have a suggested_price to record at suggested values")
-        if spot_at_execution is None and suggestion.get("spot_at_generation") is not None:
-            spot_at_execution = float(suggestion["spot_at_generation"])
-        if actual_stop_loss_level is None:
-            actual_stop_loss_level = suggestion.get("stop_loss_level")
         has_executed_fills = True
     elif not has_executed_fills:
         if skip_execution_gate:
@@ -293,11 +300,20 @@ def mark_executed(
         db.commit()
         logger.info("Suggestion %s marked IGNORED — no fills", suggestion_id)
         return None
-    elif skip_execution_gate:
-        if spot_at_execution is None and suggestion.get("spot_at_generation") is not None:
-            spot_at_execution = float(suggestion["spot_at_generation"])
-        if actual_stop_loss_level is None:
-            actual_stop_loss_level = suggestion.get("stop_loss_level")
+
+    # The entry spot and the spot stop band travel together, so resolve them
+    # in one place that both execution paths pass through. Callers that can
+    # reach the broker (Zerodha, and the dashboard for manual records) supply
+    # a live spot; generation spot is only the last resort.
+    if spot_at_execution is None and suggestion.get("spot_at_generation") is not None:
+        spot_at_execution = float(suggestion["spot_at_generation"])
+    if actual_stop_loss_level is None:
+        actual_stop_loss_level = adjust_stop_for_execution_spot(
+            _opt_float(suggestion.get("stop_loss_level")),
+            str(suggestion.get("strategy") or ""),
+            spot_at_generation=_opt_float(suggestion.get("spot_at_generation")),
+            spot_at_execution=_opt_float(spot_at_execution),
+        )
 
     if gate.ok:
         # Client skip / execute-at-suggested must not bypass a passing gate.
@@ -389,7 +405,7 @@ def mark_executed(
         ),
         "actual_upper_breakeven": actual_ub,
         "actual_lower_breakeven": actual_lb,
-        "actual_stop_loss_level": actual_stop_loss_level if actual_stop_loss_level is not None else suggestion.get("stop_loss_level"),
+        "actual_stop_loss_level": actual_stop_loss_level,
         "spot_at_execution": spot_at_execution,
         "status":          "ACTIVE",
         "daily_status":    "OPEN",

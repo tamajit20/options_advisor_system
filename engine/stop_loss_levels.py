@@ -119,6 +119,31 @@ def primary_stop_loss_level(
     return lower
 
 
+def adjust_stop_for_execution_spot(
+    stored_sl_level: Optional[float],
+    strategy: str,
+    *,
+    spot_at_generation: Optional[float],
+    spot_at_execution: Optional[float],
+) -> Optional[float]:
+    """Shift a spot stop band by how far the underlying moved between the
+    suggestion being generated and the order actually going in.
+
+    The band is a distance from spot, so it has to travel with spot: a level
+    set against a 24,500 open is the wrong trigger once the order fills at
+    24,700. Debit structures exit on MTM and have no band to move.
+    """
+    if strategy in _DEBIT_STRATEGIES:
+        return stored_sl_level
+    if stored_sl_level is None or stored_sl_level <= 0:
+        return stored_sl_level
+    if not spot_at_generation or not spot_at_execution:
+        return stored_sl_level
+    if spot_at_generation <= 0 or spot_at_execution <= 0:
+        return stored_sl_level
+    return round(stored_sl_level + (spot_at_execution - spot_at_generation), 2)
+
+
 def spot_stop_breached(
     *,
     strategy: str,

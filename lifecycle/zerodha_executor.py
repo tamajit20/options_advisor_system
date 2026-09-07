@@ -1056,15 +1056,42 @@ def _live_ltp_map(
     return live, inst_by_leg
 
 
-def _spot_ltp(facade: KiteExecutionFacade) -> Optional[float]:
+def _spot_ltp(facade: KiteExecutionFacade, underlying: str) -> Optional[float]:
+    """Live spot for the underlying being traded.
+
+    Must follow the suggestion's underlying: quoting NIFTY for a BANKNIFTY
+    trade would record an entry spot roughly 30k points wrong.
+    """
+    from providers.zerodha.leg_quotes import index_quote_key
+
+    key = index_quote_key(underlying)
     try:
-        raw = facade.ltp(["NSE:NIFTY 50"])
-        row = raw.get("NSE:NIFTY 50") or {}
+        raw = facade.ltp([key])
+        row = raw.get(key) or {}
         lp = row.get("last_price")
         return float(lp) if lp is not None else None
     except Exception:
-        logger.debug("NIFTY spot fetch failed", exc_info=True)
+        logger.debug("%s spot fetch failed", key, exc_info=True)
         return None
+
+
+def _resolve_execution_spot(
+    facade: KiteExecutionFacade,
+    suggestion: dict,
+    supplied: Optional[float],
+) -> Optional[float]:
+    """Entry spot to record, in order of trustworthiness.
+
+    A value typed on the card wins. Otherwise quote the underlying live, since
+    the spot at generation can be hours stale by the time an order goes in.
+    Generation spot is only the last resort when the quote fails.
+    """
+    if supplied is not None:
+        return supplied
+    spot = _spot_ltp(facade, str(suggestion.get("underlying") or "NIFTY"))
+    if spot is None and suggestion.get("spot_at_generation") is not None:
+        spot = float(suggestion["spot_at_generation"])
+    return spot
 
 
 @dataclass
@@ -1258,8 +1285,26 @@ def _assert_execution_not_in_flight(
     *,
     suggestion_id: Optional[str] = None,
     trade_id: Optional[str] = None,
+    except_job_id: Optional[int] = None,
 ) -> None:
+    """Refuse a second execution while another is genuinely in flight.
+
+    ``except_job_id`` is the row the *current* async worker just inserted.
+    Without ignoring it, every background entry/exit aborts immediately:
+    submit writes status=RUNNING, then the worker's preflight sees that
+    same row and raises "already running".
+    """
     from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
+
+    def _is_other_job(row: Optional[dict]) -> bool:
+        if row is None:
+            return False
+        if except_job_id is None:
+            return True
+        try:
+            return int(row.get("id")) != int(except_job_id)
+        except (TypeError, ValueError):
+            return True
 
     broker = BrokerOrderRepo(db)
     jobs = ZerodhaExecutionJobRepo(db)
@@ -1270,7 +1315,7 @@ def _assert_execution_not_in_flight(
                 "Broker orders already in flight for this suggestion — wait or cancel on Kite"
             )
         running = jobs.running_for_suggestion(suggestion_id)
-        if running is not None:
+        if _is_other_job(running):
             raise ZerodhaExecutionError(
                 "Zerodha execution already running for this suggestion"
             )
@@ -1281,7 +1326,7 @@ def _assert_execution_not_in_flight(
                 "Broker orders already in flight for this trade — wait or cancel on Kite"
             )
         running = jobs.running_for_trade(trade_id)
-        if running is not None:
+        if _is_other_job(running):
             raise ZerodhaExecutionError(
                 "Zerodha execution already running for this trade"
             )
@@ -1292,6 +1337,7 @@ def _entry_context(
     suggestion_id: str,
     leg_limits: Optional[Dict[int, float]],
     lots_override: Optional[int] = None,
+    execution_job_id: Optional[int] = None,
 ) -> Tuple[dict, List[dict], KiteExecutionFacade, InstrumentMaster, Dict[int, float], Dict[int, Instrument], List[dict], str, Optional[MarginCheckResult]]:
     sug = SuggestionRepo(db)
     suggestion = sug.get(suggestion_id)
@@ -1307,7 +1353,9 @@ def _entry_context(
         raise ZerodhaExecutionError(
             f"Suggestion status is {status!r} — only PENDING can be executed"
         )
-    _assert_execution_not_in_flight(db, suggestion_id=suggestion_id)
+    _assert_execution_not_in_flight(
+        db, suggestion_id=suggestion_id, except_job_id=execution_job_id,
+    )
     _assert_entry_execution_allowed(db, suggestion_id)
     cb_active = _circuit_breaker_on(db)
     gate = validate_execution(suggestion, legs, circuit_breaker_active=cb_active)
@@ -1359,11 +1407,7 @@ def preview_suggestion_execution(
     plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="entry", strategy=strategy)
     limit_map = {p.leg_order: p.limit_price for p in plans}
     limit_gate = validate_limit_prices(legs, limit_map)
-    spot = spot_at_execution
-    if spot is None:
-        spot = _spot_ltp(facade)
-    if spot is None and suggestion.get("spot_at_generation") is not None:
-        spot = float(suggestion["spot_at_generation"])
+    spot = _resolve_execution_spot(facade, suggestion, spot_at_execution)
     return ExecutionPreview(
         operation="ENTRY",
         suggestion_id=suggestion_id,
@@ -1468,7 +1512,10 @@ def execute_suggestion_in_zerodha(
 
     try:
         suggestion, legs, facade, master, live_map, inst_map, ordered, strategy, _margin = (
-            _entry_context(db, suggestion_id, leg_limits, lots_override)
+            _entry_context(
+                db, suggestion_id, leg_limits, lots_override,
+                execution_job_id=execution_job_id,
+            )
         )
         plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="entry", strategy=strategy)
         system_plans = (
@@ -1540,11 +1587,7 @@ def execute_suggestion_in_zerodha(
             )
             raise
 
-        spot = spot_at_execution
-        if spot is None:
-            spot = _spot_ltp(facade)
-        if spot is None and suggestion.get("spot_at_generation") is not None:
-            spot = float(suggestion["spot_at_generation"])
+        spot = _resolve_execution_spot(facade, suggestion, spot_at_execution)
 
         fills = [
             TradeLegFill(
@@ -1562,7 +1605,8 @@ def execute_suggestion_in_zerodha(
                 suggestion_id,
                 fills,
                 spot_at_execution=spot,
-                actual_stop_loss_level=suggestion.get("stop_loss_level"),
+                # Left to mark_executed so the band is shifted by the same
+                # spot drift the manual path applies.
                 skip_execution_gate=True,
                 execution_provider=EXECUTION_PROVIDER_ZERODHA,
             )
@@ -1713,6 +1757,7 @@ def close_trade_in_zerodha(
     *,
     leg_limits: Optional[Dict[int, float]] = None,
     ack_out_of_band: bool = False,
+    execution_job_id: Optional[int] = None,
 ) -> ExecutionOutcome:
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError(
@@ -1748,7 +1793,9 @@ def close_trade_in_zerodha(
             raise ZerodhaExecutionError(
                 "Broker close orders already in flight for this trade — wait or cancel on Kite"
             )
-        _assert_execution_not_in_flight(db, trade_id=trade_id)
+        _assert_execution_not_in_flight(
+            db, trade_id=trade_id, except_job_id=execution_job_id,
+        )
 
         facade, master = _build_client()
         live_map, inst_map = _live_ltp_map(facade, master, open_exits)
@@ -2016,6 +2063,7 @@ def close_trade_in_zerodha_async(
             wdb, trade_id,
             leg_limits=leg_limits,
             ack_out_of_band=ack_out_of_band,
+            execution_job_id=job_id,
         )
 
     job_id = submit_execution_job(

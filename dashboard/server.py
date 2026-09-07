@@ -1683,10 +1683,20 @@ def create_app() -> Flask:
         execute_at_suggested = bool(payload.get("execute_at_suggested"))
         skip_execution_gate = bool(payload.get("skip_execution_gate"))
         lots_raw = payload.get("lots_override")
+        spot_val = float(spot_at_exec) if spot_at_exec is not None else None
+        # Spot box left blank: quote the traded underlying now rather than
+        # recording where it was when the suggestion was generated. Fail-soft,
+        # so mark_executed still falls back to the generation spot.
+        if spot_val is None and not execute_at_suggested:
+            from providers.zerodha.leg_quotes import fetch_underlying_spot
+
+            sug_row = SuggestionRepo(db).get(sid)
+            if sug_row:
+                spot_val = fetch_underlying_spot(str(sug_row.get("underlying") or "NIFTY"))
         try:
             trade_id = mark_executed(
                 db, sid, fills,
-                spot_at_execution=float(spot_at_exec) if spot_at_exec is not None else None,
+                spot_at_execution=spot_val,
                 actual_stop_loss_level=float(adj_sl) if adj_sl is not None else None,
                 execute_at_suggested=execute_at_suggested,
                 skip_execution_gate=skip_execution_gate,

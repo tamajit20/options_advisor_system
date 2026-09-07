@@ -5348,11 +5348,12 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
         </div>
         ${canExecute ? `
         <div class="sl-field">
-          <label class="sl-label">Nifty spot at execution
-            <span class="muted" style="font-size:.7rem">(suggested ₹${fmt(s.spot_at_generation)})</span>
+          <label class="sl-label">${escapeHtml(s.underlying || 'Index')} spot at execution
+            <span class="muted" style="font-size:.7rem">(blank = live price)</span>
           </label>
           <input type="number" step="1" class="sl-input exec-spot-input"
-                 placeholder="e.g. ${Math.round(s.spot_at_generation || 0)}">
+                 title="Leave blank to record the live ${escapeHtml(s.underlying || 'index')} spot when the order goes in"
+                 placeholder="live (was ${Math.round(s.spot_at_generation || 0)})">
         </div>` : ''}
         ${usesSpotStopLoss(s.strategy, econ.sl) ? `
         <div class="sl-field">
@@ -5692,7 +5693,15 @@ function bindSuggestionActions() {
     const sid = card.dataset.sugId;
     const spotInput = card.querySelector('.exec-spot-input');
     const spotRaw = spotInput?.value.trim();
-    const spotVal = spotRaw ? parseFloat(spotRaw) : (parseFloat(card.dataset.spotAtGen) || null);
+    // Blank is deliberately not filled in here: omitting it lets the server
+    // quote the underlying live at order time, which beats the generation spot.
+    const spotVal = spotRaw ? parseFloat(spotRaw) : null;
+    if (spotVal != null && (isNaN(spotVal) || spotVal <= 0)) {
+      if (spotInput) { spotInput.classList.add('input-error'); spotInput.focus(); }
+      toast('Spot at execution must be a positive number, or leave it blank for the live price.', 'err');
+      return;
+    }
+    if (spotInput) spotInput.classList.remove('input-error');
     const legLimits = _collectZerodhaLegLimits(card, '.leg-price-input');
     const prevLabel = btn.textContent;
     btn.classList.add('is-loading');
@@ -5817,17 +5826,15 @@ function bindSuggestionActions() {
 
     const spotInput = card.querySelector('.exec-spot-input');
     const spotRaw   = spotInput?.value.trim();
-    let spotVal     = spotRaw ? parseFloat(spotRaw) : null;
-    if (!skipGate) {
-      if (!spotVal || isNaN(spotVal) || spotVal <= 0) {
-        if (spotInput) { spotInput.classList.add('input-error'); spotInput.focus(); }
-        toast('Enter the Nifty spot price at execution before proceeding.', 'err');
-        return;
-      }
-      if (spotInput) spotInput.classList.remove('input-error');
-    } else if (!spotVal || isNaN(spotVal) || spotVal <= 0) {
-      spotVal = parseFloat(card.dataset.spotAtGen) || null;
+    // Blank is allowed: the server quotes the traded underlying at record
+    // time. Only a typed-but-nonsense value is worth stopping for.
+    const spotVal = spotRaw ? parseFloat(spotRaw) : null;
+    if (spotVal != null && (isNaN(spotVal) || spotVal <= 0)) {
+      if (spotInput) { spotInput.classList.add('input-error'); spotInput.focus(); }
+      toast('Spot at execution must be a positive number, or leave it blank for the live price.', 'err');
+      return;
     }
+    if (spotInput) spotInput.classList.remove('input-error');
 
     if (!btn.dataset.confirmed) {
       btn.dataset.confirmed = '1';
@@ -5856,19 +5863,15 @@ function bindSuggestionActions() {
       fill_price: priceFor(inp),
       lots_override: numLots,
     }));
-    const sugSl   = parseFloat(card.dataset.baseSl)    || 0;
-    const sugSpot = parseFloat(card.dataset.spotAtGen) || 0;
-    const spotSlStrategy = usesSpotStopLoss(card.dataset.strategy, sugSl);
-    const adjSl = (spotSlStrategy && spotVal != null && !isNaN(spotVal) && spotVal > 0 && sugSl > 0)
-      ? sugSl + (spotVal - sugSpot) : null;
     try {
       const r = await API(`/api/suggestion/${sid}/mark-executed`, {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
           fills,
+          // Spot omitted when blank, and the stop band is derived server-side
+          // from whatever spot ends up recorded, so both paths agree.
           spot_at_execution: spotVal,
-          actual_stop_loss_level: adjSl,
           skip_execution_gate: skipGate,
         }),
       });

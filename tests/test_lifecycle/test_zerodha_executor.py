@@ -595,3 +595,36 @@ def test_preview_includes_margin_snapshot(
     assert body["margin_required"] == 18450.0
     assert body["margin_available"] == 120000.0
     assert body["margin_ok"] is True
+
+
+def test_assert_ignores_the_job_the_async_worker_just_inserted(db_conn, mocker):
+    """Regression: async entry inserts RUNNING, then the worker preflight
+    used to abort on that same row with 'already running'."""
+    from lifecycle.zerodha_executor import _assert_execution_not_in_flight
+
+    job_repo = MagicMock()
+    job_repo.running_for_suggestion.return_value = {"id": 7, "status": "RUNNING"}
+    mocker.patch(
+        "database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo",
+        return_value=job_repo,
+    )
+    broker = MagicMock()
+    broker.pending_for_suggestion.return_value = []
+    mocker.patch("lifecycle.zerodha_executor.BrokerOrderRepo", return_value=broker)
+    _assert_execution_not_in_flight(db_conn, suggestion_id="SUG-1", except_job_id=7)
+
+
+def test_assert_still_blocks_a_different_running_job(db_conn, mocker):
+    from lifecycle.zerodha_executor import _assert_execution_not_in_flight
+
+    job_repo = MagicMock()
+    job_repo.running_for_suggestion.return_value = {"id": 9, "status": "RUNNING"}
+    mocker.patch(
+        "database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo",
+        return_value=job_repo,
+    )
+    broker = MagicMock()
+    broker.pending_for_suggestion.return_value = []
+    mocker.patch("lifecycle.zerodha_executor.BrokerOrderRepo", return_value=broker)
+    with pytest.raises(ZerodhaExecutionError, match="already running"):
+        _assert_execution_not_in_flight(db_conn, suggestion_id="SUG-1", except_job_id=7)

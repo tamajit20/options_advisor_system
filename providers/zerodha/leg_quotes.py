@@ -48,6 +48,38 @@ def invalidate_caches() -> None:
         _QUOTES.clear()
 
 
+def index_quote_key(underlying: str) -> str:
+    """Kite LTP key for an underlying's index spot.
+
+    Our DB stores 'NIFTY' / 'BANKNIFTY' / 'FINNIFTY'; Kite quotes them as
+    'NIFTY 50' / 'NIFTY BANK' / 'NIFTY FIN SERVICE'. Reuses the provider's
+    mapping so there is one place that knows the translation.
+    """
+    from providers.zerodha.provider import _normalise_index_symbol
+
+    return f"NSE:{_normalise_index_symbol((underlying or 'NIFTY').upper())}"
+
+
+def fetch_underlying_spot(underlying: str) -> Optional[float]:
+    """Live index spot for the traded underlying. Read-only and fail-soft:
+    returns None rather than raising so callers can fall back."""
+    if not ZERODHA_API_CONFIG.get("api_key"):
+        return None
+    session = load_session()
+    if session is None or not is_token_valid(session):
+        return None
+    key = index_quote_key(underlying)
+    try:
+        facade = KiteFacade(
+            api_key=ZERODHA_API_CONFIG["api_key"],
+            access_token=session.access_token,
+        )
+        return _cached_ltps(facade, [key]).get(key)
+    except Exception as exc:
+        logger.warning("%s spot fetch failed: %s", underlying, exc)
+        return None
+
+
 def _as_date(value: Any) -> Optional[date]:
     if value is None:
         return None
