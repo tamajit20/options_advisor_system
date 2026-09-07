@@ -11,7 +11,7 @@ Do not ask the user to paste long prompts. Read linked docs only when you need
 detail. Run commands yourself. Ask the user ONLY for secrets and Azure Portal
 values you cannot infer.
 
-Last updated: 2026-09-05 (keep in sync — see Section 8)
+Last updated: 2026-09-07 (keep in sync — see Section 8)
 
 
 ================================================================================
@@ -134,6 +134,7 @@ SECTION 6 — CONFIG FILES (gitignored — never commit secrets)
 
   deploy/azure/laptop.config.ps1    VM IP, SSH key, Azure RG, local SQL paths
   .env.docker                       DB passwords, Zerodha, dashboard API key (on VM too)
+  data/zerodha_session.json         Live Kite access token (written on login)
 
   Templates: laptop.config.ps1.example, .env.docker.example
 
