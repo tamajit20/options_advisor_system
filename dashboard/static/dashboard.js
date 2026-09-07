@@ -2262,6 +2262,17 @@ function groupRegimePairSuggestions(list) {
   return out;
 }
 
+function _idChipsHtml(tradeId, suggestionId) {
+  const parts = [];
+  if (tradeId) {
+    parts.push(`<span class="id-chip" title="Trade ID">${escapeHtml(String(tradeId))}</span>`);
+  }
+  if (suggestionId) {
+    parts.push(`<span class="id-chip" title="Suggestion ID">${escapeHtml(String(suggestionId))}</span>`);
+  }
+  return parts.join('');
+}
+
 function wrapCollapsibleCard(summaryHtml, bodyHtml, { open = false, className = '', attrs = '' } = {}) {
   const openAttr = open ? ' open' : '';
   const cls = className ? ` ${className}` : '';
@@ -7258,7 +7269,7 @@ function _buildLineChart(trades, strategies, W = 700, H = 320) {
     const fill = t.net_pnl >= 0 ? '#86efac' : '#fca5a5';
     const prem = premiumInfoFromTrade(t);
     const pnlTxt = (t.net_pnl >= 0 ? '+' : '') + '₹' + Number(t.net_pnl).toLocaleString('en-IN') + formatPnlPctText(t.net_pnl, prem);
-    const tip = `${t.trade_name || t.trade_id} | ${t.strategy} | ${pnlTxt}`;
+    const tip = `${t.trade_id || t.trade_name || ''}${t.suggestion_id ? ' · ' + t.suggestion_id : ''} | ${t.strategy} | ${pnlTxt}`;
     dots += _svgCircle(x, y, 4, fill, 'chart-dot', `data-tip="${escapeHtml(tip)}"`);
   });
 
@@ -7558,14 +7569,14 @@ function renderHistorySuggestion(s) {
         <span class="tag ${statusCls}">${escapeHtml(s.status || '')}</span>
         ${_qualityBadge(s.entry_quality_score)}
         ${s.expiry_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(s.expiry_type)}</span>` : ''}
+        ${_idChipsHtml(s.trade_id, s.suggestion_id)}
       </div>
       <div class="hist-card-pnl">
         ${confHtml}
       </div>
     </div>
     <div class="hist-card-meta muted">
-      ${escapeHtml(s.trade_name || s.suggestion_id)}
-      &nbsp;·&nbsp;Suggestion Date: ${fmtDt(s.generated_on)}
+      ${s.trade_name ? escapeHtml(s.trade_name) + ' &nbsp;·&nbsp; ' : ''}Suggestion Date: ${fmtDt(s.generated_on)}
       ${s.expiry_date ? '&nbsp;·&nbsp;Expiry: '+fmtDt(s.expiry_date) : ''}
       ${s.dte != null ? '&nbsp;·&nbsp;DTE: '+s.dte : ''}
       ${s.entry_date ? '&nbsp;·&nbsp;Execution Date: '+fmtDt(s.entry_date) : ''}
@@ -7628,18 +7639,18 @@ function renderHistoryTrade(t) {
         <span class="tag ${statusCls}">${escapeHtml(t.status || '')}</span>
         ${_qualityBadge(t.entry_quality_score, 'Entry quality: ')}
         ${t.position_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(t.position_type)}</span>` : ''}
+        ${_idChipsHtml(t.trade_id, t.suggestion_id)}
       </div>
       <div class="hist-card-pnl ${pnlClass}">${pnl != null ? formatPnlWithPct(pnl, premium) : '—'}</div>
       <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
     <div class="collapsible-preview">
-      <span>${escapeHtml(t.trade_name || t.trade_id)}</span>
+      <span>${escapeHtml(t.trade_name || '')}</span>
       <span>Executed ${fmtDt(t.executed_on)}</span>
       ${t.closed_on ? `<span>Closed ${fmtDt(t.closed_on)}</span>` : ''}
     </div>`, `
     <div class="hist-card-meta muted">
-      ${escapeHtml(t.trade_name || t.trade_id)}
-      &nbsp;·&nbsp;Executed: ${fmtDt(t.executed_on)}
+      ${t.trade_name ? escapeHtml(t.trade_name) + ' &nbsp;·&nbsp; ' : ''}Executed: ${fmtDt(t.executed_on)}
       ${t.closed_on ? '&nbsp;·&nbsp;Closed: '+fmtDt(t.closed_on) : ''}
       ${s.expiry ? '&nbsp;·&nbsp;Expiry: '+fmtDt(s.expiry)+(s.dte != null ? ' ('+s.dte+'d)' : '') : ''}
     </div>

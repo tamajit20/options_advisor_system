@@ -2299,6 +2299,25 @@ def create_app() -> Flask:
             r_out = _row(r)
             r_out["confidence_display"] = _confidence_display(r)
             suggestions.append(r_out)
+        sids = [s.get("suggestion_id") for s in suggestions if s.get("suggestion_id")]
+        if sids:
+            ph = ",".join("?" * len(sids))
+            trade_rows = db.fetch_all(
+                "SELECT suggestion_id, trade_id FROM options_trades "
+                f"WHERE suggestion_id IN ({ph}) AND UPPER(ISNULL(status,'')) <> 'VOID' "
+                "ORDER BY executed_on DESC",
+                sids,
+            )
+            by_sug: dict = {}
+            for tr in trade_rows:
+                tr = _row(tr)
+                sid = tr.get("suggestion_id")
+                if sid and sid not in by_sug:
+                    by_sug[sid] = tr.get("trade_id")
+            for s in suggestions:
+                tid = by_sug.get(s.get("suggestion_id"))
+                if tid:
+                    s["trade_id"] = tid
         # Facet lists for the date window (ignore outcome/quality filters)
         facet_filters: list[str] = [
             "CONVERT(date, generated_on) >= ?",
@@ -2654,6 +2673,7 @@ def create_app() -> Flask:
             sug_legs = seen_sug.get(sid, [])
             item = {
                 "trade_id":          r["trade_id"],
+                "suggestion_id":     r.get("suggestion_id"),
                 "trade_name":        r["trade_name"],
                 "executed_on":       r["executed_on"],
                 "closed_on":         r["closed_on"],

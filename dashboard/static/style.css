@@ -1707,6 +1707,7 @@ details.collapsible-card.hist-card > .collapsible-summary .hist-card-head {
   gap: 12px; margin-bottom: 4px; flex-wrap: wrap;
 }
 .hist-card-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hist-card-title .id-chip { user-select: all; }
 .hist-instr { font-size: 1.05rem; }
 .hist-card-pnl { font-size: 1.15rem; font-weight: 700; white-space: nowrap; }
 .hist-pnl-pct { font-size: .75rem; font-weight: 400; opacity: .8; }
