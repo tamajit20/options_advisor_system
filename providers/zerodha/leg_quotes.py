@@ -24,6 +24,7 @@ from engine.zerodha_price_guard import leg_limit_in_band
 from providers.zerodha.facade import KiteFacade
 from providers.zerodha.instruments import Instrument, InstrumentMaster
 from providers.zerodha.session import is_token_valid, load_session
+from utils import now_ist
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +178,7 @@ def fetch_leg_live_prices(legs: List[dict]) -> dict:
         return {"available": False, "reason": "no_live_prices"}
     return {
         "available": True,
-        "as_of": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "as_of": now_ist().strftime("%Y-%m-%d %H:%M:%S"),
         "legs": out_legs,
     }
 

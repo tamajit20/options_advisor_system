@@ -92,6 +92,23 @@ def test_suggested_lots_reads_first_positive_value():
     assert _suggested_lots([{}]) == 1
 
 
+def test_manual_record_path_enforces_the_same_cap():
+    """The manual path never goes through parse_lots_override, so the cap has
+    to be re-checked before the trade is written."""
+    from config import STRATEGY_CONFIG
+    from lifecycle.trade_executor import _check_lots_override
+
+    _check_lots_override(None)
+    _check_lots_override(1)
+    with pytest.raises(ValueError, match="at least 1"):
+        _check_lots_override(0)
+    cap = int(STRATEGY_CONFIG.get("max_lots_cap") or 0)
+    if cap > 0:
+        _check_lots_override(cap)
+        with pytest.raises(ValueError, match="max_lots_cap"):
+            _check_lots_override(cap + 1)
+
+
 def test_leg_plan_quantity_follows_lots_override():
     legs = _with_lots_override([_leg(lots=1)], 3)
     plans = _build_leg_plans(

@@ -1647,6 +1647,9 @@ def create_app() -> Flask:
             "sit_out": sit_out,
             "market_summary": market_summary,
             "freshness_minutes": fresh_min,
+            # Lets the order-size box cap itself to the same limit the
+            # execution paths enforce, instead of failing on submit.
+            "max_lots_cap": int(STRATEGY_CONFIG.get("max_lots_cap") or 0),
         })
 
     @app.route("/api/suggestion/<sid>/live-prices")

@@ -504,6 +504,9 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
   font-size: 11px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .5px;
 }
+/* Without this, display:inline-block outranks the hidden attribute and every
+   badge that starts empty and fills in later shows as a stray blank pill. */
+.tag[hidden] { display: none; }
 .tag-ok    { background: rgba(16,185,129,.15); color: var(--ok); }
 .tag-warn  { background: rgba(245,158,11,.15); color: var(--warn); }
 .tag-err   { background: rgba(239,68,68,.15);  color: var(--err); }
@@ -2657,6 +2660,9 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   border-top: 1px solid rgba(14,165,233,.15);
   font-size: .82rem;
 }
+/* display:flex outranks the hidden attribute, which would otherwise leave a
+   bare tag on screen with no equation behind it. */
+.cb-live-row[hidden] { display: none; }
 .cb-live-tag {
   font-size: .62rem;
   font-weight: 700;
@@ -2677,6 +2683,9 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .cb-live-eq { font-variant-numeric: tabular-nums; }
 .cb-live-credit { color: var(--ok); font-weight: 600; }
 .cb-live-debit  { color: var(--err); font-weight: 600; }
+/* Marks a leg priced from your typed override rather than the live LTP. */
+.cb-live-own { border-bottom: 1px dotted currentColor; cursor: help; }
+.cb-live-mix { font-size: .74rem; }
 .cb-live-row .cb-live-net { font-size: .95rem; font-weight: 700; }
 .cb-live-verdict { font-size: .78rem; font-weight: 600; }
 .cb-trade-compare { font-size: .78rem; color: var(--text-dim); margin-top: 5px; padding-top: 5px; border-top: 1px solid rgba(14,165,233,.15); }

@@ -30,6 +30,7 @@ import json
 import logging
 from typing import Optional, Sequence
 
+from config import STRATEGY_CONFIG
 from contracts import TradeLegFill
 from database.connection import SQLServerConnection
 from database.models import SuggestionRepo, TradeRepo
@@ -40,6 +41,24 @@ from engine.execution_validator import validate_execution
 from utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
+
+
+def _check_lots_override(value: Optional[int]) -> None:
+    """Enforce the position-sizing cap on a caller-supplied lot count.
+
+    The Zerodha path caps this before placing orders; manual records reach
+    the DB through here only, so the same limit has to hold at this layer or
+    a hand-recorded trade could exceed the configured risk budget.
+    """
+    if value is None:
+        return
+    if value < 1:
+        raise ValueError("Order size must be at least 1 lot")
+    cap = int(STRATEGY_CONFIG.get("max_lots_cap") or 0)
+    if cap > 0 and value > cap:
+        raise ValueError(
+            f"Order size {value} exceeds the configured max_lots_cap of {cap}"
+        )
 
 
 def _fills_from_suggested(
@@ -211,6 +230,10 @@ def mark_executed(
     legs = sug.legs(suggestion_id)
     if not legs:
         raise ValueError(f"Suggestion {suggestion_id} has no legs")
+
+    _check_lots_override(lots_override)
+    for f in fills:
+        _check_lots_override(f.lots_override)
 
     has_executed_fills = any(
         f.executed and f.fill_price is not None for f in fills

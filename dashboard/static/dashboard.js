@@ -175,10 +175,7 @@ function tradeExecutionChannel(t) {
   return p === 'zerodha' ? 'zerodha' : 'manual';
 }
 
-function executionChannelBadge(channel, { inflightSlot = false } = {}) {
-  if (inflightSlot) {
-    return '<span class="tag tag-info zerodha-inflight-chip" hidden title="Zerodha fill progress"></span>';
-  }
+function executionChannelBadge(channel) {
   if (channel === 'zerodha') {
     return '<span class="tag tag-accent" title="Opened via Zerodha broker execution">Zerodha</span>';
   }
@@ -202,11 +199,48 @@ function _collectZerodhaLegLimits(root, inputSelector) {
   return out;
 }
 
-/** Shared order size (lots) for a suggestion card — governs both exec paths. */
+// STRATEGY_CONFIG.max_lots_cap, from /api/suggestion/today. 0 = uncapped.
+let _maxLotsCap = 0;
+
+/** Shared order size (lots) for a suggestion card — governs both exec paths.
+ *  Returns the lot count, `null` when the box is empty (both paths then fall
+ *  back to the suggested size), or the string 'invalid' when the value cannot
+ *  be used. Never coerce 'invalid' to a default: the box would show one number
+ *  while a different one gets placed. */
 function _collectExecLots(root) {
-  const raw = root?.querySelector('.exec-lots-input')?.value;
+  const input = root?.querySelector('.exec-lots-input');
+  if (!input) return null;
+  // A number input reports '' for unparseable text, so without badInput the
+  // box could read 'abc' while we quietly submitted the suggested size.
+  if (input.validity?.badInput) return 'invalid';
+  const raw = (input.value || '').trim();
+  if (!raw) return null;
   const lots = parseInt(raw, 10);
-  return Number.isFinite(lots) && lots > 0 ? lots : null;
+  if (!Number.isFinite(lots) || lots < 1 || String(lots) !== raw) return 'invalid';
+  const cap = parseInt(input.max, 10);
+  if (Number.isFinite(cap) && cap > 0 && lots > cap) return 'invalid';
+  return lots;
+}
+
+/** Suggested lots for the card — what a blank order-size box falls back to. */
+function _suggestedExecLots(root) {
+  const input = root?.querySelector('.exec-lots-input');
+  return parseInt(input?.dataset.suggestedLots, 10) || 1;
+}
+
+/** Shared guard for the three actions that submit an order size. */
+function _rejectInvalidExecLots(card) {
+  if (_collectExecLots(card) !== 'invalid') return false;
+  const input = card?.querySelector('.exec-lots-input');
+  const cap = parseInt(input?.max, 10);
+  toast(
+    Number.isFinite(cap) && cap > 0
+      ? `Order size must be a whole number between 1 and ${cap} lots.`
+      : 'Order size must be a whole number of at least 1 lot.',
+    'err',
+  );
+  if (input) { input.classList.add('input-error'); input.focus(); }
+  return true;
 }
 
 function _ensureZerodhaConfirmModal() {
@@ -333,7 +367,6 @@ function _hideZerodhaInflightSurfaces(meta) {
   const sid = meta?.suggestionId;
   if (sid) {
     const card = document.querySelector(`.card[data-sug-id="${CSS.escape(sid)}"]`);
-    card?.querySelector('.zerodha-inflight-chip')?.setAttribute('hidden', '');
     const panel = card?.querySelector('.zerodha-inflight-panel');
     if (panel) panel.hidden = true;
   }
@@ -377,25 +410,10 @@ function _updateZerodhaInflightSurfaces(meta, preview, status) {
     return;
   }
 
-  // Suggestion card chip (visible when card collapsed)
+  // Suggestion card panel — the expanded, per-leg view of the same progress.
   const sid = meta?.suggestionId;
   if (sid) {
     const card = document.querySelector(`.card[data-sug-id="${CSS.escape(sid)}"]`);
-    const chip = card?.querySelector('.zerodha-inflight-chip');
-    if (chip) {
-      if (inflight || (filled > 0 && filled < total)) {
-        chip.removeAttribute('hidden');
-        chip.textContent = `Zerodha ${progressText}`;
-        chip.title = `${label} — live broker fill progress`;
-      } else if (overall === 'COMPLETE') {
-        chip.removeAttribute('hidden');
-        chip.textContent = 'Zerodha complete';
-        chip.className = 'tag tag-ok zerodha-inflight-chip';
-        chip.title = 'All broker legs filled';
-      } else {
-        chip.setAttribute('hidden', '');
-      }
-    }
     const panel = card?.querySelector('.zerodha-inflight-panel');
     if (panel) {
       if (inflight || (filled > 0 && filled < total)) {
@@ -2295,6 +2313,7 @@ async function loadSuggestion() {
   refreshGlobalBanners();
   try {
     const data = await API('/api/suggestion/today');
+    _maxLotsCap = parseInt(data.max_lots_cap, 10) || 0;
     const list = data.suggestions || [];
     const sitOut = data.sit_out || [];
     const grouped = groupRegimePairSuggestions(list);
@@ -2361,36 +2380,60 @@ async function loadSuggestion() {
 const _SUG_LIVE_POLL_MS = 6000;
 let _sugLivePriceTimer = null;
 
-// Rebuild the credit-breakdown equation using live LTPs, so you can see what
-// the structure actually costs right now versus the suggested midpoints.
+// Rebuild the credit-breakdown equation at the prices the trade would
+// actually execute at: your typed price on any leg you overrode, live LTP on
+// the ones you left blank. That mix is what both execution paths send, so it
+// is the only row that answers "what will this cost me right now".
 function _applyLiveCreditBreakdown(card, legs) {
   const row = card.querySelector('[data-cb-live-row]');
   if (!row) return;
+  const tagEl = row.querySelector('[data-cb-live-tag]');
   const eqEl = row.querySelector('[data-cb-live-eq]');
   const verdictEl = row.querySelector('[data-cb-live-verdict]');
+  const ltpByLeg = new Map((legs || []).map(l => [String(l.leg_order), l.ltp]));
 
   const parts = [];
   let net = 0;
+  let overrides = 0;
   let complete = true;
-  for (const leg of legs) {
-    const legSpan = card.querySelector(`[data-cb-leg="${leg.leg_order}"]`);
-    const action = legSpan?.dataset.cbAction;
-    if (!action || leg.ltp == null) { complete = false; continue; }
+  // Driven off the equation spans, not the live payload, so a leg the broker
+  // could not quote still counts when you have typed a price for it.
+  const legSpans = [...card.querySelectorAll('[data-cb-leg]')];
+  for (const legSpan of legSpans) {
+    const action = legSpan.dataset.cbAction;
+    const lo = legSpan.dataset.cbLeg;
+    const typed = parseFloat(card.querySelector(`input[data-leg-price="${lo}"]`)?.value);
+    const own = Number.isFinite(typed) && typed > 0;
+    const price = own ? typed : ltpByLeg.get(lo);
+    if (!action || price == null || !Number.isFinite(price)) { complete = false; continue; }
+    if (own) overrides += 1;
     const sign = action === 'SELL' ? 1 : -1;
-    net += sign * leg.ltp;
-    const cls = action === 'SELL' ? 'cb-live-credit' : 'cb-live-debit';
-    parts.push(`<span class="${cls}">${sign > 0 ? '+' : '\u2212'}\u20b9${fmt(leg.ltp)}</span>`);
+    net += sign * price;
+    const cls = (action === 'SELL' ? 'cb-live-credit' : 'cb-live-debit') + (own ? ' cb-live-own' : '');
+    const tip = own ? ' title="Your price, not the live LTP"' : '';
+    parts.push(`<span class="${cls}"${tip}>${sign > 0 ? '+' : '\u2212'}\u20b9${fmt(price)}</span>`);
   }
   if (!parts.length || !complete) {
     row.hidden = true;
     return;
   }
   row.hidden = false;
+  if (tagEl) {
+    tagEl.textContent = overrides === 0 ? 'Live' : 'At execution';
+    const asOf = row.dataset.asOf ? ` — quoted ${row.dataset.asOf} IST` : '';
+    tagEl.title = (
+      overrides === 0 ? 'Every leg priced from the current live LTP'
+      : overrides === legSpans.length ? 'Every leg priced from what you typed'
+      : `${overrides} of ${legSpans.length} legs at your typed price, the rest at live LTP`
+    ) + asOf;
+  }
+  const mixNote = overrides > 0 && overrides < legSpans.length
+    ? `<span class="muted cb-live-mix"> (${overrides} at your price)</span>` : '';
   eqEl.innerHTML = `${parts.join('<span class="cb-sep"> + </span>')}`
     + `<span class="cb-sep"> = </span>`
     + `<span class="cb-live-net ${net >= 0 ? 'cb-live-credit' : 'cb-live-debit'}">`
     + `\u20b9${fmt(Math.abs(net))}/unit</span>`
-    + `<span class="muted"> ${net >= 0 ? 'credit' : 'debit'}</span>`;
+    + `<span class="muted"> ${net >= 0 ? 'credit' : 'debit'}</span>${mixNote}`;
 
   const rangeLo = parseFloat(card.dataset.sugRangeLo);
   const rangeHi = parseFloat(card.dataset.sugRangeHi);
@@ -2419,11 +2462,16 @@ function _applySuggestionLivePrices(card, payload) {
   card.querySelectorAll('.leg-live-row').forEach(row => {
     row.classList.toggle('leg-live-off', unavailable);
   });
+  // Kept on the card so typing a price can refresh the equation immediately
+  // instead of waiting out the poll interval.
+  card._sugLiveLegs = unavailable ? [] : legs;
+  const liveRow = card.querySelector('[data-cb-live-row]');
+  if (liveRow && payload?.as_of) liveRow.dataset.asOf = payload.as_of;
   if (unavailable) {
     card.querySelectorAll('.leg-live-ltp').forEach(el => { el.textContent = '—'; });
     card.querySelectorAll('.leg-live-band').forEach(el => { el.textContent = ''; });
-    const liveRow = card.querySelector('[data-cb-live-row]');
-    if (liveRow) liveRow.hidden = true;
+    // Still worth drawing if you have typed every leg yourself.
+    _applyLiveCreditBreakdown(card, []);
     return;
   }
   _applyLiveCreditBreakdown(card, legs);
@@ -2476,14 +2524,19 @@ function _startSuggestionLivePrices() {
     _sugLivePriceTimer = null;
   }
   if (!$$('.card[data-sug-id] .leg-live-row').length) return;
+  // One fetch regardless of market state, so an after-hours visit still shows
+  // last-traded prices. Only the repeat polling is gated.
   _refreshSuggestionLivePrices();
   _sugLivePriceTimer = setInterval(() => {
-    if (document.hidden) return;
     if (!$$('.card[data-sug-id] .leg-live-row').length) {
       clearInterval(_sugLivePriceTimer);
       _sugLivePriceTimer = null;
       return;
     }
+    // Switching tabs only hides the container — the cards stay in the DOM, so
+    // without these guards this would keep hitting Kite's quote API all day
+    // for a card nobody is looking at.
+    if (document.hidden || !_isSuggestionTabActive() || !_inMarketHours()) return;
     _refreshSuggestionLivePrices();
   }, _SUG_LIVE_POLL_MS);
 }
@@ -4388,7 +4441,7 @@ function estChargesFromLegs(execLegs) {
 // Credit breakdown box — shows per-leg contribution and the net combined credit.
 // mode='suggest': uses suggested_price / suggested_price_low / suggested_price_high
 // mode='trade':   uses fill_price (actual fills)
-function creditBreakdownHtml(legs, mode) {
+function creditBreakdownHtml(legs, mode, live = false) {
   if (!legs || !legs.length) return '';
   let netMid = 0, netLow = 0, netHigh = 0;
   let sugNetLow = 0, sugNetHigh = 0;
@@ -4438,12 +4491,13 @@ function creditBreakdownHtml(legs, mode) {
         : `<span class="cb-fill-status cb-fill-below">↓ below suggested minimum</span>`;
     tradeCompareHtml = `<div class="cb-trade-compare">${rangeLabel} &nbsp;·&nbsp; ${fillStatus}</div>`;
   }
-  // Blank price boxes execute at the live LTP, so the suggested-price
-  // equation above is not what you would actually pay. This second row is
-  // filled in by the live-price poller with the same maths at live prices.
-  const liveRowHtml = mode === 'suggest' ? `
+  // The equation above prices blank legs at the suggested midpoint, but they
+  // actually execute at the live LTP. This second row redoes the maths at the
+  // prices that would really be sent — see _applyLiveCreditBreakdown. Only
+  // useful where the price boxes exist, so read-only recaps skip it.
+  const liveRowHtml = mode === 'suggest' && live ? `
     <div class="cb-live-row" data-cb-live-row hidden>
-      <span class="cb-live-tag">Live</span>
+      <span class="cb-live-tag" data-cb-live-tag>Live</span>
       <span class="cb-live-eq" data-cb-live-eq></span>
       <span class="cb-live-verdict" data-cb-live-verdict></span>
     </div>` : '';
@@ -5201,7 +5255,6 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
         ${regimePairChip(s)}
         ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn" title="Live checks failed — use Mark Executed at suggested prices">${escapeHtml(gateLabel)}</span>` : ''}
         ${executionChannelBadge(s.execution_channel)}
-        ${showExecActions && !readOnly ? executionChannelBadge(null, { inflightSlot: true }) : ''}
         ${sugStatus === 'IGNORED' ? '<span class="tag tag-warn">Retired</span>' : ''}
         ${s.is_stale && sugStatus === 'PENDING' && !gateLabel ? '<span class="tag tag-warn">Stale</span>' : ''}
         ${_qualityBadge(s.entry_quality_score, '', {
@@ -5276,18 +5329,19 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     </div>
     ${execOrderBanner(s.legs, s.strategy, 'entry')}
     <div class="legs-grid">${legsHtml}</div>
-    ${creditBreakdownHtml(s.legs, 'suggest')}
+    ${creditBreakdownHtml(s.legs, 'suggest', !readOnly)}
     ${readOnly ? '' : (showExecActions ? `
     <div class="exec-order-bar">
       <div class="sl-monitor-label" style="margin-bottom:6px">Your order</div>
       <div class="exec-order-row">
         <div class="sl-field">
           <label class="sl-label">Order size
-            <span class="muted" style="font-size:.7rem">(suggested ${baseLots} lot${baseLots !== 1 ? 's' : ''})</span>
+            <span class="muted" style="font-size:.7rem">(suggested ${baseLots} lot${baseLots !== 1 ? 's' : ''}${_maxLotsCap > 0 ? `, max ${_maxLotsCap}` : ''})</span>
           </label>
           <div class="exec-lots-wrap">
-            <input type="number" step="1" min="1" class="sl-input exec-lots-input"
-                   value="${baseLots}" data-lot-size="${baseLotSize}"
+            <input type="number" step="1" min="1"${_maxLotsCap > 0 ? ` max="${_maxLotsCap}"` : ''}
+                   class="sl-input exec-lots-input"
+                   value="${baseLots}" data-suggested-lots="${baseLots}"
                    title="Applies to every leg, for both Zerodha orders and manual records">
             <span class="muted exec-lots-qty">lots · <span class="exec-qty-shown">${baseLots * baseLotSize}</span> qty per leg</span>
           </div>
@@ -5334,7 +5388,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           <button type="button" class="btn btn-accent btn-exec-manual"${canExecuteAtSuggested ? ' data-skip-gate="1"' : ''}>Record my fills</button>
           <button type="button" class="btn btn-ghost btn-mark-exec" data-at-suggested="1">Record at suggested prices</button>
         </div>
-        <span class="muted exec-path-note">Records your prices above. Legs left blank are recorded at the suggested price.</span>
+        <span class="muted exec-path-note"><strong>Record my fills</strong> uses your prices above, and the suggested price on any leg you left blank. <strong>Record at suggested prices</strong> ignores what you typed and records every leg at its suggested price.</span>
       </div>
       <div class="exec-actions-footer">
         <button type="button" class="btn btn-ghost btn-ignore">Ignore suggestion</button>
@@ -5536,11 +5590,17 @@ function bindSuggestionActions() {
       const lbEl = card.querySelector('.econ-lb');
       if (ubEl && !isNaN(scStrike)) ubEl.textContent = '\u20b9' + fmt(scStrike + liveCreditPerUnit);
       if (lbEl && !isNaN(spStrike)) lbEl.textContent = '\u20b9' + fmt(spStrike - liveCreditPerUnit);
+      // Overriding a leg price changes the execution mix, so redraw that row
+      // now rather than leaving it stale until the next poll.
+      _applyLiveCreditBreakdown(card, card._sugLiveLegs || []);
     };
     card.addEventListener('input', e => {
       const inp = e.target;
       if (inp.classList.contains('exec-lots-input') ||
           inp.hasAttribute('data-leg-price')) {
+        if (inp.classList.contains('exec-lots-input')) {
+          inp.classList.toggle('input-error', _collectExecLots(card) === 'invalid');
+        }
         recalc();
       }
       if (inp.classList.contains('exec-spot-input')) {
@@ -5572,6 +5632,7 @@ function bindSuggestionActions() {
     if (btn.disabled) return;
     const card = btn.closest('.card');
     const sid  = card.dataset.sugId;
+    if (_rejectInvalidExecLots(card)) return;
 
     if (!btn.dataset.confirmed) {
       btn.dataset.confirmed = '1';
@@ -5627,6 +5688,7 @@ function bindSuggestionActions() {
       toast(blocked, 'warn');
       return;
     }
+    if (_rejectInvalidExecLots(card)) return;
     const sid = card.dataset.sugId;
     const spotInput = card.querySelector('.exec-spot-input');
     const spotRaw = spotInput?.value.trim();
@@ -5731,6 +5793,7 @@ function bindSuggestionActions() {
     const card = btn.closest('.card');
     const sid  = card.dataset.sugId;
     const skipGate = btn.dataset.skipGate === '1';
+    if (_rejectInvalidExecLots(card)) return;
 
     // One shared price field per leg. Blank falls back to the suggested
     // price, which is what the placeholder shows.
@@ -5748,11 +5811,9 @@ function bindSuggestionActions() {
       return;
     }
 
-    const numLots = _collectExecLots(card) || 1;
-    if (numLots < 1) {
-      toast('Order size must be at least 1 lot.', 'err');
-      return;
-    }
+    // null = box left empty, so the backend records each leg's own lot count.
+    const numLots = _collectExecLots(card);
+    const shownLots = numLots == null ? _suggestedExecLots(card) : numLots;
 
     const spotInput = card.querySelector('.exec-spot-input');
     const spotRaw   = spotInput?.value.trim();
@@ -5770,7 +5831,7 @@ function bindSuggestionActions() {
 
     if (!btn.dataset.confirmed) {
       btn.dataset.confirmed = '1';
-      btn.textContent = `Confirm record · ${numLots} lot${numLots !== 1 ? 's' : ''}?`;
+      btn.textContent = `Confirm record · ${shownLots} lot${shownLots !== 1 ? 's' : ''}?`;
       btn.classList.add('btn-confirm-pending');
       const cancelBtn = document.createElement('button');
       cancelBtn.className = 'btn btn-ghost btn-confirm-cancel';
