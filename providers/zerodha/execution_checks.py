@@ -101,7 +101,7 @@ def check_margin_for_orders(
     *,
     fallback_required: Optional[float] = None,
 ) -> MarginCheckResult:
-    """Estimate margin for planned orders and compare to usable Zerodha cash.
+    """Estimate margin for planned orders and compare to available margin.
 
     Fail-closed: if Kite cannot report required margin or available funds,
     execution is blocked. Multi-leg structures use basket margins so hedge
@@ -165,7 +165,7 @@ def check_margin_for_orders(
         return MarginCheckResult(
             ok=False,
             required=required,
-            message="Execution blocked: Zerodha did not report usable funds",
+            message="Execution blocked: Zerodha did not report available margin",
         )
     buffer_pct = float(ZERODHA_EXECUTION_CONFIG.get("margin_buffer_pct", 5)) / 100.0
     need = required * (1.0 + buffer_pct)

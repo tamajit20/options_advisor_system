@@ -43,7 +43,11 @@
     <div id="global-banners" class="global-banners" aria-live="polite" hidden></div>
   </div>
   <div class="header-actions">
-    <span id="zerodha-profile-chip" class="zerodha-profile-chip" hidden aria-label="Zerodha account balance"></span>
+    <div id="zerodha-profile-chip" class="idx-chip idx-chip-live zerodha-funds-chip" hidden aria-label="Zerodha available margin">
+      <span class="idx-chip-label">Zerodha</span>
+      <span class="idx-chip-price" id="zerodha-profile-amount">—</span>
+      <span class="idx-chip-src">Margin</span>
+    </div>
     <a id="zerodha-login-btn" class="icon-btn" href="/zerodha/login"
        title="Zerodha login (daily token refresh)"
        aria-label="Zerodha login">

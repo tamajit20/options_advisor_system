@@ -157,4 +157,4 @@ def test_margin_fail_closed_when_usable_funds_absent():
     facade.margins.return_value = {"equity": {"available": {}}}
     out = check_margin_for_orders(facade, [{"variety": "regular"}])
     assert not out.ok
-    assert "did not report usable funds" in out.message
+    assert "did not report available margin" in out.message

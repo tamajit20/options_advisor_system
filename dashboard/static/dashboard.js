@@ -651,10 +651,10 @@ function _renderZerodhaFundsBlock(preview) {
   const note = preview.margin_message
     || (blocked
       ? 'Not enough funds in Zerodha to place these orders'
-      : 'Zerodha available balance covers this order (incl. buffer)');
+      : 'Available margin covers this order (incl. buffer)');
   return `
     <div class="${blocked ? 'pending-close-alert' : ''}" style="margin:0 0 10px;padding:8px 10px;border:1px solid #2a3744;border-radius:6px">
-      <div><strong>Amount needed</strong> ${need} \u00b7 <strong>Zerodha available</strong> ${have}</div>
+      <div><strong>Amount needed</strong> ${need} \u00b7 <strong>Available margin</strong> ${have}</div>
       <div class="muted" style="font-size:.82rem;margin-top:4px">${escapeHtml(note)}</div>
     </div>`;
 }
@@ -1411,11 +1411,11 @@ const TERM_HELP = {
   },
   margin_required: {
     label: 'Amount needed',
-    html: '<strong>Amount needed</strong> — Approximate funds Zerodha must have available to open this defined-risk spread (spread width minus net credit). Live balance is re-checked before orders are placed.',
+    html: '<strong>Amount needed</strong> — Approximate margin Zerodha must have available to open this defined-risk spread (spread width minus net credit). Available margin is re-checked before orders are placed.',
   },
   capital_required: {
     label: 'Amount needed',
-    html: '<strong>Amount needed</strong> — Premium you pay upfront to buy this position. Zerodha available cash is checked before orders are placed.',
+    html: '<strong>Amount needed</strong> — Premium you pay upfront to buy this position. Available margin is checked before orders are placed.',
   },
   est_net_max_profit: {
     label: 'Est. net at max profit',
@@ -8482,6 +8482,14 @@ function _fmtZerodhaMoney(n) {
   return '₹' + fmt(Number(n));
 }
 
+function _fmtZerodhaChipPrice(n) {
+  if (n == null || Number.isNaN(Number(n))) return '—';
+  return '₹' + Number(n).toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 function _applyZerodhaAccountUi(account, d) {
   const panel = document.getElementById('zerodha-account-panel');
   const chip = document.getElementById('zerodha-profile-chip');
@@ -8504,13 +8512,16 @@ function _applyZerodhaAccountUi(account, d) {
 
   if (chip) {
     chip.hidden = false;
-    chip.textContent = usable != null
-      ? `${_fmtZerodhaMoney(usable)} avail`
-      : (name || 'Zerodha');
+    const priceEl = chip.querySelector('.idx-chip-price');
+    const srcEl = chip.querySelector('.idx-chip-src');
+    if (priceEl) {
+      priceEl.textContent = usable != null ? _fmtZerodhaChipPrice(usable) : '—';
+    }
+    if (srcEl) srcEl.textContent = usable != null ? 'Margin' : 'Zerodha';
     chip.title = [
       name,
-      usable != null ? `Usable: ${_fmtZerodhaMoney(usable)}` : null,
-      cash != null ? `Cash: ${_fmtZerodhaMoney(cash)}` : null,
+      usable != null ? `Available margin: ${_fmtZerodhaMoney(usable)}` : null,
+      cash != null ? `Available cash: ${_fmtZerodhaMoney(cash)}` : null,
       net != null ? `Net: ${_fmtZerodhaMoney(net)}` : null,
     ].filter(Boolean).join(' · ');
   }
@@ -8518,7 +8529,7 @@ function _applyZerodhaAccountUi(account, d) {
   if (headerBtn && d?.valid && name) {
     const untilTip = d.valid_until ? ` until ${d.valid_until.slice(0, 16)}` : '';
     headerBtn.title = `${name} (${d.user_id || ''})${untilTip}` +
-      (usable != null ? ` · ${_fmtZerodhaMoney(usable)} usable` : '');
+      (usable != null ? ` · ${_fmtZerodhaMoney(usable)} available margin` : '');
   }
 
   if (!panel) return;
@@ -8529,7 +8540,7 @@ function _applyZerodhaAccountUi(account, d) {
     </div>
     <div class="zerodha-account-grid">
       <div class="zerodha-account-item">
-        <label>Usable balance</label>
+        <label>Available margin</label>
         <strong>${escapeHtml(_fmtZerodhaMoney(usable))}</strong>
       </div>
       <div class="zerodha-account-item">
