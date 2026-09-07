@@ -341,6 +341,14 @@ class TestTradeRepo:
         assert "VOID" in sql
         assert params == ["TRD-1"]
 
+    def test_latest_for_suggestion_skips_void(self, mock_db):
+        mock_db.fetch_one.return_value = {"trade_id": "TRD-2", "status": "ACTIVE"}
+        row = TradeRepo(mock_db).latest_for_suggestion("SUG-1")
+        sql, params = mock_db.fetch_one.call_args[0]
+        assert "status <> 'VOID'" in sql
+        assert params == ["SUG-1"]
+        assert row["trade_id"] == "TRD-2"
+
     def test_update_pnl_passes_three_values(self, mock_db):
         TradeRepo(mock_db).update_pnl("TRD-1", 1000.0, 50.0, 950.0)
         _, params = mock_db.execute.call_args[0]

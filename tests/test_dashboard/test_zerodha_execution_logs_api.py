@@ -85,3 +85,5 @@ def test_execution_logs_groups_rows(logs_client, mocker):
     data = resp.get_json()
     assert len(data["executions"]) == 1
     assert data["executions"][0]["trade_name"] == "Test trade"
+    assert data["executions"][0]["headline"] == "You placed entry"
+    assert data["executions"][0]["badge"] == "COMPLETE"

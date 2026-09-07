@@ -994,6 +994,15 @@ class TradeRepo:
     def get(self, trade_id: str) -> Optional[dict]:
         return self.db.fetch_one("SELECT * FROM options_trades WHERE trade_id = ?", [trade_id])
 
+    def latest_for_suggestion(self, suggestion_id: str) -> Optional[dict]:
+        """Newest non-voided trade for this suggestion, if any."""
+        return self.db.fetch_one(
+            "SELECT TOP 1 * FROM options_trades "
+            "WHERE suggestion_id = ? AND status <> 'VOID' "
+            "ORDER BY executed_on DESC, trade_id DESC",
+            [suggestion_id],
+        )
+
     def legs(self, trade_id: str) -> List[dict]:
         return self.db.fetch_all(
             "SELECT * FROM options_trade_legs WHERE trade_id = ? ORDER BY leg_order",

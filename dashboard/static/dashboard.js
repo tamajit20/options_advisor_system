@@ -3631,7 +3631,7 @@ function renderTradeActionPanel(t) {
     outlook: t.live_outlook || {},
     outlookSummary: t.live_outlook && t.live_outlook.summary,
   });
-  const origSugHtml = renderOriginalSuggestion(t.suggestion);
+  const origSugHtml = renderOriginalSuggestion(t.suggestion, t.trade_id);
   const isHold = initial.tone === 'hold';
   const profitZoneLines = renderTradeProfitZone(t, legs);
   const metaRow = origSugHtml ? `
@@ -5084,12 +5084,26 @@ function suggestionCanExecuteAtSuggested(s) {
   return !suggestionGateOk(s);
 }
 
+function _suggestionAlreadyExecuted(card) {
+  const sugStatus = (card?.dataset?.sugStatus || '').toUpperCase();
+  if (sugStatus && sugStatus !== 'PENDING') {
+    toast(
+      'This suggestion was already executed. A second trade is blocked to avoid a duplicate.',
+      'warn',
+    );
+    return true;
+  }
+  return false;
+}
+
 function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
   const status = (s.status || '').toUpperCase();
   if (status === 'EXECUTED') {
+    const tid = s.trade_id || s.linked_trade_id;
+    const tradeBit = tid ? ` as <strong>${escapeHtml(tid)}</strong>` : '';
     return `<div class="suggestion-gate-banner suggestion-gate-info">
       <span class="tag tag-ok">EXECUTED</span>
-      <span>This suggestion was already acted on.</span>
+      <span>This suggestion was already executed${tradeBit}. Place orders is blocked so you do not open a duplicate position.${tid ? ' Manage it on My Trades.' : ' See My Trades.'}</span>
     </div>`;
   }
   if (status === 'IGNORED') {
@@ -5409,6 +5423,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
   }
   const cardAttrs = `
     data-sug-id="${escapeHtml(s.suggestion_id)}"
+    data-sug-status="${escapeHtml(sugStatus)}"
     data-strategy="${escapeHtml(s.strategy || '')}"
     data-dte="${s.dte != null ? parseInt(s.dte, 10) : ''}"
     data-base-qty="${baseQty}"
@@ -5634,6 +5649,7 @@ function bindSuggestionActions() {
     if (btn.disabled) return;
     const card = btn.closest('.card');
     const sid  = card.dataset.sugId;
+    if (_suggestionAlreadyExecuted(card)) return;
     if (_rejectInvalidExecLots(card)) return;
 
     if (!btn.dataset.confirmed) {
@@ -5692,6 +5708,7 @@ function bindSuggestionActions() {
     }
     if (_rejectInvalidExecLots(card)) return;
     const sid = card.dataset.sugId;
+    if (_suggestionAlreadyExecuted(card)) return;
     const spotInput = card.querySelector('.exec-spot-input');
     const spotRaw = spotInput?.value.trim();
     // Blank is deliberately not filled in here: omitting it lets the server
@@ -5803,6 +5820,7 @@ function bindSuggestionActions() {
     const card = btn.closest('.card');
     const sid  = card.dataset.sugId;
     const skipGate = btn.dataset.skipGate === '1';
+    if (_suggestionAlreadyExecuted(card)) return;
     if (_rejectInvalidExecLots(card)) return;
 
     // One shared price field per leg. Blank falls back to the suggested
@@ -6494,9 +6512,10 @@ function legNextAction(leg, allLegs) {
 }
 
 // Collapsible original-suggestion panel shown inside each open trade card
-function renderOriginalSuggestion(s) {
+function renderOriginalSuggestion(s, tradeId) {
   if (!s) return '';
-  return renderSuggestion(s, true, [], true);
+  const row = (tradeId && !s.trade_id) ? Object.assign({}, s, { trade_id: tradeId }) : s;
+  return renderSuggestion(row, true, [], true);
 }
 
 function _gapReplayDecisionLabel(decision) {
@@ -7676,12 +7695,15 @@ async function loadZerodhaExecutionLogs() {
       const title = g.trade_name
         ? escapeHtml(g.trade_name)
         : (g.trade_id ? escapeHtml(g.trade_id) : escapeHtml(g.suggestion_id || g.group_key));
+      const badge = g.badge || g.overall_status || '';
+      const headline = g.headline || '';
+      const detail = g.detail || '';
       const sub = [
         g.trade_id ? `Trade ${escapeHtml(g.trade_id)}` : null,
         g.suggestion_id ? `Suggestion ${escapeHtml(g.suggestion_id)}` : null,
         g.operations?.length ? g.operations.join(', ') : null,
       ].filter(Boolean).join(' · ');
-      const stCls = _brokerStatusClass(g.overall_status);
+      const stCls = _brokerStatusClass(badge);
       const orders = (g.orders || []).map(o => `
         <tr>
           <td>${escapeHtml(o.created_at || '')}</td>
@@ -7697,13 +7719,15 @@ async function loadZerodhaExecutionLogs() {
           <td style="font-size:.78rem">${escapeHtml(o.kite_order_id || '—')}</td>
           <td style="font-size:.78rem;max-width:220px">${escapeHtml(o.error_message || '')}</td>
         </tr>`).join('');
-      return `<details class="card zerodha-exec-card" style="margin-bottom:10px">
+      return `<details class="card zerodha-exec-card">
         <summary class="zerodha-exec-summary">
           <span class="zerodha-exec-title">${title}</span>
-          <span class="tag tag-${stCls}">${escapeHtml(g.overall_status || '')}</span>
-          <span class="muted" style="font-size:.78rem">${escapeHtml(g.started_at || '')}${g.last_at && g.last_at !== g.started_at ? ' → ' + escapeHtml(g.last_at) : ''}</span>
+          <span class="tag tag-${stCls}">${escapeHtml(badge)}</span>
+          <span class="muted zerodha-exec-time">${escapeHtml(g.started_at || '')}${g.last_at && g.last_at !== g.started_at ? ' → ' + escapeHtml(g.last_at) : ''}</span>
+          ${headline ? `<span class="zerodha-exec-headline">${escapeHtml(headline)}</span>` : ''}
         </summary>
         <div class="zerodha-exec-body">
+          ${detail ? `<p class="zerodha-exec-detail">${escapeHtml(detail)}</p>` : ''}
           ${sub ? `<div class="muted" style="font-size:.82rem;margin-bottom:8px">${sub}</div>` : ''}
           <div class="hist-legs-scroll">
             <table class="dt zerodha-exec-tbl">
@@ -7728,7 +7752,7 @@ function _brokerStatusClass(status) {
   const s = (status || '').toUpperCase();
   if (s === 'COMPLETE') return 'ok';
   if (s === 'FAILED' || s === 'REJECTED' || s === 'CANCELLED') return 'err';
-  if (s === 'PARTIAL') return 'warn';
+  if (s === 'PARTIAL' || s === 'REVERTED') return 'warn';
   if (s === 'IN_FLIGHT' || s === 'OPEN' || s === 'PENDING') return 'info';
   return '';
 }

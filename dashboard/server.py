@@ -2756,6 +2756,7 @@ def create_app() -> Flask:
         from config import RETENTION_CONFIG
         from database.broker_order_repo import BrokerOrderRepo
         from database.models import TradeRepo
+        from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
         from lifecycle.zerodha_execution_log import group_broker_orders
 
         days = int(request.args.get("days", RETENTION_CONFIG["hot_archive_keep_days"]))
@@ -2778,7 +2779,11 @@ def create_app() -> Flask:
             if t and t.get("trade_name"):
                 trade_names[tid] = t["trade_name"]
 
-        groups = group_broker_orders([_row(r) for r in rows], trade_names=trade_names)
+        sids = [r["suggestion_id"] for r in rows if r.get("suggestion_id")]
+        jobs = [_row(j) for j in ZerodhaExecutionJobRepo(db).list_for_suggestions(sids)]
+        groups = group_broker_orders(
+            [_row(r) for r in rows], trade_names=trade_names, jobs=jobs,
+        )
         if not trade_id and not suggestion_id:
             groups = groups[:limit]
 

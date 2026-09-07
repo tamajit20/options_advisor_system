@@ -80,6 +80,33 @@ class TestMarkExecuted:
         update_status.assert_called_with("SUG-X", "IGNORED")
         mock_db.commit.assert_called()
 
+    def test_raises_when_already_executed(self, mock_db, mocker, fake_suggestion, fake_legs):
+        fake_suggestion = dict(fake_suggestion, status="EXECUTED")
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
+                              fill_time=datetime(2026, 5, 4, 9, 30))
+                 for i in (1, 2, 3, 4)]
+        with pytest.raises(ValueError, match="already executed"):
+            te.mark_executed(mock_db, "SUG-X", fills)
+
+    def test_raises_when_trade_already_exists(self, mock_db, mocker, fake_suggestion, fake_legs):
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        mocker.patch(
+            "lifecycle.trade_executor.TradeRepo.latest_for_suggestion",
+            return_value={"trade_id": "TRD-OLD", "status": "ACTIVE"},
+        )
+        fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
+                              fill_time=datetime(2026, 5, 4, 9, 30))
+                 for i in (1, 2, 3, 4)]
+        with pytest.raises(ValueError, match="already live as trade TRD-OLD"):
+            te.mark_executed(mock_db, "SUG-X", fills)
+
     def test_full_valid_when_all_filled(self, mock_db, mocker, fake_suggestion, fake_legs):
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
                      return_value=fake_suggestion)

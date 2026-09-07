@@ -44,6 +44,40 @@ from utils import now_ist, today_ist
 logger = logging.getLogger(__name__)
 
 
+def duplicate_execution_reason(
+    db: SQLServerConnection,
+    suggestion_id: str,
+    *,
+    suggestion_status: Optional[str] = None,
+) -> Optional[str]:
+    """Why a second entry must not be placed. ``None`` if entry is allowed."""
+    existing = TradeRepo(db).latest_for_suggestion(suggestion_id)
+    tid = existing.get("trade_id") if isinstance(existing, dict) else None
+    if tid:
+        st = str(existing.get("status") or "").upper()
+        if st in ("CLOSED", "EXPIRED"):
+            return (
+                f"This suggestion was already executed as {tid} ({st.lower()}). "
+                "Place orders is blocked so you do not open a second position."
+            )
+        return (
+            f"This suggestion is already live as trade {tid}. "
+            "Place orders is blocked to avoid a duplicate position — "
+            "manage it on My Trades."
+        )
+    status = (suggestion_status or "").upper()
+    if status == "EXECUTED":
+        return (
+            "This suggestion was already executed. "
+            "Place orders is blocked to avoid a duplicate position — see My Trades."
+        )
+    if status and status != "PENDING":
+        return (
+            f"This suggestion is {status} — only a PENDING suggestion can be executed."
+        )
+    return None
+
+
 def _opt_float(value: Any) -> Optional[float]:
     """SQL Server hands back Decimal; spot maths needs plain floats."""
     if value is None:
@@ -261,8 +295,11 @@ def mark_executed(
         return None
 
     status = (suggestion.get("status") or "").upper()
-    if status != "PENDING":
-        raise ValueError(f"Cannot execute suggestion with status {status}")
+    dup = duplicate_execution_reason(
+        db, suggestion_id, suggestion_status=status,
+    )
+    if dup:
+        raise ValueError(dup)
 
     from database.broker_order_repo import BrokerOrderRepo
     broker = BrokerOrderRepo(db)

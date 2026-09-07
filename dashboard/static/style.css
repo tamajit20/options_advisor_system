@@ -748,6 +748,27 @@ table.dt {
 .zerodha-inflight-leg-sym { font-family: var(--mono, monospace); font-size: .78rem; }
 .zerodha-inflight-note { font-size: .75rem; margin: 8px 0 0; }
 
+.zerodha-exec-card { margin-bottom: 10px; }
+.zerodha-exec-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  cursor: pointer;
+}
+.zerodha-exec-title { font-weight: 600; }
+.zerodha-exec-time { margin-left: auto; font-size: .78rem; }
+.zerodha-exec-headline {
+  flex: 1 1 100%;
+  font-size: .88rem;
+  font-weight: 500;
+}
+.zerodha-exec-detail {
+  margin: 0 0 10px;
+  font-size: .84rem;
+  line-height: 1.45;
+}
+
 .btn-ghost  { background: transparent; color: var(--text); border: 1px solid #3a4754; }
 .btn-danger { background: var(--err); }
 .btn-warn   { background: rgba(245,158,11,.15); color: var(--warn);

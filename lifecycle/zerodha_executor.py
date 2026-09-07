@@ -35,6 +35,7 @@ from engine.zerodha_price_guard import (
 from lifecycle.leg_execution_order import leg_execution_order, legs_in_execution_order
 from lifecycle.trade_executor import (
     close_trade_with_fills,
+    duplicate_execution_reason,
     mark_executed,
     supplement_trade,
     _circuit_breaker_on,
@@ -1358,10 +1359,11 @@ def _entry_context(
     sug_lots = _suggested_lots(legs)
     legs = _with_lots_override(legs, lots_override)
     status = (suggestion.get("status") or "").upper()
-    if status != "PENDING":
-        raise ZerodhaExecutionError(
-            f"Suggestion status is {status!r} — only PENDING can be executed"
-        )
+    dup = duplicate_execution_reason(
+        db, suggestion_id, suggestion_status=status,
+    )
+    if dup:
+        raise ZerodhaExecutionError(dup)
     _assert_execution_not_in_flight(
         db, suggestion_id=suggestion_id, except_job_id=execution_job_id,
     )

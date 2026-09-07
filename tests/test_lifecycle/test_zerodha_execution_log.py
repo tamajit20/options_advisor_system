@@ -27,6 +27,8 @@ def test_groups_by_trade_id():
     assert groups[0]["overall_status"] == "COMPLETE"
     assert len(groups[0]["orders"]) == 2
     assert groups[0]["operations"] == ["ENTRY", "EXIT"]
+    assert groups[0]["headline"] == "You placed entry, then closed"
+    assert groups[0]["badge"] == "COMPLETE"
 
 
 def test_failed_entry_groups_by_suggestion():
@@ -43,6 +45,9 @@ def test_failed_entry_groups_by_suggestion():
     assert len(groups) == 1
     assert groups[0]["suggestion_id"] == "S9"
     assert groups[0]["overall_status"] == "FAILED"
+    assert groups[0]["headline"] == "You placed entry — failed"
+    assert groups[0]["badge"] == "FAILED"
+    assert groups[0]["detail"] == "timeout"
 
 
 def test_partial_status():
@@ -62,6 +67,8 @@ def test_partial_status():
     ]
     groups = group_broker_orders(rows)
     assert groups[0]["overall_status"] == "PARTIAL"
+    assert groups[0]["headline"] == "You placed entry — partial"
+    assert groups[0]["badge"] == "PARTIAL"
 
 
 def test_jobs_on_same_suggestion_are_separate_groups():
@@ -116,3 +123,71 @@ def test_live_progress_ignores_prior_failed_attempt():
     assert progress["filled_count"] == 2
     assert progress["total_orders"] == 2
     assert all(r.get("execution_job_id") == 3 for r in progress["orders"])
+
+
+def test_failed_ip_uses_job_error_as_reason():
+    rows = [
+        {
+            "id": 1, "trade_id": None, "suggestion_id": "SUG-Z",
+            "execution_job_id": 2, "operation": "ENTRY", "leg_order": 1,
+            "status": "FAILED", "created_at": datetime(2026, 9, 7, 11, 49, 15),
+        },
+    ]
+    jobs = [{
+        "id": 2,
+        "error_message": (
+            "No IPs configured for this API. Please add your IP. "
+            "Learn more: https://kite.trade/docs"
+        ),
+    }]
+    groups = group_broker_orders(rows, jobs=jobs)
+    assert groups[0]["headline"] == "You placed entry — failed"
+    assert "no static IPs" in groups[0]["detail"]
+    assert "https://" not in groups[0]["detail"]
+
+
+def test_merges_unlinked_rollback_into_entry_and_explains_revert():
+    rows = [
+        {
+            "id": 1, "trade_id": None, "suggestion_id": "SUG-Z",
+            "execution_job_id": 3, "operation": "ENTRY", "leg_order": 1,
+            "status": "COMPLETE", "transaction_type": "BUY",
+            "created_at": datetime(2026, 9, 7, 11, 57, 19),
+            "updated_at": datetime(2026, 9, 7, 11, 57, 20),
+        },
+        {
+            "id": 2, "trade_id": None, "suggestion_id": "SUG-Z",
+            "execution_job_id": None, "operation": "ROLLBACK", "leg_order": 1,
+            "status": "COMPLETE", "transaction_type": "SELL",
+            "created_at": datetime(2026, 9, 7, 11, 57, 20),
+            "updated_at": datetime(2026, 9, 7, 11, 57, 21),
+        },
+    ]
+    jobs = [{
+        "id": 3,
+        "error_message": (
+            "Prior Zerodha entry fills exist without a recorded trade; "
+            "flatten on kite first."
+        ),
+    }]
+    groups = group_broker_orders(rows, jobs=jobs)
+    assert len(groups) == 1
+    assert groups[0]["group_key"] == "job:3"
+    assert groups[0]["operations"] == ["ENTRY", "ROLLBACK"]
+    assert groups[0]["headline"] == "You placed entry · system reverted"
+    assert groups[0]["badge"] == "REVERTED"
+    assert "leftovers" in groups[0]["detail"]
+
+
+def test_recorded_entry_headline():
+    rows = [
+        {
+            "id": 1, "trade_id": "TRD-9", "suggestion_id": "S1",
+            "execution_job_id": 8, "operation": "ENTRY", "leg_order": 1,
+            "status": "COMPLETE", "created_at": datetime(2026, 9, 7, 12, 0),
+        },
+    ]
+    groups = group_broker_orders(rows)
+    assert groups[0]["headline"] == "You placed entry"
+    assert groups[0]["detail"] == "Trade TRD-9 recorded."
+    assert groups[0]["badge"] == "COMPLETE"

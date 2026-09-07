@@ -246,7 +246,37 @@ def test_execute_rejects_non_pending(db_conn, mocker, mock_instrument):
     }])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
-    with pytest.raises(ZerodhaExecutionError, match="PENDING"):
+    with pytest.raises(ZerodhaExecutionError, match="already executed"):
+        execute_suggestion_in_zerodha(db_conn, "SUG-1")
+
+
+def test_execute_rejects_existing_trade_even_if_pending(db_conn, mocker, mock_instrument):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("database.models.SuggestionRepo.get", return_value={
+        "suggestion_id": "SUG-1",
+        "status": "PENDING",
+        "strategy": "LONG_CALL",
+    })
+    mocker.patch("database.models.SuggestionRepo.legs", return_value=[{
+        "leg_order": 1,
+        "action": "BUY",
+        "option_type": "CE",
+        "symbol": "NIFTY",
+        "expiry_date": date(2026, 5, 28),
+        "strike": 23000,
+        "lots": 1,
+        "lot_size": 50,
+        "suggested_price": 100,
+        "suggested_price_low": 95,
+        "suggested_price_high": 105,
+    }])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
+    mocker.patch(
+        "lifecycle.trade_executor.TradeRepo.latest_for_suggestion",
+        return_value={"trade_id": "TRD-9", "status": "ACTIVE"},
+    )
+    with pytest.raises(ZerodhaExecutionError, match="already live as trade TRD-9"):
         execute_suggestion_in_zerodha(db_conn, "SUG-1")
 
 
