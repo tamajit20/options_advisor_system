@@ -826,6 +826,7 @@ def _reverse_partial_leg(
     trade_id: Optional[str],
     mode: str,
     inst_map: Optional[Dict[int, Instrument]] = None,
+    execution_job_id: Optional[int] = None,
 ) -> None:
     """Reverse a partial fill on the failing leg."""
     if partial.filled_quantity <= 0:
@@ -859,6 +860,7 @@ def _reverse_partial_leg(
             trade_id=trade_id,
             expected_transaction_type=reverse_txn,
             execution_profile=profile_for("rollback"),
+            execution_job_id=execution_job_id,
             quantity_override=partial.filled_quantity,
         )
     except Exception:
@@ -880,6 +882,7 @@ def _rollback_filled_legs(
     mode: str,
     inst_map: Optional[Dict[int, Instrument]] = None,
     partial_on_fail: Optional[LegFillOutcome] = None,
+    execution_job_id: Optional[int] = None,
 ) -> List[int]:
     """Best-effort reverse orders for legs already filled before a failure."""
     if not completed and partial_on_fail is None:
@@ -928,6 +931,7 @@ def _rollback_filled_legs(
                 trade_id=trade_id,
                 expected_transaction_type=reverse_txn,
                 execution_profile=profile_for("rollback"),
+                execution_job_id=execution_job_id,
                 quantity_override=(
                     fill.filled_quantity if fill.filled_quantity > 0 else fill.planned_quantity or None
                 ),
@@ -956,6 +960,7 @@ def _rollback_filled_legs(
                     trade_id=trade_id,
                     mode=mode,
                     inst_map=inst_map,
+                    execution_job_id=execution_job_id,
                 )
             except Exception:
                 failed.append(partial_on_fail.leg_order)
@@ -984,6 +989,7 @@ def _rollback_entry_legs(
     completed: List[LegFillOutcome],
     inst_map: Optional[Dict[int, Instrument]] = None,
     partial_on_fail: Optional[LegFillOutcome] = None,
+    execution_job_id: Optional[int] = None,
 ) -> None:
     _rollback_filled_legs(
         facade, db,
@@ -994,6 +1000,7 @@ def _rollback_entry_legs(
         mode="entry",
         inst_map=inst_map,
         partial_on_fail=partial_on_fail,
+        execution_job_id=execution_job_id,
     )
 
 
@@ -1007,6 +1014,7 @@ def _rollback_close_legs(
     completed: List[LegFillOutcome],
     inst_map: Optional[Dict[int, Instrument]] = None,
     partial_on_fail: Optional[LegFillOutcome] = None,
+    execution_job_id: Optional[int] = None,
 ) -> None:
     _rollback_filled_legs(
         facade, db,
@@ -1017,6 +1025,7 @@ def _rollback_close_legs(
         mode="exit",
         inst_map=inst_map,
         partial_on_fail=partial_on_fail,
+        execution_job_id=execution_job_id,
     )
 
 
@@ -1465,6 +1474,7 @@ def _handle_leg_failure(
     completed: List[LegFillOutcome],
     inst_map: Dict[int, Instrument],
     mode: str,
+    execution_job_id: Optional[int] = None,
 ) -> None:
     partial: Optional[LegFillOutcome] = None
     if isinstance(exc, LegOrderPartialError):
@@ -1477,6 +1487,7 @@ def _handle_leg_failure(
             completed=completed,
             inst_map=inst_map,
             partial_on_fail=partial,
+            execution_job_id=execution_job_id,
         )
     else:
         _rollback_close_legs(
@@ -1487,6 +1498,7 @@ def _handle_leg_failure(
             completed=completed,
             inst_map=inst_map,
             partial_on_fail=partial,
+            execution_job_id=execution_job_id,
         )
 
 
@@ -1584,6 +1596,7 @@ def execute_suggestion_in_zerodha(
                 completed=completed,
                 inst_map=inst_map,
                 mode="entry",
+                execution_job_id=execution_job_id,
             )
             raise
 
@@ -1619,6 +1632,7 @@ def execute_suggestion_in_zerodha(
                 completed=completed,
                 inst_map=inst_map,
                 mode="entry",
+                execution_job_id=execution_job_id,
             )
             raise
         if trade_id is None:
@@ -1631,17 +1645,23 @@ def execute_suggestion_in_zerodha(
                 completed=completed,
                 inst_map=inst_map,
                 mode="entry",
+                execution_job_id=execution_job_id,
             )
             raise ZerodhaExecutionError("Trade was not created after fills")
 
-        broker_rows = BrokerOrderRepo(db).by_suggestion(suggestion_id)
-        for row in broker_rows:
-            if row.get("operation") == "ENTRY" and not row.get("trade_id"):
-                db.execute(
-                    "UPDATE options_broker_orders SET trade_id = ? WHERE id = ?",
-                    [trade_id, row["id"]],
-                ).close()
+        broker_rows = BrokerOrderRepo(db).by_job(execution_job_id) if execution_job_id is not None else []
+        if not broker_rows:
+            broker_rows = [
+                r for r in BrokerOrderRepo(db).by_suggestion(suggestion_id)
+                if str(r.get("operation") or "").upper() == "ENTRY"
+            ]
+        BrokerOrderRepo(db).attach_trade_id(
+            trade_id,
+            suggestion_id=suggestion_id,
+            execution_job_id=execution_job_id,
+        )
         db.commit()
+        broker_rows = BrokerOrderRepo(db).by_job(execution_job_id) if execution_job_id is not None else broker_rows
 
         recon = reconcile_positions_after_fill(
             facade, ordered, inst_map,
@@ -1862,6 +1882,7 @@ def close_trade_in_zerodha(
                 completed=completed,
                 inst_map=inst_map,
                 mode="exit",
+                execution_job_id=execution_job_id,
             )
             raise
 
@@ -2007,6 +2028,7 @@ def execute_supplement_in_zerodha(
                 completed=completed,
                 inst_map=inst_map,
                 mode="entry",
+                execution_job_id=execution_job_id,
             )
             raise
 

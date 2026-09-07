@@ -405,18 +405,19 @@ function _updateZerodhaInflightSurfaces(meta, preview, status) {
       : st.lbl;
   });
 
-  if (!inflight && overall === 'NONE') {
+  if (!inflight && (overall === 'NONE' || overall === 'FAILED')) {
     _hideZerodhaInflightSurfaces(meta);
     return;
   }
 
-  // Suggestion card panel — the expanded, per-leg view of the same progress.
+  // Suggestion card panel — only while this attempt is actually in flight.
+  // A failed first click must not leave 0/2 or 4/5 sitting on the card.
   const sid = meta?.suggestionId;
   if (sid) {
     const card = document.querySelector(`.card[data-sug-id="${CSS.escape(sid)}"]`);
     const panel = card?.querySelector('.zerodha-inflight-panel');
     if (panel) {
-      if (inflight || (filled > 0 && filled < total)) {
+      if (inflight) {
         panel.hidden = false;
         panel.innerHTML = `
           <div class="zerodha-inflight-head">
@@ -433,7 +434,7 @@ function _updateZerodhaInflightSurfaces(meta, preview, status) {
 
   // App-wide strip — one compact line; hidden on Suggestion tab (card has full detail)
   const strip = document.getElementById('zerodha-execution-strip');
-  if (strip && (inflight || (filled > 0 && filled < total))) {
+  if (strip && inflight) {
     strip.dataset.inflight = '1';
     strip.innerHTML = `
       <div class="zerodha-execution-strip-inner">

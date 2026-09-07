@@ -1818,24 +1818,19 @@ def create_app() -> Flask:
     def api_zerodha_orders_for_suggestion(db: SQLServerConnection, sid: str):
         """Live broker-order status for in-flight Zerodha entry execution."""
         from database.broker_order_repo import BrokerOrderRepo
-        from lifecycle.zerodha_execution_log import group_broker_orders
+        from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
+        from lifecycle.zerodha_execution_log import live_suggestion_order_status
 
         rows = [_row(r) for r in BrokerOrderRepo(db).by_suggestion(sid)]
-        trade_id = next((r["trade_id"] for r in rows if r.get("trade_id")), None)
-        filled = sum(
-            1 for r in rows if str(r.get("status") or "").upper() == "COMPLETE"
-        )
-        overall = "NONE"
-        if rows:
-            groups = group_broker_orders(rows)
-            overall = groups[0].get("overall_status") or "UNKNOWN"
+        latest_job = ZerodhaExecutionJobRepo(db).latest_for_suggestion(sid)
+        progress = live_suggestion_order_status(rows, latest_job)
         return jsonify({
             "suggestion_id": sid,
-            "trade_id": trade_id,
-            "orders": rows,
-            "overall_status": overall,
-            "filled_count": filled,
-            "total_orders": len(rows),
+            "trade_id": progress["trade_id"],
+            "orders": progress["orders"],
+            "overall_status": progress["overall_status"],
+            "filled_count": progress["filled_count"],
+            "total_orders": progress["total_orders"],
         })
 
     # ---------- Tab 2: My Trades ----------

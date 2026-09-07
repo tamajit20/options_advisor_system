@@ -266,18 +266,24 @@ def mark_executed(
 
     from database.broker_order_repo import BrokerOrderRepo
     broker = BrokerOrderRepo(db)
-    pending_orders = broker.pending_for_suggestion(suggestion_id)
-    if pending_orders:
-        raise ValueError(
-            "Zerodha orders are already in flight for this suggestion — "
-            "wait or cancel on Kite before recording a manual fill"
-        )
-    orphans = broker.orphan_entry_fills(suggestion_id)
-    if orphans:
-        raise ValueError(
-            "Prior Zerodha entry fills exist without a recorded trade — "
-            "flatten on Kite before recording a manual fill"
-        )
+    # These guards exist so a *manual* record cannot be written on top of a
+    # live Kite position. The Zerodha path *is* booking that position — the
+    # COMPLETE rows with no trade_id are the fills we just placed. Treating
+    # them as leftovers aborted the trade and rolled both legs back.
+    from_zerodha = str(execution_provider or "").lower() == "zerodha"
+    if not from_zerodha:
+        pending_orders = broker.pending_for_suggestion(suggestion_id)
+        if pending_orders:
+            raise ValueError(
+                "Zerodha orders are already in flight for this suggestion — "
+                "wait or cancel on Kite before recording a manual fill"
+            )
+        orphans = broker.orphan_entry_fills(suggestion_id)
+        if orphans:
+            raise ValueError(
+                "Prior Zerodha entry fills exist without a recorded trade — "
+                "flatten on Kite before recording a manual fill"
+            )
 
     cb_active = _circuit_breaker_on(db)
     gate = validate_execution(

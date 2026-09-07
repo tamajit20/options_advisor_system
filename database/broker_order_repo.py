@@ -14,6 +14,83 @@ from typing import Any, Dict, Iterable, List, Optional
 from database.connection import SQLServerConnection
 
 
+def net_unbooked_entry_fills(
+    rows: Iterable[dict],
+    *,
+    except_job_id: Optional[int] = None,
+) -> List[dict]:
+    """COMPLETE ENTRY fills that still represent an open, unbooked position.
+
+    Walks rows in id order. Each COMPLETE ENTRY with a Kite id adds quantity
+    to a pool; each later COMPLETE ROLLBACK for the same leg consumes it.
+    Whatever remains is a real leftover on Kite, not a retry artifact.
+    """
+    except_id: Optional[int] = None
+    if except_job_id is not None:
+        try:
+            except_id = int(except_job_id)
+        except (TypeError, ValueError):
+            except_id = None
+
+    def _qty(row: dict) -> int:
+        try:
+            return int(row.get("filled_quantity") or row.get("quantity") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _job(row: dict) -> Optional[int]:
+        raw = row.get("execution_job_id")
+        if raw is None or raw == "":
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    ordered = sorted(
+        rows,
+        key=lambda r: (int(r.get("id") or 0), str(r.get("created_at") or "")),
+    )
+    pool: List[dict] = []
+    for row in ordered:
+        op = str(row.get("operation") or "").upper()
+        status = str(row.get("status") or "").upper()
+        if op == "ENTRY" and status == "COMPLETE":
+            if row.get("trade_id"):
+                continue
+            if not row.get("kite_order_id"):
+                continue
+            if except_id is not None and _job(row) == except_id:
+                continue
+            qty = _qty(row)
+            if qty <= 0:
+                continue
+            pool.append({
+                "row": row,
+                "remaining": qty,
+                "leg": int(row.get("leg_order") or 0),
+                "sym": row.get("tradingsymbol"),
+            })
+            continue
+        if op == "ROLLBACK" and status == "COMPLETE":
+            qty = _qty(row)
+            if qty <= 0:
+                continue
+            leg = int(row.get("leg_order") or 0)
+            sym = row.get("tradingsymbol")
+            for item in pool:
+                if item["remaining"] <= 0 or item["leg"] != leg:
+                    continue
+                if sym and item["sym"] and item["sym"] != sym:
+                    continue
+                take = min(item["remaining"], qty)
+                item["remaining"] -= take
+                qty -= take
+                if qty <= 0:
+                    break
+    return [item["row"] for item in pool if item["remaining"] > 0]
+
+
 class BrokerOrderRepo:
     def __init__(self, db: SQLServerConnection):
         self.db = db
@@ -120,7 +197,32 @@ class BrokerOrderRepo:
             "SELECT * FROM options_broker_orders WHERE suggestion_id = ? "
             "ORDER BY leg_order, id",
             [suggestion_id],
-        )
+        ) or []
+
+    def attach_trade_id(
+        self,
+        trade_id: str,
+        *,
+        suggestion_id: str,
+        execution_job_id: Optional[int] = None,
+    ) -> None:
+        """Stamp ``trade_id`` on the rows this job just placed.
+
+        Only the current job is linked. A prior failed attempt (IP reject,
+        timeout) stays unlinked so history does not look like part of the trade.
+        """
+        if execution_job_id is not None:
+            self.db.execute(
+                "UPDATE options_broker_orders SET trade_id = ? "
+                "WHERE suggestion_id = ? AND execution_job_id = ? AND trade_id IS NULL",
+                [trade_id, suggestion_id, execution_job_id],
+            ).close()
+            return
+        self.db.execute(
+            "UPDATE options_broker_orders SET trade_id = ? "
+            "WHERE suggestion_id = ? AND operation = 'ENTRY' AND trade_id IS NULL",
+            [trade_id, suggestion_id],
+        ).close()
 
     def by_trade(self, trade_id: str, *, operation: Optional[str] = None) -> List[dict]:
         if operation:
@@ -141,13 +243,22 @@ class BrokerOrderRepo:
             [suggestion_id],
         )
 
-    def orphan_entry_fills(self, suggestion_id: str) -> List[dict]:
-        """COMPLETE ENTRY rows with no linked trade — failed post-fill bookkeeping."""
-        return self.db.fetch_all(
-            "SELECT * FROM options_broker_orders WHERE suggestion_id = ? "
-            "AND operation = 'ENTRY' AND status = 'COMPLETE' AND trade_id IS NULL "
-            "ORDER BY leg_order, id",
-            [suggestion_id],
+    def orphan_entry_fills(
+        self,
+        suggestion_id: str,
+        *,
+        except_job_id: Optional[int] = None,
+    ) -> List[dict]:
+        """Unbooked COMPLETE ENTRY fills that still mean an open Kite position.
+
+        A retry must not be blocked by:
+        - a prior attempt that never reached Kite (FAILED, no order id)
+        - a prior attempt that filled and was fully rolled back
+        - the current job's own fills, which are about to be booked
+        """
+        return net_unbooked_entry_fills(
+            self.by_suggestion(suggestion_id),
+            except_job_id=except_job_id,
         )
 
     def has_kite_orders_for_trade(self, trade_id: str) -> bool:

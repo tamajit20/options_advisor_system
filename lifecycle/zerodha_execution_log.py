@@ -38,7 +38,14 @@ def group_broker_orders(
     for row in rows:
         trade_id = (row.get("trade_id") or "").strip() or None
         suggestion_id = (row.get("suggestion_id") or "").strip() or None
-        group_key = trade_id or suggestion_id
+        job_id = row.get("execution_job_id")
+        # One card per attempt. Mixing a failed IP reject with a later fill
+        # made the live view look like 4/5 legs when two of those rows were
+        # a rollback of the retry.
+        if job_id is not None and job_id != "":
+            group_key = f"job:{job_id}"
+        else:
+            group_key = trade_id or suggestion_id
         if not group_key:
             group_key = f"orphan-{row.get('id')}"
 
@@ -119,3 +126,59 @@ def _overall_status(orders: List[dict]) -> str:
             return "PARTIAL"
         return "FAILED"
     return "UNKNOWN"
+
+
+def live_suggestion_order_status(
+    rows: List[dict],
+    latest_job: Optional[dict] = None,
+) -> dict:
+    """Progress for the suggestion card — latest attempt only.
+
+    Historical FAILED rows and rollbacks from a previous click must not
+    change filled/total or keep the inflight panel open.
+    """
+    job_status = str((latest_job or {}).get("status") or "").upper()
+    job_id = (latest_job or {}).get("id")
+    focused = list(rows)
+    if job_id is not None:
+        focused = [
+            r for r in rows
+            if str(r.get("execution_job_id") or "") == str(job_id)
+        ]
+    entries = [
+        r for r in focused
+        if str(r.get("operation") or "").upper() == "ENTRY"
+    ]
+    filled = sum(
+        1 for r in entries if str(r.get("status") or "").upper() == "COMPLETE"
+    )
+    try:
+        total = int((latest_job or {}).get("total_legs") or 0)
+    except (TypeError, ValueError):
+        total = 0
+    if total <= 0:
+        total = len(entries)
+
+    if not latest_job and not focused:
+        overall = "NONE"
+    elif job_status == "RUNNING":
+        overall = _overall_status(entries) if entries else "IN_FLIGHT"
+        if overall == "UNKNOWN":
+            overall = "IN_FLIGHT"
+    elif job_status == "FAILED":
+        overall = "FAILED"
+    elif job_status in ("COMPLETE", "SUCCESS"):
+        overall = "COMPLETE"
+    elif entries:
+        overall = _overall_status(entries)
+    else:
+        overall = "NONE"
+
+    trade_id = next((r.get("trade_id") for r in focused if r.get("trade_id")), None)
+    return {
+        "orders": focused,
+        "overall_status": overall,
+        "filled_count": filled,
+        "total_orders": total,
+        "trade_id": trade_id,
+    }

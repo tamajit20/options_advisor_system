@@ -62,3 +62,57 @@ def test_partial_status():
     ]
     groups = group_broker_orders(rows)
     assert groups[0]["overall_status"] == "PARTIAL"
+
+
+def test_jobs_on_same_suggestion_are_separate_groups():
+    rows = [
+        {
+            "id": 1, "trade_id": None, "suggestion_id": "S9",
+            "execution_job_id": 2, "operation": "ENTRY", "leg_order": 1,
+            "status": "FAILED", "created_at": datetime(2026, 9, 7, 11, 49),
+        },
+        {
+            "id": 2, "trade_id": None, "suggestion_id": "S9",
+            "execution_job_id": 3, "operation": "ENTRY", "leg_order": 1,
+            "status": "COMPLETE", "created_at": datetime(2026, 9, 7, 11, 57),
+        },
+    ]
+    groups = group_broker_orders(rows)
+    assert len(groups) == 2
+    by_key = {g["group_key"]: g for g in groups}
+    assert by_key["job:2"]["overall_status"] == "FAILED"
+    assert by_key["job:3"]["overall_status"] == "COMPLETE"
+
+
+def test_live_progress_ignores_prior_failed_attempt():
+    from lifecycle.zerodha_execution_log import live_suggestion_order_status
+
+    rows = [
+        {
+            "id": 1, "execution_job_id": 2, "operation": "ENTRY",
+            "leg_order": 1, "status": "FAILED", "trade_id": None,
+        },
+        {
+            "id": 2, "execution_job_id": 3, "operation": "ENTRY",
+            "leg_order": 1, "status": "COMPLETE", "trade_id": None,
+        },
+        {
+            "id": 3, "execution_job_id": 3, "operation": "ENTRY",
+            "leg_order": 2, "status": "COMPLETE", "trade_id": None,
+        },
+        {
+            "id": 4, "execution_job_id": 3, "operation": "ROLLBACK",
+            "leg_order": 2, "status": "COMPLETE",
+        },
+        {
+            "id": 5, "execution_job_id": 3, "operation": "ROLLBACK",
+            "leg_order": 1, "status": "COMPLETE",
+        },
+    ]
+    progress = live_suggestion_order_status(
+        rows, {"id": 3, "status": "FAILED", "total_legs": 2},
+    )
+    assert progress["overall_status"] == "FAILED"
+    assert progress["filled_count"] == 2
+    assert progress["total_orders"] == 2
+    assert all(r.get("execution_job_id") == 3 for r in progress["orders"])

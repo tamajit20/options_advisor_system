@@ -634,6 +634,37 @@ class TestActualNetCreditComputation:
         with pytest.raises(ValueError, match="without a recorded trade"):
             te.mark_executed(mock_db, "SUG-X", fills)
 
+    def test_zerodha_path_books_the_fills_it_just_placed(
+        self, mock_db, mocker, fake_suggestion, fake_legs
+    ):
+        """COMPLETE rows with no trade_id are the current Kite fills, not leftovers."""
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
+                     return_value=fake_suggestion)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
+                     return_value=fake_legs)
+        mocker.patch("lifecycle.trade_executor.SuggestionRepo.update_status")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.next_trade_id",
+                     return_value="TRD-Z")
+        ins = mocker.patch("lifecycle.trade_executor.TradeRepo.insert")
+        mocker.patch("lifecycle.trade_executor.TradeRepo.insert_legs")
+        mocker.patch(
+            "database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion",
+            return_value=[{"id": 9, "status": "COMPLETE"}],
+        )
+        mocker.patch(
+            "database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills",
+            return_value=[{"id": 2, "status": "COMPLETE", "trade_id": None}],
+        )
+        fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
+                              fill_time=datetime(2026, 5, 4, 9, 30))
+                 for i in (1, 2, 3, 4)]
+        tid = te.mark_executed(
+            mock_db, "SUG-X", fills, skip_execution_gate=True,
+            execution_provider="zerodha",
+        )
+        assert tid == "TRD-Z"
+        assert ins.called
+
     def test_completed_booked_kite_orders_do_not_block_manual_fill(
         self, mock_db, mocker, fake_suggestion, fake_legs
     ):
