@@ -272,6 +272,7 @@ function _closeZerodhaConfirmModal() {
   const modal = document.getElementById('zerodha-confirm-modal');
   if (!modal) return;
   modal.hidden = true;
+  delete modal.dataset.ownerKey;
   document.body.classList.remove('sg-modal-open');
   const submit = document.getElementById('zerodha-confirm-submit');
   if (submit) {
@@ -280,6 +281,18 @@ function _closeZerodhaConfirmModal() {
     submit.disabled = false;
     submit.textContent = 'Place orders';
   }
+}
+
+function _setZerodhaModalOwner(meta) {
+  const modal = _ensureZerodhaConfirmModal();
+  modal.dataset.ownerKey = _zerodhaInflightKey(meta);
+}
+
+function _zerodhaModalIsBusy() {
+  const modal = document.getElementById('zerodha-confirm-modal');
+  if (!modal || modal.hidden) return false;
+  const submit = document.getElementById('zerodha-confirm-submit');
+  return !!(modal.dataset.ownerKey && submit?.hidden);
 }
 
 function _setZerodhaModalBody(title, bodyHtml) {
@@ -370,11 +383,27 @@ function _hideZerodhaInflightSurfaces(meta) {
     const panel = card?.querySelector('.zerodha-inflight-panel');
     if (panel) panel.hidden = true;
   }
+  const key = _zerodhaInflightKey(meta);
   const strip = document.getElementById('zerodha-execution-strip');
+  if (strip && strip.dataset.ownerKey === key) {
+    strip.dataset.ownerKey = '';
+  }
   if (strip && !_zerodhaInflightPolls.size) {
     strip.hidden = true;
     strip.innerHTML = '';
+    strip.dataset.inflight = '';
   }
+}
+
+function _claimZerodhaStrip(key, { force = false } = {}) {
+  const strip = document.getElementById('zerodha-execution-strip');
+  if (!strip) return false;
+  const owner = strip.dataset.ownerKey || '';
+  if (force || !owner || owner === key || !_zerodhaInflightPolls.has(owner)) {
+    strip.dataset.ownerKey = key;
+    return true;
+  }
+  return owner === key;
 }
 
 function _updateZerodhaInflightSurfaces(meta, preview, status) {
@@ -385,25 +414,29 @@ function _updateZerodhaInflightSurfaces(meta, preview, status) {
   const inflight = _zerodhaIsInflightStatus(overall);
   const label = _zerodhaInflightLabel(meta);
   const progressText = total ? `${filled}/${total} legs filled` : 'Placing orders…';
+  const key = _zerodhaInflightKey(meta);
+  const modal = document.getElementById('zerodha-confirm-modal');
+  const ownsModal = !!(modal && modal.dataset.ownerKey === key);
 
-  // Modal body (when open)
-  const summary = document.getElementById('zerodha-exec-progress-summary');
-  if (summary) summary.textContent = progressText;
-  const byLeg = {};
-  (status?.orders || []).forEach(o => { byLeg[o.leg_order] = o; });
-  (legs.length ? legs : (status?.orders || [])).forEach(l => {
-    const lo = l.leg_order ?? l.execution_step;
-    const row = document.querySelector(`#zerodha-confirm-body tr[data-leg-order="${lo}"]`);
-    if (!row) return;
-    const cell = row.querySelector('.zerodha-leg-status');
-    if (!cell) return;
-    const o = byLeg[lo];
-    const st = _zerodhaLegStatusTag(o?.status);
-    cell.className = `tag tag-sm ${st.cls} zerodha-leg-status`;
-    cell.textContent = (o?.fill_price != null && st.lbl === 'Filled')
-      ? `Filled @ \u20b9${fmt(o.fill_price)}`
-      : st.lbl;
-  });
+  if (ownsModal) {
+    const summary = document.getElementById('zerodha-exec-progress-summary');
+    if (summary) summary.textContent = progressText;
+    const byLeg = {};
+    (status?.orders || []).forEach(o => { byLeg[o.leg_order] = o; });
+    (legs.length ? legs : (status?.orders || [])).forEach(l => {
+      const lo = l.leg_order ?? l.execution_step;
+      const row = document.querySelector(`#zerodha-confirm-body tr[data-leg-order="${lo}"]`);
+      if (!row) return;
+      const cell = row.querySelector('.zerodha-leg-status');
+      if (!cell) return;
+      const o = byLeg[lo];
+      const st = _zerodhaLegStatusTag(o?.status);
+      cell.className = `tag tag-sm ${st.cls} zerodha-leg-status`;
+      cell.textContent = (o?.fill_price != null && st.lbl === 'Filled')
+        ? `Filled @ \u20b9${fmt(o.fill_price)}`
+        : st.lbl;
+    });
+  }
 
   if (!inflight && (overall === 'NONE' || overall === 'FAILED')) {
     _hideZerodhaInflightSurfaces(meta);
@@ -435,14 +468,18 @@ function _updateZerodhaInflightSurfaces(meta, preview, status) {
   // App-wide strip — one compact line; hidden on Suggestion tab (card has full detail)
   const strip = document.getElementById('zerodha-execution-strip');
   if (strip && inflight) {
-    strip.dataset.inflight = '1';
-    strip.innerHTML = `
-      <div class="zerodha-execution-strip-inner">
-        <span class="zerodha-exec-spinner zerodha-exec-spinner--sm" aria-hidden="true"></span>
-        <span class="zerodha-execution-strip-text"><strong>Zerodha</strong> · ${escapeHtml(label)} · ${escapeHtml(progressText)}</span>
-      </div>`;
-  } else if (strip && overall === 'COMPLETE' && filled >= total && total > 0) {
+    if (_claimZerodhaStrip(key, { force: !!meta.claimStrip })) {
+      strip.dataset.inflight = '1';
+      strip.innerHTML = `
+        <div class="zerodha-execution-strip-inner">
+          <span class="zerodha-exec-spinner zerodha-exec-spinner--sm" aria-hidden="true"></span>
+          <span class="zerodha-execution-strip-text"><strong>Zerodha</strong> · ${escapeHtml(label)} · ${escapeHtml(progressText)}</span>
+        </div>`;
+    }
+  } else if (strip && overall === 'COMPLETE' && filled >= total && total > 0
+      && (strip.dataset.ownerKey === key || !strip.dataset.ownerKey)) {
     strip.dataset.inflight = '';
+    strip.dataset.ownerKey = '';
     strip.innerHTML = `
       <div class="zerodha-execution-strip-inner zerodha-execution-strip-inner--ok">
         <span class="zerodha-execution-strip-text"><strong>Zerodha</strong> · ${escapeHtml(label)} · all ${total} legs filled${status?.trade_id ? ` · ${escapeHtml(status.trade_id)}` : ''}</span>
@@ -686,7 +723,12 @@ function _renderZerodhaFundsBlock(preview) {
 }
 
 function showZerodhaConfirmModal(preview, { title, submitLabel, onConfirm }) {
+  if (_zerodhaModalIsBusy()) {
+    toast('A Zerodha order is already in progress in this window. Wait for it to finish.', 'warn');
+    return;
+  }
   const modal = _ensureZerodhaConfirmModal();
+  delete modal.dataset.ownerKey;
   _setZerodhaModalBody(title || 'Confirm Zerodha orders', _renderZerodhaPreviewTable(preview));
   const submit = document.getElementById('zerodha-confirm-submit');
   submit.hidden = false;
@@ -5753,8 +5795,10 @@ function bindSuggestionActions() {
           const pollMeta = {
             suggestionId: sid,
             label: execLabel,
+            claimStrip: true,
             onTradeCreated: (tid) => toast(`Trade ${tid} created — visible on My Trades`, 'info'),
           };
+          _setZerodhaModalOwner(pollMeta);
           const stopPoll = _startZerodhaOrderPolling(
             `/api/suggestion/${sid}/zerodha-orders`,
             preview,
@@ -6380,7 +6424,8 @@ async function submitZerodhaClose(tradeId, btn, panel) {
         _setZerodhaModalBody('Closing in Zerodha…', _renderZerodhaExecutionProgress(preview));
         const submit = document.getElementById('zerodha-confirm-submit');
         if (submit) submit.hidden = true;
-        const closeMeta = { tradeId, label: `Close ${tradeId}` };
+        const closeMeta = { tradeId, label: `Close ${tradeId}`, claimStrip: true };
+        _setZerodhaModalOwner(closeMeta);
         const execBody = { ...body, ack_out_of_band: !preview.all_limits_in_band };
         const stopPoll = _startZerodhaOrderPolling(
           `/api/trades/${tradeId}/zerodha-orders`,

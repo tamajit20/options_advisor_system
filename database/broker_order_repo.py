@@ -205,11 +205,12 @@ class BrokerOrderRepo:
         *,
         suggestion_id: str,
         execution_job_id: Optional[int] = None,
+        kite_order_ids: Optional[Iterable[str]] = None,
     ) -> None:
         """Stamp ``trade_id`` on the rows this job just placed.
 
-        Only the current job is linked. A prior failed attempt (IP reject,
-        timeout) stays unlinked so history does not look like part of the trade.
+        Only the current job (or its Kite ids) is linked. A prior failed
+        attempt stays unlinked so history does not look like part of the trade.
         """
         if execution_job_id is not None:
             self.db.execute(
@@ -218,10 +219,15 @@ class BrokerOrderRepo:
                 [trade_id, suggestion_id, execution_job_id],
             ).close()
             return
+        ids = [str(x).strip() for x in (kite_order_ids or []) if x]
+        if not ids:
+            return
+        placeholders = ",".join("?" * len(ids))
         self.db.execute(
             "UPDATE options_broker_orders SET trade_id = ? "
-            "WHERE suggestion_id = ? AND operation = 'ENTRY' AND trade_id IS NULL",
-            [trade_id, suggestion_id],
+            f"WHERE suggestion_id = ? AND kite_order_id IN ({placeholders}) "
+            "AND trade_id IS NULL",
+            [trade_id, suggestion_id, *ids],
         ).close()
 
     def by_trade(self, trade_id: str, *, operation: Optional[str] = None) -> List[dict]:

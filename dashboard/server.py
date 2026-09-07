@@ -2056,22 +2056,22 @@ def create_app() -> Flask:
     def api_zerodha_orders_for_trade(db: SQLServerConnection, trade_id: str):
         """Live broker-order status for in-flight Zerodha close execution."""
         from database.broker_order_repo import BrokerOrderRepo
-        from lifecycle.zerodha_execution_log import group_broker_orders
+        from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
+        from lifecycle.zerodha_execution_log import live_suggestion_order_status
 
         rows = [_row(r) for r in BrokerOrderRepo(db).by_trade(trade_id)]
-        filled = sum(
-            1 for r in rows if str(r.get("status") or "").upper() == "COMPLETE"
+        latest_job = ZerodhaExecutionJobRepo(db).latest_for_trade(
+            trade_id, operation="EXIT",
         )
-        overall = "NONE"
-        if rows:
-            groups = group_broker_orders(rows)
-            overall = groups[0].get("overall_status") or "UNKNOWN"
+        progress = live_suggestion_order_status(
+            rows, latest_job, operation="EXIT",
+        )
         return jsonify({
             "trade_id": trade_id,
-            "orders": rows,
-            "overall_status": overall,
-            "filled_count": filled,
-            "total_orders": len(rows),
+            "orders": progress["orders"],
+            "overall_status": progress["overall_status"],
+            "filled_count": progress["filled_count"],
+            "total_orders": progress["total_orders"],
         })
 
     @app.route("/api/zerodha-execution-jobs/<int:job_id>")

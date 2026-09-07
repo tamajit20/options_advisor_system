@@ -123,7 +123,14 @@ class ZerodhaExecutionJobRepo:
             seen,
         ) or []
 
-    def latest_for_trade(self, trade_id: str) -> Optional[dict]:
+    def latest_for_trade(self, trade_id: str, *, operation: Optional[str] = None) -> Optional[dict]:
+        if operation:
+            return self.db.fetch_one(
+                "SELECT TOP 1 * FROM options_zerodha_execution_jobs "
+                "WHERE trade_id = ? AND operation = ? "
+                "ORDER BY created_at DESC, id DESC",
+                [trade_id, operation],
+            )
         return self.db.fetch_one(
             "SELECT TOP 1 * FROM options_zerodha_execution_jobs "
             "WHERE trade_id = ? ORDER BY created_at DESC, id DESC",

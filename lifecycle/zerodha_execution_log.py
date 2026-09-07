@@ -364,23 +364,30 @@ def _overall_status(orders: List[dict]) -> str:
 def live_suggestion_order_status(
     rows: List[dict],
     latest_job: Optional[dict] = None,
+    *,
+    operation: str = "ENTRY",
 ) -> dict:
-    """Progress for the suggestion card — latest attempt only.
+    """Progress for the live card — latest attempt only.
 
     Historical FAILED rows and rollbacks from a previous click must not
     change filled/total or keep the inflight panel open.
     """
     job_status = str((latest_job or {}).get("status") or "").upper()
     job_id = (latest_job or {}).get("id")
+    op = (operation or "ENTRY").upper()
     focused = list(rows)
     if job_id is not None:
         focused = [
             r for r in rows
             if str(r.get("execution_job_id") or "") == str(job_id)
         ]
+    elif op != "ENTRY":
+        # Close/supplement polling starts before the job row exists; do not
+        # mix prior EXIT attempts into 2/2 complete.
+        focused = []
     entries = [
         r for r in focused
-        if str(r.get("operation") or "").upper() == "ENTRY"
+        if str(r.get("operation") or "").upper() == op
     ]
     filled = sum(
         1 for r in entries if str(r.get("status") or "").upper() == "COMPLETE"

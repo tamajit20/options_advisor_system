@@ -1661,6 +1661,7 @@ def execute_suggestion_in_zerodha(
             trade_id,
             suggestion_id=suggestion_id,
             execution_job_id=execution_job_id,
+            kite_order_ids=[f.kite_order_id for f in completed],
         )
         db.commit()
         broker_rows = BrokerOrderRepo(db).by_job(execution_job_id) if execution_job_id is not None else broker_rows
@@ -1872,6 +1873,7 @@ def close_trade_in_zerodha(
                     user_limit_price=user_lim,
                     expected_transaction_type=close_txn,
                     execution_profile=profile_for("close"),
+                    execution_job_id=execution_job_id,
                     quote_row=qmap.get(_kite_symbol_key(inst_map[lo])),
                 )
                 completed.append(outcome)
@@ -1906,7 +1908,9 @@ def close_trade_in_zerodha(
         if not recon.ok and recon.message:
             warnings.append(recon.message)
 
-        broker_rows = BrokerOrderRepo(db).by_trade(trade_id, operation="EXIT")
+        broker_rows = BrokerOrderRepo(db).by_job(execution_job_id) if execution_job_id is not None else []
+        if not broker_rows:
+            broker_rows = BrokerOrderRepo(db).by_trade(trade_id, operation="EXIT")
         return ExecutionOutcome(
             ok=True,
             trade_id=trade_id,
@@ -1914,6 +1918,7 @@ def close_trade_in_zerodha(
             leg_fills=completed,
             broker_orders=broker_rows,
             warnings=warnings,
+            job_id=execution_job_id,
         )
     finally:
         lock.release()
@@ -1950,7 +1955,9 @@ def execute_supplement_in_zerodha(
             raise ZerodhaExecutionError(
                 "Broker supplement orders already in flight — wait or cancel on Kite"
             )
-        _assert_execution_not_in_flight(db, trade_id=trade_id)
+        _assert_execution_not_in_flight(
+            db, trade_id=trade_id, except_job_id=execution_job_id,
+        )
 
         facade, master = _build_client()
         live_map, inst_map = _live_ltp_map(facade, master, pending_legs)

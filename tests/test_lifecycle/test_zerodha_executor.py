@@ -499,6 +499,37 @@ def test_close_trade_happy_path(db_conn, mocker, mock_instrument):
     close.assert_called_once()
 
 
+def test_close_passes_execution_job_id_to_place(db_conn, mocker, mock_instrument):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    leg = {
+        "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
+        "option_type": "CE", "symbol": "NIFTY", "expiry_date": date(2026, 5, 28),
+        "strike": 23000, "lots": 1, "lot_size": 50,
+        "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
+    }
+    mocker.patch("database.models.TradeRepo.get", return_value={
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+    })
+    mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_trade", return_value=[])
+    _mock_kite_facade(mocker, mock_instrument)
+    place = mocker.patch(
+        "lifecycle.zerodha_executor._place_and_monitor_leg",
+        return_value=LegFillOutcome(
+            leg_order=1, fill_price=98.0, fill_time=now_ist(),
+            kite_order_id="OID-1", broker_row_id=1,
+        ),
+    )
+    mocker.patch("lifecycle.zerodha_executor.close_trade_with_fills")
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.by_job",
+        return_value=[{"operation": "EXIT", "status": "COMPLETE", "execution_job_id": 9}],
+    )
+
+    close_trade_in_zerodha(db_conn, "TRD-1", execution_job_id=9)
+    assert place.call_args.kwargs["execution_job_id"] == 9
+
+
 def test_supplement_rejects_live_prices_out_of_band(
     db_conn, mocker, mock_instrument, sample_leg,
 ):

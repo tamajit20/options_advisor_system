@@ -160,3 +160,21 @@ def test_unreversed_complete_fill_is_still_an_orphan():
         },
     ]
     assert len(net_unbooked_entry_fills(rows)) == 1
+
+
+def test_attach_trade_id_without_job_uses_kite_ids_only():
+    db = MagicMock()
+    BrokerOrderRepo(db).attach_trade_id(
+        "TRD-1",
+        suggestion_id="SUG-1",
+        kite_order_ids=["K-NEW", ""],
+    )
+    sql, params = db.execute.call_args[0]
+    assert "kite_order_id IN" in sql
+    assert params == ["TRD-1", "SUG-1", "K-NEW"]
+
+
+def test_attach_trade_id_without_job_or_kite_ids_is_noop():
+    db = MagicMock()
+    BrokerOrderRepo(db).attach_trade_id("TRD-1", suggestion_id="SUG-1")
+    db.execute.assert_not_called()

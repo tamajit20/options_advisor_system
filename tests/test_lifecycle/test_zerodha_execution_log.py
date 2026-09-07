@@ -125,6 +125,44 @@ def test_live_progress_ignores_prior_failed_attempt():
     assert all(r.get("execution_job_id") == 3 for r in progress["orders"])
 
 
+def test_live_close_progress_uses_latest_exit_job_only():
+    from lifecycle.zerodha_execution_log import live_suggestion_order_status
+
+    rows = [
+        {
+            "id": 1, "execution_job_id": 8, "operation": "EXIT",
+            "leg_order": 1, "status": "COMPLETE", "trade_id": "TRD-1",
+        },
+        {
+            "id": 2, "execution_job_id": 9, "operation": "EXIT",
+            "leg_order": 1, "status": "OPEN", "trade_id": "TRD-1",
+        },
+    ]
+    progress = live_suggestion_order_status(
+        rows, {"id": 9, "status": "RUNNING", "total_legs": 1},
+        operation="EXIT",
+    )
+    assert progress["overall_status"] == "IN_FLIGHT"
+    assert progress["filled_count"] == 0
+    assert progress["total_orders"] == 1
+    assert all(r.get("execution_job_id") == 9 for r in progress["orders"])
+
+
+def test_live_close_progress_without_job_does_not_count_old_exits():
+    from lifecycle.zerodha_execution_log import live_suggestion_order_status
+
+    rows = [
+        {
+            "id": 1, "execution_job_id": None, "operation": "EXIT",
+            "leg_order": 1, "status": "COMPLETE",
+        },
+    ]
+    progress = live_suggestion_order_status(rows, None, operation="EXIT")
+    assert progress["overall_status"] == "NONE"
+    assert progress["filled_count"] == 0
+    assert progress["orders"] == []
+
+
 def test_failed_ip_uses_job_error_as_reason():
     rows = [
         {
