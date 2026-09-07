@@ -37,3 +37,6 @@ coverage.xml
 # Ad-hoc diagnostics in data/
 data/_*.py
 data/*-diag.*
+
+# Local one-off helpers (underscore prefix — not product scripts)
+scripts/_*
