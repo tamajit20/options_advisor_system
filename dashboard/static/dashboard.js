@@ -2361,6 +2361,58 @@ async function loadSuggestion() {
 const _SUG_LIVE_POLL_MS = 6000;
 let _sugLivePriceTimer = null;
 
+// Rebuild the credit-breakdown equation using live LTPs, so you can see what
+// the structure actually costs right now versus the suggested midpoints.
+function _applyLiveCreditBreakdown(card, legs) {
+  const row = card.querySelector('[data-cb-live-row]');
+  if (!row) return;
+  const eqEl = row.querySelector('[data-cb-live-eq]');
+  const verdictEl = row.querySelector('[data-cb-live-verdict]');
+
+  const parts = [];
+  let net = 0;
+  let complete = true;
+  for (const leg of legs) {
+    const legSpan = card.querySelector(`[data-cb-leg="${leg.leg_order}"]`);
+    const action = legSpan?.dataset.cbAction;
+    if (!action || leg.ltp == null) { complete = false; continue; }
+    const sign = action === 'SELL' ? 1 : -1;
+    net += sign * leg.ltp;
+    const cls = action === 'SELL' ? 'cb-live-credit' : 'cb-live-debit';
+    parts.push(`<span class="${cls}">${sign > 0 ? '+' : '\u2212'}\u20b9${fmt(leg.ltp)}</span>`);
+  }
+  if (!parts.length || !complete) {
+    row.hidden = true;
+    return;
+  }
+  row.hidden = false;
+  eqEl.innerHTML = `${parts.join('<span class="cb-sep"> + </span>')}`
+    + `<span class="cb-sep"> = </span>`
+    + `<span class="cb-live-net ${net >= 0 ? 'cb-live-credit' : 'cb-live-debit'}">`
+    + `\u20b9${fmt(Math.abs(net))}/unit</span>`
+    + `<span class="muted"> ${net >= 0 ? 'credit' : 'debit'}</span>`;
+
+  const rangeLo = parseFloat(card.dataset.sugRangeLo);
+  const rangeHi = parseFloat(card.dataset.sugRangeHi);
+  if (!Number.isFinite(rangeLo) || !Number.isFinite(rangeHi) || rangeHi <= rangeLo + 0.5) {
+    verdictEl.textContent = '';
+    verdictEl.className = 'cb-live-verdict';
+    return;
+  }
+  // Range is expressed as net credit, so a higher number is always better.
+  if (net >= rangeLo && net <= rangeHi) {
+    verdictEl.textContent = '\u2713 within acceptable range';
+    verdictEl.className = 'cb-live-verdict cb-status-ok';
+  } else if (net > rangeHi) {
+    verdictEl.textContent = '\u2191 better than suggested';
+    verdictEl.className = 'cb-live-verdict cb-status-ok';
+  } else {
+    const gap = rangeLo - net;
+    verdictEl.textContent = `\u2193 \u20b9${fmt(gap)}/unit worse than the minimum \u2014 wait`;
+    verdictEl.className = 'cb-live-verdict cb-status-warn';
+  }
+}
+
 function _applySuggestionLivePrices(card, payload) {
   const legs = (payload && payload.legs) || [];
   const unavailable = !payload || payload.available === false;
@@ -2370,8 +2422,11 @@ function _applySuggestionLivePrices(card, payload) {
   if (unavailable) {
     card.querySelectorAll('.leg-live-ltp').forEach(el => { el.textContent = '—'; });
     card.querySelectorAll('.leg-live-band').forEach(el => { el.textContent = ''; });
+    const liveRow = card.querySelector('[data-cb-live-row]');
+    if (liveRow) liveRow.hidden = true;
     return;
   }
+  _applyLiveCreditBreakdown(card, legs);
   legs.forEach(leg => {
     const priceEl = card.querySelector(`.leg-live-ltp[data-leg-order="${leg.leg_order}"]`);
     const bandEl = card.querySelector(`.leg-live-band[data-leg-order="${leg.leg_order}"]`);
@@ -4383,12 +4438,22 @@ function creditBreakdownHtml(legs, mode) {
         : `<span class="cb-fill-status cb-fill-below">↓ below suggested minimum</span>`;
     tradeCompareHtml = `<div class="cb-trade-compare">${rangeLabel} &nbsp;·&nbsp; ${fillStatus}</div>`;
   }
+  // Blank price boxes execute at the live LTP, so the suggested-price
+  // equation above is not what you would actually pay. This second row is
+  // filled in by the live-price poller with the same maths at live prices.
+  const liveRowHtml = mode === 'suggest' ? `
+    <div class="cb-live-row" data-cb-live-row hidden>
+      <span class="cb-live-tag">Live</span>
+      <span class="cb-live-eq" data-cb-live-eq></span>
+      <span class="cb-live-verdict" data-cb-live-verdict></span>
+    </div>` : '';
   return `<div class="credit-breakdown">
     <div class="cb-equation">${rows}
       <span class="cb-sep"> = </span>
       <span class="cb-net" data-cb-net style="color:${netColor}">\u20b9${fmt(Math.abs(netMid))}/unit</span>${rangeText}${mode === 'suggest' ? ' <span class="cb-live-status" data-cb-status></span>' : ''}
     </div>
     <div class="cb-label">${escapeHtml(netLabel)} per unit (1 lot each leg)</div>
+    ${liveRowHtml}
     ${tradeCompareHtml}
   </div>`;
 }
@@ -5265,17 +5330,6 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           <strong class="exec-path-title">Record manually</strong>
           <span class="muted exec-path-hint">No broker orders — you already traded elsewhere</span>
         </div>
-        <div class="exec-price-block">
-          <span class="exec-price-label muted">Legs traded <span class="exec-price-sub">— untick any leg you did not trade</span></span>
-          <div class="exec-fill-grid">
-            ${(s.legs || []).map(l => `
-              <label class="exec-leg-toggle">
-                <input type="checkbox" data-leg="${l.leg_order}" class="leg-exec" checked
-                       title="Untick if this leg was not traded">
-                <span>${escapeHtml(l.action)} ${l.strike} ${escapeHtml(l.option_type)}</span>
-              </label>`).join('')}
-          </div>
-        </div>
         <div class="exec-manual-actions">
           <button type="button" class="btn btn-accent btn-exec-manual"${canExecuteAtSuggested ? ' data-skip-gate="1"' : ''}>Record my fills</button>
           <button type="button" class="btn btn-ghost btn-mark-exec" data-at-suggested="1">Record at suggested prices</button>
@@ -5681,23 +5735,16 @@ function bindSuggestionActions() {
     // One shared price field per leg. Blank falls back to the suggested
     // price, which is what the placeholder shows.
     const fillInputs = $$('.leg-price-input', card);
-    const isTicked = inp => card.querySelector(
-      `.leg-exec[data-leg="${parseInt(inp.dataset.legOrder, 10)}"]`,
-    )?.checked !== false;
     const priceFor = inp => {
       const typed = parseFloat((inp.value || '').trim());
       if (typed > 0) return typed;
       const suggested = parseFloat(inp.dataset.suggested);
       return suggested > 0 ? suggested : null;
     };
-    const invalid = fillInputs.filter(inp => isTicked(inp) && priceFor(inp) == null);
+    const invalid = fillInputs.filter(inp => priceFor(inp) == null);
     if (invalid.length) {
-      toast('Enter a price for every ticked leg before recording.', 'err');
+      toast('Enter a price for every leg before recording.', 'err');
       invalid[0].focus();
-      return;
-    }
-    if (!fillInputs.some(isTicked)) {
-      toast('Tick at least one leg to record.', 'err');
       return;
     }
 
@@ -5742,16 +5789,12 @@ function bindSuggestionActions() {
     btn.classList.remove('btn-confirm-pending');
     btn.nextElementSibling?.classList.contains('btn-confirm-cancel') && btn.nextElementSibling.remove();
 
-    const fills = fillInputs.map(inp => {
-      const order = parseInt(inp.dataset.legOrder, 10);
-      const checked = isTicked(inp);
-      return {
-        leg_order: order,
-        executed: checked,
-        fill_price: checked ? priceFor(inp) : null,
-        lots_override: numLots,
-      };
-    });
+    const fills = fillInputs.map(inp => ({
+      leg_order: parseInt(inp.dataset.legOrder, 10),
+      executed: true,
+      fill_price: priceFor(inp),
+      lots_override: numLots,
+    }));
     const sugSl   = parseFloat(card.dataset.baseSl)    || 0;
     const sugSpot = parseFloat(card.dataset.spotAtGen) || 0;
     const spotSlStrategy = usesSpotStopLoss(card.dataset.strategy, sugSl);

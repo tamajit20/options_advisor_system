@@ -830,40 +830,11 @@ table.dt {
   border: 1px solid rgba(255,255,255,.12);
   background: var(--surface-alt);
 }
-.exec-fill-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.exec-price-block {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.exec-price-label { font-size: .74rem; }
-.exec-price-sub { opacity: .8; }
 .exec-path-note { font-size: .72rem; line-height: 1.35; }
 .exec-manual-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-}
-/* Per-leg "did I trade this leg" ticks — manual path only */
-.exec-leg-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  border: 1px solid rgba(255,255,255,.12);
-  border-radius: 6px;
-  background: rgba(255,255,255,.03);
-  font-size: .74rem;
-  cursor: pointer;
-}
-.exec-leg-toggle input[type="checkbox"] { margin: 0; }
-.exec-leg-toggle:has(input:not(:checked)) {
-  opacity: .55;
-  text-decoration: line-through;
 }
 .exec-actions-footer {
   grid-column: 1 / -1;
@@ -2675,6 +2646,39 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .cb-net { font-size: 1rem; font-weight: 700; }
 .cb-range { color: var(--text-dim); font-size: .78rem; }
 .cb-label { color: var(--text-dim); font-size: .76rem; margin-top: 2px; }
+/* Same equation at live LTPs — what a blank-price order would actually cost */
+.cb-live-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(14,165,233,.15);
+  font-size: .82rem;
+}
+.cb-live-tag {
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: #86efac;
+}
+.cb-live-tag::before {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin-right: 3px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74,222,128,.8);
+  vertical-align: middle;
+}
+.cb-live-eq { font-variant-numeric: tabular-nums; }
+.cb-live-credit { color: var(--ok); font-weight: 600; }
+.cb-live-debit  { color: var(--err); font-weight: 600; }
+.cb-live-row .cb-live-net { font-size: .95rem; font-weight: 700; }
+.cb-live-verdict { font-size: .78rem; font-weight: 600; }
 .cb-trade-compare { font-size: .78rem; color: var(--text-dim); margin-top: 5px; padding-top: 5px; border-top: 1px solid rgba(14,165,233,.15); }
 .cb-fill-status { font-weight: 600; padding: 1px 6px; border-radius: 4px; }
 .cb-fill-ok    { color: var(--ok);  background: rgba(34,197,94,.12); }
