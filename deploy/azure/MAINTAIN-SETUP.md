@@ -55,9 +55,10 @@ Align job time with **VM uptime Mon–Fri 08:55–15:45 IST** (no weekend-only j
 
 ## New archive / backup behaviour
 
-1. `lifecycle/archive_export.py`, `deploy/archive-export.sh`
-2. `deploy/azure/pull-archive-and-merge.ps1`, `scripts/merge_archive_into_local.py`
-3. `deploy/azure/ARCHIVE-AUTOMATION.md`, `readmefirst.txt` Section 5
+1. `lifecycle/sql_backup.py`, `lifecycle/archive_export.py`, `deploy/archive-export.sh`
+2. `docker-compose.yml` — `./backups` bind-mount on `sqlserver` and `options_advisor`
+3. `deploy/azure/pull-archive-and-merge.ps1`, `scripts/merge_archive_into_local.py`
+4. `deploy/azure/ARCHIVE-AUTOMATION.md`, `readmefirst.txt` Section 5
 
 ---
 

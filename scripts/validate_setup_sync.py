@@ -23,6 +23,7 @@ REQUIRED_SCRIPTS = [
     "database/archive_repo.py",
     "lifecycle/archive_orchestrator.py",
     "lifecycle/archive_export.py",
+    "lifecycle/sql_backup.py",
 ]
 
 LOG_TABLES = frozenset({

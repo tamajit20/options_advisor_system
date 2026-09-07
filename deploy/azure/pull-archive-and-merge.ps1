@@ -62,8 +62,16 @@ Write-Host "==> [1/5] Check VM for pending archive export..."
 $remoteManifest = "$VmProjectDir/backups/archive/PENDING.json"
 $localManifest = Join-Path $LocalArchiveDir "PENDING.json"
 
-& scp @scpArgs "${sshTarget}:${remoteManifest}" $localManifest 2>$null
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path $localManifest)) {
+# scp writes "No such file" to stderr; with $ErrorActionPreference=Stop that
+# becomes a terminating NativeCommandError even when nothing is pending.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "SilentlyContinue"
+& scp @scpArgs "${sshTarget}:${remoteManifest}" $localManifest 2>$null | Out-Null
+$scpCode = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+$manifestOk = (Test-Path $localManifest) -and ((Get-Item $localManifest).Length -ge 20)
+if ($scpCode -ne 0 -or -not $manifestOk) {
+    Remove-Item $localManifest -ErrorAction SilentlyContinue
     Write-Host "No pending archive on VM (nothing to do)."
     exit 0
 }

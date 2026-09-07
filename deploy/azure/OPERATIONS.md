@@ -238,7 +238,13 @@ Use after a git push when you want **new application code** but **keep the exist
 cd ~/options_advisor_system
 export COMPOSE_PROFILES=bundled
 
+# Keep today's Kite login — git must not replace data/zerodha_session.json
+cp -a data/zerodha_session.json /tmp/zerodha_session.json.bak 2>/dev/null || true
 git pull origin master
+cp -a /tmp/zerodha_session.json.bak data/zerodha_session.json 2>/dev/null || true
+
+mkdir -p backups/archive
+chmod 777 backups backups/archive || true
 
 docker compose build options_advisor
 docker compose up -d
@@ -259,7 +265,8 @@ Dashboard: `http://<VM_PUBLIC_IP>:5001`
 |----|--------|
 | `git pull` + `docker compose build` + `up -d` | Run `./deploy/vm-install-deploy.sh --fresh-db` |
 | Keep existing DB volume | Run restore scripts unless you **intend** to replace data |
-| Re-login Zerodha if token expired | Wipe `sqlserver_data` Docker volume |
+| Preserve `data/zerodha_session.json` across pull/reset | Commit or `git reset --hard` over a live Kite session |
+| Re-login Zerodha if token expired (daily 06:00 IST) | Wipe `sqlserver_data` Docker volume |
 
 ### If `vm-install-deploy.sh` asks about the database
 
@@ -399,6 +406,7 @@ If you prefer the Portal instead of the script:
 | WS runner restarting | Run Zerodha login (Part 1 Step 4) |
 | Kite rejects redirect URL (HTTPS required) | See **HTTPS for Zerodha OAuth** below |
 | sqlcmd not found on laptop | Install SSMS / SQL Server tools, or use `-BackupPath` with existing `.bak` |
+| `db_backup` / `archive_export` FAILED in Jobs | App cannot `docker compose` from inside the container. After deploy, `docker compose up -d` must recreate sqlserver with `./backups` bind-mounted. Laptop merge exits 0 when nothing is pending. |
 
 ---
 

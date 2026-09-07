@@ -467,27 +467,11 @@ def job_pcr_regen_poll():
 
 def job_db_backup():
     def _backup(db: SQLServerConnection) -> int:
-        import subprocess
-        from pathlib import Path
+        from lifecycle.sql_backup import run_hot_backup
 
-        root = Path(__file__).resolve().parent.parent
-        script = root / "deploy" / "backup.sh"
-        if not script.is_file():
-            logger.warning("db_backup: deploy/backup.sh not found")
-            return 0
-        try:
-            subprocess.run(
-                ["bash", str(script)],
-                cwd=str(root),
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
-            return 1
-        except subprocess.CalledProcessError as exc:
-            logger.error("db_backup failed: %s", exc.stderr or exc)
-            raise
+        path = run_hot_backup(db)
+        logger.info("db_backup wrote %s", path)
+        return 1
 
     _run_job("db_backup", _backup)
 

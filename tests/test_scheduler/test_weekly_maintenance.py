@@ -108,3 +108,18 @@ class TestWeeklyArchive:
 
         run_archive.assert_called_once_with(patched_db)
         assert n == 42
+
+
+class TestDbBackup:
+    def test_delegates_to_sql_backup(self, patched_db, mocker):
+        captured = _capture_cleanup_fn(mocker)
+        run_hot = mocker.patch(
+            "lifecycle.sql_backup.run_hot_backup",
+            return_value="/app/backups/OptionsAdvisorDB-1.bak",
+        )
+
+        sched.job_db_backup()
+        n = captured["fn"](patched_db)
+
+        run_hot.assert_called_once_with(patched_db)
+        assert n == 1

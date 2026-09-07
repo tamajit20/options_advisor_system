@@ -139,7 +139,7 @@ class TestJobFuncsRegistry:
             "fo_bhav_download", "spot_bhav_download", "vix_download", "fii_download",
             "iv_calculation", "suggestion_engine", "simulation_update", "exit_engine",
             "events_seed", "weekly_archive", "weekly_log_cleanup", "eod_nightly_pipeline",
-            "morning_eod_catchup",
+            "morning_eod_catchup", "archive_export", "db_backup",
         }
         assert expected.issubset(set(sched.JOB_FUNCS.keys()))
 

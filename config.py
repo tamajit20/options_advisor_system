@@ -201,7 +201,7 @@ SCHEDULER_CONFIG = {
         "morning_eod_catchup":     1200,
         "intraday_sl_fallback":    120,
         "pcr_regen_poll":          120,
-        "db_backup":               600,
+        "db_backup":               1800,
     },
     # Default for jobs not listed above.
     "default_job_timeout_seconds": 600,

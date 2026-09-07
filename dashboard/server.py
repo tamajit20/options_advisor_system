@@ -727,6 +727,8 @@ _JOB_META: Dict[str, Dict[str, str]] = {
                             "description": "Delete system/job logs only (Fri 09:35)."},
     "archive_export":     {"icon": "💾", "name": "Archive Export",
                             "description": "Export pending *_Archive .bak before VM stop (Fri 15:36)."},
+    "db_backup":          {"icon": "💽", "name": "Hot DB Backup",
+                            "description": "SQL BACKUP of OptionsAdvisorDB to ./backups before VM stop (Fri 15:38)."},
 }
 
 _DOW_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu",

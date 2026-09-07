@@ -34,6 +34,8 @@ if [[ -z "${MSSQL_SA_PASSWORD:-}" || "${MSSQL_SA_PASSWORD}" == "ChangeMe!Str0ng#
 fi
 
 echo "==> Building app image..."
+mkdir -p backups/archive logs data archive
+chmod 777 backups backups/archive 2>/dev/null || true
 docker compose build options_advisor
 
 echo "==> Starting SQL Server..."
