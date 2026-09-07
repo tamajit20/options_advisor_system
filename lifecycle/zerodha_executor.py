@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from config import ZERODHA_API_CONFIG, ZERODHA_EXECUTION_CONFIG
+from config import STRATEGY_CONFIG, ZERODHA_API_CONFIG, ZERODHA_EXECUTION_CONFIG
 from contracts import TradeLegFill
 from database.broker_order_repo import BrokerOrderRepo
 from database.connection import SQLServerConnection
@@ -378,6 +378,52 @@ def parse_leg_limits(raw: Any) -> Dict[int, float]:
             continue
         out[int(lo)] = float(lp)
     return out
+
+
+def parse_lots_override(raw: Any) -> Optional[int]:
+    """Parse API payload ``lots`` — the shared order size for every leg."""
+    if raw is None or raw == "":
+        return None
+    try:
+        lots = int(raw)
+    except (TypeError, ValueError):
+        raise ZerodhaExecutionError(f"Invalid lots value: {raw!r}") from None
+    if lots < 1:
+        raise ZerodhaExecutionError("Lots must be at least 1")
+    cap = int(STRATEGY_CONFIG.get("max_lots_cap") or 0)
+    if cap > 0 and lots > cap:
+        raise ZerodhaExecutionError(
+            f"Lots {lots} exceeds the configured max_lots_cap of {cap}"
+        )
+    return lots
+
+
+def _with_lots_override(legs: List[dict], lots: Optional[int]) -> List[dict]:
+    """Copy legs with ``lots_actual`` pinned to the shared order size.
+
+    Every downstream consumer (leg plans, margin params, order placement)
+    already prefers ``lots_actual`` over ``lots``, so this is the single
+    lever that resizes the whole structure.
+    """
+    if lots is None:
+        return legs
+    out: List[dict] = []
+    for leg in legs:
+        copy = dict(leg)
+        copy["lots_actual"] = lots
+        out.append(copy)
+    return out
+
+
+def _suggested_lots(legs: List[dict]) -> int:
+    for leg in legs:
+        try:
+            val = int(leg.get("lots") or 0)
+        except (TypeError, ValueError):
+            continue
+        if val > 0:
+            return val
+    return 1
 
 
 def _fetch_ltps(facade: KiteExecutionFacade, keys: List[str]) -> Dict[str, float]:
@@ -1245,6 +1291,7 @@ def _entry_context(
     db: SQLServerConnection,
     suggestion_id: str,
     leg_limits: Optional[Dict[int, float]],
+    lots_override: Optional[int] = None,
 ) -> Tuple[dict, List[dict], KiteExecutionFacade, InstrumentMaster, Dict[int, float], Dict[int, Instrument], List[dict], str, Optional[MarginCheckResult]]:
     sug = SuggestionRepo(db)
     suggestion = sug.get(suggestion_id)
@@ -1253,6 +1300,8 @@ def _entry_context(
     legs = sug.legs(suggestion_id)
     if not legs:
         raise ZerodhaExecutionError("Suggestion has no legs")
+    sug_lots = _suggested_lots(legs)
+    legs = _with_lots_override(legs, lots_override)
     status = (suggestion.get("status") or "").upper()
     if status != "PENDING":
         raise ZerodhaExecutionError(
@@ -1282,6 +1331,10 @@ def _entry_context(
             fallback_required = abs(float(fallback_ml)) if fallback_ml is not None else None
         except (TypeError, ValueError):
             fallback_required = None
+        # Stored max_loss is sized for the suggested lots — rescale so a
+        # resized order can't slip through on an understated estimate.
+        if fallback_required is not None and lots_override and sug_lots > 0:
+            fallback_required *= lots_override / sug_lots
     margin = _run_pre_trade_checks(
         facade, legs, inst_map, ordered, leg_limits, mode="entry",
         live_map=live_map,
@@ -1296,11 +1349,12 @@ def preview_suggestion_execution(
     *,
     leg_limits: Optional[Dict[int, float]] = None,
     spot_at_execution: Optional[float] = None,
+    lots_override: Optional[int] = None,
 ) -> ExecutionPreview:
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
     suggestion, legs, facade, _master, live_map, inst_map, ordered, strategy, margin = (
-        _entry_context(db, suggestion_id, leg_limits)
+        _entry_context(db, suggestion_id, leg_limits, lots_override)
     )
     plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="entry", strategy=strategy)
     limit_map = {p.leg_order: p.limit_price for p in plans}
@@ -1400,6 +1454,7 @@ def execute_suggestion_in_zerodha(
     leg_limits: Optional[Dict[int, float]] = None,
     ack_out_of_band: bool = False,
     execution_job_id: Optional[int] = None,
+    lots_override: Optional[int] = None,
 ) -> ExecutionOutcome:
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError(
@@ -1413,7 +1468,7 @@ def execute_suggestion_in_zerodha(
 
     try:
         suggestion, legs, facade, master, live_map, inst_map, ordered, strategy, _margin = (
-            _entry_context(db, suggestion_id, leg_limits)
+            _entry_context(db, suggestion_id, leg_limits, lots_override)
         )
         plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="entry", strategy=strategy)
         system_plans = (
@@ -1497,6 +1552,7 @@ def execute_suggestion_in_zerodha(
                 executed=True,
                 fill_price=f.fill_price,
                 fill_time=f.fill_time,
+                lots_override=lots_override,
             )
             for f in completed
         ]
@@ -1571,13 +1627,14 @@ def execute_suggestion_in_zerodha_async(
     spot_at_execution: Optional[float] = None,
     leg_limits: Optional[Dict[int, float]] = None,
     ack_out_of_band: bool = False,
+    lots_override: Optional[int] = None,
 ) -> ExecutionOutcome:
     """Start background entry execution; returns immediately with job_id."""
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
     _assert_execution_not_in_flight(db, suggestion_id=suggestion_id)
     # Fail before the job is queued if funds / live prices / gates fail.
-    _entry_context(db, suggestion_id, leg_limits)
+    _entry_context(db, suggestion_id, leg_limits, lots_override)
 
     suggestion = SuggestionRepo(db).get(suggestion_id)
     if suggestion is None:
@@ -1592,6 +1649,7 @@ def execute_suggestion_in_zerodha_async(
             leg_limits=leg_limits,
             ack_out_of_band=ack_out_of_band,
             execution_job_id=job_id,
+            lots_override=lots_override,
         )
 
     job_id = submit_execution_job(

@@ -754,6 +754,29 @@ table.dt {
 .btn-confirm-pending:hover { background: #b45309 !important; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* Shared order size + spot — governs BOTH execution paths, so it sits above
+   them rather than being duplicated inside each panel. */
+.exec-order-bar {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 10px;
+  background: rgba(255,255,255,.03);
+}
+.exec-order-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  align-items: flex-end;
+}
+.exec-lots-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.exec-lots-input { width: 76px; }
+.exec-lots-qty { font-size: .74rem; }
+
 .exec-actions-panel {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -807,59 +830,46 @@ table.dt {
   border: 1px solid rgba(255,255,255,.12);
   background: var(--surface-alt);
 }
-.zerodha-limit-row {
-  font-size: .74rem;
-}
-.zerodha-limit-grid,
 .exec-fill-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
-.exec-manual-fills {
+.exec-price-block {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-top: 4px;
-  border-top: 1px solid rgba(255,255,255,.08);
+  gap: 6px;
 }
-.exec-manual-fills-label {
+.exec-price-label { font-size: .74rem; }
+.exec-price-sub { opacity: .8; }
+.exec-path-note { font-size: .72rem; line-height: 1.35; }
+.exec-manual-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* Per-leg "did I trade this leg" ticks — manual path only */
+.exec-leg-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 6px;
+  background: rgba(255,255,255,.03);
   font-size: .74rem;
+  cursor: pointer;
+}
+.exec-leg-toggle input[type="checkbox"] { margin: 0; }
+.exec-leg-toggle:has(input:not(:checked)) {
+  opacity: .55;
+  text-decoration: line-through;
 }
 .exec-actions-footer {
   grid-column: 1 / -1;
   display: flex;
   justify-content: flex-end;
   padding-top: 4px;
-}
-.exec-action-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 10px;
-  margin-top: 12px;
-}
-.exec-fill-cluster {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid rgba(255,255,255,.1);
-  border-radius: 8px;
-  background: rgba(255,255,255,.03);
-}
-.exec-fill-leg {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: .7rem;
-  color: var(--text-dim);
-}
-.exec-fill-leg input {
-  width: 88px;
-  min-height: 36px;
-  padding: 4px 8px;
 }
 @media (max-width: 820px) {
   .exec-actions-panel {
@@ -1195,7 +1205,8 @@ input:focus, select:focus, textarea:focus {
 .leg-row.action-SELL { border-left: 3px solid var(--err); }
 .leg-row.action-BUY  { border-left: 3px solid var(--ok); }
 .leg-meta { color: var(--text-dim); font-size: .85rem; }
-/* editable lot-count input inline in leg-meta */
+.leg-lots-shown { color: var(--text); font-weight: 600; }
+/* editable lot-count input inline in leg-meta (supplement / complete-trade panel) */
 .leg-lots {
   display: inline-block;
   width: 52px;
@@ -1207,6 +1218,48 @@ input:focus, select:focus, textarea:focus {
   vertical-align: middle;
   margin-right: 2px;
 }
+/* Live LTP beside each suggestion leg (read-only, polled) */
+.leg-live-row {
+  margin-top: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: .78rem;
+}
+.leg-live-label {
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: #86efac;
+}
+.leg-live-label::before {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin-right: 3px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 6px rgba(74,222,128,.8);
+  vertical-align: middle;
+}
+.leg-live-ltp { font-weight: 700; font-variant-numeric: tabular-nums; }
+.leg-live-band { font-size: .72rem; color: var(--text-dim); }
+.leg-live-band.lv-ok { color: var(--ok); }
+.leg-live-band.lv-warn { color: var(--warn); }
+.leg-live-off { opacity: .45; }
+.leg-live-off .leg-live-label { color: var(--text-dim); }
+.leg-live-off .leg-live-label::before { background: #64748b; box-shadow: none; }
+/* Preview-only price beside each leg — never sent to the broker */
+.leg-fill { display: flex; flex-direction: column; gap: 2px; }
+.leg-fill-label {
+  font-size: .62rem;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--text-dim);
+}
+.leg-fill input { width: 90px; }
 /* threshold + target-close hints under each leg */
 .leg-hints {
   margin-top: 4px; font-size: .78rem; color: var(--text-dim);

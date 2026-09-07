@@ -1649,6 +1649,17 @@ def create_app() -> Flask:
             "freshness_minutes": fresh_min,
         })
 
+    @app.route("/api/suggestion/<sid>/live-prices")
+    @_with_db
+    def api_suggestion_live_prices(db: SQLServerConnection, sid: str):
+        """Live LTP per leg for a pending suggestion card. Fail-soft."""
+        from providers.zerodha.leg_quotes import fetch_leg_live_prices
+
+        legs = SuggestionRepo(db).legs(sid)
+        if not legs:
+            return jsonify({"available": False, "reason": "no_legs"})
+        return jsonify(fetch_leg_live_prices([_row(l) for l in legs]))
+
     @app.route("/api/suggestion/<sid>/mark-executed", methods=["POST"])
     @_with_db
     def api_mark_executed(db: SQLServerConnection, sid: str):
@@ -1668,6 +1679,7 @@ def create_app() -> Flask:
         adj_sl = payload.get("actual_stop_loss_level")
         execute_at_suggested = bool(payload.get("execute_at_suggested"))
         skip_execution_gate = bool(payload.get("skip_execution_gate"))
+        lots_raw = payload.get("lots_override")
         try:
             trade_id = mark_executed(
                 db, sid, fills,
@@ -1675,6 +1687,7 @@ def create_app() -> Flask:
                 actual_stop_loss_level=float(adj_sl) if adj_sl is not None else None,
                 execute_at_suggested=execute_at_suggested,
                 skip_execution_gate=skip_execution_gate,
+                lots_override=int(lots_raw) if lots_raw else None,
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -1689,6 +1702,7 @@ def create_app() -> Flask:
         from lifecycle.zerodha_executor import (
             ZerodhaExecutionError,
             parse_leg_limits,
+            parse_lots_override,
             preview_suggestion_execution,
             zerodha_execution_ready,
         )
@@ -1702,6 +1716,7 @@ def create_app() -> Flask:
                 db, sid,
                 leg_limits=leg_limits or None,
                 spot_at_execution=float(spot_raw) if spot_raw is not None else None,
+                lots_override=parse_lots_override(payload.get("lots")),
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -1729,7 +1744,7 @@ def create_app() -> Flask:
             }), 403
         payload = request.get_json(silent=True) or {}
         spot_raw = payload.get("spot_at_execution")
-        from lifecycle.zerodha_executor import parse_leg_limits
+        from lifecycle.zerodha_executor import parse_leg_limits, parse_lots_override
         leg_limits = parse_leg_limits(payload.get("leg_limits"))
         ack_oob = bool(payload.get("ack_out_of_band"))
         use_async = payload.get("async")
@@ -1738,12 +1753,14 @@ def create_app() -> Flask:
         else:
             use_async = bool(use_async)
         try:
+            lots_override = parse_lots_override(payload.get("lots"))
             if use_async:
                 outcome = execute_suggestion_in_zerodha_async(
                     db, sid,
                     spot_at_execution=float(spot_raw) if spot_raw is not None else None,
                     leg_limits=leg_limits or None,
                     ack_out_of_band=ack_oob,
+                    lots_override=lots_override,
                 )
                 return jsonify({
                     "ok": True,
@@ -1756,6 +1773,7 @@ def create_app() -> Flask:
                 spot_at_execution=float(spot_raw) if spot_raw is not None else None,
                 leg_limits=leg_limits or None,
                 ack_out_of_band=ack_oob,
+                lots_override=lots_override,
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400

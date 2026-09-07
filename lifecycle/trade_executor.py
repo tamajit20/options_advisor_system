@@ -42,7 +42,10 @@ from utils import now_ist, today_ist
 logger = logging.getLogger(__name__)
 
 
-def _fills_from_suggested(legs: Sequence[dict]) -> list[TradeLegFill]:
+def _fills_from_suggested(
+    legs: Sequence[dict],
+    lots_override: Optional[int] = None,
+) -> list[TradeLegFill]:
     """Build executed fills from each leg's suggested_price (midpoint)."""
     out: list[TradeLegFill] = []
     for leg in legs:
@@ -54,6 +57,7 @@ def _fills_from_suggested(legs: Sequence[dict]) -> list[TradeLegFill]:
             executed=True,
             fill_price=float(price),
             fill_time=now_ist(),
+            lots_override=lots_override,
         ))
     return out
 
@@ -196,6 +200,7 @@ def mark_executed(
     execute_at_suggested: bool = False,
     skip_execution_gate: bool = False,
     execution_provider: Optional[str] = None,
+    lots_override: Optional[int] = None,
 ) -> Optional[str]:
     sug = SuggestionRepo(db)
     trd = TradeRepo(db)
@@ -248,7 +253,7 @@ def mark_executed(
         raise ValueError(f"Execution blocked: {gate.reason()}")
 
     if execute_at_suggested:
-        fills = _fills_from_suggested(legs)
+        fills = _fills_from_suggested(legs, lots_override)
         if not fills:
             raise ValueError("No suggested prices on legs — cannot record at suggested values")
         if len(fills) != len(legs):

@@ -202,6 +202,13 @@ function _collectZerodhaLegLimits(root, inputSelector) {
   return out;
 }
 
+/** Shared order size (lots) for a suggestion card — governs both exec paths. */
+function _collectExecLots(root) {
+  const raw = root?.querySelector('.exec-lots-input')?.value;
+  const lots = parseInt(raw, 10);
+  return Number.isFinite(lots) && lots > 0 ? lots : null;
+}
+
 function _ensureZerodhaConfirmModal() {
   let modal = document.getElementById('zerodha-confirm-modal');
   if (modal) return modal;
@@ -2341,9 +2348,89 @@ async function loadSuggestion() {
     c.querySelectorAll('.collapsible-card').forEach(card => card.classList.add('mobile-compact'));
     _scanInflightZerodhaExecutions();
     _refreshZerodhaExecButtons();
+    _startSuggestionLivePrices();
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+// ── Live leg prices on suggestion cards ──────────────────────────────────
+// Shows the current LTP next to each leg so you can see how far the market
+// has moved from the suggested mid before placing anything. Read-only: the
+// endpoint never touches the order path.
+const _SUG_LIVE_POLL_MS = 6000;
+let _sugLivePriceTimer = null;
+
+function _applySuggestionLivePrices(card, payload) {
+  const legs = (payload && payload.legs) || [];
+  const unavailable = !payload || payload.available === false;
+  card.querySelectorAll('.leg-live-row').forEach(row => {
+    row.classList.toggle('leg-live-off', unavailable);
+  });
+  if (unavailable) {
+    card.querySelectorAll('.leg-live-ltp').forEach(el => { el.textContent = '—'; });
+    card.querySelectorAll('.leg-live-band').forEach(el => { el.textContent = ''; });
+    return;
+  }
+  legs.forEach(leg => {
+    const priceEl = card.querySelector(`.leg-live-ltp[data-leg-order="${leg.leg_order}"]`);
+    const bandEl = card.querySelector(`.leg-live-band[data-leg-order="${leg.leg_order}"]`);
+    if (priceEl) {
+      const next = leg.ltp != null ? `\u20b9${fmt(leg.ltp)}` : '—';
+      if (priceEl.textContent !== next) {
+        priceEl.textContent = next;
+        priceEl.classList.add('ltp-flash');
+        setTimeout(() => priceEl.classList.remove('ltp-flash'), 600);
+      }
+    }
+    if (!bandEl) return;
+    if (leg.ltp == null || leg.in_band == null) {
+      bandEl.textContent = '';
+      bandEl.className = 'leg-live-band';
+      return;
+    }
+    const drift = leg.suggested_price ? leg.ltp - leg.suggested_price : null;
+    const driftTxt = drift != null
+      ? ` (${drift >= 0 ? '+' : '\u2212'}\u20b9${fmt(Math.abs(drift))} vs suggested)` : '';
+    bandEl.textContent = (leg.in_band ? 'in band' : 'out of band') + driftTxt;
+    bandEl.className = 'leg-live-band ' + (leg.in_band ? 'lv-ok' : 'lv-warn');
+  });
+}
+
+async function _refreshSuggestionLivePrices() {
+  const cards = $$('.card[data-sug-id] .leg-live-row');
+  if (!cards.length) return;
+  const seen = new Set();
+  for (const row of cards) {
+    const card = row.closest('.card[data-sug-id]');
+    const sid = card?.dataset.sugId;
+    if (!sid || seen.has(sid)) continue;
+    seen.add(sid);
+    try {
+      const payload = await API(`/api/suggestion/${encodeURIComponent(sid)}/live-prices`);
+      _applySuggestionLivePrices(card, payload);
+    } catch {
+      _applySuggestionLivePrices(card, { available: false });
+    }
+  }
+}
+
+function _startSuggestionLivePrices() {
+  if (_sugLivePriceTimer) {
+    clearInterval(_sugLivePriceTimer);
+    _sugLivePriceTimer = null;
+  }
+  if (!$$('.card[data-sug-id] .leg-live-row').length) return;
+  _refreshSuggestionLivePrices();
+  _sugLivePriceTimer = setInterval(() => {
+    if (document.hidden) return;
+    if (!$$('.card[data-sug-id] .leg-live-row').length) {
+      clearInterval(_sugLivePriceTimer);
+      _sugLivePriceTimer = null;
+      return;
+    }
+    _refreshSuggestionLivePrices();
+  }, _SUG_LIVE_POLL_MS);
 }
 
 // ── P&L rules from config.py (engine.pnl_targets.pnl_rules_public) ────────
@@ -4982,18 +5069,24 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     const legMetaHtml = readOnly
       ? `<span class="muted">${l.lots || 1} lot${(l.lots||1)!==1?'s':''} × ${l.lot_size} @ ₹${fmt(l.suggested_price)} = <strong>₹${fmt(legTotal)}</strong></span>
          <span class="leg-price-range muted">(range ₹${fmt(l.suggested_price_low)}–₹${fmt(l.suggested_price_high)})</span>`
-      : `<input type="number" class="leg-lots" min="1" value="${l.lots || 1}"
-                 data-lot-size="${l.lot_size}" data-leg-order="${l.leg_order}"
-                 data-price="${l.suggested_price}"
-                 data-orig-lots="${l.lots || 1}">×
+      : `<span class="muted"><span class="leg-lots-shown" data-leg-order="${l.leg_order}"
+                 data-lot-size="${l.lot_size}">${l.lots || 1}</span> ×
           lot ${l.lot_size} @ ₹<span class="leg-price-shown" data-leg-order="${l.leg_order}">${fmt(l.suggested_price)}</span> =
-          <strong><span class="leg-total" data-leg-order="${l.leg_order}">₹${fmt(legTotal)}</span></strong>
+          <strong><span class="leg-total" data-leg-order="${l.leg_order}">₹${fmt(legTotal)}</span></strong></span>
           <span class="leg-price-range muted">(range ₹${fmt(l.suggested_price_low)}–₹${fmt(l.suggested_price_high)})</span>`;
+    const liveHtml = readOnly ? '' : `
+      <div class="leg-live-row">
+        <span class="leg-live-label">Live</span>
+        <span class="leg-live-ltp" data-leg-order="${l.leg_order}">—</span>
+        <span class="leg-live-band" data-leg-order="${l.leg_order}"></span>
+      </div>`;
     const fillColHtml = readOnly ? '' : `
-      <label class="leg-fill">
-        <input type="checkbox" data-leg="${l.leg_order}" class="leg-exec" checked>
-        <input type="number" step="0.05" data-leg-price="${l.leg_order}"
-               value="${l.suggested_price}" style="width:90px">
+      <label class="leg-fill" title="Used by whichever action you take below. Leave blank for the live price in Zerodha, or the suggested price when recording manually.">
+        <span class="leg-fill-label">Your price</span>
+        <input type="number" step="0.05" min="0.05" class="leg-price-input"
+               data-leg-price="${l.leg_order}" data-leg-order="${l.leg_order}"
+               data-suggested="${l.suggested_price}"
+               placeholder="${fmt(l.suggested_price)}">
       </label>`;
     return `
     <div class="leg-row action-${l.action}" data-leg-action="${l.action}">
@@ -5005,11 +5098,14 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       <div>
         <div><strong>${escapeHtml(l.symbol)} ${escapeHtml(l.expiry_date || '')} ${l.strike} ${l.option_type}</strong></div>
         <div class="leg-meta">${legMetaHtml}</div>
+        ${liveHtml}
         <div class="leg-hints">${thresholdHint} · ${closeHint}</div>
         <div class="muted" style="font-size:.8rem">${escapeHtml(legRoleNote(s.strategy, l))}</div>
       </div>${fillColHtml}
     </div>`;
   }).join('');
+  const baseLots = ((s.legs || [])[0] || {}).lots || 1;
+  const baseLotSize = ((s.legs || [])[0] || {}).lot_size || 0;
   const canExecute = !readOnly && suggestionCanExecute(s);
   const canExecuteAtSuggested = !readOnly && suggestionCanExecuteAtSuggested(s);
   const showExecActions = canExecute || canExecuteAtSuggested;
@@ -5117,15 +5213,28 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     <div class="legs-grid">${legsHtml}</div>
     ${creditBreakdownHtml(s.legs, 'suggest')}
     ${readOnly ? '' : (showExecActions ? `
-    ${canExecute ? `
-    <div class="exec-spot-bar">
-      <div class="sl-monitor-label" style="margin-bottom:6px">Nifty spot at execution</div>
-      <div class="exec-spot-row">
+    <div class="exec-order-bar">
+      <div class="sl-monitor-label" style="margin-bottom:6px">Your order</div>
+      <div class="exec-order-row">
         <div class="sl-field">
-          <label class="sl-label">Your actual Nifty spot <span class="muted" style="font-size:.7rem">(suggested ₹${fmt(s.spot_at_generation)})</span></label>
+          <label class="sl-label">Order size
+            <span class="muted" style="font-size:.7rem">(suggested ${baseLots} lot${baseLots !== 1 ? 's' : ''})</span>
+          </label>
+          <div class="exec-lots-wrap">
+            <input type="number" step="1" min="1" class="sl-input exec-lots-input"
+                   value="${baseLots}" data-lot-size="${baseLotSize}"
+                   title="Applies to every leg, for both Zerodha orders and manual records">
+            <span class="muted exec-lots-qty">lots · <span class="exec-qty-shown">${baseLots * baseLotSize}</span> qty per leg</span>
+          </div>
+        </div>
+        ${canExecute ? `
+        <div class="sl-field">
+          <label class="sl-label">Nifty spot at execution
+            <span class="muted" style="font-size:.7rem">(suggested ₹${fmt(s.spot_at_generation)})</span>
+          </label>
           <input type="number" step="1" class="sl-input exec-spot-input"
                  placeholder="e.g. ${Math.round(s.spot_at_generation || 0)}">
-        </div>
+        </div>` : ''}
         ${usesSpotStopLoss(s.strategy, econ.sl) ? `
         <div class="sl-field">
           <label class="sl-label">Adjusted SL level</label>
@@ -5138,7 +5247,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           <span class="muted exec-adj-note" style="font-size:.72rem">${escapeHtml(slExitPlanText(s.strategy, econ.ml))}</span>
         </div>`}
       </div>
-    </div>` : ''}
+    </div>
     <div class="exec-actions-panel">
       <div class="exec-path exec-path-broker">
         <div class="exec-path-head">
@@ -5148,17 +5257,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
         <div class="zerodha-readiness-hint pending-close-alert" style="font-size:.82rem;padding:8px 10px;margin:0" hidden></div>
         <div class="zerodha-inflight-panel" hidden aria-live="polite"></div>
         <button type="button" class="${zExecBtnClass}"${zExecAria} title="${zExecTitle}">Place orders in Zerodha</button>
-        <div class="zerodha-limit-row muted">Optional limit prices (blank = live auto):</div>
-        <div class="zerodha-limit-grid">
-          ${(s.legs || []).map(l => `
-            <label class="exec-fill-leg zerodha-limit-leg">
-              <span>${escapeHtml(l.action)} ${l.strike} ${escapeHtml(l.option_type)}</span>
-              <input type="number" step="0.05" min="0.05" class="zerodha-limit-price"
-                     data-leg-order="${l.leg_order}"
-                     placeholder="Auto"
-                     title="Leave blank for live LTP ± slippage; or enter your LIMIT price">
-            </label>`).join('')}
-        </div>
+        <span class="muted exec-path-note">Sends your prices above as LIMIT orders. Legs left blank are priced from the live LTP.</span>
       </div>
       <div class="exec-path-or" aria-hidden="true"><span>or</span></div>
       <div class="exec-path exec-path-manual">
@@ -5166,21 +5265,22 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           <strong class="exec-path-title">Record manually</strong>
           <span class="muted exec-path-hint">No broker orders — you already traded elsewhere</span>
         </div>
-        <button type="button" class="btn btn-ghost btn-mark-exec" data-at-suggested="1">Record at suggested prices</button>
-        <div class="exec-manual-fills">
-          <span class="exec-manual-fills-label muted">Or enter your actual fill prices:</span>
+        <div class="exec-price-block">
+          <span class="exec-price-label muted">Legs traded <span class="exec-price-sub">— untick any leg you did not trade</span></span>
           <div class="exec-fill-grid">
             ${(s.legs || []).map(l => `
-              <label class="exec-fill-leg">
+              <label class="exec-leg-toggle">
+                <input type="checkbox" data-leg="${l.leg_order}" class="leg-exec" checked
+                       title="Untick if this leg was not traded">
                 <span>${escapeHtml(l.action)} ${l.strike} ${escapeHtml(l.option_type)}</span>
-                <input type="number" step="0.05" min="0.05" class="exec-fill-price"
-                       data-leg-order="${l.leg_order}"
-                       value="${l.suggested_price}"
-                       title="Your fill for this leg">
               </label>`).join('')}
           </div>
-          <button type="button" class="btn btn-accent btn-exec-manual"${canExecuteAtSuggested ? ' data-skip-gate="1"' : ''}>Record my fills</button>
         </div>
+        <div class="exec-manual-actions">
+          <button type="button" class="btn btn-accent btn-exec-manual"${canExecuteAtSuggested ? ' data-skip-gate="1"' : ''}>Record my fills</button>
+          <button type="button" class="btn btn-ghost btn-mark-exec" data-at-suggested="1">Record at suggested prices</button>
+        </div>
+        <span class="muted exec-path-note">Records your prices above. Legs left blank are recorded at the suggested price.</span>
       </div>
       <div class="exec-actions-footer">
         <button type="button" class="btn btn-ghost btn-ignore">Ignore suggestion</button>
@@ -5256,9 +5356,10 @@ function bindFlagResetButtons() {
 
 function bindSuggestionActions() {
   // Live recalc on every card. Triggers on:
-  //   * leg-lots input  → quantity changes (scales rupee totals)
-  //   * data-leg-price  → actual fill price changes (shifts net credit;
-  //                       width is constant so max-loss moves opposite)
+  //   * exec-lots-input → shared order size (scales rupee totals)
+  //   * data-leg-price  → shared per-leg price (shifts net credit; width is
+  //                       constant so max-loss moves opposite). Blank means
+  //                       the suggested price.
   $$('.card[data-sug-id]').forEach(card => {
     const recalc = () => {
       const baseQty   = parseFloat(card.dataset.baseQty)        || 1;
@@ -5267,19 +5368,26 @@ function bindSuggestionActions() {
       const baseChg   = parseFloat(card.dataset.baseChg)        || 0;
       const baseWidth = parseFloat(card.dataset.baseWidthTotal) || 0;
 
-      // 1. Compute live per-unit net credit from leg actions + price inputs
+      // 1. Compute live per-unit net credit from leg actions + price inputs.
+      // Quantity comes from the single shared "Order size" control, which is
+      // also what both execution paths submit.
+      const lotsShared = parseInt(card.querySelector('.exec-lots-input')?.value) || 0;
       let liveCreditPerUnit = 0;
       let curQty = 0;
       card.querySelectorAll('.leg-row').forEach(row => {
         const action  = row.dataset.legAction;
-        const lotsIn  = row.querySelector('.leg-lots');
+        const shownLots = row.querySelector('.leg-lots-shown');
         const priceIn = row.querySelector('input[data-leg-price]');
-        const lots    = parseInt(lotsIn?.value)    || 0;
-        const lotSize = parseFloat(lotsIn?.dataset.lotSize) || 0;
-        const price   = parseFloat(priceIn?.value) || 0;
-        const lo      = lotsIn?.dataset.legOrder;
+        const lots    = lotsShared || parseInt(shownLots?.textContent) || 0;
+        const lotSize = parseFloat(shownLots?.dataset.lotSize) || 0;
+        // Blank price field means "use the suggested price" for both paths.
+        const price   = parseFloat(priceIn?.value)
+                     || parseFloat(priceIn?.dataset.suggested)
+                     || 0;
+        const lo      = shownLots?.dataset.legOrder;
         const qty     = lots * lotSize;
         curQty += qty;
+        if (shownLots && lotsShared) shownLots.textContent = lotsShared;
         // SELL collects premium (+), BUY pays premium (−)
         liveCreditPerUnit += (action === 'SELL' ? 1 : -1) * price;
         // Update per-leg row total + price echo + target close (50% capture)
@@ -5338,12 +5446,16 @@ function bindSuggestionActions() {
       setText('.econ-psl',        `\u20b9${fmt(liveTotalCredit * 1.5)}`);
       const qtyHint = card.querySelector('.econ-qty-hint');
       if (qtyHint) qtyHint.textContent = `(\u00d7${curQty})`;
+      const qtyShown = card.querySelector('.exec-qty-shown');
+      if (qtyShown) qtyShown.textContent = curQty;
       // Update credit breakdown equation spans live
       card.querySelectorAll('[data-cb-leg]').forEach(span => {
         const lo     = span.dataset.cbLeg;
         const action = span.dataset.cbAction;
         const priceIn = card.querySelector(`input[data-leg-price="${lo}"]`);
-        const p = parseFloat(priceIn?.value) || 0;
+        const p = parseFloat(priceIn?.value)
+               || parseFloat(priceIn?.dataset.suggested)
+               || 0;
         span.textContent = `${action === 'SELL' ? '+' : '\u2212'}\u20b9${fmt(p)}`;
         span.style.color = action === 'SELL' ? 'var(--ok)' : 'var(--err)';
       });
@@ -5373,7 +5485,7 @@ function bindSuggestionActions() {
     };
     card.addEventListener('input', e => {
       const inp = e.target;
-      if (inp.classList.contains('leg-lots') ||
+      if (inp.classList.contains('exec-lots-input') ||
           inp.hasAttribute('data-leg-price')) {
         recalc();
       }
@@ -5429,6 +5541,7 @@ function bindSuggestionActions() {
     btn.nextElementSibling?.classList.contains('btn-confirm-cancel') && btn.nextElementSibling.remove();
 
     const sugSpot = parseFloat(card.dataset.spotAtGen) || null;
+    const atSugLots = _collectExecLots(card);
     try {
       const r = await API(`/api/suggestion/${sid}/mark-executed`, {
         method:'POST',
@@ -5437,6 +5550,7 @@ function bindSuggestionActions() {
           execute_at_suggested: true,
           fills: [],
           spot_at_execution: sugSpot,
+          lots_override: atSugLots,
         }),
       });
       toast(r.trade_id ? `Trade created at suggested prices: ${r.trade_id}` : 'Suggestion ignored', 'info');
@@ -5463,7 +5577,7 @@ function bindSuggestionActions() {
     const spotInput = card.querySelector('.exec-spot-input');
     const spotRaw = spotInput?.value.trim();
     const spotVal = spotRaw ? parseFloat(spotRaw) : (parseFloat(card.dataset.spotAtGen) || null);
-    const legLimits = _collectZerodhaLegLimits(card, '.zerodha-limit-price');
+    const legLimits = _collectZerodhaLegLimits(card, '.leg-price-input');
     const prevLabel = btn.textContent;
     btn.classList.add('is-loading');
     btn.textContent = 'Loading preview…';
@@ -5471,6 +5585,8 @@ function bindSuggestionActions() {
       const body = {};
       if (spotVal != null) body.spot_at_execution = spotVal;
       if (legLimits.length) body.leg_limits = legLimits;
+      const execLots = _collectExecLots(card);
+      if (execLots != null) body.lots = execLots;
       const prev = await API(`/api/suggestion/${sid}/zerodha-preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -5562,27 +5678,34 @@ function bindSuggestionActions() {
     const sid  = card.dataset.sugId;
     const skipGate = btn.dataset.skipGate === '1';
 
-    const fillInputs = $$('.exec-fill-price', card);
-    const prices = fillInputs.map(inp => parseFloat(inp.value));
-    if (prices.some(p => !p || isNaN(p) || p <= 0)) {
-      toast('Enter a fill price for every leg before recording.', 'err');
-      fillInputs.find(inp => {
-        const p = parseFloat(inp.value);
-        return !p || isNaN(p) || p <= 0;
-      })?.focus();
+    // One shared price field per leg. Blank falls back to the suggested
+    // price, which is what the placeholder shows.
+    const fillInputs = $$('.leg-price-input', card);
+    const isTicked = inp => card.querySelector(
+      `.leg-exec[data-leg="${parseInt(inp.dataset.legOrder, 10)}"]`,
+    )?.checked !== false;
+    const priceFor = inp => {
+      const typed = parseFloat((inp.value || '').trim());
+      if (typed > 0) return typed;
+      const suggested = parseFloat(inp.dataset.suggested);
+      return suggested > 0 ? suggested : null;
+    };
+    const invalid = fillInputs.filter(inp => isTicked(inp) && priceFor(inp) == null);
+    if (invalid.length) {
+      toast('Enter a price for every ticked leg before recording.', 'err');
+      invalid[0].focus();
+      return;
+    }
+    if (!fillInputs.some(isTicked)) {
+      toast('Tick at least one leg to record.', 'err');
       return;
     }
 
-    const execLots = $$('.leg-row', card)
-      .filter(row => row.querySelector('.leg-exec')?.checked !== false)
-      .map(row => parseInt(row.querySelector('.leg-lots')?.value || 1))
-      .filter(n => !isNaN(n));
-    const uniqueLots = [...new Set(execLots)];
-    if (uniqueLots.length > 1) {
-      toast(`All legs must use the same lot count — found ${uniqueLots.join(' & ')} lots. Fix before proceeding.`, 'err');
+    const numLots = _collectExecLots(card) || 1;
+    if (numLots < 1) {
+      toast('Order size must be at least 1 lot.', 'err');
       return;
     }
-    const numLots = uniqueLots[0] || 1;
 
     const spotInput = card.querySelector('.exec-spot-input');
     const spotRaw   = spotInput?.value.trim();
@@ -5621,15 +5744,12 @@ function bindSuggestionActions() {
 
     const fills = fillInputs.map(inp => {
       const order = parseInt(inp.dataset.legOrder, 10);
-      const row = card.querySelector(`.leg-row .leg-exec[data-leg="${order}"]`)?.closest('.leg-row');
-      const lotsInput = row?.querySelector('.leg-lots');
-      const checked = row?.querySelector('.leg-exec')?.checked !== false;
-      const lotsOverride = lotsInput ? parseInt(lotsInput.value) : null;
+      const checked = isTicked(inp);
       return {
         leg_order: order,
         executed: checked,
-        fill_price: checked ? parseFloat(inp.value) : null,
-        lots_override: lotsOverride,
+        fill_price: checked ? priceFor(inp) : null,
+        lots_override: numLots,
       };
     });
     const sugSl   = parseFloat(card.dataset.baseSl)    || 0;
