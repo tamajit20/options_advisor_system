@@ -804,13 +804,12 @@ STRATEGY_CONFIG = {
         "event_eve_credit_only": True,
     },
 
-    # Loss milestone — optional early exit when MTM loss reaches a user-set
-    # percentage of premium at entry (paid for debits, received for credits).
-    # Same basis as dashboard P&L % brackets. Independent of strategy SL.
-    # When enabled, fires LOSS_MILESTONE_HIT.
+    # Loss milestone — early MTM warning (top-left signal + LOSS_MILESTONE_HIT).
+    # Independent of strategy SL. Fires when MTM loss reaches pct_of_premium of
+    # entry premium (paid on debits, received on credits).
     "loss_milestone_alert": {
-        "enabled": False,
-        "pct_of_premium": 25.0,
+        "enabled": True,
+        "pct_of_premium": 5.0,
         "cooldown_minutes": None,
     },
 

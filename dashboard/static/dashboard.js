@@ -2624,8 +2624,8 @@ const PNL_RULES = {
     pre_breach_fraction: 0.70,
   },
   loss_milestone_alert: {
-    enabled: false,
-    pct_of_premium: 25.0,
+    enabled: true,
+    pct_of_premium: 5.0,
   },
 };
 
