@@ -804,13 +804,15 @@ STRATEGY_CONFIG = {
         "event_eve_credit_only": True,
     },
 
-    # Loss milestone — early MTM warning (top-left signal + LOSS_MILESTONE_HIT).
+    # Loss milestone — MTM auto-exit (top-left signal + LOSS_MILESTONE_HIT).
     # Independent of strategy SL. Fires when MTM loss reaches pct_of_premium of
-    # entry premium (paid on debits, received on credits).
+    # entry premium (paid on debits, received on credits). auto_close flattens
+    # Zerodha trades on Kite and books manual trades at live LTP.
     "loss_milestone_alert": {
         "enabled": True,
         "pct_of_premium": 5.0,
         "cooldown_minutes": None,
+        "auto_close": True,
     },
 
     # Suggestion freshness (Phase 3 — #2).

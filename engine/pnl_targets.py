@@ -204,6 +204,7 @@ def pnl_rules_public() -> Dict[str, Any]:
             STRATEGY_CONFIG.get("loss_milestone_alert") or {
                 "enabled": False,
                 "pct_of_premium": 25.0,
+                "auto_close": True,
             }
         ),
     }

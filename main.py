@@ -214,6 +214,7 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict) -> str:
         LiveRiskMonitor,
         make_db_snapshot_loader as make_db_risk_snapshot_loader,
     )
+    from lifecycle.auto_execution import dispatch_auto_execution
     from lifecycle.opportunity_regen_watcher import OpportunityRegenWatcher
     from notifications import build_notifier
     from providers.cache import TTLCache
@@ -335,6 +336,7 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict) -> str:
         level_event_persister=_persist_level_event,
         events_repo=EventCalendarRepo(db),
         config_reloader=lambda: apply_strategy_overrides(db),
+        auto_exec=dispatch_auto_execution,
     )
 
     monitor = IntradayMonitor(

@@ -1429,7 +1429,8 @@ class NotificationRepo:
         """
         _CATEGORY_TYPES: dict[str, list[str]] = {
             "sl":         ["SL_TRIGGER", "SL_HIT", "PRE_BREACH_WARNING",
-                           "LOSS_MILESTONE_HIT", "LOSS_LIMIT_HIT", "PROFIT_FLOOR_HIT"],
+                           "LOSS_MILESTONE_HIT", "LOSS_MILESTONE_CLOSE_FAILED",
+                           "LOSS_LIMIT_HIT", "PROFIT_FLOOR_HIT"],
             "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED",
                            "PROFIT_FLOOR_SET"],
             "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
@@ -1483,7 +1484,8 @@ class NotificationRepo:
     ) -> int:
         _CATEGORY_TYPES: dict[str, list[str]] = {
             "sl":         ["SL_TRIGGER", "SL_HIT", "PRE_BREACH_WARNING",
-                           "LOSS_MILESTONE_HIT", "LOSS_LIMIT_HIT", "PROFIT_FLOOR_HIT"],
+                           "LOSS_MILESTONE_HIT", "LOSS_MILESTONE_CLOSE_FAILED",
+                           "LOSS_LIMIT_HIT", "PROFIT_FLOOR_HIT"],
             "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED",
                            "PROFIT_FLOOR_SET"],
             "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
@@ -1527,7 +1529,8 @@ class NotificationRepo:
         by_cat: dict[str, int] = {}
         _CAT_MAP = {
             "SL_TRIGGER": "sl", "SL_HIT": "sl", "PRE_BREACH_WARNING": "sl",
-            "LOSS_MILESTONE_HIT": "sl", "LOSS_LIMIT_HIT": "sl", "PROFIT_FLOOR_HIT": "sl",
+            "LOSS_MILESTONE_HIT": "sl", "LOSS_MILESTONE_CLOSE_FAILED": "sl",
+            "LOSS_LIMIT_HIT": "sl", "PROFIT_FLOOR_HIT": "sl",
             "TARGET_HIT": "profit", "TAKE_PROFIT": "profit", "TARGET_LOCKED": "profit",
             "PROFIT_FLOOR_SET": "profit",
             "EXIT_TOMORROW": "exit", "TIME_DECAY_DONE": "exit",
@@ -1589,6 +1592,7 @@ class NotificationRepo:
             "                      'PRE_BREACH_WARNING', 'TARGET_LOCKED', "
             "                      'PROFIT_FLOOR_SET', 'PROFIT_FLOOR_HIT', "
             "                      'LOSS_MILESTONE_HIT', "
+            "                      'LOSS_MILESTONE_CLOSE_FAILED', "
             "                      'LOSS_LIMIT_HIT') "
             " ORDER BY created_at DESC",
             [trade_id, today_start],

@@ -57,3 +57,19 @@ class TestLossMilestoneThreshold:
         ):
             cfg = loss_milestone_config()
             assert cfg["pct_of_premium"] == 100.0
+
+    def test_auto_close_defaults_true(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 5.0}},
+        ):
+            assert loss_milestone_config()["auto_close"] is True
+
+    def test_auto_close_can_be_disabled(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "auto_close": False,
+            }},
+        ):
+            assert loss_milestone_config()["auto_close"] is False

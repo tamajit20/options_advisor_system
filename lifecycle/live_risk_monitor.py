@@ -15,11 +15,11 @@ uses) and emits a notification when:
 * ``PROFIT_FLOOR_SET`` — a trailing profit-lock step arms and raises the
   trade's ``trailing_pnl_floor``.
 * ``PROFIT_FLOOR_HIT`` — live MTM drops below the armed profit floor.
-* ``LOSS_MILESTONE_HIT`` — optional user-configured ``pct_of_premium`` of
-  entry premium (see ``loss_milestone_alert``). Separate from hard SL; suggests
-  considering an exit when the milestone is crossed.
+* ``LOSS_MILESTONE_HIT`` — user-configured ``pct_of_premium`` of entry
+  premium (see ``loss_milestone_alert``). Alert only here; auto-close lives
+  in ``lifecycle.auto_execution`` when ``auto_close`` is on.
 * ``LOSS_LIMIT_HIT`` — current PnL crosses the strategy effective loss limit
-  (``effective_sl_rs``).
+  (``effective_sl_rs``). Alert only — no auto flatten.
 * ``SL_TRIGGER`` — underlying spot crosses ``actual_stop_loss_level`` (when
   set). Premium-based loss uses ``LOSS_LIMIT_HIT`` instead.
 * ``SHORT_LEG_STRESS`` — a SHORT leg's live LTP has risen above
@@ -27,14 +27,18 @@ uses) and emits a notification when:
   Suppressed when whole-trade MTM is already at or past the pre-breach zone.
 * ``TARGET_HIT`` — ``evaluate_exit`` returned ``TAKE_PROFIT`` (same rupee
   target as the dashboard Exit Plan; see ``engine.pnl_targets``).
+  Alert only — profit booking stays a dashboard button.
 
 Alerts are dispatched through the existing ``Notifier`` (which inserts into
 ``options_notifications`` and respects the ``sl_alerts`` /
-``closure_alerts`` runtime flags).
+``closure_alerts`` runtime flags). After each alert this monitor hands an
+``AutoExecContext`` to ``auto_exec`` (wired to
+``lifecycle.auto_execution.dispatch_auto_execution``). That package decides
+whether any order is placed. Entry and TARGET_HIT are not registered there.
 
 Behaviour
 ---------
-* Never closes the trade automatically. The user closes manually.
+* This monitor does not place orders. Auto-execution is a separate registry.
 * Cooldown re-fire while the trade stays in breach (configurable).
 * Cooldown is **reset** when the trade exits the breached state, so the
   next entry into breach alerts immediately.
@@ -80,6 +84,7 @@ from engine.sl_threshold import (
     loss_milestone_rs,
     trade_investment_rs,
 )
+from lifecycle.auto_execution.types import AutoExecContext
 from providers.base import LiveQuote
 from providers.event_bus import (
     EventBus,
@@ -463,6 +468,7 @@ class LiveRiskMonitor:
         level_event_persister: Optional[Callable[[dict], None]] = None,
         events_repo: Optional[object] = None,
         config_reloader: Optional[Callable[[], None]] = None,
+        auto_exec: Optional[Callable[[AutoExecContext], None]] = None,
     ) -> None:
         self._notifier = notifier
         self._loader = snapshot_loader
@@ -474,6 +480,7 @@ class LiveRiskMonitor:
         self._level_event_persister = level_event_persister
         self._events_repo = events_repo
         self._config_reloader = config_reloader
+        self._auto_exec = auto_exec
         self._clock = clock
         self._mtm_state: dict = {}   # trade_id → last payload written
         self._bind_monitor_cfg()
@@ -612,6 +619,7 @@ class LiveRiskMonitor:
         self._loss_milestone_cooldown = (
             timedelta(minutes=int(cd)) if cd is not None else None
         )
+        self._loss_milestone_auto_close = bool(lmc.get("auto_close", True))
 
     def _reload(self, *, prime: bool = False) -> None:
         if self._config_reloader is not None:
@@ -1109,10 +1117,15 @@ class LiveRiskMonitor:
             prem_label = (
                 "premium received" if state.entry_net_credit > 0 else "premium paid"
             )
+            close_note = (
+                "Auto-closing now."
+                if self._loss_milestone_auto_close
+                else "Consider closing — hard SL unchanged."
+            )
             reason = (
                 f"Loss milestone ({milestone_pct:.0f}% of {prem_label} ₹"
                 f"{investment:,.0f} = ₹{milestone_rs:,.0f}): "
-                f"MTM ₹{current_pnl:,.0f}. Consider closing — hard SL unchanged."
+                f"MTM ₹{current_pnl:,.0f}. {close_note}"
             )
             alert = self._maybe_alert(
                 state, "LOSS_MILESTONE_HIT", "WARNING",
@@ -1470,10 +1483,42 @@ class LiveRiskMonitor:
             )
             with self._lock:
                 self._counters["alerts_fired"] += 1
+            self._maybe_auto_exec(alert)
         except Exception:
             logger.exception(
                 "LiveRiskMonitor: notify failed for %s/%s",
                 alert.state.trade_id, alert.notif_type,
+            )
+
+    def _maybe_auto_exec(self, alert: "_PendingAlert") -> None:
+        """Hand the alert to the auto-execution registry. No orders here."""
+        if self._auto_exec is None:
+            return
+        state = alert.state
+        now = self._clock()
+        exits: List[dict] = []
+        for leg in state.legs:
+            ltp = state.leg_ltps.get(leg.key)
+            if ltp is None or float(ltp) <= 0:
+                continue
+            exits.append({
+                "leg_order": int(leg.leg_order),
+                "exit_price": float(ltp),
+                "exit_time": now,
+            })
+        ctx = AutoExecContext(
+            notif_type=alert.notif_type,
+            trade_id=state.trade_id,
+            trade_name=state.trade_name,
+            exits=exits,
+            as_of=now,
+        )
+        try:
+            self._auto_exec(ctx)
+        except Exception:
+            logger.exception(
+                "LiveRiskMonitor: auto_exec hook failed for %s/%s",
+                state.trade_id, alert.notif_type,
             )
 
     def _current_pnl(self, state: _TradeState) -> float:

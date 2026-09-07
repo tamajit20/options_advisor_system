@@ -9,6 +9,7 @@ Module breakdown:
     iv_orchestrator       : computes IVs and IV ranks per underlying/expiry
     suggestion_engine     : generates daily suggestion or NoSuggestion
     trade_executor        : marks suggestion as executed (full/paired/naked)
+    auto_execution        : unattended actions (today: close on loss milestone)
     resuggestion_engine   : creates a resuggestion when a trade goes broken
     exit_orchestrator     : runs daily exit-decision check on open trades
 

@@ -492,6 +492,54 @@ class TestLossMilestoneHit:
         types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
         assert "LOSS_MILESTONE_HIT" not in types
 
+    def test_loss_milestone_offers_auto_exec_context(self, mocker):
+        hook = MagicMock()
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "auto_close": True,
+            }},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
+        )
+        monitor._auto_exec = hook
+        monitor._bind_loss_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 130.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 130.0))
+        hook.assert_called_once()
+        ctx = hook.call_args.args[0]
+        assert ctx.notif_type == "LOSS_MILESTONE_HIT"
+        assert ctx.trade_id == "T-001"
+        assert sorted(e["leg_order"] for e in ctx.exits) == [1, 2]
+        assert all(e["exit_price"] == 130.0 for e in ctx.exits)
+
+    def test_loss_milestone_still_offers_hook_when_auto_close_off(self, mocker):
+        """Monitor always offers; the registry decides whether to trade."""
+        hook = MagicMock()
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "auto_close": False,
+            }},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
+        )
+        monitor._auto_exec = hook
+        monitor._bind_loss_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 130.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 130.0))
+        assert notifier.notify.call_count == 1
+        hook.assert_called_once()
+        assert hook.call_args.args[0].notif_type == "LOSS_MILESTONE_HIT"
+
 
 class TestDTEAwareTarget:
     def test_credit_target_follows_strategy_fraction_at_low_dte(self):

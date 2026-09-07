@@ -1527,7 +1527,7 @@ const TERM_HELP = {
   },
   loss_milestone: {
     label: 'Loss milestone',
-    html: '<strong>Loss milestone</strong> — Early warning when MTM loss reaches your configured % of <em>entry premium</em> (premium paid on debits, premium received on credits — same basis as the P&amp;L % bracket). Softer than the hard stop-loss.',
+    html: '<strong>Loss milestone</strong> — Auto-closes the trade when MTM loss reaches your configured % of <em>entry premium</em> (premium paid on debits, premium received on credits). Zerodha trades flatten on Kite; manual trades close at live prices. Separate from the hard stop-loss.',
   },
   profit_floor: {
     label: 'Profit floor',
@@ -1864,7 +1864,7 @@ function stopIndexSpotStream() {
 
 const _SIGNAL_LABELS = {
   sl: 'Stop-loss — close now',
-  milestone: 'Loss milestone — consider exit',
+  milestone: 'Loss milestone — auto-closing',
   thesis: 'Thesis failed — close now',
   profit: 'Take profit — target hit',
   exit: 'Close pending',
@@ -2018,7 +2018,7 @@ function _renderSignalRail(st) {
   }
   if (milestone.length) {
     const names = milestone.map(s => s.trade_name || s.trade_id).join(', ');
-    tiles.push(_signalTile('milestone', milestone.length, `Loss milestone — consider exit ${names}`, milestone[0].trade_id));
+    tiles.push(_signalTile('milestone', milestone.length, `Loss milestone — auto-closing ${names}`, milestone[0].trade_id));
   }
   if (thesis.length) {
     const names = thesis.map(s => s.trade_name || s.trade_id).join(', ');
@@ -2626,6 +2626,7 @@ const PNL_RULES = {
   loss_milestone_alert: {
     enabled: true,
     pct_of_premium: 5.0,
+    auto_close: true,
   },
 };
 
@@ -2710,7 +2711,7 @@ function slLossPctHint(strategy, maxLossRs) {
 }
 
 function lossMilestoneConfig() {
-  return PNL_RULES.loss_milestone_alert || { enabled: false, pct_of_premium: 25 };
+  return PNL_RULES.loss_milestone_alert || { enabled: false, pct_of_premium: 25, auto_close: true };
 }
 
 function lossMilestoneEnabled() {
@@ -2928,7 +2929,7 @@ function renderLiveProfitLevels(t) {
             <span class="lpl-val lpl-milestone">\u20b9${fmt(milestoneRs)} loss${lossMilestonePctHint(milestoneKind)}</span>
             <span class="lpl-status lpl-status-milestone" hidden></span>
           </span>
-          <span class="muted lpl-note">Alert at ${Math.round(lossMilestonePct())}% loss on \u20b9${fmt(investmentRs)} ${milestoneKind === 'received' ? 'premium received' : 'premium paid'} \u2014 separate from hard SL</span>
+          <span class="muted lpl-note">Auto-closes at ${Math.round(lossMilestonePct())}% loss on \u20b9${fmt(investmentRs)} ${milestoneKind === 'received' ? 'premium received' : 'premium paid'} \u2014 separate from hard SL</span>
         </div>` : ''}
         <div class="lpl-row lpl-floor-row">
           <span class="lpl-label">${labelWithHelp('Profit floor', 'profit_floor')}</span>
@@ -3450,20 +3451,19 @@ function _computeTradeActionInstruction(opts) {
       ? 'premium received' : 'premium paid';
     const premRs = premiumInfo && premiumInfo.rs ? premiumInfo.rs : null;
     return {
-      tone: 'warn',
-      verb: 'CONSIDER EXIT',
-      title: 'Loss milestone hit — consider closing',
+      tone: 'critical',
+      verb: 'AUTO-CLOSE',
+      title: 'Loss milestone hit — closing the trade',
       instruction: pct != null && premRs
         ? `Configured loss milestone (${Math.round(pct)}% of ${premLbl} \u20b9${fmt(premRs)} = \u2212\u20b9${fmt(milestoneRs || premRs * pct / 100)} MTM). `
-          + 'You may close now to limit further loss. Hard stop-loss is separate and still applies.'
+          + 'The system is flattening this on Zerodha, or booking the close at live prices for a manual trade.'
         : (pct != null
-          ? `Configured loss milestone (${Math.round(pct)}% of entry premium) reached. `
-            + 'You may close now — hard stop-loss still applies.'
-          : 'Configured loss milestone reached. You may close now — hard stop-loss still applies.'),
+          ? `Configured loss milestone (${Math.round(pct)}% of entry premium) reached. Auto-closing now.`
+          : 'Configured loss milestone reached. Auto-closing now.'),
       why: liveMtm != null && milestoneRs != null
         ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · milestone \u2212\u20b9${fmt(milestoneRs)} (${Math.round(pct || 0)}% of premium)`
-        : 'Loss milestone alert is active.',
-      cta: 'Use Close Trade below if you want to exit.',
+        : 'Loss milestone auto-close is active.',
+      cta: 'Watch broker orders. If auto-close fails, flatten on Kite then record the close.',
     };
   }
   if (floorBreach || rn === 'PROFIT_FLOOR_HIT') {
@@ -6884,7 +6884,7 @@ function renderTrade(t, expanded = false) {
             ra.notif_type === 'PROFIT_FLOOR_SET'   ? 'tag tag-ok'   :
             ra.notif_type === 'PROFIT_FLOOR_HIT'   ? 'tag tag-warn' :
             ra.notif_type === 'LOSS_LIMIT_HIT'     ? 'tag tag-err'  :
-            ra.notif_type === 'LOSS_MILESTONE_HIT' ? 'tag tag-warn' :
+            ra.notif_type === 'LOSS_MILESTONE_HIT' ? 'tag tag-err' :
             ra.notif_type === 'THESIS_FAIL'        ? 'tag tag-err'  :
             ra.notif_type === 'SL_TRIGGER'         ? 'tag tag-err'  :
             ra.notif_type === 'SHORT_LEG_STRESS'   ? 'tag tag-warn' :
@@ -8998,7 +8998,7 @@ const _NF_CAT_LABELS = {
 
 const _NF_TYPE_CAT = {
   SL_TRIGGER: 'sl', SL_HIT: 'sl', PRE_BREACH_WARNING: 'sl',
-  LOSS_MILESTONE_HIT: 'sl', LOSS_LIMIT_HIT: 'sl', THESIS_FAIL: 'sl', PROFIT_FLOOR_HIT: 'sl', SHORT_LEG_STRESS: 'sl',
+  LOSS_MILESTONE_HIT: 'sl', LOSS_MILESTONE_CLOSE_FAILED: 'sl', LOSS_LIMIT_HIT: 'sl', THESIS_FAIL: 'sl', PROFIT_FLOOR_HIT: 'sl', SHORT_LEG_STRESS: 'sl',
   TARGET_HIT: 'profit', TAKE_PROFIT: 'profit', TARGET_LOCKED: 'profit',
   PROFIT_FLOOR_SET: 'profit',
   EXIT_TOMORROW: 'exit', TIME_DECAY_DONE: 'exit', EXPIRE: 'exit', AUTO_SETTLED: 'exit',
