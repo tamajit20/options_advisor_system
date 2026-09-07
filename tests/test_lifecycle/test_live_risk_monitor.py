@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from typing import List
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -91,6 +91,19 @@ def _build_monitor(state, *, target_fraction=0.70, cooldown_minutes=15,
     monitor._snapshot = snap   # bypass start() so we don't spawn the thread
     monitor._unsubscribe = bus.subscribe("tick", monitor._on_tick)
     return monitor, notifier, bus
+
+
+@pytest.fixture(autouse=True)
+def _disable_default_loss_milestone():
+    """Default config now enables a 5% LOSS_MILESTONE_HIT. Tests that assert
+    PRE_BREACH_WARNING / SHORT_LEG_STRESS / cooldown isolation must not get
+    that earlier alert. TestLossMilestoneHit re-enables via patch.dict."""
+    with patch.dict(
+        "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+        {"loss_milestone_alert": {"enabled": False, "pct_of_premium": 25.0}},
+        clear=False,
+    ):
+        yield
 
 
 class TestEvaluation:
