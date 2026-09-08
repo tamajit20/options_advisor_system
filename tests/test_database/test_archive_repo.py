@@ -8,11 +8,13 @@ import pytest
 
 from database.archive_registry import ARCHIVE_TABLE_SPECS
 from database.archive_repo import (
+    add_missing_hot_columns,
     archive_copy_insert_sql,
     ensure_archive_tables,
     merge_chunk_insert_sql,
     move_spec,
     run_weekly_archive,
+    sql_type_clause,
     wrap_identity_insert,
 )
 
@@ -52,11 +54,84 @@ class TestEnsureArchiveTables:
         db = MagicMock()
         cur = MagicMock()
         db.execute.return_value = cur
+        db.fetch_all.return_value = []
         ensure_archive_tables(db)
         sqls = [call.args[0] for call in db.execute.call_args_list]
         assert any("options_broker_orders_Archive" in sql for sql in sqls)
         assert db.execute.call_count == len(ARCHIVE_TABLE_SPECS)
         assert all("COL_LENGTH" in sql and "archive_batch_id" in sql for sql in sqls)
+
+
+class TestSqlTypeClause:
+    def test_int_and_nvarchar_and_decimal(self):
+        assert sql_type_clause({"type_name": "int"}) == "int"
+        assert sql_type_clause({"type_name": "nvarchar", "max_length": 1000}) == "nvarchar(500)"
+        assert sql_type_clause({"type_name": "nvarchar", "max_length": -1}) == "nvarchar(MAX)"
+        assert sql_type_clause(
+            {"type_name": "decimal", "precision": 18, "scale": 4},
+        ) == "decimal(18,4)"
+        assert sql_type_clause({"type_name": "datetime2", "scale": 0}) == "datetime2(0)"
+        assert sql_type_clause({"type_name": "bit"}) == "bit"
+
+    def test_rejects_unusable_types(self):
+        with pytest.raises(ValueError, match="unsupported"):
+            sql_type_clause({"type_name": "xml"})
+
+
+def _col(
+    name, type_name="int", *, max_length=4, precision=10, scale=0,
+    nullable=1, identity=0, computed=0,
+):
+    return {
+        "col_name": name,
+        "type_name": type_name,
+        "max_length": max_length,
+        "precision": precision,
+        "scale": scale,
+        "is_nullable": nullable,
+        "is_identity": identity,
+        "is_computed": computed,
+    }
+
+
+class TestAddMissingHotColumns:
+    def test_adds_filled_quantity_and_other_broker_alters(self):
+        db = MagicMock()
+        db.execute.return_value = MagicMock()
+        hot = [
+            _col("id", "bigint", identity=1),
+            _col("quantity", "int"),
+            _col("filled_quantity", "int"),
+            _col("pending_quantity", "int"),
+            _col("status_message", "nvarchar", max_length=1000),
+            _col("order_type", "nvarchar", max_length=20),
+            _col("validity", "nvarchar", max_length=20),
+            _col("execution_job_id", "bigint", max_length=8, precision=19),
+        ]
+        arch = [_col("id", "bigint", identity=1), _col("quantity", "int")]
+        db.fetch_all.side_effect = [hot, arch]
+        added = add_missing_hot_columns(
+            db, "options_broker_orders", "options_broker_orders_Archive",
+        )
+        assert added == [
+            "filled_quantity", "pending_quantity", "status_message",
+            "order_type", "validity", "execution_job_id",
+        ]
+        sqls = [c.args[0] for c in db.execute.call_args_list]
+        assert "ALTER TABLE options_broker_orders_Archive ADD filled_quantity int NULL" in sqls
+        assert "ADD status_message nvarchar(500) NULL" in sqls[2]
+        assert "ADD execution_job_id bigint NULL" in sqls[-1]
+        assert not any(" ADD id " in s for s in sqls)
+
+    def test_skips_when_archive_already_in_sync(self):
+        db = MagicMock()
+        cols = [_col("id", "bigint", identity=1), _col("filled_quantity", "int")]
+        db.fetch_all.side_effect = [cols, cols]
+        added = add_missing_hot_columns(
+            db, "options_broker_orders", "options_broker_orders_Archive",
+        )
+        assert added == []
+        db.execute.assert_not_called()
 
 
 class TestArchiveCopyInsertSql:
@@ -84,6 +159,31 @@ class TestArchiveCopyInsertSql:
         )
         assert "IDENTITY_INSERT" not in sql
         assert "INSERT INTO options_vix_history_Archive (trade_date, close_price, archived_at, archive_batch_id)" in sql
+
+    def test_omits_hot_columns_missing_on_archive(self):
+        sql = archive_copy_insert_sql(
+            hot="options_broker_orders",
+            arch="options_broker_orders_Archive",
+            hot_columns=["id", "filled_quantity", "created_at"],
+            arch_columns=["id", "created_at", "archived_at"],
+            where_sql="WHERE s.created_at < ?",
+            has_identity=True,
+        )
+        assert "filled_quantity" not in sql
+        assert "INSERT INTO options_broker_orders_Archive (id, created_at, archived_at, archive_batch_id)" in sql
+        assert "SELECT s.id, s.created_at, SYSDATETIME(), ?" in sql
+
+    def test_copies_filled_quantity_when_archive_has_it(self):
+        sql = archive_copy_insert_sql(
+            hot="options_broker_orders",
+            arch="options_broker_orders_Archive",
+            hot_columns=["id", "filled_quantity", "created_at"],
+            arch_columns=["id", "filled_quantity", "created_at", "archived_at"],
+            where_sql="WHERE s.created_at < ?",
+            has_identity=True,
+        )
+        assert "filled_quantity" in sql
+        assert "s.filled_quantity" in sql
 
     def test_wrap_identity_insert_turns_off_on_failure(self):
         wrapped = wrap_identity_insert(

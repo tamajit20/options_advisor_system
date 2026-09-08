@@ -24,12 +24,49 @@ logger = logging.getLogger(__name__)
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ARCHIVE_ONLY_COLS = frozenset({"archived_at", "archive_batch_id"})
+_SKIP_COPY_TYPES = frozenset({"timestamp", "rowversion", "xml", "sql_variant", "image", "text", "ntext"})
+_LEN_TYPES = frozenset({"varchar", "nvarchar", "char", "nchar", "varbinary", "binary"})
+_PREC_SCALE_TYPES = frozenset({"decimal", "numeric"})
+_SCALE_TYPES = frozenset({"datetime2", "datetimeoffset", "time"})
+_ALLOWED_TYPES = frozenset({
+    "int", "bigint", "smallint", "tinyint", "bit",
+    "decimal", "numeric", "money", "smallmoney", "float", "real",
+    "date", "datetime", "datetime2", "datetimeoffset", "smalldatetime", "time",
+    "char", "varchar", "nchar", "nvarchar",
+    "binary", "varbinary", "uniqueidentifier", "sysname",
+})
 
 
 def _ident(name: str) -> str:
     if not name or not _IDENT_RE.match(name):
         raise ValueError(f"unsafe SQL identifier: {name!r}")
     return name
+
+
+def sql_type_clause(row: dict) -> str:
+    """Map a ``sys.columns`` row to a T-SQL type clause (allowlisted types)."""
+    raw = str(row.get("type_name") or "").strip().lower()
+    if raw == "sysname":
+        return "nvarchar(128)"
+    if raw not in _ALLOWED_TYPES or raw in _SKIP_COPY_TYPES:
+        raise ValueError(f"unsupported column type: {raw!r}")
+    if raw in _LEN_TYPES:
+        n = int(row.get("max_length") or 0)
+        if n < 0:
+            return f"{raw}(MAX)"
+        if raw in ("nvarchar", "nchar"):
+            n = max(1, n // 2)
+        return f"{raw}({n})"
+    if raw in _PREC_SCALE_TYPES:
+        return f"{raw}({int(row['precision'])},{int(row['scale'])})"
+    if raw in _SCALE_TYPES:
+        return f"{raw}({int(row['scale'])})"
+    if raw == "float":
+        prec = int(row.get("precision") or 53)
+        if prec in (0, 53):
+            return "float"
+        return f"float({prec})"
+    return raw
 
 
 def _cutoff_for_spec(spec: ArchiveTableSpec, today: date) -> datetime | date:
@@ -45,9 +82,9 @@ def _cutoff_for_spec(spec: ArchiveTableSpec, today: date) -> datetime | date:
 def ensure_archive_tables(db: SQLServerConnection) -> None:
     """Create *_Archive tables and add columns that older shells are missing.
 
-    ``SELECT * INTO`` copies the hot table only. Tables created before
-    ``archive_batch_id`` existed still lack that column; CREATE-IF-NULL
-    never runs again, so we ALTER missing columns on every call.
+    ``SELECT * INTO`` copies the hot table only at first create. Later
+    ``ALTER TABLE`` on hot (e.g. ``filled_quantity``) is not copied, so we
+    add missing hot columns on every call, plus archive-only metadata.
     """
     for spec in ARCHIVE_TABLE_SPECS:
         hot = _ident(spec.hot_table)
@@ -69,11 +106,88 @@ def ensure_archive_tables(db: SQLServerConnection) -> None:
             END
             """
         ).close()
+        add_missing_hot_columns(db, hot, arch)
 
 
 def _pk_match_sql(spec: ArchiveTableSpec, alias_src: str, alias_tgt: str) -> str:
     parts = [f"{alias_tgt}.{c} = {alias_src}.{c}" for c in spec.pk_columns]
     return " AND ".join(parts)
+
+
+def _table_column_defs(db: SQLServerConnection, table: str) -> List[dict]:
+    table = _ident(table)
+    rows = db.fetch_all(
+        f"""
+        SELECT
+          c.name AS col_name,
+          TYPE_NAME(c.system_type_id) AS type_name,
+          c.max_length,
+          c.precision,
+          c.scale,
+          CAST(c.is_nullable AS INT) AS is_nullable,
+          CAST(c.is_identity AS INT) AS is_identity,
+          CAST(c.is_computed AS INT) AS is_computed
+        FROM sys.columns c
+        WHERE c.object_id = OBJECT_ID(N'dbo.{table}')
+        ORDER BY c.column_id
+        """
+    )
+    if not isinstance(rows, (list, tuple)):
+        return []
+    return list(rows)
+
+
+def add_missing_hot_columns(
+    db: SQLServerConnection, hot: str, arch: str,
+) -> List[str]:
+    """ALTER ``arch`` to add hot columns that did not exist at SELECT * INTO.
+
+    New columns are always NULLABLE so existing archive rows stay valid.
+    Identity and computed columns are skipped.
+    """
+    hot = _ident(hot)
+    arch = _ident(arch)
+    hot_defs = _table_column_defs(db, hot)
+    arch_defs = _table_column_defs(db, arch)
+    if not hot_defs:
+        logger.warning("archive sync: no columns on hot table %s", hot)
+        return []
+    arch_names = {
+        _ident(str(r["col_name"])).lower()
+        for r in arch_defs
+        if r.get("col_name")
+    }
+    added: List[str] = []
+    for row in hot_defs:
+        name = _ident(str(row["col_name"]))
+        key = name.lower()
+        if key in _ARCHIVE_ONLY_COLS or key in arch_names:
+            continue
+        if int(row.get("is_identity") or 0):
+            logger.warning(
+                "archive sync: skip identity column %s.%s missing on %s",
+                hot, name, arch,
+            )
+            continue
+        if int(row.get("is_computed") or 0):
+            logger.warning(
+                "archive sync: skip computed column %s.%s", hot, name,
+            )
+            continue
+        try:
+            typ = sql_type_clause(row)
+        except ValueError:
+            logger.warning(
+                "archive sync: skip %s.%s type %r",
+                hot, name, row.get("type_name"),
+            )
+            continue
+        db.execute(
+            f"ALTER TABLE {arch} ADD {name} {typ} NULL"
+        ).close()
+        added.append(name)
+        logger.info("archive sync: added %s.%s %s NULL", arch, name, typ)
+    return added
 
 
 def _table_column_names(db: SQLServerConnection, table: str) -> List[str]:
@@ -130,18 +244,33 @@ def archive_copy_insert_sql(
     hot_columns: Sequence[str],
     where_sql: str,
     has_identity: bool,
+    arch_columns: Optional[Sequence[str]] = None,
 ) -> str:
     """INSERT hot rows into *_Archive with an explicit column list.
 
     ``SELECT * INTO`` copies IDENTITY, so ``INSERT ... SELECT s.*`` raises
     8101 unless IDENTITY_INSERT is ON and the column list is named.
+
+    Only columns present on **both** tables are copied, so a hot ALTER that
+    has not yet been synced onto archive cannot break the INSERT.
     """
     hot = _ident(hot)
     arch = _ident(arch)
-    cols = [
-        _ident(c) for c in hot_columns
-        if _ident(c).lower() not in _ARCHIVE_ONLY_COLS
-    ]
+    arch_set = {
+        _ident(c).lower()
+        for c in (arch_columns if arch_columns is not None else hot_columns)
+    }
+    cols = []
+    seen = set()
+    for c in hot_columns:
+        name = _ident(c)
+        key = name.lower()
+        if key in _ARCHIVE_ONLY_COLS or key in seen:
+            continue
+        if key not in arch_set:
+            continue
+        cols.append(name)
+        seen.add(key)
     if not cols:
         raise RuntimeError(f"no copyable columns for {hot} → {arch}")
     insert_cols = ", ".join(cols + ["archived_at", "archive_batch_id"])
@@ -224,11 +353,13 @@ def _insert_archive_rows(
     hot = spec.hot_table
     arch = archive_table_name(hot)
     hot_columns = _table_column_names(db, hot)
+    arch_columns = _table_column_names(db, arch)
     has_identity = _table_has_identity(db, arch)
     sql = archive_copy_insert_sql(
         hot=hot,
         arch=arch,
         hot_columns=hot_columns,
+        arch_columns=arch_columns,
         where_sql=where_sql,
         has_identity=has_identity,
     )
