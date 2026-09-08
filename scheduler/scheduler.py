@@ -576,44 +576,22 @@ def job_archive_export():
 
 
 def job_weekly_cleanup():
-    """Legacy: full retention delete — disabled; use weekly_archive + weekly_log_cleanup."""
-    from datetime import timedelta as _td
-    from config import RETENTION_CONFIG
-
-    def _cleanup(db: SQLServerConnection) -> int:
-        from database.models import (
-            FoEodRepo, SpotEodRepo, VixRepo, FiiRepo, IvHistoryRepo,
-            SuggestionRepo, NotificationRepo,
-            ChainTimeseriesRepo, AtmIvTimeseriesRepo, TradeMtmSnapshotRepo,
+    """Retired hard-delete. Blocked — use weekly_archive + weekly_log_cleanup."""
+    def _blocked(_db: SQLServerConnection) -> int:
+        raise RuntimeError(
+            "weekly_cleanup is retired — it permanently deletes hot history. "
+            "Use weekly_archive (Fri 09:30) then weekly_log_cleanup (Fri 09:35)."
         )
-        from database.log_repo import LogRepo, JobLogRepo
-        today = today_ist()
-        delete_cutoff = today - _td(days=int(RETENTION_CONFIG["delete_keep_days"]))
-        archive_cutoff = today - _td(days=int(RETENTION_CONFIG["hot_archive_keep_days"]))
-        n = 0
-        n += FoEodRepo(db).delete_older_than(archive_cutoff)
-        n += SpotEodRepo(db).delete_older_than(archive_cutoff)
-        n += VixRepo(db).delete_older_than(archive_cutoff)
-        n += FiiRepo(db).delete_older_than(archive_cutoff)
-        n += IvHistoryRepo(db).delete_older_than(archive_cutoff)
-        n += SuggestionRepo(db).delete_older_than(archive_cutoff)
-        n += NotificationRepo(db).delete_older_than(delete_cutoff)
-        n += ChainTimeseriesRepo(db).delete_older_than(archive_cutoff)
-        n += AtmIvTimeseriesRepo(db).delete_older_than(archive_cutoff)
-        n += LogRepo(db).delete_older_than(delete_cutoff)
-        n += JobLogRepo(db).delete_older_than(delete_cutoff)
-        mtm_repo = TradeMtmSnapshotRepo(db)
-        n += mtm_repo.archive_non_active()
-        n += mtm_repo.delete_history_older_than(archive_cutoff)
-        db.commit()
-        return n
 
-    _run_job("weekly_cleanup", _cleanup)
+    _run_job("weekly_cleanup", _blocked)
 
 
 # ---------------------------------------------------------------------------
 # Scheduler bootstrap
 # ---------------------------------------------------------------------------
+
+# Jobs that remain in JOB_FUNCS (history/UI) but must never Run now.
+BLOCKED_MANUAL_JOBS = frozenset({"weekly_cleanup"})
 
 JOB_FUNCS = {
     "fo_bhav_download":   job_fo_bhav,
@@ -741,6 +719,11 @@ def trigger_job_now(job_name: str, trade_date: str | None = None) -> bool:
     """
     if job_name not in JOB_FUNCS:
         return False
+    if job_name in BLOCKED_MANUAL_JOBS:
+        raise RuntimeError(
+            "weekly_cleanup is retired — it permanently deletes hot history. "
+            "Use weekly_archive then weekly_log_cleanup."
+        )
     sch = _SCHEDULER
     if sch is None or not sch.running:
         raise RuntimeError("Scheduler is not running")

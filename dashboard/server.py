@@ -719,8 +719,8 @@ _JOB_META: Dict[str, Dict[str, str]] = {
                             "description": "Sequential EOD chain (disabled — use Morning EOD Catchup @ 09:00; manual re-run only)."},
     "morning_eod_catchup": {"icon": "🌅", "name": "Morning EOD Catchup",
                             "description": "Same EOD chain at 09:00 IST when the VM boots (08:55) — backfills missed overnight runs before market open."},
-    "weekly_cleanup":     {"icon": "🧹", "name": "Weekly Cleanup (legacy)",
-                            "description": "Deprecated — use Weekly Archive + Log Cleanup."},
+    "weekly_cleanup":     {"icon": "🧹", "name": "Weekly Cleanup (retired)",
+                            "description": "Blocked — permanently deleted history. Use Weekly Archive + Log Cleanup."},
     "weekly_archive":     {"icon": "📦", "name": "Weekly Archive",
                             "description": "Move aged rows to *_Archive tables (Fri 09:30)."},
     "weekly_log_cleanup": {"icon": "🪵", "name": "Log Cleanup",
@@ -1292,6 +1292,7 @@ def _build_jobs_list_payload(db: SQLServerConnection) -> Dict[str, Any]:
     """Job monitor grid — shared by /api/jobs/list and /api/jobs/stream."""
     from scheduler.scheduler import (
         JOB_FUNCS as _JOB_FUNCS,
+        BLOCKED_MANUAL_JOBS as _BLOCKED_MANUAL,
         _EOD_PIPELINE_STEPS,
         _LAST_STATUS as _LAST,
         _eod_pipeline_enabled,
@@ -1381,7 +1382,7 @@ def _build_jobs_list_payload(db: SQLServerConnection) -> Dict[str, Any]:
             "cron_enabled":  cron_enabled,
             "via_pipeline":  via_pipeline,
             "pipeline_parent": pipeline_parent if via_pipeline else None,
-            "manual_enabled": True,
+            "manual_enabled": name not in _BLOCKED_MANUAL,
             "status":        disp,
             "started_at":    _ist_iso(row.get("started_at")),
             "finished_at":   _ist_iso(row.get("finished_at")),
@@ -3143,10 +3144,21 @@ def create_app() -> Flask:
     @app.route("/api/jobs/<job_name>/trigger", methods=["POST"])
     @_with_db
     def api_jobs_trigger(db: SQLServerConnection, job_name: str):
-        from scheduler.scheduler import JOB_FUNCS as _JOB_FUNCS, trigger_job_now
+        from scheduler.scheduler import (
+            BLOCKED_MANUAL_JOBS as _BLOCKED_MANUAL,
+            JOB_FUNCS as _JOB_FUNCS,
+            trigger_job_now,
+        )
 
         if job_name not in _JOB_FUNCS:
             return jsonify({"error": f"Unknown job: {job_name}"}), 400
+        if job_name in _BLOCKED_MANUAL:
+            return jsonify({
+                "error": (
+                    "weekly_cleanup is retired — it permanently deletes hot "
+                    "history. Use weekly_archive then weekly_log_cleanup."
+                ),
+            }), 400
 
         # Block if already RUNNING (per latest DB row)
         latest = JobLogRepo(db).last_status(job_name)

@@ -43,6 +43,14 @@ class TestTriggerJobNow:
     def test_returns_false_for_unknown_job(self):
         assert sched.trigger_job_now("no_such_job") is False
 
+    def test_refuses_retired_weekly_cleanup(self):
+        fake = MagicMock()
+        fake.running = True
+        sched._SCHEDULER = fake
+        with pytest.raises(RuntimeError, match="weekly_cleanup is retired"):
+            sched.trigger_job_now("weekly_cleanup")
+        fake.add_job.assert_not_called()
+
     def test_raises_when_scheduler_not_running(self):
         sched._SCHEDULER = None
         with pytest.raises(RuntimeError, match="not running"):

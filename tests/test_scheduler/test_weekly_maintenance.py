@@ -124,6 +124,16 @@ class TestWeeklyArchive:
         assert n == 42
 
 
+class TestWeeklyCleanupRetired:
+    def test_inner_fn_raises_instead_of_deleting(self, patched_db, mocker):
+        captured = _capture_cleanup_fn(mocker)
+        fo = mocker.patch("database.models.FoEodRepo")
+        sched.job_weekly_cleanup()
+        with pytest.raises(RuntimeError, match="weekly_cleanup is retired"):
+            captured["fn"](patched_db)
+        fo.assert_not_called()
+
+
 class TestDbBackup:
     def test_delegates_to_sql_backup(self, patched_db, mocker):
         captured = _capture_cleanup_fn(mocker)

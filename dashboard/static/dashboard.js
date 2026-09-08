@@ -8435,7 +8435,7 @@ function renderJobCard(j) {
 
   const triggerBtn = `<button class="btn job-trigger-btn" data-job="${escapeHtml(j.job_name)}"
       ${isRunning || j.manual_enabled === false ? 'disabled' : ''}>
-      ${isRunning ? '⏳ Running…' : '▶ Run now'}
+      ${isRunning ? '⏳ Running…' : (j.manual_enabled === false ? 'Blocked' : '▶ Run now')}
     </button>`;
 
   const stepBadge = (j.via_pipeline && j.pipeline_step)

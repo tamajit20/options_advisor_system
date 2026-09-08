@@ -17,6 +17,7 @@ from database.config_overlay import (
     catalog_items,
     coerce_value,
     restore_file_defaults,
+    select_overlay_winners,
 )
 
 
@@ -142,3 +143,45 @@ def test_overlay_maps_legacy_retention_keys(monkeypatch):
         assert RETENTION_CONFIG["hot_archive_keep_days"] == 180
     finally:
         restore_file_defaults()
+
+
+def test_overlay_canonical_retention_beats_legacy_alias():
+    restore_file_defaults()
+    db = MagicMock()
+    db.fetch_all.return_value = [
+        {"config_key": "retention.delete_keep_days", "config_value": "7",
+         "last_modified": "2026-09-01"},
+        {"config_key": "retention.zerodha_execution_jobs_keep_days",
+         "config_value": "30", "last_modified": "2026-09-08"},
+        {"config_key": "retention.hot_archive_keep_days", "config_value": "365",
+         "last_modified": "2026-09-01"},
+        {"config_key": "retention.vix_keep_days", "config_value": "180",
+         "last_modified": "2026-09-08"},
+    ]
+    try:
+        n = apply_strategy_overrides(db)
+        assert n == 2
+        assert RETENTION_CONFIG["delete_keep_days"] == 7
+        assert RETENTION_CONFIG["hot_archive_keep_days"] == 365
+    finally:
+        restore_file_defaults()
+
+
+def test_catalog_treats_legacy_retention_alias_as_override():
+    db = MagicMock()
+    db.fetch_all.return_value = [
+        {"config_key": "retention.system_logs_keep_days", "config_value": "14",
+         "last_modified": "2026-09-01", "modified_by": "ui", "is_locked": 0},
+    ]
+    items = {row["key"]: row for row in catalog_items(db)}
+    item = items["retention.delete_keep_days"]
+    assert item["overridden"] is True
+    assert item["value"] == 14
+
+
+def test_select_overlay_winners_prefers_canonical_key():
+    winners = dict(select_overlay_winners([
+        {"config_key": "retention.delete_keep_days", "config_value": "7"},
+        {"config_key": "retention.job_log_keep_days", "config_value": "21"},
+    ]))
+    assert winners["retention.delete_keep_days"]["config_value"] == "7"

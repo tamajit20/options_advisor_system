@@ -182,6 +182,7 @@ class _TradeState:
     last_spot: Optional[float] = None
     last_spot_at: Optional[datetime] = None
     last_alert_at: Dict[str, datetime] = field(default_factory=dict)
+    last_auto_exec_at: Optional[datetime] = None
     in_breach: Dict[str, bool] = field(default_factory=dict)
     pre_breach_alerted_today: bool = False
     leg_stress_alerted_today: set = field(default_factory=set)  # leg_order ints
@@ -645,6 +646,12 @@ class LiveRiskMonitor:
             timedelta(minutes=int(cd)) if cd is not None else None
         )
         self._loss_milestone_auto_close = bool(lmc.get("auto_close", True))
+        retry_sec = lmc.get("auto_close_retry_seconds", 60)
+        try:
+            retry_sec = max(0, int(retry_sec))
+        except (TypeError, ValueError):
+            retry_sec = 60
+        self._loss_milestone_retry = timedelta(seconds=retry_sec)
 
     def _reload(self, *, prime: bool = False) -> None:
         if self._config_reloader is not None:
@@ -666,6 +673,7 @@ class LiveRiskMonitor:
                 old = self._snapshot.trades.get(tid)
                 if old is not None:
                     new_state.last_alert_at = dict(old.last_alert_at)
+                    new_state.last_auto_exec_at = old.last_auto_exec_at
                     new_state.in_breach = dict(old.in_breach)
                     new_state.pre_breach_alerted_today = old.pre_breach_alerted_today
                     new_state.leg_stress_alerted_today = set(old.leg_stress_alerted_today)
@@ -1167,6 +1175,8 @@ class LiveRiskMonitor:
                 threshold_rs=milestone_rs,
                 cooldown=self._loss_milestone_cooldown,
             )
+            if alert is None:
+                alert = self._silent_milestone_retry(state, now)
             return alert, mtm_payload, trailing_persist, snapshot_payload
 
         # 3. Soft pre-breach warning. Event-eve uses tighter fraction.
@@ -1504,23 +1514,47 @@ class LiveRiskMonitor:
         state.in_breach[breach_key] = False
         state.last_alert_at.pop(breach_key, None)
 
+    def _silent_milestone_retry(
+        self, state: _TradeState, now: datetime,
+    ) -> Optional["_PendingAlert"]:
+        """Re-attempt auto-close while still in breach without a new alert.
+
+        Alert cooldown (often 15 min when ``cooldown_minutes`` is omitted)
+        must not stall flatten after ``LOSS_MILESTONE_CLOSE_FAILED``.
+        """
+        if not self._loss_milestone_auto_close or self._auto_exec is None:
+            return None
+        last = state.last_auto_exec_at
+        if last is not None and (now - last) < self._loss_milestone_retry:
+            return None
+        return _PendingAlert(
+            state=state,
+            notif_type="LOSS_MILESTONE_HIT",
+            severity="WARNING",
+            title="",
+            body="",
+            breach_key="LOSS_MILESTONE",
+            silent=True,
+        )
+
     def _dispatch(self, alert: "_PendingAlert") -> None:
-        try:
-            self._notifier.notify(
-                notif_type=alert.notif_type,
-                severity=alert.severity,
-                title=alert.title,
-                body=alert.body,
-                related_trade_id=alert.state.trade_id,
-            )
-            with self._lock:
-                self._counters["alerts_fired"] += 1
-            self._maybe_auto_exec(alert)
-        except Exception:
-            logger.exception(
-                "LiveRiskMonitor: notify failed for %s/%s",
-                alert.state.trade_id, alert.notif_type,
-            )
+        if not alert.silent:
+            try:
+                self._notifier.notify(
+                    notif_type=alert.notif_type,
+                    severity=alert.severity,
+                    title=alert.title,
+                    body=alert.body,
+                    related_trade_id=alert.state.trade_id,
+                )
+                with self._lock:
+                    self._counters["alerts_fired"] += 1
+            except Exception:
+                logger.exception(
+                    "LiveRiskMonitor: notify failed for %s/%s",
+                    alert.state.trade_id, alert.notif_type,
+                )
+        self._maybe_auto_exec(alert)
 
     def _maybe_auto_exec(self, alert: "_PendingAlert") -> None:
         """Hand the alert to the auto-execution registry. No orders here."""
@@ -1554,6 +1588,8 @@ class LiveRiskMonitor:
             exits=exits,
             as_of=now,
         )
+        with self._lock:
+            state.last_auto_exec_at = now
         try:
             self._auto_exec(ctx)
         except Exception:
@@ -1726,6 +1762,7 @@ class _PendingAlert:
     title: str
     body: str
     breach_key: str
+    silent: bool = False
 
 
 def _parse_hhmm(s: str) -> dtime:

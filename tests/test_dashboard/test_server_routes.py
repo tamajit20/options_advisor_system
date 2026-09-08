@@ -606,6 +606,15 @@ class TestJobsList:
         assert "20:35" in fo["next_run"] or "20:35" in fo["schedule"]
         assert fo["manual_enabled"] is True
 
+    def test_weekly_cleanup_manual_trigger_disabled(self, client, mocker):
+        mocker.patch("dashboard.server.JobLogRepo.latest_status_per_job",
+                     return_value=[])
+        import scheduler.scheduler as sched
+        mocker.patch.object(sched, "_SCHEDULER", None)
+        resp = client.get("/api/jobs/list")
+        job = next(j for j in resp.get_json()["jobs"] if j["job_name"] == "weekly_cleanup")
+        assert job["manual_enabled"] is False
+
     def test_morning_pipeline_steps_not_manual_only(self, client, mocker):
         from datetime import datetime
         from zoneinfo import ZoneInfo
@@ -757,6 +766,14 @@ class TestJobsTrigger:
         resp = client.post("/api/jobs/fo_bhav_download/trigger")
         assert resp.status_code == 200
         assert resp.get_json()["status"] == "queued"
+
+    def test_weekly_cleanup_returns_400(self, client, mocker):
+        mocker.patch("dashboard.server.JobLogRepo.last_status", return_value=None)
+        trigger = mocker.patch("scheduler.scheduler.trigger_job_now", return_value=True)
+        resp = client.post("/api/jobs/weekly_cleanup/trigger")
+        assert resp.status_code == 400
+        assert "retired" in resp.get_json()["error"]
+        trigger.assert_not_called()
 
 
 class TestJobsHistory:

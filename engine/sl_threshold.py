@@ -95,11 +95,17 @@ def loss_milestone_config() -> Dict[str, Any]:
         except (TypeError, ValueError):
             cooldown_minutes = None
     auto_close = bool(raw.get("auto_close", True))
+    retry_raw = raw.get("auto_close_retry_seconds", 60)
+    try:
+        auto_close_retry_seconds = max(0, int(retry_raw))
+    except (TypeError, ValueError):
+        auto_close_retry_seconds = 60
     return {
         "enabled": enabled,
         "pct_of_premium": pct,
         "cooldown_minutes": cooldown_minutes,
         "auto_close": auto_close,
+        "auto_close_retry_seconds": auto_close_retry_seconds,
     }
 
 

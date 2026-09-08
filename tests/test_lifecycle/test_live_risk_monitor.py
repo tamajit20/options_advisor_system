@@ -561,6 +561,57 @@ class TestLossMilestoneHit:
         assert sorted(e["leg_order"] for e in ctx.exits) == [1, 2]
         assert all(e["exit_price"] == 130.0 for e in ctx.exits)
 
+    def test_milestone_retries_auto_close_during_alert_cooldown(self, mocker):
+        hook = MagicMock()
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "auto_close": True,
+                "cooldown_minutes": None, "auto_close_retry_seconds": 60,
+            }},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        clock = {"now": datetime(2026, 5, 5, 11, 0)}
+        snap = _Snapshot()
+        snap.trades[state.trade_id] = state
+        for leg in state.legs:
+            snap.index.setdefault(leg.key, []).append(state.trade_id)
+        bus = EventBus()
+        notifier = MagicMock()
+        monitor = LiveRiskMonitor(
+            notifier=notifier, snapshot_loader=lambda: snap,
+            event_bus=bus,
+            config={
+                "enabled": True,
+                "cooldown_minutes": 15, "reload_interval_sec": 9999,
+                "session_start": "09:15", "session_end": "15:30",
+                "pre_breach_fraction": 0.99, "stale_leg_seconds": 9999,
+            },
+            clock=lambda: clock["now"],
+        )
+        monitor._snapshot = snap
+        monitor._auto_exec = hook
+        monitor._bind_loss_milestone_cfg()
+        bus.subscribe("tick", monitor._on_tick)
+
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 130.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 130.0))
+        assert notifier.notify.call_count == 1
+        assert hook.call_count == 1
+
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 131.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 131.0))
+        assert notifier.notify.call_count == 1
+        assert hook.call_count == 1
+
+        clock["now"] = datetime(2026, 5, 5, 11, 1, 1)
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 132.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 132.0))
+        assert notifier.notify.call_count == 1
+        assert hook.call_count == 2
+        assert hook.call_args.args[0].notif_type == "LOSS_MILESTONE_HIT"
+
     def test_loss_milestone_still_offers_hook_when_auto_close_off(self, mocker):
         """Monitor always offers; the registry decides whether to trade."""
         hook = MagicMock()

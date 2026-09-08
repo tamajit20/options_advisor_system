@@ -808,11 +808,15 @@ STRATEGY_CONFIG = {
     # Independent of strategy SL. Fires when MTM loss reaches pct_of_premium of
     # entry premium (paid on debits, received on credits). auto_close flattens
     # Zerodha trades on Kite and books manual trades at live LTP.
+    # cooldown_minutes None = use live_risk_monitor cooldown for alerts.
+    # auto_close_retry_seconds re-attempts flatten while still in breach
+    # without waiting for that alert cooldown (in-flight closes are skipped).
     "loss_milestone_alert": {
         "enabled": True,
         "pct_of_premium": 5.0,
         "cooldown_minutes": None,
         "auto_close": True,
+        "auto_close_retry_seconds": 60,
     },
 
     # Suggestion freshness (Phase 3 — #2).

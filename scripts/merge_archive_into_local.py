@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from database.archive_registry import ARCHIVE_TABLE_SPECS, archive_table_name
+from database.archive_repo import merge_chunk_insert_sql
 
 
 def _sqlcmd(server: str, query: str, *, db: str | None = None) -> subprocess.CompletedProcess:
@@ -121,17 +122,10 @@ def merge_table(server: str, staging_db: str, target_db: str, table: str, pk_col
             f"SELECT * INTO [{target_db}].dbo.[{table}] FROM [{staging_db}].dbo.[{table}] WHERE 1 = 0;",
         )
 
-    pk = " AND ".join(f"t.[{c}] = s.[{c}]" for c in pk_cols)
     _run_step(
         server,
         f"merge {table}",
-        f"""
-        INSERT INTO [{target_db}].dbo.[{table}]
-        SELECT s.* FROM [{staging_db}].dbo.[{table}] s
-        WHERE NOT EXISTS (
-          SELECT 1 FROM [{target_db}].dbo.[{table}] t WHERE {pk}
-        );
-        """,
+        merge_chunk_insert_sql(target_db, staging_db, table, pk_cols),
     )
     print(f"  merged {table} (+up to {n} rows)")
 

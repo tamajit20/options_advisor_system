@@ -113,6 +113,9 @@ def main() -> int:
     for job in ("weekly_archive", "weekly_log_cleanup", "archive_export"):
         if job not in SCHEDULER_CONFIG.get("jobs", {}):
             errors.append(f"SCHEDULER_CONFIG missing job: {job}")
+    wc = (SCHEDULER_CONFIG.get("jobs") or {}).get("weekly_cleanup") or {}
+    if wc.get("enabled"):
+        errors.append("SCHEDULER_CONFIG weekly_cleanup must stay disabled")
 
     print("SETUP SYNC VALIDATION")
     print("=" * 50)

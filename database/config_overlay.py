@@ -151,8 +151,8 @@ _DESCRIPTIONS: Dict[str, str] = {
         "(paid for debits, received for credits — same as P&L % brackets). "
         "Zerodha trades flatten on Kite; manual trades close in the DB at live LTP. "
         "Separate from strategy SL. JSON: {enabled, pct_of_premium, auto_close, "
-        "cooldown_minutes}. Legacy key pct_of_max_loss is still read if "
-        "pct_of_premium is omitted.",
+        "cooldown_minutes, auto_close_retry_seconds}. Legacy key pct_of_max_loss "
+        "is still read if pct_of_premium is omitted.",
     "live_risk_monitor":
         "Live alert engine (session, cooldown, trailing floor, pre-breach). Nested JSON.",
     "trading_capital_rs": "Notional capital for circuit-breaker and sizing.",
@@ -383,6 +383,33 @@ def _assign(spec: _Spec, value: Any) -> None:
     spec.target[spec.local_key] = value
 
 
+def _canonical_config_key(raw_key: Optional[str]) -> Optional[str]:
+    if not raw_key:
+        return raw_key
+    return _CONFIG_KEY_ALIASES.get(raw_key, raw_key)
+
+
+def _overlay_row_sort_key(row: Dict[str, Any]) -> Tuple[str, str]:
+    return (str(row.get("last_modified") or ""), str(row.get("config_key") or ""))
+
+
+def select_overlay_winners(rows: Sequence[Dict[str, Any]]) -> List[Tuple[str, Dict[str, Any]]]:
+    """One DB row per live knob. Canonical keys beat leftover aliases."""
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        raw = row.get("config_key")
+        canon = _canonical_config_key(raw)
+        if not canon:
+            continue
+        grouped.setdefault(canon, []).append(row)
+    winners: List[Tuple[str, Dict[str, Any]]] = []
+    for canon, group in grouped.items():
+        explicit = [r for r in group if r.get("config_key") == canon]
+        pool = explicit if explicit else group
+        winners.append((canon, max(pool, key=_overlay_row_sort_key)))
+    return winners
+
+
 def apply_config_overrides(db=None) -> int:
     """Copy DB overrides onto live config dicts. Returns override count."""
     close = False
@@ -400,8 +427,7 @@ def apply_config_overrides(db=None) -> int:
         restore_file_defaults()
         specs = _spec_map()
         applied = 0
-        for row in rows:
-            key = _CONFIG_KEY_ALIASES.get(row.get("config_key"), row.get("config_key"))
+        for key, row in select_overlay_winners(rows):
             spec = specs.get(key)
             if spec is None:
                 continue
@@ -432,11 +458,14 @@ def catalog_items(db) -> List[Dict[str, Any]]:
     raw = ConfigRepo(db).get_all()
     if not isinstance(raw, (list, tuple)):
         raw = []
-    rows = {r["config_key"]: r for r in raw}
+    rows_by_key = {r["config_key"]: r for r in raw}
+    winners = {canon: row for canon, row in select_overlay_winners(raw)}
     items: List[Dict[str, Any]] = []
     for spec in sorted(_specs(), key=lambda s: (s.group, s.key)):
         default = json_safe(_default_for(spec))
-        row = rows.get(spec.key)
+        row = winners.get(spec.key)
+        if row is None:
+            row = rows_by_key.get(spec.key)
         overridden = row is not None and row.get("config_value") is not None
         current = (
             coerce_value(spec.key, _parse_stored(row["config_value"]))
