@@ -926,6 +926,36 @@ _TABLE_DDL: List[str] = [
     """,
 
     """
+    IF OBJECT_ID('options_execution_reversals', 'U') IS NULL
+    CREATE TABLE options_execution_reversals (
+        id                  BIGINT IDENTITY(1,1) PRIMARY KEY,
+        suggestion_id       NVARCHAR(40)  NULL,
+        trade_id            NVARCHAR(40)  NULL,
+        execution_job_id    BIGINT        NULL,
+        reason              NVARCHAR(40)  NOT NULL,
+        created_at          DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        gross_pnl           DECIMAL(18,4) NOT NULL,
+        total_charges       DECIMAL(18,4) NOT NULL,
+        net_pnl             DECIMAL(18,4) NOT NULL,
+        brokerage           DECIMAL(18,4) NULL,
+        stt                 DECIMAL(18,4) NULL,
+        exchange_charges    DECIMAL(18,4) NULL,
+        sebi                DECIMAL(18,4) NULL,
+        stamp_duty          DECIMAL(18,4) NULL,
+        gst                 DECIMAL(18,4) NULL,
+        matched_qty         INT           NOT NULL DEFAULT 0,
+        order_fingerprint   NVARCHAR(40)  NOT NULL,
+        legs_json           NVARCHAR(MAX) NULL,
+        notes               NVARCHAR(500) NULL,
+        CONSTRAINT UX_options_execution_reversals_fp UNIQUE (order_fingerprint)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_execution_reversals_created "
+    "ON options_execution_reversals (created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS IX_options_execution_reversals_job "
+    "ON options_execution_reversals (execution_job_id)",
+
+    """
     IF OBJECT_ID('options_zerodha_execution_jobs', 'U') IS NULL
     CREATE TABLE options_zerodha_execution_jobs (
         id                 BIGINT IDENTITY(1,1) PRIMARY KEY,
@@ -1129,6 +1159,7 @@ def list_tables() -> List[str]:
         "options_config",
         "options_notifications",
         "options_broker_orders",
+        "options_execution_reversals",
         "options_zerodha_execution_jobs",
         "options_runtime_flags",
         "options_intraday_close_snapshot",

@@ -3,13 +3,15 @@ lifecycle/archive_export.py
 =============================
 
 Build a chunk .bak of pending *_Archive rows on the VM (Fri before shutdown).
-Laptop merges into cumulative OptionsAdvisorDB_Archive; VM truncates after ACK.
+Laptop merges into cumulative OptionsAdvisorDB_Archive; ACK then deletes the
+matching hot rows, truncates VM *_Archive, and drops the export .bak.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 
 from database.archive_repo import archive_table_row_counts, ensure_archive_tables
@@ -18,6 +20,7 @@ from lifecycle.sql_backup import (
     backup_database,
     bak_filename,
     host_backup_dir,
+    hot_backup_marker_path,
     prepare_backup_dirs,
     prune_bak_files,
     sql_autocommit,
@@ -45,6 +48,11 @@ def run_archive_export(db: SQLServerConnection) -> int:
     total = sum(counts.values())
     if total <= 0:
         logger.info("archive_export: no pending *_Archive rows")
+        if pending_manifest_path().is_file():
+            logger.info(
+                "PENDING.json still present; leaving VM export files until laptop ACK"
+            )
+            return 0
         _remove_pending_export_files()
         return 0
 
@@ -72,7 +80,8 @@ def run_archive_export(db: SQLServerConnection) -> int:
         dest_dir=dest_dir,
         sql_subdir="archive",
     )
-    prune_bak_files(dest_dir, keep_names={bak_name})
+    # Keep older export chunks until laptop ACK. Pruning here would delete last
+    # week's .bak while the laptop was off.
 
     rel_bak = f"backups/archive/{bak_name}"
     manifest = pending_manifest_path()
@@ -143,12 +152,108 @@ def _remove_pending_export_files() -> None:
     _clear_pending_manifest()
 
 
-def acknowledge_export(db: SQLServerConnection) -> int:
-    """Truncate VM *_Archive after laptop merge and delete the export .bak."""
-    from database.archive_repo import truncate_all_archive_tables
+def _parse_iso(value: str) -> datetime:
+    text = (value or "").strip()
+    if not text:
+        raise ValueError("empty timestamp")
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    return datetime.fromisoformat(text)
 
-    n = truncate_all_archive_tables(db)
+
+def _load_pending_manifest() -> dict | None:
+    path = pending_manifest_path()
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"invalid PENDING.json: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("PENDING.json must be a JSON object")
+    return data
+
+
+def _pending_row_counts_match_live(pending: dict, live: dict[str, int]) -> bool:
+    expected = pending.get("row_counts")
+    if not isinstance(expected, dict):
+        return False
+    if set(expected) != set(live):
+        return False
+    for table, n in live.items():
+        try:
+            if int(expected.get(table, -1)) != int(n):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def require_hot_backup_after_export(pending: dict) -> None:
+    """Refuse ACK unless db_backup finished after this week's archive export."""
+    exported_raw = str(pending.get("exported_at") or "").strip()
+    if not exported_raw:
+        raise RuntimeError("PENDING.json missing exported_at; refusing to delete hot rows")
+    marker = hot_backup_marker_path()
+    if not marker.is_file():
+        raise RuntimeError(
+            "hot backup not confirmed (missing LAST_HOT_BACKUP.json); "
+            "re-run db_backup before ACK"
+        )
+    try:
+        marker_data = json.loads(marker.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"invalid LAST_HOT_BACKUP.json: {exc}") from exc
+    backup_raw = str((marker_data or {}).get("completed_at") or "").strip()
+    if not backup_raw:
+        raise RuntimeError("LAST_HOT_BACKUP.json missing completed_at; refusing ACK")
+    try:
+        exported_at = _parse_iso(exported_raw)
+        backup_at = _parse_iso(backup_raw)
+    except ValueError as exc:
+        raise RuntimeError(f"cannot parse backup/export timestamps: {exc}") from exc
+    if backup_at.tzinfo is None and exported_at.tzinfo is not None:
+        exported_at = exported_at.replace(tzinfo=None)
+    elif exported_at.tzinfo is None and backup_at.tzinfo is not None:
+        backup_at = backup_at.replace(tzinfo=None)
+    if backup_at < exported_at:
+        raise RuntimeError(
+            "hot backup is older than this archive export; re-run db_backup before ACK"
+        )
+
+
+def acknowledge_export(db: SQLServerConnection) -> int:
+    """After laptop merge: delete mirrored hot rows, then clear VM archive export."""
+    from database.archive_repo import (
+        archive_table_row_counts,
+        delete_hot_rows_present_in_archive,
+        truncate_all_archive_tables,
+    )
+
+    pending = _load_pending_manifest()
+    counts = archive_table_row_counts(db)
+    archived = sum(counts.values())
+    if pending is None:
+        if archived <= 0:
+            _remove_pending_export_files()
+            logger.info("archive ACK: nothing pending")
+            return 0
+        raise RuntimeError(
+            "*_Archive has rows but PENDING.json is missing; refusing ACK"
+        )
+
+    require_hot_backup_after_export(pending)
+    if not _pending_row_counts_match_live(pending, counts):
+        raise RuntimeError(
+            "*_Archive row counts changed since export; "
+            "waiting for archive_export to rebuild PENDING before deleting hot rows"
+        )
+    n_hot = delete_hot_rows_present_in_archive(db)
+    n_arch = truncate_all_archive_tables(db)
     db.commit()
     _remove_pending_export_files()
-    logger.info("archive export acknowledged: cleared %d archive rows on VM", n)
-    return n
+    logger.info(
+        "archive export acknowledged: deleted %d hot rows, cleared %d archive rows",
+        n_hot, n_arch,
+    )
+    return n_hot

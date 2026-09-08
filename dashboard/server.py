@@ -722,13 +722,13 @@ _JOB_META: Dict[str, Dict[str, str]] = {
     "weekly_cleanup":     {"icon": "🧹", "name": "Weekly Cleanup (retired)",
                             "description": "Blocked — permanently deleted history. Use Weekly Archive + Log Cleanup."},
     "weekly_archive":     {"icon": "📦", "name": "Weekly Archive",
-                            "description": "Move aged rows to *_Archive tables (Fri 09:30)."},
+                            "description": "Copy aged rows to *_Archive (Fri 09:30). Hot rows stay until the laptop has both .bak files and ACKs."},
     "weekly_log_cleanup": {"icon": "🪵", "name": "Log Cleanup",
                             "description": "Delete system/job logs and alerts (Fri 09:35)."},
     "archive_export":     {"icon": "💾", "name": "Archive Export",
                             "description": "Export pending *_Archive .bak before VM stop (Fri 15:36)."},
     "db_backup":          {"icon": "💽", "name": "Hot DB Backup",
-                            "description": "SQL BACKUP of OptionsAdvisorDB to ./backups before VM stop (Fri 15:38)."},
+                            "description": "SQL BACKUP of OptionsAdvisorDB to ./backups before VM stop (Fri 15:38). ACK will not delete hot rows without this."},
 }
 
 _DOW_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu",
@@ -2378,6 +2378,18 @@ def create_app() -> Flask:
         )
         filters.extend(date_filters)
 
+        from database.execution_reversal_repo import ExecutionReversalRepo
+
+        rev_from = next((p for f, p in zip(date_filters, params) if ">=" in f), None)
+        rev_to = next((p for f, p in zip(date_filters, params) if "<=" in f), None)
+        try:
+            rev_rows = ExecutionReversalRepo(db).list_between(
+                from_date=rev_from, to_date=rev_to,
+            )
+        except Exception:
+            logger.debug("execution reversals unavailable", exc_info=True)
+            rev_rows = []
+
         where = " AND ".join(filters)
         rows = db.fetch_all(
             f"SELECT t.trade_id, t.trade_name, t.closed_on, t.executed_on, "
@@ -2391,36 +2403,76 @@ def create_app() -> Flask:
             params,
         )
 
+        events = []
+        for r in rows:
+            events.append({
+                "trade_id":          r["trade_id"],
+                "trade_name":        r["trade_name"],
+                "closed_on":         r["closed_on"],
+                "executed_on":       r["executed_on"],
+                "strategy":          r["strategy"],
+                "underlying":        r["underlying"],
+                "net_pnl":           float(r["net_pnl"]),
+                "gross_pnl":         float(r["gross_pnl"] or 0),
+                "total_charges":     float(r["total_charges"] or 0),
+                "net_credit_actual": float(r["net_credit_actual"] or 0),
+                "is_reversal":       False,
+            })
+        for r in rev_rows:
+            events.append({
+                "trade_id":          f"REV-{r.get('id')}",
+                "trade_name":        "Execution revert",
+                "closed_on":         r.get("created_at"),
+                "executed_on":       r.get("created_at"),
+                "strategy":          "EXECUTION_REVERT",
+                "underlying":        "",
+                "net_pnl":           float(r.get("net_pnl") or 0),
+                "gross_pnl":         float(r.get("gross_pnl") or 0),
+                "total_charges":     float(r.get("total_charges") or 0),
+                "net_credit_actual": 0.0,
+                "is_reversal":       True,
+            })
+        events.sort(key=lambda e: e["closed_on"] or "")
+
         trades = []
         cum_overall = 0.0
         cum_by_strategy: dict = {}
         total_invested = 0.0
+        total_charges = 0.0
 
-        for r in rows:
-            pnl    = float(r["net_pnl"])
-            credit = float(r["net_credit_actual"] or 0)
-            strat  = r["strategy"]
-            prem_rs, prem_kind = _trade_premium_from_legs(db, r["trade_id"])
-            if prem_rs <= 0:
-                prem_rs = abs(credit)
+        for e in events:
+            pnl = e["net_pnl"]
+            strat = e["strategy"]
+            if e["is_reversal"]:
+                prem_rs, prem_kind = 0.0, "paid"
+            else:
+                prem_rs, prem_kind = _trade_premium_from_legs(db, e["trade_id"])
+                if prem_rs <= 0:
+                    prem_rs = abs(e["net_credit_actual"])
             cum_overall += pnl
             cum_by_strategy[strat] = cum_by_strategy.get(strat, 0.0) + pnl
             total_invested += prem_rs
+            total_charges += e["total_charges"]
+            rr = {
+                "closed_on": e["closed_on"],
+                "executed_on": e["executed_on"],
+            }
             trades.append({
-                "trade_id":        r["trade_id"],
-                "trade_name":      r["trade_name"],
-                "closed_on":       _row(r)["closed_on"],
-                "executed_on":     _row(r)["executed_on"],
-                "strategy":        strat,
-                "underlying":      r["underlying"],
-                "net_pnl":         round(pnl, 2),
-                "gross_pnl":       round(float(r["gross_pnl"] or 0), 2),
-                "total_charges":   round(float(r["total_charges"] or 0), 2),
-                "net_credit_actual": round(credit, 2),
-                "premium_rs":      round(prem_rs, 2),
-                "premium_kind":    prem_kind,
-                "cum_pnl_overall": round(cum_overall, 2),
-                "cum_pnl_strategy": round(cum_by_strategy[strat], 2),
+                "trade_id":          e["trade_id"],
+                "trade_name":        e["trade_name"],
+                "closed_on":         _row(rr)["closed_on"],
+                "executed_on":       _row(rr)["executed_on"],
+                "strategy":          strat,
+                "underlying":        e["underlying"],
+                "net_pnl":           round(pnl, 2),
+                "gross_pnl":         round(e["gross_pnl"], 2),
+                "total_charges":     round(e["total_charges"], 2),
+                "net_credit_actual": round(e["net_credit_actual"], 2),
+                "premium_rs":        round(prem_rs, 2),
+                "premium_kind":      prem_kind,
+                "is_reversal":       e["is_reversal"],
+                "cum_pnl_overall":   round(cum_overall, 2),
+                "cum_pnl_strategy":  round(cum_by_strategy[strat], 2),
             })
 
         strategies = sorted(cum_by_strategy.keys())
@@ -2429,7 +2481,7 @@ def create_app() -> Flask:
             "strategies":      strategies,
             "total_pnl":       round(cum_overall, 2),
             "total_invested":  round(total_invested, 2),
-            "total_charges":   round(sum(float(r["total_charges"] or 0) for r in rows), 2),
+            "total_charges":   round(total_charges, 2),
         })
 
     @app.route("/api/stats/strategy-performance")
@@ -2448,6 +2500,19 @@ def create_app() -> Flask:
         where = "t.status IN ('CLOSED', 'EXPIRED') AND t.net_pnl IS NOT NULL"
         if date_filters:
             where += " AND " + " AND ".join(date_filters)
+
+        from database.execution_reversal_repo import ExecutionReversalRepo
+
+        rev_from = next((p for f, p in zip(date_filters, params) if ">=" in f), None)
+        rev_to = next((p for f, p in zip(date_filters, params) if "<=" in f), None)
+        try:
+            rev_rows = ExecutionReversalRepo(db).list_between(
+                from_date=rev_from, to_date=rev_to,
+            )
+        except Exception:
+            logger.debug("execution reversals unavailable", exc_info=True)
+            rev_rows = []
+
         rows = db.fetch_all(
             "SELECT t.trade_id, t.net_pnl, t.gross_pnl, t.total_charges, "
             "       t.executed_on, t.closed_on, t.net_credit_actual, "
@@ -2465,6 +2530,19 @@ def create_app() -> Flask:
         buckets: dict = defaultdict(list)
         for r in rows:
             buckets[r["strategy"]].append(r)
+        for r in rev_rows:
+            buckets["EXECUTION_REVERT"].append({
+                "trade_id": None,
+                "net_pnl": r.get("net_pnl"),
+                "gross_pnl": r.get("gross_pnl"),
+                "total_charges": r.get("total_charges"),
+                "executed_on": r.get("created_at"),
+                "closed_on": r.get("created_at"),
+                "net_credit_actual": 0,
+                "actual_max_profit": None,
+                "strategy": "EXECUTION_REVERT",
+                "underlying": "REVERT",
+            })
 
         def _hold_days(r):
             ex = r.get("executed_on")
@@ -2495,15 +2573,23 @@ def create_app() -> Flask:
             worst = float(worst_row["net_pnl"])
             strat_premium = 0.0
             for t in trades:
-                prem_rs, _ = _trade_premium_from_legs(db, t["trade_id"])
-                strat_premium += prem_rs
+                tid = t.get("trade_id")
+                if tid:
+                    prem_rs, _ = _trade_premium_from_legs(db, tid)
+                    strat_premium += prem_rs
             overall_premium += strat_premium
             avg_max_profit = None
             mps = [float(t["actual_max_profit"]) for t in trades if t.get("actual_max_profit")]
             if mps:
                 avg_max_profit = round(sum(mps) / len(mps), 2)
-            best_prem, best_kind = _trade_premium_from_legs(db, best_row["trade_id"])
-            worst_prem, worst_kind = _trade_premium_from_legs(db, worst_row["trade_id"])
+            best_prem, best_kind = (
+                _trade_premium_from_legs(db, best_row["trade_id"])
+                if best_row.get("trade_id") else (0.0, "paid")
+            )
+            worst_prem, worst_kind = (
+                _trade_premium_from_legs(db, worst_row["trade_id"])
+                if worst_row.get("trade_id") else (0.0, "paid")
+            )
             strategy_stats.append({
                 "strategy":       strategy,
                 "total":          len(trades),
@@ -2807,6 +2893,11 @@ def create_app() -> Flask:
         groups = group_broker_orders(
             [_row(r) for r in rows], trade_names=trade_names, jobs=jobs,
         )
+        try:
+            from lifecycle.execution_reversal import attach_reversals_to_groups
+            attach_reversals_to_groups(db, groups)
+        except Exception:
+            logger.debug("attach execution reversals skipped", exc_info=True)
         if not trade_id and not suggestion_id:
             groups = groups[:limit]
 

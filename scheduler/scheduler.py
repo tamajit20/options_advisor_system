@@ -533,7 +533,7 @@ def job_morning_eod_catchup():
 
 
 def job_weekly_archive():
-    """Move aged hot rows into *_Archive tables (no deletes except logs)."""
+    """Copy aged hot rows into *_Archive tables (hot delete waits for ACK)."""
     from lifecycle.archive_orchestrator import run_archive
 
     _run_job("weekly_archive", run_archive)

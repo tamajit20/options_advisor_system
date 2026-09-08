@@ -28,11 +28,11 @@ $Settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew
 
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings `
-    -Description "Pull Options Advisor archive .bak from Azure VM, merge into local OptionsAdvisorDB_Archive, ACK VM truncate." `
+    -Description "Pull hot+archive .bak to laptop, merge archive, ACK VM delete only after local copies exist." `
     -Force | Out-Null
 
 Write-Host "Registered scheduled task: $TaskName"
-Write-Host "  Runs: Mon-Fri at $Time (pull + merge when VM has pending export)"
+Write-Host "  Runs: Mon-Fri at $Time (pull backups to laptop, then ACK VM delete)"
 Write-Host "  Script: $ScriptPath"
 Write-Host ""
 Write-Host 'Test now: .\deploy\azure\pull-archive-and-merge.ps1'

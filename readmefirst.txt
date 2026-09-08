@@ -103,7 +103,7 @@ SECTION 4 — KEY SCRIPTS (do not duplicate logic elsewhere)
   deploy/azure/pull-archive-and-merge.ps1   Download archive chunk + merge locally
   deploy/azure/register-laptop-archive-task.ps1   Windows scheduled task
   deploy/archive-export.sh                  VM: export *_Archive to .bak (Fri)
-  deploy/archive-truncate-vm.sh               VM: clear *_Archive after laptop ACK
+  deploy/archive-truncate-vm.sh               VM ACK: delete hot mirrors + clear *_Archive
   deploy/vm-restart.sh                      Rebuild/restart app container on VM
   deploy/backup.sh                          Hot DB backup on VM
   scripts/merge_archive_into_local.py       Merge weekly .bak into archive DB
@@ -116,15 +116,15 @@ SECTION 5 — AUTOMATED SCHEDULE (no daily user action)
 
   VM Mon-Fri 08:55-15:45     Azure Automation (VMUpTimeConfiguration.ps1)
 
-  VM Friday 09:30            weekly_archive      hot rows -> *_Archive
+  VM Friday 09:30            weekly_archive      copy hot rows -> *_Archive (hot stays)
   VM Friday 09:35            weekly_log_cleanup  delete logs and alerts
   VM Friday 15:36            archive_export      .bak + PENDING.json on VM
-                             (ACK deletes the VM .bak after laptop merge)
-  VM Friday 15:38            db_backup           single OptionsAdvisorDB-latest.bak
-                             (replaced each Friday; deleted after laptop pull)
+  VM Friday 15:38            db_backup           OptionsAdvisorDB-latest.bak
+                             + LAST_HOT_BACKUP.json (ACK refuses without this)
 
   Laptop Mon-Fri 09:15       Task OptionsAdvisor-ArchiveMerge
-                               pull-archive-and-merge.ps1
+                               pull hot .bak + archive chunk to laptop, then
+                               merge, then ACK (VM deletes only after that)
 
   Log retention (VM delete):  delete_keep_days = 7 (logs, alerts, job runs, Zerodha jobs)
   Hot retention (VM archive):  hot_archive_keep_days = 365 (every historical table)
@@ -151,6 +151,9 @@ SECTION 7 — DATABASE & ARCHIVE TABLES
   Log tables (delete only, no _Archive): options_system_logs, options_job_log,
                                          options_zerodha_execution_jobs,
                                          options_notifications
+
+  Execution reversals: options_execution_reversals (flatten P&L + charges;
+                       archived with historical tables)
 
   Never archive: options_config, options_runtime_flags, options_lot_sizes,
                  options_expiry_calendar, options_events_calendar,

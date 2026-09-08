@@ -10,6 +10,7 @@ from database.archive_registry import ARCHIVE_TABLE_SPECS
 from database.archive_repo import (
     add_missing_hot_columns,
     archive_copy_insert_sql,
+    delete_hot_rows_present_in_archive,
     ensure_archive_tables,
     merge_chunk_insert_sql,
     move_spec,
@@ -215,7 +216,7 @@ class TestMoveBrokerOrders:
         n = move_spec(db, spec, "batch-abc", today)
 
         assert n == 2
-        assert db.execute.call_count == 2
+        assert db.execute.call_count == 1
 
         ins_sql, ins_params = db.execute.call_args_list[0][0]
         assert "INSERT INTO options_broker_orders_Archive (id, created_at, trade_id, archived_at, archive_batch_id)" in ins_sql
@@ -227,11 +228,7 @@ class TestMoveBrokerOrders:
         cutoff = ins_params[1]
         assert isinstance(cutoff, datetime)
         assert cutoff == datetime(2025, 9, 5, 0, 0, 0)
-
-        del_sql, del_params = db.execute.call_args_list[1][0]
-        assert "DELETE FROM options_broker_orders" in del_sql
-        assert "created_at < ?" in del_sql
-        assert del_params[0] == cutoff
+        assert "DELETE FROM options_broker_orders" not in ins_sql
 
     def test_fo_eod_move_names_identity_column(self):
         db = MagicMock()
@@ -262,10 +259,12 @@ class TestMoveBrokerOrders:
 
         n = move_spec(db, _legs_spec(), "b1", date(2026, 9, 8))
         assert n == 3
+        assert db.execute.call_count == 1
         ins_sql = db.execute.call_args_list[0][0][0]
         assert "SET IDENTITY_INSERT options_suggestion_legs_Archive ON" in ins_sql
         assert "FROM options_suggestion_legs s" in ins_sql
         assert "s.suggestion_id IN" in ins_sql
+        assert "DELETE FROM options_suggestion_legs" not in ins_sql
 
     def test_move_respects_retention_config_override(self, monkeypatch):
         from config import RETENTION_CONFIG
@@ -303,3 +302,25 @@ class TestRunWeeklyArchive:
         )
         with pytest.raises(RuntimeError, match="archive failed"):
             run_weekly_archive(db, date(2026, 9, 5))
+
+
+class TestDeleteHotRowsPresentInArchive:
+    def test_deletes_children_before_parents_in_batches(self):
+        db = MagicMock()
+        done = MagicMock(rowcount=0)
+        db.execute.return_value = done
+
+        n = delete_hot_rows_present_in_archive(db, batch_size=5000)
+
+        assert n == 0
+        sqls = [c.args[0] for c in db.execute.call_args_list]
+
+        def _idx(table: str) -> int:
+            needle = f"DELETE TOP (5000) FROM {table}\n"
+            return next(i for i, s in enumerate(sqls) if needle in s)
+
+        assert _idx("options_suggestion_legs") < _idx("options_suggestions")
+        assert _idx("options_trade_legs") < _idx("options_trades")
+        legs_sql = sqls[_idx("options_suggestion_legs")]
+        assert "WHERE EXISTS (SELECT 1 FROM options_suggestion_legs_Archive" in legs_sql
+        assert db.commit.call_count == len(ARCHIVE_TABLE_SPECS)

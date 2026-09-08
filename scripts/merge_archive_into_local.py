@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Merge a weekly archive .bak chunk into cumulative local OptionsAdvisorDB_Archive."""
+"""Merge a weekly archive .bak chunk into cumulative local OptionsAdvisorDB_Archive.
+
+Does not touch VM hot tables. Hot delete happens later on VM ACK after this merge
+and a confirmed db_backup.
+"""
 from __future__ import annotations
 
 import argparse

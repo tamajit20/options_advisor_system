@@ -33,6 +33,11 @@ class TestArchiveRegistry:
         hot = {s.hot_table for s in ARCHIVE_TABLE_SPECS}
         assert "options_broker_orders" in hot
 
+    def test_execution_reversals_in_schema_and_registry(self):
+        assert "options_execution_reversals" in sc.list_tables()
+        hot = {s.hot_table for s in ARCHIVE_TABLE_SPECS}
+        assert "options_execution_reversals" in hot
+
     def test_ordered_specs_parents_before_children(self):
         seen_parents: set[str] = set()
         for spec in ordered_specs():

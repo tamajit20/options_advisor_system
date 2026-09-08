@@ -9,6 +9,7 @@ bind-mounts to ./backups on the VM.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from contextlib import contextmanager
@@ -25,6 +26,7 @@ SQL_BIND_BACKUP_DIR = "/var/opt/mssql/host-backups"
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _BAK_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.bak$")
 _MIN_BAK_BYTES = 1024
+HOT_BACKUP_MARKER_NAME = "LAST_HOT_BACKUP.json"
 
 
 def sql_ident(name: str) -> str:
@@ -78,6 +80,26 @@ def repo_root() -> Path:
 def host_backup_dir() -> Path:
     """Advisor-side path for ./backups (bind-mounted in Docker)."""
     return repo_root() / "backups"
+
+
+def hot_backup_marker_path() -> Path:
+    return host_backup_dir() / "archive" / HOT_BACKUP_MARKER_NAME
+
+
+def write_hot_backup_marker(*, bak_name: str, size_bytes: int) -> Path:
+    """Record a successful db_backup so ACK can refuse to delete hot rows without it."""
+    from utils import now_ist
+
+    path = hot_backup_marker_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "bak_name": bak_filename(bak_name),
+        "completed_at": now_ist().isoformat(),
+        "bytes": int(size_bytes),
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    logger.info("hot backup confirmed: %s", path)
+    return path
 
 
 def prepare_backup_dirs() -> Path:
@@ -184,7 +206,8 @@ def backup_database(
             "or too small. Bind-mount ./backups on sqlserver "
             f"({SQL_BIND_BACKUP_DIR}) and options_advisor (/app/backups)."
         )
-    logger.info("backup wrote %s (%d bytes)", target, target.stat().st_size)
+    size = target.stat().st_size
+    logger.info("backup wrote %s (%d bytes)", target, size)
     return target
 
 
@@ -209,4 +232,5 @@ def run_hot_backup(db: SQLServerConnection) -> Path:
     dest = prepare_backup_dirs()
     path = backup_database(db, db_name, filename, timeout=timeout)
     prune_bak_files(dest, keep_names={filename})
+    write_hot_backup_marker(bak_name=filename, size_bytes=path.stat().st_size)
     return path

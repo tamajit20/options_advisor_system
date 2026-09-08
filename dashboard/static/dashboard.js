@@ -7803,6 +7803,7 @@ async function loadZerodhaExecutionLogs() {
         </summary>
         <div class="zerodha-exec-body">
           ${detail ? `<p class="zerodha-exec-detail">${escapeHtml(detail)}</p>` : ''}
+          ${g.reversal ? `<p class="zerodha-exec-detail">Booked revert P&amp;L <strong>${Number(g.reversal.net_pnl) >= 0 ? '+' : ''}₹${Number(g.reversal.net_pnl).toLocaleString('en-IN', {maximumFractionDigits: 2})}</strong> · charges ₹${Number(g.reversal.total_charges).toLocaleString('en-IN', {maximumFractionDigits: 2})}</p>` : ''}
           ${sub ? `<div class="muted" style="font-size:.82rem;margin-bottom:8px">${sub}</div>` : ''}
           <div class="hist-legs-scroll">
             <table class="dt zerodha-exec-tbl">

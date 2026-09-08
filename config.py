@@ -1158,7 +1158,8 @@ LOGGING_CONFIG = {
 # Two knobs only. Config UI and jobs both use these — never add per-table days.
 #   delete_keep_days       — weekly_log_cleanup hard-deletes logs, alerts,
 #                            job runs, Zerodha execution jobs
-#   hot_archive_keep_days  — weekly_archive moves every historical table
+#   hot_archive_keep_days  — weekly_archive copies every historical table;
+#                            hot delete happens only after laptop merge + db_backup ACK
 _HOT_ARCHIVE_DAYS = 365
 _DELETE_KEEP_DAYS = 7
 

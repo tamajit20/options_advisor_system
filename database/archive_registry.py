@@ -123,6 +123,11 @@ ARCHIVE_TABLE_SPECS: List[ArchiveTableSpec] = [
         ("id",),
         date_type="datetime",
     ),
+    ArchiveTableSpec(
+        "options_execution_reversals", "created_at", ARCHIVE_RETENTION_KEY,
+        ("id",),
+        date_type="datetime",
+    ),
 ]
 
 

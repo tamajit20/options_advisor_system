@@ -978,6 +978,18 @@ def _rollback_filled_legs(
             leg_orders=failed,
             context=ctx,
         )
+    try:
+        from lifecycle.execution_reversal import record_reversal_after_flatten
+
+        record_reversal_after_flatten(
+            db,
+            suggestion_id=suggestion_id,
+            trade_id=trade_id,
+            execution_job_id=execution_job_id,
+            reason="EXIT_ROLLBACK" if mode == "exit" else "ENTRY_ROLLBACK",
+        )
+    except Exception:
+        logger.exception("execution reversal P&L recording failed")
     return failed
 
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# After laptop merge: delete mirrored hot rows, truncate *_Archive, drop export .bak.
+# Refuses if PENDING.json is missing or Friday db_backup has not been confirmed.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

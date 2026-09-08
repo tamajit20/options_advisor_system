@@ -1,5 +1,8 @@
 """
-Move aged rows from hot tables into matching *_Archive tables.
+Copy aged rows from hot tables into matching *_Archive tables.
+
+Hot rows are not deleted here. ACK (after laptop merge + hot backup) deletes
+hot rows whose primary key already exists in *_Archive, then truncates archive.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ARCHIVE_ONLY_COLS = frozenset({"archived_at", "archive_batch_id"})
+_HOT_DELETE_BATCH = 5000
 _SKIP_COPY_TYPES = frozenset({"timestamp", "rowversion", "xml", "sql_variant", "image", "text", "ntext"})
 _LEN_TYPES = frozenset({"varchar", "nvarchar", "char", "nchar", "varbinary", "binary"})
 _PREC_SCALE_TYPES = frozenset({"decimal", "numeric"})
@@ -394,13 +398,11 @@ def _move_child_by_parent(
     n_ins = _insert_archive_rows(
         db, spec, batch_id, where_sql, [batch_id, parent_cutoff],
     )
-    de = db.execute(
-        f"DELETE FROM {spec.hot_table} WHERE {spec.parent_key} IN ({parent_sub})",
-        [parent_cutoff],
+    logger.info(
+        "archive %s: copied ~%d child rows (parent cutoff %s)",
+        spec.hot_table, n_ins, parent_cutoff,
     )
-    n_del = de.rowcount or 0
-    de.close()
-    return max(n_ins, n_del)
+    return n_ins
 
 
 def move_spec(
@@ -426,15 +428,9 @@ def move_spec(
         f"WHERE s.{spec.date_column} < ?{extra}\n"
         f"          AND NOT EXISTS (SELECT 1 FROM {arch} t WHERE {pk})"
     )
-    _insert_archive_rows(db, spec, batch_id, where_sql, [batch_id, cutoff])
-    de = db.execute(
-        f"DELETE FROM {hot} WHERE {spec.date_column} < ?{extra}",
-        [cutoff],
-    )
-    n_del = de.rowcount or 0
-    de.close()
-    logger.info("archive %s: moved ~%d rows (cutoff %s)", hot, n_del, cutoff)
-    return n_del
+    n_ins = _insert_archive_rows(db, spec, batch_id, where_sql, [batch_id, cutoff])
+    logger.info("archive %s: copied ~%d rows (cutoff %s)", hot, n_ins, cutoff)
+    return n_ins
 
 
 def run_weekly_archive(db: SQLServerConnection, today: date) -> int:
@@ -457,6 +453,42 @@ def archive_table_row_counts(db: SQLServerConnection) -> dict[str, int]:
         row = db.fetch_one(f"SELECT COUNT(*) AS n FROM {arch}")
         out[arch] = int(row["n"]) if row else 0
     return out
+
+
+def delete_hot_rows_present_in_archive(
+    db: SQLServerConnection,
+    *,
+    batch_size: int = _HOT_DELETE_BATCH,
+) -> int:
+    """Delete hot rows that already exist in *_Archive (children first).
+
+    Called only after laptop merge and hot backup are confirmed.
+    """
+    batch_size = max(1, int(batch_size))
+    total = 0
+    for spec in roots_first_for_export():
+        hot = _ident(spec.hot_table)
+        arch = _ident(archive_table_name(spec.hot_table))
+        pk = _pk_match_sql(spec, hot, arch)
+        sql = (
+            f"DELETE TOP ({batch_size}) FROM {hot}\n"
+            f"WHERE EXISTS (SELECT 1 FROM {arch} WHERE {pk})"
+        )
+        moved = 0
+        while True:
+            cur = db.execute(sql)
+            n = int(cur.rowcount or 0)
+            cur.close()
+            if n < 0:
+                n = 0
+            moved += n
+            db.commit()
+            if n < batch_size:
+                break
+        if moved:
+            logger.info("ACK delete hot %s: %d rows", hot, moved)
+        total += moved
+    return total
 
 
 def truncate_all_archive_tables(db: SQLServerConnection) -> int:

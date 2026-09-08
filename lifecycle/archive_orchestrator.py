@@ -2,7 +2,7 @@
 lifecycle/archive_orchestrator.py
 =================================
 
-Weekly move of aged hot rows into *_Archive tables (no deletes except logs).
+Weekly copy of aged hot rows into *_Archive tables. Hot rows stay until ACK.
 """
 
 from __future__ import annotations
@@ -20,5 +20,5 @@ def run_archive(db: SQLServerConnection) -> int:
     today = today_ist()
     n = run_weekly_archive(db, today)
     db.commit()
-    logger.info("weekly archive complete: ~%d rows moved", n)
+    logger.info("weekly archive complete: ~%d rows copied", n)
     return n
