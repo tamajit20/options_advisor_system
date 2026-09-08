@@ -540,23 +540,23 @@ def job_weekly_archive():
 
 
 def job_weekly_log_cleanup():
-    """Delete log tables only; keep MTM hot-table maintenance."""
+    """Delete log/alert/job rows older than ``delete_keep_days``."""
     from datetime import timedelta as _td
     from config import RETENTION_CONFIG
 
     def _cleanup(db: SQLServerConnection) -> int:
         from database.log_repo import LogRepo, JobLogRepo
-        from database.models import TradeMtmSnapshotRepo
+        from database.models import NotificationRepo, TradeMtmSnapshotRepo
         today = today_ist()
+        cutoff = today - _td(days=int(RETENTION_CONFIG["delete_keep_days"]))
         n = 0
-        n += LogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["system_logs_keep_days"]))
-        n += JobLogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["job_log_keep_days"]))
+        n += LogRepo(db).delete_older_than(cutoff)
+        n += JobLogRepo(db).delete_older_than(cutoff)
+        n += NotificationRepo(db).delete_older_than(cutoff)
         mtm_repo = TradeMtmSnapshotRepo(db)
         n += mtm_repo.archive_non_active()
         from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
-        n += ZerodhaExecutionJobRepo(db).delete_older_than(
-            today - _td(days=RETENTION_CONFIG["zerodha_execution_jobs_keep_days"])
-        )
+        n += ZerodhaExecutionJobRepo(db).delete_older_than(cutoff)
         db.commit()
         return n
 
@@ -588,22 +588,23 @@ def job_weekly_cleanup():
         )
         from database.log_repo import LogRepo, JobLogRepo
         today = today_ist()
+        delete_cutoff = today - _td(days=int(RETENTION_CONFIG["delete_keep_days"]))
+        archive_cutoff = today - _td(days=int(RETENTION_CONFIG["hot_archive_keep_days"]))
         n = 0
-        n += FoEodRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["fo_bhav_keep_days"]))
-        n += SpotEodRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["spot_bhav_keep_days"]))
-        n += VixRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["vix_keep_days"]))
-        n += FiiRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["fii_keep_days"]))
-        n += IvHistoryRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["iv_history_keep_days"]))
-        n += SuggestionRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["suggestions_keep_days"]))
-        n += NotificationRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["notifications_keep_days"]))
-        n += ChainTimeseriesRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["chain_5min_keep_days"]))
-        n += AtmIvTimeseriesRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["atm_iv_5min_keep_days"]))
-        n += LogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["system_logs_keep_days"]))
-        n += JobLogRepo(db).delete_older_than(today - _td(days=RETENTION_CONFIG["job_log_keep_days"]))
+        n += FoEodRepo(db).delete_older_than(archive_cutoff)
+        n += SpotEodRepo(db).delete_older_than(archive_cutoff)
+        n += VixRepo(db).delete_older_than(archive_cutoff)
+        n += FiiRepo(db).delete_older_than(archive_cutoff)
+        n += IvHistoryRepo(db).delete_older_than(archive_cutoff)
+        n += SuggestionRepo(db).delete_older_than(archive_cutoff)
+        n += NotificationRepo(db).delete_older_than(delete_cutoff)
+        n += ChainTimeseriesRepo(db).delete_older_than(archive_cutoff)
+        n += AtmIvTimeseriesRepo(db).delete_older_than(archive_cutoff)
+        n += LogRepo(db).delete_older_than(delete_cutoff)
+        n += JobLogRepo(db).delete_older_than(delete_cutoff)
         mtm_repo = TradeMtmSnapshotRepo(db)
         n += mtm_repo.archive_non_active()
-        n += mtm_repo.delete_history_older_than(
-            today - _td(days=RETENTION_CONFIG["trade_mtm_snapshot_history_keep_days"]))
+        n += mtm_repo.delete_history_older_than(archive_cutoff)
         db.commit()
         return n
 

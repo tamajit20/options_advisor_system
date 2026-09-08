@@ -59,6 +59,26 @@ _DASHBOARD_SKIP = frozenset({
     "host", "port", "debug", "api_key", "public_base_url",
 })
 
+# Old per-table retention keys in options_config → the two live knobs.
+_CONFIG_KEY_ALIASES = {
+    "retention.system_logs_keep_days": "retention.delete_keep_days",
+    "retention.job_log_keep_days": "retention.delete_keep_days",
+    "retention.zerodha_execution_jobs_keep_days": "retention.delete_keep_days",
+    "retention.notifications_keep_days": "retention.delete_keep_days",
+    "retention.fo_bhav_keep_days": "retention.hot_archive_keep_days",
+    "retention.spot_bhav_keep_days": "retention.hot_archive_keep_days",
+    "retention.vix_keep_days": "retention.hot_archive_keep_days",
+    "retention.fii_keep_days": "retention.hot_archive_keep_days",
+    "retention.iv_history_keep_days": "retention.hot_archive_keep_days",
+    "retention.suggestions_keep_days": "retention.hot_archive_keep_days",
+    "retention.trades_keep_days": "retention.hot_archive_keep_days",
+    "retention.simulations_keep_days": "retention.hot_archive_keep_days",
+    "retention.chain_5min_keep_days": "retention.hot_archive_keep_days",
+    "retention.atm_iv_5min_keep_days": "retention.hot_archive_keep_days",
+    "retention.trade_mtm_snapshot_history_keep_days": "retention.hot_archive_keep_days",
+    "retention.broker_orders_keep_days": "retention.hot_archive_keep_days",
+}
+
 _PNL_KEYS = frozenset({
     "long_premium_target_base", "long_premium_target_dte_scale",
     "long_premium_target_max", "long_premium_target_strategies",
@@ -381,7 +401,7 @@ def apply_config_overrides(db=None) -> int:
         specs = _spec_map()
         applied = 0
         for row in rows:
-            key = row.get("config_key")
+            key = _CONFIG_KEY_ALIASES.get(row.get("config_key"), row.get("config_key"))
             spec = specs.get(key)
             if spec is None:
                 continue

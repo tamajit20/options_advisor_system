@@ -724,7 +724,7 @@ _JOB_META: Dict[str, Dict[str, str]] = {
     "weekly_archive":     {"icon": "📦", "name": "Weekly Archive",
                             "description": "Move aged rows to *_Archive tables (Fri 09:30)."},
     "weekly_log_cleanup": {"icon": "🪵", "name": "Log Cleanup",
-                            "description": "Delete system/job logs only (Fri 09:35)."},
+                            "description": "Delete system/job logs and alerts (Fri 09:35)."},
     "archive_export":     {"icon": "💾", "name": "Archive Export",
                             "description": "Export pending *_Archive .bak before VM stop (Fri 15:36)."},
     "db_backup":          {"icon": "💽", "name": "Hot DB Backup",
@@ -2762,7 +2762,7 @@ def create_app() -> Flask:
                           since=since, search=search, limit=limit, offset=offset)
         return jsonify({
             "logs": [_row(r) for r in rows],
-            "retention_days": RETENTION_CONFIG["system_logs_keep_days"],
+            "retention_days": RETENTION_CONFIG["delete_keep_days"],
         })
 
     @app.route("/api/logs/level-counts")
@@ -3605,7 +3605,19 @@ def create_app() -> Flask:
                     if _os.path.exists(MTM_STATE_PATH):
                         with open(MTM_STATE_PATH, encoding="utf-8") as fh:
                             state = _json.load(fh)
-                        for tid, payload in (state.get("trades") or {}).items():
+                        live = state.get("trades") or {}
+                        if not isinstance(live, dict):
+                            live = {}
+                        live_ids = set(live)
+                        for tid in list(last_seen):
+                            if tid not in live_ids:
+                                last_seen.pop(tid, None)
+                                yield (
+                                    "data: "
+                                    + _json.dumps({"trade_id": tid, "closed": True})
+                                    + "\n\n"
+                                )
+                        for tid, payload in live.items():
                             cur_key = (
                                 payload.get("mtm"),
                                 payload.get("live_pop"),

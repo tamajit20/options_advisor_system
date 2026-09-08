@@ -43,9 +43,14 @@
     <div id="global-banners" class="global-banners" aria-live="polite" hidden></div>
   </div>
   <div class="header-actions">
-    <div id="zerodha-profile-chip" class="idx-chip idx-chip-live zerodha-funds-chip" hidden aria-label="Zerodha available margin">
+    <div id="zerodha-profile-chip" class="idx-chip idx-chip-live zerodha-funds-chip" hidden
+         title="Available margin — updates every 30 minutes."
+         aria-label="Zerodha available margin">
       <span class="idx-chip-label">Zerodha</span>
       <span class="idx-chip-price" id="zerodha-profile-amount">—</span>
+      <button type="button" class="zerodha-margin-refresh-btn" id="zerodha-margin-refresh"
+              title="Refresh available margin from Zerodha now"
+              aria-label="Refresh Zerodha margin">Refresh</button>
       <span class="idx-chip-src">Margin</span>
     </div>
     <a id="zerodha-login-btn" class="icon-btn" href="/zerodha/login"

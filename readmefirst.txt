@@ -11,7 +11,7 @@ Do not ask the user to paste long prompts. Read linked docs only when you need
 detail. Run commands yourself. Ask the user ONLY for secrets and Azure Portal
 values you cannot infer.
 
-Last updated: 2026-09-07 (keep in sync — see Section 8)
+Last updated: 2026-09-08 (keep in sync — see Section 8)
 
 
 ================================================================================
@@ -117,15 +117,15 @@ SECTION 5 — AUTOMATED SCHEDULE (no daily user action)
   VM Mon-Fri 08:55-15:45     Azure Automation (VMUpTimeConfiguration.ps1)
 
   VM Friday 09:30            weekly_archive      hot rows -> *_Archive
-  VM Friday 09:35            weekly_log_cleanup  delete logs only
+  VM Friday 09:35            weekly_log_cleanup  delete logs and alerts
   VM Friday 15:36            archive_export      .bak + PENDING.json on VM
   VM Friday 15:38            db_backup           hot DB snapshot
 
   Laptop Mon-Fri 09:15       Task OptionsAdvisor-ArchiveMerge
                                pull-archive-and-merge.ps1
 
-  Log retention (VM delete):  system_logs 7d | job_log 7d | zerodha_execution_jobs 30d
-  Hot retention (VM archive):  hot_archive_keep_days = 365 (all tables incl. broker orders)
+  Log retention (VM delete):  delete_keep_days = 7 (logs, alerts, job runs, Zerodha jobs)
+  Hot retention (VM archive):  hot_archive_keep_days = 365 (every historical table)
 
 
 ================================================================================
@@ -147,7 +147,8 @@ SECTION 7 — DATABASE & ARCHIVE TABLES
   Archive registry:  database/archive_registry.py  (ARCHIVE_TABLE_SPECS)
   Archive logic:     database/archive_repo.py, lifecycle/archive_orchestrator.py
   Log tables (delete only, no _Archive): options_system_logs, options_job_log,
-                                         options_zerodha_execution_jobs
+                                         options_zerodha_execution_jobs,
+                                         options_notifications
 
   Never archive: options_config, options_runtime_flags, options_lot_sizes,
                  options_expiry_calendar, options_events_calendar,
@@ -176,8 +177,8 @@ SECTION 8 — MAINTENANCE (developers & AI: keep setup in sync)
   New DB table (historical data)  schema.py list_tables(), archive_registry.py,
                                   merge script uses registry automatically,
                                   readmefirst Section 7 if special case
-  New log table                   RETENTION_CONFIG, weekly_log_cleanup in
-                                  scheduler.py, readmefirst Section 5
+  New log table                   weekly_log_cleanup in scheduler.py,
+                                  readmefirst Section 5 (uses delete_keep_days)
   New scheduler job               config.py SCHEDULER_CONFIG, scheduler.py
                                   JOB_FUNCS, dashboard/server.py job metadata,
                                   readmefirst Section 5, OPERATIONS.md

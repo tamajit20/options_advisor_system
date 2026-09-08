@@ -46,11 +46,18 @@ class TestArchiveRegistry:
     def test_roots_first_is_reverse_of_ordered(self):
         assert roots_first_for_export() == list(reversed(ordered_specs()))
 
-    def test_retention_config_has_hot_archive_and_broker_alias(self):
+    def test_retention_config_has_exactly_two_keys(self):
+        assert set(RETENTION_CONFIG) == {"delete_keep_days", "hot_archive_keep_days"}
         assert RETENTION_CONFIG["hot_archive_keep_days"] == 365
-        assert RETENTION_CONFIG["broker_orders_keep_days"] == 365
-        assert RETENTION_CONFIG["broker_orders_keep_days"] == RETENTION_CONFIG["hot_archive_keep_days"]
+        assert RETENTION_CONFIG["delete_keep_days"] == 7
 
     def test_every_spec_retention_key_in_config(self):
         for spec in ARCHIVE_TABLE_SPECS:
             assert spec.retention_key in RETENTION_CONFIG
+
+    def test_notifications_are_delete_only_not_archived(self):
+        hot = {s.hot_table for s in ARCHIVE_TABLE_SPECS}
+        assert "options_notifications" not in hot
+        assert "options_notifications" in sc.list_tables()
+        assert "notifications_keep_days" not in RETENTION_CONFIG
+        assert RETENTION_CONFIG["delete_keep_days"] == 7

@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 
 _CACHE_LOCK = threading.Lock()
 _CACHE: Dict[str, Any] = {"at": 0.0, "payload": None}
-_CACHE_TTL_SEC = 45
+# Dashboard polls status often; Kite profile/margins are fetched at most this often
+# unless the user clicks Refresh (force_refresh=True).
+_CACHE_TTL_SEC = 30 * 60
 
 
 def _num(value: Any) -> Optional[float]:

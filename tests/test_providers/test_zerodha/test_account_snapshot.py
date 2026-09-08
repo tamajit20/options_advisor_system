@@ -79,6 +79,40 @@ def test_fetch_account_snapshot_success(mocker):
     assert facade.profile.call_count == 1
 
 
+def test_account_cache_ttl_is_thirty_minutes():
+    assert acct._CACHE_TTL_SEC == 30 * 60
+
+
+def test_account_cache_expires_after_ttl(mocker):
+    session = MagicMock(access_token="tok", user_id="AB1234")
+    mocker.patch("providers.zerodha.account_snapshot.load_session", return_value=session)
+    mocker.patch("providers.zerodha.account_snapshot.is_token_valid", return_value=True)
+    mocker.patch.dict("config.ZERODHA_API_CONFIG", {"api_key": "k"}, clear=False)
+    clock = {"t": 1_000.0}
+    mocker.patch(
+        "providers.zerodha.account_snapshot.time.monotonic",
+        side_effect=lambda: clock["t"],
+    )
+
+    facade = MagicMock()
+    facade.profile.return_value = {"user_id": "AB1234", "user_name": "A"}
+    facade.margins.return_value = {
+        "equity": {"net": 1, "available": {"cash": 1, "live_balance": 1}, "utilised": {}}
+    }
+    mocker.patch("providers.zerodha.account_snapshot._build_facade", return_value=facade)
+
+    acct.fetch_account_snapshot(force_refresh=True)
+    clock["t"] = 1_000.0 + acct._CACHE_TTL_SEC - 1
+    cached = acct.fetch_account_snapshot(force_refresh=False)
+    assert cached["cached"] is True
+    assert facade.profile.call_count == 1
+
+    clock["t"] = 1_000.0 + acct._CACHE_TTL_SEC + 1
+    stale = acct.fetch_account_snapshot(force_refresh=False)
+    assert stale["cached"] is False
+    assert facade.profile.call_count == 2
+
+
 def test_fetch_account_snapshot_force_refresh_bypasses_cache(mocker):
     session = MagicMock(access_token="tok")
     mocker.patch("providers.zerodha.account_snapshot.load_session", return_value=session)

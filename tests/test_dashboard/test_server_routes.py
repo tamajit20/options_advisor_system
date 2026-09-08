@@ -870,6 +870,28 @@ class TestLiveMTMStream:
         assert b"T-001" in chunk and b"1234" in chunk
         resp.close()
 
+    def test_closed_trade_emits_tombstone(self, client, mocker, tmp_path, monkeypatch):
+        import json
+        import os
+
+        path = tmp_path / "live_mtm_state.json"
+        path.write_text(json.dumps({
+            "trades": {"T-001": {"trade_id": "T-001", "mtm": 10.0}},
+        }), encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        os.makedirs("data", exist_ok=True)
+        os.replace(path, "data/live_mtm_state.json")
+        mocker.patch("time.sleep", return_value=None)
+        resp = client.get("/api/live/mtm", buffered=False)
+        next(resp.response)  # connected
+        first = next(resp.response)
+        assert b"T-001" in first and b"10" in first
+        with open("data/live_mtm_state.json", "w", encoding="utf-8") as fh:
+            json.dump({"trades": {}}, fh)
+        tomb = next(resp.response)
+        assert b"closed" in tomb and b"T-001" in tomb
+        resp.close()
+
 
 class TestIndicesSpotStream:
     def test_endpoint_returns_event_stream_mime(self, client):

@@ -77,7 +77,18 @@ let _zerodhaExecutionConfigEnabled = false;
 let _zerodhaExecutionRuntimeEnabled = false;
 let _zerodhaExecutionEnabled = false;
 let _zerodhaExecutionReady = false;
-let _lastMtmByTrade = {};  // tradeId → { mtm, as_of, receivedAt }
+let _lastMtmByTrade = {};  // tradeId → { mtm, as_of, receivedAt } — open trades only
+
+function _pruneMtmCache(openIds) {
+  const keep = new Set((openIds || []).map(id => String(id)));
+  let dropped = false;
+  Object.keys(_lastMtmByTrade).forEach(tid => {
+    if (keep.has(tid)) return;
+    delete _lastMtmByTrade[tid];
+    dropped = true;
+  });
+  if (dropped) _refreshPnlSignalRail();
+}
 const _zerodhaInflightPolls = new Map(); // key → stop function
 
 function _parseMtmAsOf(asOfStr) {
@@ -6033,6 +6044,7 @@ async function loadTrades() {
     const data = await API('/api/trades/open');
     if (!data.trades.length) {
       c.className=''; c.innerHTML = '<div class="empty">No open trades.</div>';
+      _pruneMtmCache([]);
       return;
     }
     c.className=''; c.innerHTML = data.trades.map(t => renderTrade(t, false)).join('');
@@ -6042,6 +6054,7 @@ async function loadTrades() {
     } catch (_) {
       _bootstrapLiveLevelsForTrades(data.trades, { trades: {} });
     }
+    _pruneMtmCache(data.trades.map(t => t.trade_id));
     // Phase 3 — #3: open SSE stream once after each trades render so live
     // MTM cells (.live-mtm[data-trade-id="..."]) update without polling.
     ensureLiveMTMStream();
@@ -8247,6 +8260,13 @@ function _qualityBadge(storedScore, prefix = '', detail = null) {
 let _liveMTMSource = null;
 
 function _applyMtmEvent(m) {
+  if (m && m.closed && m.trade_id) {
+    if (_lastMtmByTrade[m.trade_id]) {
+      delete _lastMtmByTrade[m.trade_id];
+      _refreshPnlSignalRail();
+    }
+    return;
+  }
   if (m && m.trade_id && m.trade_name) {
     _lastMtmByTrade[m.trade_id] = {
       ...(_lastMtmByTrade[m.trade_id] || {}),
@@ -8804,6 +8824,34 @@ function _fmtZerodhaChipPrice(n) {
   });
 }
 
+let _zerodhaMarginRefreshInFlight = false;
+
+async function refreshZerodhaMargin() {
+  if (_zerodhaMarginRefreshInFlight) return;
+  _zerodhaMarginRefreshInFlight = true;
+  const btn = document.getElementById('zerodha-margin-refresh');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '…';
+  }
+  try {
+    const d = await loadZerodhaStatus(true);
+    if (d && d.account && d.account.available) {
+      if (typeof toast === 'function') toast('Margin refreshed from Zerodha', 'ok');
+    } else if (typeof toast === 'function') {
+      toast('Could not refresh margin', 'err');
+    }
+  } catch (e) {
+    if (typeof toast === 'function') toast('Could not refresh margin', 'err');
+  } finally {
+    _zerodhaMarginRefreshInFlight = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Refresh';
+    }
+  }
+}
+
 function _applyZerodhaAccountUi(account, d) {
   const panel = document.getElementById('zerodha-account-panel');
   const chip = document.getElementById('zerodha-profile-chip');
@@ -8837,6 +8885,7 @@ function _applyZerodhaAccountUi(account, d) {
       usable != null ? `Available margin: ${_fmtZerodhaMoney(usable)}` : null,
       cash != null ? `Available cash: ${_fmtZerodhaMoney(cash)}` : null,
       net != null ? `Net: ${_fmtZerodhaMoney(net)}` : null,
+      'Updates every 30 minutes. Use Refresh beside the amount to pull now.',
     ].filter(Boolean).join(' · ');
   }
 
@@ -8881,7 +8930,7 @@ function _applyZerodhaAccountUi(account, d) {
     <div class="zerodha-account-meta">
       Broker: ${escapeHtml(account.broker || 'Zerodha')}
       ${account.fetched_at ? ` · updated ${escapeHtml(account.fetched_at)}` : ''}
-      ${account.cached ? ' · cached' : ''}
+      ${account.cached ? ' · cached (up to 30 min)' : ''}
     </div>`;
 }
 
@@ -8975,10 +9024,12 @@ async function loadZerodhaStatus(refreshAccount = false) {
       }
     }
     _applyZerodhaAccountUi(d.account, d);
+    return d;
   } catch (e) {
     if (el) el.textContent = 'Status unavailable: ' + e;
     const chip = document.getElementById('zerodha-profile-chip');
     if (chip) chip.hidden = true;
+    return null;
   }
 }
 
@@ -9250,6 +9301,12 @@ ensureIndexSpotStream();
 
 loadZerodhaStatus();
 setInterval(loadZerodhaStatus, 60000);
+
+document.getElementById('zerodha-margin-refresh')?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  refreshZerodhaMargin();
+});
 
 // Return from /zerodha/callback server-side exchange (?tab=wsmon&zerodha=ok).
 (function _handleZerodhaOAuthReturn() {

@@ -74,7 +74,7 @@ Templates: `laptop.config.ps1.example`, `.env.docker.example`
 |-------|------------|
 | **VM** Mon–Fri 08:55–15:45 | Azure Automation start/stop (`VMUpTimeConfiguration.ps1`) |
 | **VM** Fri 09:30 | `weekly_archive` — hot → `*_Archive` |
-| **VM** Fri 09:35 | `weekly_log_cleanup` — logs only |
+| **VM** Fri 09:35 | `weekly_log_cleanup` — logs and alerts |
 | **VM** Fri 15:36 | `archive_export` — `.bak` for laptop |
 | **VM** Fri 15:38 | `db_backup` — hot DB snapshot |
 | **Laptop** Mon–Fri 09:15 | Task `OptionsAdvisor-ArchiveMerge` — pull, merge, VM ack |

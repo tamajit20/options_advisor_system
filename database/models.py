@@ -1565,6 +1565,8 @@ class NotificationRepo:
         ).close()
 
     def delete_older_than(self, cutoff: date) -> int:
+        """Hard-delete alerts older than ``cutoff``. Weekly log cleanup uses
+        the same window as ``delete_keep_days``; rows are not archived."""
         cur = self.db.execute(
             "DELETE FROM options_notifications WHERE created_at < ?",
             [datetime.combine(cutoff, datetime.min.time())],

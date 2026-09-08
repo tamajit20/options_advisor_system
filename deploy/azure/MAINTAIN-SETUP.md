@@ -16,17 +16,17 @@ pytest tests/test_database/test_schema.py tests/test_scheduler/test_scheduler.py
 1. `database/schema.py` — CREATE TABLE + add to `list_tables()`
 2. `database/archive_registry.py` — add `ArchiveTableSpec` (unless log-only or never archive)
 3. `readmefirst.txt` Section 7 — only if special retention rules
-4. `config.py` — `RETENTION_CONFIG` key if new hot window
+4. `config.py` — do **not** add a new `RETENTION_CONFIG` key; archive uses `hot_archive_keep_days` (365)
 5. `scheduler/scheduler.py` — if log table: `job_weekly_log_cleanup`; else archive handles via registry
 
-**Skip archive** for: config, flags, calendars, hot-only tables.
+**Skip archive** for: config, flags, calendars, hot-only tables, and delete-only log tables (`options_system_logs`, `options_job_log`, `options_zerodha_execution_jobs`, `options_notifications`).
 
 ---
 
 ## New log / audit table (delete only)
 
 1. `database/schema.py` + `list_tables()`
-2. `config.py` — `RETENTION_CONFIG` days
+2. `config.py` — no new key; delete uses `delete_keep_days` (7)
 3. `scheduler/scheduler.py` — `job_weekly_log_cleanup` delete call
 4. `readmefirst.txt` Section 5 log retention line
 

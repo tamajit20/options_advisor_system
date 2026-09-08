@@ -7,7 +7,7 @@ VM uptime: **Mon–Fri 08:55–15:45 IST** (off weekends).
 | When (Fri) | Job | What |
 |------------|-----|------|
 | 09:30 | `weekly_archive` | Move old rows → `*_Archive` |
-| 09:35 | `weekly_log_cleanup` | Delete logs only |
+| 09:35 | `weekly_log_cleanup` | Delete logs and alerts |
 | 15:36 | `archive_export` | `.bak` chunk + `backups/archive/PENDING.json` |
 | 15:38 | `db_backup` | Hot DB snapshot in `backups/` |
 

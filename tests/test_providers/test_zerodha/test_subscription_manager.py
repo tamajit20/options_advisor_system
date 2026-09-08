@@ -353,6 +353,15 @@ def test_make_db_leg_loader_yields_tuples():
     ]
 
 
+def test_make_db_leg_loader_normalises_symbol_and_option_type():
+    rows = [
+        {"symbol": "nifty", "expiry_date": date(2026, 5, 28),
+         "strike": 22000.0, "option_type": "ce"},
+    ]
+    loader = make_db_leg_loader(_FakeDB(rows))
+    assert list(loader()) == [("NIFTY", date(2026, 5, 28), 22000.0, "CE")]
+
+
 def test_make_db_leg_loader_query_unions_active_and_pending():
     db = _FakeDB([])
     loader = make_db_leg_loader(db)

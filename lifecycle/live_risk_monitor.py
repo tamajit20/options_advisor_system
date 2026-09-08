@@ -45,6 +45,9 @@ Behaviour
 * Per-trade silencing via ``options_trades.alerts_silenced_until``: when
   set in the future, all alerts for that trade are suppressed until the
   timestamp passes.
+* All-legs watch: every *executed* leg is on the snapshot, WS subscription,
+  and MTM sum. ``LOSS_MILESTONE_HIT`` (and auto-close exits) wait until
+  every such leg has a positive LTP.
 * Stale-LTP guard: legs that haven't ticked for ``stale_leg_seconds`` are
   treated as "no fresh price" and trade evaluation is skipped.
 * Cold-start prime: optional ``prime_loader`` callable can be supplied to
@@ -54,6 +57,8 @@ Behaviour
 * Counters surfaced via :meth:`stats` and an optional JSON status file.
 * Reload triggers: periodic (default 60 s) **and** the
   ``TOPIC_TRADE_OPENED`` / ``TOPIC_TRADE_CLOSED`` events for prompt updates.
+  Closed trades are dropped from the in-memory snapshot **and** from
+  ``live_mtm_state.json`` so the dashboard SSE does not keep them forever.
 
 Concurrency
 -----------
@@ -123,6 +128,25 @@ def _leg_expiry(raw: object) -> Optional[date]:
         except Exception:
             return None
     return None
+
+
+def _quote_leg_key(quote: LiveQuote) -> Optional[LegKey]:
+    """Same (symbol, expiry-date, strike, CE/PE) key as executed-leg load.
+
+    Datetime expiries or mixed-case symbols otherwise miss the watchlist
+    and that leg never enters MTM / LOSS_MILESTONE.
+    """
+    if quote.strike is None or quote.option_type is None:
+        return None
+    expiry = _leg_expiry(quote.expiry)
+    if expiry is None:
+        return None
+    return (
+        str(quote.symbol or "").upper(),
+        expiry,
+        float(quote.strike),
+        str(quote.option_type).upper(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +520,7 @@ class LiveRiskMonitor:
             "alerts_fired":      0,
             "alerts_suppressed": 0,
             "stale_skips":       0,
+            "incomplete_leg_skips": 0,
             "session_skips":     0,
             "silenced_skips":    0,
             "reloads":           0,
@@ -633,6 +658,8 @@ class LiveRiskMonitor:
                 except Exception:
                     logger.exception("LiveRiskMonitor: rebind config failed")
         new_snap = self._loader()
+        persist_mtm = False
+        mtm_dump = None
         with self._lock:
             self._counters["reloads"] += 1
             for tid, new_state in new_snap.trades.items():
@@ -660,6 +687,10 @@ class LiveRiskMonitor:
                         new_state.trailing_step_idx = old.trailing_step_idx
                         new_state.trailing_pnl_floor = old.trailing_pnl_floor
             self._snapshot = new_snap
+            persist_mtm = self._prune_closed_mtm_locked()
+            mtm_dump = dict(self._mtm_state) if persist_mtm else None
+        if persist_mtm:
+            self._persist_mtm_file(mtm_dump)
         if prime and self._prime is not None:
             self._prime_ltps()
         self._seed_outlook_on_reload()
@@ -699,13 +730,9 @@ class LiveRiskMonitor:
         if quote.strike is None or quote.option_type is None:
             self._handle_spot_tick(quote)
             return
-        if quote.expiry is None:
+        key = _quote_leg_key(quote)
+        if key is None:
             return
-
-        key: LegKey = (
-            quote.symbol, quote.expiry,
-            float(quote.strike), str(quote.option_type).upper(),
-        )
         ltp = float(quote.last_price or 0.0)
         if ltp <= 0:
             return
@@ -853,6 +880,9 @@ class LiveRiskMonitor:
             last = state.leg_last_tick.get(leg.key)
             if last is None or (now - last) > self._stale_window:
                 return False
+            ltp = state.leg_ltps.get(leg.key)
+            if ltp is None or float(ltp) <= 0:
+                return False
         return True
 
     @staticmethod
@@ -904,10 +934,12 @@ class LiveRiskMonitor:
         ``snapshot_payload`` is non-None when a periodic DB snapshot should
         be written.
         """
-        # Stale guard.
+        # All-legs + stale guard: never MTM / milestone on a partial book.
         for leg in state.legs:
             last = state.leg_last_tick.get(leg.key)
-            if last is None:
+            ltp = state.leg_ltps.get(leg.key)
+            if last is None or ltp is None or float(ltp) <= 0:
+                self._counters["incomplete_leg_skips"] += 1
                 return None, None, None, None
             if (now - last) > self._stale_window:
                 self._counters["stale_skips"] += 1
@@ -1497,15 +1529,24 @@ class LiveRiskMonitor:
         state = alert.state
         now = self._clock()
         exits: List[dict] = []
+        missing: List[int] = []
         for leg in state.legs:
             ltp = state.leg_ltps.get(leg.key)
             if ltp is None or float(ltp) <= 0:
+                missing.append(int(leg.leg_order))
                 continue
             exits.append({
                 "leg_order": int(leg.leg_order),
                 "exit_price": float(ltp),
                 "exit_time": now,
             })
+        if missing:
+            logger.error(
+                "LiveRiskMonitor: auto-exec skipped for %s/%s — "
+                "missing LTP on executed leg(s) %s",
+                state.trade_id, alert.notif_type, missing,
+            )
+            return
         ctx = AutoExecContext(
             notif_type=alert.notif_type,
             trade_id=state.trade_id,
@@ -1529,7 +1570,7 @@ class LiveRiskMonitor:
             ltp = state.leg_ltps.get(leg.key, 0.0)
             qty = leg.lots * leg.lot_size
             sign = -1.0 if leg.action == "SELL" else 1.0
-            total += sign * ltp * qty
+            total += sign * float(ltp or 0.0) * qty
         return total
 
     def _active_pre_breach_fraction(self, now: datetime, strategy: str = "") -> float:
@@ -1612,23 +1653,46 @@ class LiveRiskMonitor:
             state.pre_breach_alerted_today = False
             state.leg_stress_alerted_today.clear()
 
+    def _prune_closed_mtm_locked(self) -> bool:
+        """Drop MTM rows for trades no longer ACTIVE. Caller holds ``_lock``."""
+        dropped = [tid for tid in self._mtm_state if tid not in self._snapshot.trades]
+        if not dropped:
+            return False
+        for tid in dropped:
+            self._mtm_state.pop(tid, None)
+        return True
+
+    def _persist_mtm_file(self, trades: Optional[dict] = None, as_of: Optional[str] = None) -> None:
+        path = self._mtm_state_path
+        if not path:
+            return
+        dump = trades if trades is not None else dict(self._mtm_state)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({
+                "as_of": as_of or self._clock().isoformat(timespec="seconds"),
+                "trades": dump,
+            }, f)
+        os.replace(tmp, path)
+
     def _write_mtm_state(self, payload: dict) -> None:
         """Write per-trade MTM to a shared file so the Flask dashboard
-        container (separate process) can poll it for the live MTM SSE stream."""
+        container (separate process) can poll it for the live MTM SSE stream.
+
+        Closed trades are not written; reload prunes leftovers from the file.
+        """
         try:
             tid = payload["trade_id"]
-            existing = self._mtm_state.get(tid) or {}
-            merged = {**existing, **payload}
-            self._mtm_state[tid] = merged
-            path = self._mtm_state_path
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({
-                    "as_of":  merged.get("as_of") or payload.get("as_of"),
-                    "trades": self._mtm_state,
-                }, f)
-            os.replace(tmp, path)
+            with self._lock:
+                if tid not in self._snapshot.trades:
+                    return
+                existing = self._mtm_state.get(tid) or {}
+                merged = {**existing, **payload}
+                self._mtm_state[tid] = merged
+                dump = dict(self._mtm_state)
+                as_of = merged.get("as_of") or payload.get("as_of")
+            self._persist_mtm_file(dump, as_of)
         except Exception:
             pass  # never let file I/O interrupt the monitor loop
 

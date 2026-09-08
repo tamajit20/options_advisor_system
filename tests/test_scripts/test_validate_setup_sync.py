@@ -28,6 +28,7 @@ class TestValidateSetupSync:
         assert "options_broker_orders" not in mod.LOG_TABLES
         assert "options_system_logs" in mod.LOG_TABLES
         assert "options_job_log" in mod.LOG_TABLES
+        assert "options_notifications" in mod.LOG_TABLES
 
     def test_broker_orders_in_archive_registry(self):
         from database.archive_registry import ARCHIVE_TABLE_SPECS

@@ -30,6 +30,7 @@ LOG_TABLES = frozenset({
     "options_system_logs",
     "options_job_log",
     "options_zerodha_execution_jobs",
+    "options_notifications",
 })
 
 NEVER_ARCHIVE = frozenset({
@@ -98,8 +99,16 @@ def main() -> int:
     for spec in ARCHIVE_TABLE_SPECS:
         if spec.retention_key not in RETENTION_CONFIG:
             errors.append(f"RETENTION_CONFIG missing key: {spec.retention_key}")
-    if "hot_archive_keep_days" not in RETENTION_CONFIG:
-        errors.append("RETENTION_CONFIG missing hot_archive_keep_days")
+    allowed_retention = {"delete_keep_days", "hot_archive_keep_days"}
+    extra_retention = set(RETENTION_CONFIG) - allowed_retention
+    if extra_retention:
+        errors.append(
+            "RETENTION_CONFIG must only have delete_keep_days and "
+            f"hot_archive_keep_days; extra: {sorted(extra_retention)}"
+        )
+    for key in allowed_retention:
+        if key not in RETENTION_CONFIG:
+            errors.append(f"RETENTION_CONFIG missing key: {key}")
 
     for job in ("weekly_archive", "weekly_log_cleanup", "archive_export"):
         if job not in SCHEDULER_CONFIG.get("jobs", {}):

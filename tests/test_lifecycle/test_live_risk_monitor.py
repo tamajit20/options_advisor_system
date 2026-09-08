@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import List
 from unittest.mock import MagicMock, patch
+import json
 
 import pytest
 
@@ -260,6 +261,49 @@ class TestReloadStopsAlertsOnClosedTrade:
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 300.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 300.0))
         assert notifier.notify.call_count == 1   # no further alerts
+
+
+class TestMtmStatePrune:
+    def test_closed_trade_dropped_from_mtm_file(self, tmp_path):
+        state = _make_state(max_loss=10000.0)
+        path = tmp_path / "live_mtm_state.json"
+        snap_open = _Snapshot()
+        snap_open.trades[state.trade_id] = state
+        for leg in state.legs:
+            snap_open.index.setdefault(leg.key, []).append(state.trade_id)
+        snaps = {"cur": snap_open}
+        monitor = LiveRiskMonitor(
+            notifier=MagicMock(),
+            snapshot_loader=lambda: snaps["cur"],
+            event_bus=EventBus(),
+            config={"enabled": True, "reload_interval_sec": 9999,
+                    "mtm_state_path": str(path)},
+            clock=lambda: datetime(2026, 5, 5, 11, 0),
+        )
+        monitor._reload()
+        monitor._write_mtm_state({
+            "trade_id": state.trade_id, "trade_name": state.trade_name,
+            "mtm": -100.0, "as_of": "2026-05-05T11:00:00",
+        })
+        assert json.loads(path.read_text())["trades"][state.trade_id]["mtm"] == -100.0
+        snaps["cur"] = _Snapshot()
+        monitor._reload()
+        assert json.loads(path.read_text())["trades"] == {}
+        assert monitor._mtm_state == {}
+
+    def test_write_skips_unknown_trade(self, tmp_path):
+        path = tmp_path / "live_mtm_state.json"
+        monitor = LiveRiskMonitor(
+            notifier=MagicMock(),
+            snapshot_loader=lambda: _Snapshot(),
+            event_bus=EventBus(),
+            config={"enabled": True, "reload_interval_sec": 9999,
+                    "mtm_state_path": str(path)},
+            clock=lambda: datetime(2026, 5, 5, 11, 0),
+        )
+        monitor._reload()
+        monitor._write_mtm_state({"trade_id": "GONE", "mtm": 1.0})
+        assert not path.exists() or json.loads(path.read_text()).get("trades") == {}
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +583,88 @@ class TestLossMilestoneHit:
         assert notifier.notify.call_count == 1
         hook.assert_called_once()
         assert hook.call_args.args[0].notif_type == "LOSS_MILESTONE_HIT"
+
+    def test_milestone_waits_until_every_leg_has_ltp(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 25.0}},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
+        )
+        monitor._bind_loss_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 130.0))
+        notifier.notify.assert_not_called()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 130.0))
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "LOSS_MILESTONE_HIT"
+
+    def test_milestone_matches_datetime_expiry_and_mixed_case_ticks(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 25.0}},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
+        )
+        monitor._bind_loss_milestone_cfg()
+        exp_dt = datetime(2026, 5, 28, 15, 30)
+        bus.publish("tick", _q("nifty", exp_dt, 23000.0, "ce", 130.0))
+        bus.publish("tick", _q("Nifty", exp_dt, 23000.0, "pe", 130.0))
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "LOSS_MILESTONE_HIT"
+
+    def test_four_leg_iron_condor_milestone_covers_every_leg(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "auto_close": True,
+            }},
+            clear=False,
+        )
+        expiry = date(2026, 5, 28)
+        legs = [
+            _LegRef(1, "SELL", 23200.0, "CE", 80.0, 1, 50,
+                    ("NIFTY", expiry, 23200.0, "CE")),
+            _LegRef(2, "BUY", 23400.0, "CE", 20.0, 1, 50,
+                    ("NIFTY", expiry, 23400.0, "CE")),
+            _LegRef(3, "SELL", 22800.0, "PE", 80.0, 1, 50,
+                    ("NIFTY", expiry, 22800.0, "PE")),
+            _LegRef(4, "BUY", 22600.0, "PE", 20.0, 1, 50,
+                    ("NIFTY", expiry, 22600.0, "PE")),
+        ]
+        state = _TradeState(
+            trade_id="T-IC", trade_name="Test IC",
+            strategy="IRON_CONDOR", underlying="NIFTY", expiry=expiry,
+            entry_net_credit=6000.0, max_profit=6000.0, max_loss=14000.0,
+            sl_level=None, legs=legs,
+        )
+        hook = MagicMock()
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
+        )
+        monitor._auto_exec = hook
+        monitor._bind_loss_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", expiry, 23200.0, "CE", 120.0))
+        bus.publish("tick", _q("NIFTY", expiry, 23400.0, "CE", 20.0))
+        bus.publish("tick", _q("NIFTY", expiry, 22800.0, "PE", 120.0))
+        notifier.notify.assert_not_called()
+        hook.assert_not_called()
+        bus.publish("tick", _q("NIFTY", expiry, 22600.0, "PE", 20.0))
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "LOSS_MILESTONE_HIT"
+        hook.assert_called_once()
+        ctx = hook.call_args.args[0]
+        assert sorted(e["leg_order"] for e in ctx.exits) == [1, 2, 3, 4]
+        by_order = {e["leg_order"]: e["exit_price"] for e in ctx.exits}
+        assert by_order == {1: 120.0, 2: 20.0, 3: 120.0, 4: 20.0}
 
 
 class TestDTEAwareTarget:

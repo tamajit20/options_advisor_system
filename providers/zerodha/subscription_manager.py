@@ -391,10 +391,10 @@ def make_db_leg_loader(db) -> LegLoader:
             if isinstance(expiry, datetime):
                 expiry = expiry.date()
             yield (
-                str(r["symbol"]),
+                str(r["symbol"]).upper(),
                 expiry,
                 float(r["strike"]),
-                str(r["option_type"]),
+                str(r["option_type"]).upper(),
             )
 
     return _loader

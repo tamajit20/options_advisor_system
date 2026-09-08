@@ -50,10 +50,13 @@ class TestWeeklyLogCleanup:
         job_log_repo.delete_older_than.return_value = 22
         mtm_repo = MagicMock()
         mtm_repo.archive_non_active.return_value = 3
+        notif_repo = MagicMock()
+        notif_repo.delete_older_than.return_value = 5
 
         mocker.patch("database.log_repo.LogRepo", return_value=log_repo)
         mocker.patch("database.log_repo.JobLogRepo", return_value=job_log_repo)
         mocker.patch("database.models.TradeMtmSnapshotRepo", return_value=mtm_repo)
+        mocker.patch("database.models.NotificationRepo", return_value=notif_repo)
         job_repo = MagicMock()
         job_repo.delete_older_than.return_value = 0
         mocker.patch("database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo", return_value=job_repo)
@@ -63,9 +66,10 @@ class TestWeeklyLogCleanup:
         cleanup = captured["fn"]
         n = cleanup(patched_db)
 
-        assert n == 36
+        assert n == 41
         assert log_repo.delete_older_than.call_count == 1
         assert job_log_repo.delete_older_than.call_count == 1
+        notif_repo.delete_older_than.assert_called_once()
         mtm_repo.archive_non_active.assert_called_once()
         job_repo.delete_older_than.assert_called_once()
         broker_cls.assert_not_called()
@@ -85,14 +89,24 @@ class TestWeeklyLogCleanup:
         mocker.patch("database.log_repo.LogRepo", return_value=log_repo)
         mocker.patch("database.log_repo.JobLogRepo", return_value=job_log_repo)
         mocker.patch("database.models.TradeMtmSnapshotRepo", return_value=mtm_repo)
+        notif_repo = MagicMock()
+        notif_repo.delete_older_than.return_value = 0
+        mocker.patch("database.models.NotificationRepo", return_value=notif_repo)
+        job_repo = MagicMock()
+        job_repo.delete_older_than.return_value = 0
+        mocker.patch(
+            "database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo",
+            return_value=job_repo,
+        )
 
         sched.job_weekly_log_cleanup()
         captured["fn"](patched_db)
 
-        log_cutoff = log_repo.delete_older_than.call_args[0][0]
-        job_cutoff = job_log_repo.delete_older_than.call_args[0][0]
-        assert log_cutoff == date(2026, 8, 29)   # 7 days
-        assert job_cutoff == date(2026, 8, 29)   # 7 days
+        expected = date(2026, 8, 29)  # delete_keep_days = 7
+        assert log_repo.delete_older_than.call_args[0][0] == expected
+        assert job_log_repo.delete_older_than.call_args[0][0] == expected
+        assert notif_repo.delete_older_than.call_args[0][0] == expected
+        assert job_repo.delete_older_than.call_args[0][0] == expected
 
 
 class TestWeeklyArchive:

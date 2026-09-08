@@ -1101,7 +1101,6 @@ ZERODHA_EXECUTION_CONFIG = {
     "position_reconcile_enabled": _env_bool("OPT_ZERODHA_POSITION_RECONCILE", True),
     "use_ws_order_updates": _env_bool("OPT_ZERODHA_WS_ORDER_UPDATES", True),
     "async_execution_default": _env_bool("OPT_ZERODHA_ASYNC_DEFAULT", True),
-    "execution_job_retention_days": _env_int("OPT_ZERODHA_JOB_RETENTION_DAYS", 30),
 }
 
 
@@ -1152,30 +1151,16 @@ LOGGING_CONFIG = {
 # ---------------------------------------------------------------------------
 # Retention (weekly cleanup + archive)
 # ---------------------------------------------------------------------------
-# hot_archive_keep_days — single hot window for ALL weekly_archive moves.
-# Log tables use the *_log* keys below (delete only, not archived).
+# Two knobs only. Config UI and jobs both use these — never add per-table days.
+#   delete_keep_days       — weekly_log_cleanup hard-deletes logs, alerts,
+#                            job runs, Zerodha execution jobs
+#   hot_archive_keep_days  — weekly_archive moves every historical table
 _HOT_ARCHIVE_DAYS = 365
+_DELETE_KEEP_DAYS = 7
 
 RETENTION_CONFIG = {
-    "hot_archive_keep_days":      _HOT_ARCHIVE_DAYS,
-    # Legacy per-table keys (config UI compat); archive job uses hot_archive_keep_days only.
-    "fo_bhav_keep_days":          _HOT_ARCHIVE_DAYS,
-    "spot_bhav_keep_days":        _HOT_ARCHIVE_DAYS,
-    "vix_keep_days":              _HOT_ARCHIVE_DAYS,
-    "fii_keep_days":              _HOT_ARCHIVE_DAYS,
-    "iv_history_keep_days":       _HOT_ARCHIVE_DAYS,
-    "suggestions_keep_days":      _HOT_ARCHIVE_DAYS,
-    "trades_keep_days":           _HOT_ARCHIVE_DAYS,
-    "simulations_keep_days":      _HOT_ARCHIVE_DAYS,
-    "system_logs_keep_days":      7,     # weekly log cleanup (delete)
-    "job_log_keep_days":          7,
-    "notifications_keep_days":    _HOT_ARCHIVE_DAYS,
-    "chain_5min_keep_days":       _HOT_ARCHIVE_DAYS,
-    "atm_iv_5min_keep_days":      _HOT_ARCHIVE_DAYS,
-    "trade_mtm_snapshot_history_keep_days": _HOT_ARCHIVE_DAYS,
-    # Zerodha broker orders — archived via hot_archive_keep_days (legacy key for API)
-    "broker_orders_keep_days":    _HOT_ARCHIVE_DAYS,
-    "zerodha_execution_jobs_keep_days": 30,
+    "delete_keep_days":      _DELETE_KEEP_DAYS,
+    "hot_archive_keep_days": _HOT_ARCHIVE_DAYS,
 }
 
 

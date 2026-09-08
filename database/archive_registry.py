@@ -1,6 +1,9 @@
 """
 Registry of hot tables eligible for move → *_Archive (not log tables).
 
+Alerts (`options_notifications`) are delete-only with system logs — they are
+not listed here.
+
 Each spec drives DDL bootstrap, weekly archive moves, and laptop merge keys.
 """
 
@@ -83,11 +86,6 @@ ARCHIVE_TABLE_SPECS: List[ArchiveTableSpec] = [
     ),
     ArchiveTableSpec(
         "options_resuggestions", "generated_on", ARCHIVE_RETENTION_KEY,
-        ("id",),
-        date_type="datetime",
-    ),
-    ArchiveTableSpec(
-        "options_notifications", "created_at", ARCHIVE_RETENTION_KEY,
         ("id",),
         date_type="datetime",
     ),

@@ -10,6 +10,7 @@ from config import (
     STRATEGY_CONFIG_DEFAULTS,
     ZERODHA_CONFIG,
     ZERODHA_CONFIG_DEFAULTS,
+    RETENTION_CONFIG,
 )
 from database.config_overlay import (
     apply_strategy_overrides,
@@ -111,3 +112,33 @@ def test_catalog_covers_strategy_and_namespaces():
     assert not secret_keys
     assert "dashboard.api_key" not in items
     assert "alerts.smtp_password" not in items
+
+
+def test_catalog_retention_has_exactly_two_keys():
+    db = MagicMock()
+    db.fetch_all.return_value = []
+    items = {row["key"]: row for row in catalog_items(db)}
+    retention = [k for k in items if k.startswith("retention.")]
+    assert set(retention) == {
+        "retention.delete_keep_days",
+        "retention.hot_archive_keep_days",
+    }
+    assert "retention.system_logs_keep_days" not in items
+    assert "retention.fo_bhav_keep_days" not in items
+    assert "zerodha_execution.execution_job_retention_days" not in items
+
+
+def test_overlay_maps_legacy_retention_keys(monkeypatch):
+    restore_file_defaults()
+    db = MagicMock()
+    db.fetch_all.return_value = [
+        {"config_key": "retention.system_logs_keep_days", "config_value": "14"},
+        {"config_key": "retention.fo_bhav_keep_days", "config_value": "180"},
+    ]
+    try:
+        n = apply_strategy_overrides(db)
+        assert n == 2
+        assert RETENTION_CONFIG["delete_keep_days"] == 14
+        assert RETENTION_CONFIG["hot_archive_keep_days"] == 180
+    finally:
+        restore_file_defaults()
