@@ -154,13 +154,9 @@ class ZerodhaExecutionJobRepo:
         )
 
     def delete_older_than(self, cutoff: date) -> int:
-        cur = self.db.execute(
-            "DELETE FROM options_zerodha_execution_jobs WHERE created_at < ?",
-            [datetime.combine(cutoff, datetime.min.time())],
-        )
-        n = cur.rowcount or 0
-        cur.close()
-        return n
+        from database.retention import delete_older_than as _batched
+
+        return _batched(self.db, "options_zerodha_execution_jobs", "created_at", cutoff)
 
     @staticmethod
     def result_dict(job: dict) -> Optional[dict]:

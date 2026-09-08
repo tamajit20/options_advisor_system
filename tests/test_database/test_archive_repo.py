@@ -56,6 +56,7 @@ class TestEnsureArchiveTables:
         sqls = [call.args[0] for call in db.execute.call_args_list]
         assert any("options_broker_orders_Archive" in sql for sql in sqls)
         assert db.execute.call_count == len(ARCHIVE_TABLE_SPECS)
+        assert all("COL_LENGTH" in sql and "archive_batch_id" in sql for sql in sqls)
 
 
 class TestArchiveCopyInsertSql:

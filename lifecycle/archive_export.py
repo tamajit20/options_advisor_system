@@ -19,6 +19,7 @@ from lifecycle.sql_backup import (
     bak_filename,
     host_backup_dir,
     prepare_backup_dirs,
+    prune_bak_files,
     sql_autocommit,
     sql_ident,
 )
@@ -44,7 +45,7 @@ def run_archive_export(db: SQLServerConnection) -> int:
     total = sum(counts.values())
     if total <= 0:
         logger.info("archive_export: no pending *_Archive rows")
-        _clear_pending_manifest()
+        _remove_pending_export_files()
         return 0
 
     main_db = sql_ident(str(DATABASE_CONFIG.get("database") or "OptionsAdvisorDB"))
@@ -71,6 +72,7 @@ def run_archive_export(db: SQLServerConnection) -> int:
         dest_dir=dest_dir,
         sql_subdir="archive",
     )
+    prune_bak_files(dest_dir, keep_names={bak_name})
 
     rel_bak = f"backups/archive/{bak_name}"
     manifest = pending_manifest_path()
@@ -134,12 +136,19 @@ def _clear_pending_manifest() -> None:
         p.unlink()
 
 
+def _remove_pending_export_files() -> None:
+    """Drop PENDING.json and leftover archive ``*.bak`` on the VM."""
+    archive_dir = host_backup_dir() / "archive"
+    prune_bak_files(archive_dir, keep_names=set())
+    _clear_pending_manifest()
+
+
 def acknowledge_export(db: SQLServerConnection) -> int:
-    """Truncate VM *_Archive after laptop merge succeeded."""
+    """Truncate VM *_Archive after laptop merge and delete the export .bak."""
     from database.archive_repo import truncate_all_archive_tables
 
     n = truncate_all_archive_tables(db)
     db.commit()
-    _clear_pending_manifest()
+    _remove_pending_export_files()
     logger.info("archive export acknowledged: cleared %d archive rows on VM", n)
     return n

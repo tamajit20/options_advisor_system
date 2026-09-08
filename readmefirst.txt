@@ -119,7 +119,9 @@ SECTION 5 — AUTOMATED SCHEDULE (no daily user action)
   VM Friday 09:30            weekly_archive      hot rows -> *_Archive
   VM Friday 09:35            weekly_log_cleanup  delete logs and alerts
   VM Friday 15:36            archive_export      .bak + PENDING.json on VM
-  VM Friday 15:38            db_backup           hot DB snapshot
+                             (ACK deletes the VM .bak after laptop merge)
+  VM Friday 15:38            db_backup           single OptionsAdvisorDB-latest.bak
+                             (replaced each Friday; deleted after laptop pull)
 
   Laptop Mon-Fri 09:15       Task OptionsAdvisor-ArchiveMerge
                                pull-archive-and-merge.ps1

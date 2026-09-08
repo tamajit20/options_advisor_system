@@ -5,7 +5,7 @@
 # call this — it uses lifecycle/sql_backup.py over pyodbc.
 #
 # Usage:  ./deploy/backup.sh
-# Output: ./backups/OptionsAdvisorDB-YYYYMMDD-HHMMSS.bak
+# Output: ./backups/OptionsAdvisorDB-latest.bak  (replaces the previous file)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -26,8 +26,7 @@ elif [[ -z "${MSSQL_SA_PASSWORD:-}" ]]; then
 fi
 
 DB="${OPT_DB_NAME:-OptionsAdvisorDB}"
-STAMP="$(date +%Y%m%d-%H%M%S)"
-OUT="backups/${DB}-${STAMP}.bak"
+OUT="backups/${DB}-latest.bak"
 BIND_DIR="/var/opt/mssql/host-backups"
 INTERNAL_DIR="/var/opt/mssql/backup"
 
@@ -41,7 +40,7 @@ fi
 
 echo "==> Backing up ${DB}..."
 if docker compose exec -T sqlserver bash -c "test -w '${BIND_DIR}'"; then
-  CONTAINER_PATH="${BIND_DIR}/${DB}-${STAMP}.bak"
+  CONTAINER_PATH="${BIND_DIR}/${DB}-latest.bak"
   docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd \
     -S localhost -U sa -P "${MSSQL_SA_PASSWORD}" -C -b -Q \
     "BACKUP DATABASE [${DB}] TO DISK = N'${CONTAINER_PATH}' WITH INIT, STATS = 10"
@@ -50,11 +49,14 @@ if docker compose exec -T sqlserver bash -c "test -w '${BIND_DIR}'"; then
     exit 1
   fi
 else
-  CONTAINER_PATH="${INTERNAL_DIR}/${DB}-${STAMP}.bak"
+  CONTAINER_PATH="${INTERNAL_DIR}/${DB}-latest.bak"
   docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd \
     -S localhost -U sa -P "${MSSQL_SA_PASSWORD}" -C -b -Q \
     "BACKUP DATABASE [${DB}] TO DISK = N'${CONTAINER_PATH}' WITH INIT, STATS = 10"
   docker cp "options_sqlserver:${CONTAINER_PATH}" "${OUT}"
 fi
+
+# Keep a single hot snapshot on the VM; do not touch backups/archive.
+find backups -maxdepth 1 -type f -name "${DB}-*.bak" ! -name "${DB}-latest.bak" -delete
 
 echo "==> Done: ${OUT} ($(du -h "${OUT}" | awk '{print $1}'))"

@@ -243,13 +243,9 @@ class LogRepo:
 
     def delete_older_than(self, cutoff: date) -> int:
         """Delete log rows older than ``cutoff`` (retention trim)."""
-        cur = self.db.execute(
-            "DELETE FROM options_system_logs WHERE logged_at < ?",
-            [datetime.combine(cutoff, datetime.min.time())],
-        )
-        n = cur.rowcount or 0
-        cur.close()
-        return n
+        from database.retention import delete_older_than as _batched
+
+        return _batched(self.db, "options_system_logs", "logged_at", cutoff)
 
 
 class JobLogRepo:
@@ -311,10 +307,6 @@ class JobLogRepo:
 
     def delete_older_than(self, cutoff: date) -> int:
         """Delete finished job runs older than ``cutoff`` (retention trim)."""
-        cur = self.db.execute(
-            "DELETE FROM options_job_log WHERE started_at < ?",
-            [datetime.combine(cutoff, datetime.min.time())],
-        )
-        n = cur.rowcount or 0
-        cur.close()
-        return n
+        from database.retention import delete_older_than as _batched
+
+        return _batched(self.db, "options_job_log", "started_at", cutoff)

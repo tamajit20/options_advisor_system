@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 from database.connection import SQLServerConnection
-from utils import now_ist
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +38,37 @@ def bak_filename(name: str) -> str:
     if not name or not _BAK_NAME_RE.match(name):
         raise ValueError(f"unsafe backup filename: {name!r}")
     return name
+
+
+def hot_backup_filename(database: str) -> str:
+    """Single rotating hot-backup name so Friday jobs do not stack .bak files."""
+    return bak_filename(f"{sql_ident(database)}-latest.bak")
+
+
+def prune_bak_files(directory: Path, *, keep_names: set[str] | frozenset[str]) -> int:
+    """Delete ``*.bak`` in ``directory`` except ``keep_names`` (no recursion).
+
+    Only ``./backups`` and ``./backups/archive`` are allowed.
+    """
+    directory = directory.resolve()
+    root = host_backup_dir().resolve()
+    archive = (root / "archive").resolve()
+    if directory not in (root, archive):
+        raise ValueError(f"refuse to prune backups outside {root}: {directory}")
+    keep = {bak_filename(n) for n in keep_names}
+    removed = 0
+    if not directory.is_dir():
+        return 0
+    for path in directory.glob("*.bak"):
+        if path.name in keep:
+            continue
+        try:
+            path.unlink()
+            removed += 1
+            logger.info("removed leftover backup %s", path)
+        except OSError:
+            logger.warning("could not remove leftover backup %s", path, exc_info=True)
+    return removed
 
 
 def repo_root() -> Path:
@@ -166,12 +196,17 @@ def _job_timeout(job_name: str, default: int) -> int:
 
 
 def run_hot_backup(db: SQLServerConnection) -> Path:
-    """Snapshot the live OptionsAdvisorDB. Used by the db_backup job."""
+    """Snapshot the live OptionsAdvisorDB. Used by the db_backup job.
+
+    Always writes ``<db>-latest.bak`` (replaces last week's file) and deletes
+    any other ``*.bak`` in ``./backups`` (not ``./backups/archive``).
+    """
     from config import DATABASE_CONFIG
 
     db_name = sql_ident(str(DATABASE_CONFIG.get("database") or "OptionsAdvisorDB"))
-    stamp = now_ist().strftime("%Y%m%d-%H%M%S")
-    filename = bak_filename(f"{db_name}-{stamp}.bak")
+    filename = hot_backup_filename(db_name)
     timeout = _job_timeout("db_backup", 1800)
-    prepare_backup_dirs()
-    return backup_database(db, db_name, filename, timeout=timeout)
+    dest = prepare_backup_dirs()
+    path = backup_database(db, db_name, filename, timeout=timeout)
+    prune_bak_files(dest, keep_names={filename})
+    return path

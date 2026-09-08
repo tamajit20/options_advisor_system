@@ -43,16 +43,28 @@ def _cutoff_for_spec(spec: ArchiveTableSpec, today: date) -> datetime | date:
 
 
 def ensure_archive_tables(db: SQLServerConnection) -> None:
+    """Create *_Archive tables and add columns that older shells are missing.
+
+    ``SELECT * INTO`` copies the hot table only. Tables created before
+    ``archive_batch_id`` existed still lack that column; CREATE-IF-NULL
+    never runs again, so we ALTER missing columns on every call.
+    """
     for spec in ARCHIVE_TABLE_SPECS:
-        hot = spec.hot_table
-        arch = archive_table_name(hot)
+        hot = _ident(spec.hot_table)
+        arch = _ident(archive_table_name(hot))
         db.execute(
             f"""
             IF OBJECT_ID(N'{arch}', N'U') IS NULL
             BEGIN
                 SELECT * INTO {arch} FROM {hot} WHERE 1 = 0;
+            END
+            IF COL_LENGTH(N'{arch}', N'archived_at') IS NULL
+            BEGIN
                 ALTER TABLE {arch} ADD archived_at DATETIME2(0) NOT NULL
                     CONSTRAINT DF_{arch}_archived_at DEFAULT SYSDATETIME();
+            END
+            IF COL_LENGTH(N'{arch}', N'archive_batch_id') IS NULL
+            BEGIN
                 ALTER TABLE {arch} ADD archive_batch_id NVARCHAR(40) NULL;
             END
             """

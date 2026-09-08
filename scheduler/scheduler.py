@@ -547,18 +547,32 @@ def job_weekly_log_cleanup():
     def _cleanup(db: SQLServerConnection) -> int:
         from database.log_repo import LogRepo, JobLogRepo
         from database.models import NotificationRepo, TradeMtmSnapshotRepo
-        today = today_ist()
-        cutoff = today - _td(days=int(RETENTION_CONFIG["delete_keep_days"]))
-        n = 0
-        n += LogRepo(db).delete_older_than(cutoff)
-        n += JobLogRepo(db).delete_older_than(cutoff)
-        n += NotificationRepo(db).delete_older_than(cutoff)
-        mtm_repo = TradeMtmSnapshotRepo(db)
-        n += mtm_repo.archive_non_active()
+        from database.retention import ensure_log_delete_indexes
         from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
-        n += ZerodhaExecutionJobRepo(db).delete_older_than(cutoff)
-        db.commit()
-        return n
+
+        conn = getattr(db, "connection", None)
+        old_to = None
+        if conn is not None:
+            try:
+                old_to = int(getattr(conn, "timeout", 0) or 0)
+            except (TypeError, ValueError):
+                old_to = 0
+            conn.timeout = max(old_to, _job_timeout_seconds("weekly_log_cleanup"))
+        try:
+            ensure_log_delete_indexes(db)
+            today = today_ist()
+            cutoff = today - _td(days=int(RETENTION_CONFIG["delete_keep_days"]))
+            n = 0
+            n += LogRepo(db).delete_older_than(cutoff)
+            n += JobLogRepo(db).delete_older_than(cutoff)
+            n += NotificationRepo(db).delete_older_than(cutoff)
+            n += TradeMtmSnapshotRepo(db).archive_non_active()
+            n += ZerodhaExecutionJobRepo(db).delete_older_than(cutoff)
+            db.commit()
+            return n
+        finally:
+            if conn is not None and old_to is not None:
+                conn.timeout = old_to
 
     _run_job("weekly_log_cleanup", _cleanup)
 

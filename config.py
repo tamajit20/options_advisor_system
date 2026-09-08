@@ -192,7 +192,7 @@ SCHEDULER_CONFIG = {
         "event_eve_review":   180,
         "weekly_cleanup":     1800,
         "weekly_archive":     3600,
-        "weekly_log_cleanup": 600,
+        "weekly_log_cleanup": 1800,
         "archive_export":     900,
         "intraday_close_snapshot": 300,
         "drift_verifier":          120,

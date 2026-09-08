@@ -1,4 +1,5 @@
-# Pull pending archive .bak from VM, merge into local OptionsAdvisorDB_Archive, ACK truncate on VM.
+# Pull pending archive .bak from VM, merge into local OptionsAdvisorDB_Archive,
+# ACK truncate on VM and delete the VM export .bak.
 #
 # One-time setup:
 #   .\deploy\azure\register-laptop-archive-task.ps1

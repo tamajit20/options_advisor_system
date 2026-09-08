@@ -1567,13 +1567,9 @@ class NotificationRepo:
     def delete_older_than(self, cutoff: date) -> int:
         """Hard-delete alerts older than ``cutoff``. Weekly log cleanup uses
         the same window as ``delete_keep_days``; rows are not archived."""
-        cur = self.db.execute(
-            "DELETE FROM options_notifications WHERE created_at < ?",
-            [datetime.combine(cutoff, datetime.min.time())],
-        )
-        n = cur.rowcount or 0
-        cur.close()
-        return n
+        from database.retention import delete_older_than as _batched
+
+        return _batched(self.db, "options_notifications", "created_at", cutoff)
 
     def latest_risk_alert_for_trade(self, trade_id: str) -> Optional[dict]:
         """Return the most recent risk-monitor alert for ``trade_id`` from the
