@@ -5,12 +5,25 @@ from __future__ import annotations
 from datetime import date
 from unittest.mock import MagicMock
 
+import pytest
+
 from providers.tick_routing import (
     PRODUCT_OPTIONS_INDEX,
     resolve_product,
     topic_for_meta,
 )
 from providers.zerodha.ws_runner import TokenMeta
+
+
+@pytest.mark.future
+@pytest.mark.skip(
+    reason="future: enable trade_greeks_update inside VM uptime "
+           "(FUTURE_ENHANCEMENT_SCOPES.md → Risk & Monitoring)",
+)
+def test_trade_greeks_job_runs_during_vm_hours():
+    """trade_greeks_update must be enabled and scheduled Mon–Fri inside
+    08:55–15:45 IST so open-trade Greek drift is actually stored."""
+    pass
 
 
 def test_resolve_product_finnifty_index():

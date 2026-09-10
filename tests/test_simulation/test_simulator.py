@@ -172,7 +172,7 @@ class TestUpdateSimulation:
 # ---------------------------------------------------------------------------
 @pytest.mark.future
 @pytest.mark.skip(reason="future: full multi-day simulation walk through expiry "
-                  "(FUTURE_ENHANCEMENT_SCOPES.md → Simulation)")
+                  "(FUTURE_ENHANCEMENT_SCOPES.md → Simulation / Backtesting)")
 def test_full_simulation_walk_to_expiry():
     """End-to-end: 14-day IC simulation, day-by-day P&L progression, expiry close."""
     pass

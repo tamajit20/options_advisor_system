@@ -285,15 +285,22 @@ class TestTrajectoryGates:
 
 
 @pytest.mark.future
-@pytest.mark.skip(reason="future: promote IV trajectory gate SOFT_FAIL -> FAIL after 2-3 weeks accuracy review (FUTURE_ENHANCEMENT_SCOPES.md -> Risk & Monitoring)")
+@pytest.mark.skip(
+    reason="future: do not harden IV trajectory to FAIL until a larger closed-trade "
+           "review says so (FUTURE_ENHANCEMENT_SCOPES.md → Risk & Monitoring)",
+)
 def test_iv_trajectory_gate_hardens_to_fail():
-    """After review window, sustained rising IV (slope>0.5%/5min, persist>=0.7) should
-    HARD-FAIL the suggestion (all_passed False, hard_failed >=1)."""
+    """Only after a documented win/loss split on a larger sample may sustained
+    rising IV become a hard FAIL. Sep 2026 n=16 review was not enough."""
     pass
 
 
 @pytest.mark.future
-@pytest.mark.skip(reason="future: promote OI PCR momentum gate SOFT_FAIL -> FAIL after accuracy review (FUTURE_ENHANCEMENT_SCOPES.md -> Risk & Monitoring)")
+@pytest.mark.skip(
+    reason="future: do not harden OI PCR momentum to FAIL until a larger closed-trade "
+           "review says so (FUTURE_ENHANCEMENT_SCOPES.md → Risk & Monitoring)",
+)
 def test_oi_momentum_gate_hardens_to_fail():
-    """After review window, sustained directional OI PCR drift should HARD-FAIL."""
+    """Only after a documented win/loss split on a larger sample may sustained
+    OI PCR drift become a hard FAIL. Sep 2026 n=16 review was not enough."""
     pass

@@ -5,24 +5,7 @@ Pick up from here in future development sessions.
 
 > **Convention:** Every entry below is paired with a `@pytest.mark.future` skipped test stub in `tests/`. When an entry is implemented, the skip is removed AND the entry is deleted from this doc. See `tests/README.md` and `.github/copilot-instructions.md` for the full convention.
 
----
-
-## 🔴 Engine Correctness (Fix These First)
-
-### LONG_STRANGLE strikes too close to ATM
-**File:** `engine/leg_builder.py`  
-**Issue:** Strikes are built at `±0.5 × EM` (inside the expected move). Near-the-money strikes = high cost, less edge.  
-**Fix:** Change to `±1.0 × EM` so strikes sit at the boundary of the expected move.
-
-### JADE_LIZARD — no net-credit ≥ call-spread-width validation
-**File:** `engine/leg_builder.py` or `engine/strategy_selector.py`  
-**Issue:** A valid Jade Lizard requires `net_credit >= call_spread_width`. If premium is thin this is silently violated, leaving undefined upside risk on the naked short put.  
-**Fix:** Add gate: `if net_credit < call_spread_width: raise StrategyVeto`.
-
-### LONG_STRANGLE strategy is dead code — never triggered
-**Files:** `engine/strategy_selector.py`, `engine/leg_builder.py`  
-**Issue:** `leg_builder.py` has `build_long_strangle()` but `strategy_selector.py` never routes to it.  
-**Fix:** Either implement trigger conditions (low IV rank + expected breakout / event-driven) or remove the dead function.
+**Last pruned:** 2026-09-10 — removed items already shipped (strangle ±1×EM, jade credit gate, LONG_STRANGLE routing, calendar in mid-IV, dynamic lots, OI-change PCR, VIX-spike veto on credit, PCR regen poll, LiveRiskMonitor, slippage/charges in simulator, strategy-selector / suggestion / trade-executor / dashboard-route tests).
 
 ---
 
@@ -34,64 +17,52 @@ Pick up from here in future development sessions.
 2. **Gap-buffer SL** — widen SL to 2.5× credit when VIX is rising AND a high-impact event is within 2 days
 3. **Reduce lot size on high-event weeks** — position sizing multiplier < 1.0 when event risk is elevated
 
-### Intraday SL monitoring
-**Files:** New `lifecycle/sl_monitor.py`, `scheduler/scheduler.py`  
-**Issue:** No automated intraday monitoring. SL breaches can only be caught manually.  
-**Fix:** Add intraday scheduler job (09:30–15:00 IST, every 30 min) that fetches live NSE option chain JSON and alerts if MTM loss ≥ premium SL or spot crosses the SL level. NSE option chain is publicly accessible without auth (no broker API needed).
-
 ### LiveRiskMonitor — per-leg sanity check on tick prices
 **File:** `lifecycle/live_risk_monitor.py`  
 **Issue:** A single fat-finger tick (10× normal price) can fire a spurious SL_TRIGGER. The monitor accepts whatever LTP the WebSocket delivers without sanity-checking against the prior tick or against a band around the leg's prior close.  
-**Fix:** Maintain a `prev_ltp` per leg; reject a tick if `abs(ltp - prev_ltp) / prev_ltp > 0.50` (configurable). Also reject ticks where ltp ≤ 0. Log rejections under counter `bad_ticks_skipped`. Add test for fat-finger rejection.
+**Fix:** Maintain a `prev_ltp` per leg; reject a tick if `abs(ltp - prev_ltp) / prev_ltp > 0.50` (configurable). Also reject ticks where ltp ≤ 0. Log rejections under counter `bad_ticks_skipped`. Add test for fat-finger rejection.  
+**Test:** `tests/test_lifecycle/test_live_risk_monitor.py::test_fat_finger_tick_is_rejected`
 
-### No VIX regime / slope filter on Iron Condor entry
-**Files:** `engine/indicators.py`, `engine/strategy_selector.py`  
-**Issue:** High IV Rank during a VIX spike ≠ safe to sell premium — the market is pricing in *continued* large moves. Engine currently treats all high-IV-rank environments the same.  
-**Fix:** Add VIX rate-of-change check: skip IC/Butterfly suggestion if VIX has risen >20% over the last 3 trading days.
+### Enable daily trade Greeks inside VM uptime
+**Issue:** `options_trade_greeks` and `trade_greeks_update` exist, and `engine/greeks_exit.py` can consume them, but the job is **disabled** and scheduled at **21:00 IST** (VM is already off at 15:45). Open-trade Greek drift is therefore not actually refreshed.  
+**Fix:** Enable the job and move it into Mon–Fri 08:55–15:45 IST. Do not treat this as a suggestion-gate change.
 
-### Greek drift tracking on open trades
-**Issue:** Greeks (vega/delta/theta) are computed at suggestion time but never tracked on open trades. A trade at 50% profit target but with exploding vega is risky to hold.  
-**Fix:** Add daily Greek recomputation stored against the trade record in `options_trades`.
-
-### Promote IV trajectory gate from SOFT_FAIL → hard FAIL
-**Files:** `engine/confidence.py` → `_iv_trajectory_gate`
-**Issue:** The intraday ATM IV trajectory gate currently emits SOFT_FAIL only (visible but does not block). After 2-3 weeks of accuracy review on production data, evaluate whether sustained rising IV ahead of trade entry is a strong enough signal to harden into a blocking FAIL.
-**Fix:** After review window, change `_FAIL_SOFT` → `_FAIL` in `_iv_trajectory_gate` and add the gate to the hard-fail counter slice so it blocks suggestions.
-
-### Promote OI PCR momentum gate from SOFT_FAIL → hard FAIL
-**Files:** `engine/confidence.py` → `_oi_momentum_gate`
-**Issue:** OI PCR momentum gate currently emits SOFT_FAIL. Same review-and-promote cadence as the IV trajectory gate.
-**Fix:** After 2-3 weeks of accuracy review, harden to `_FAIL` and include in the hard-fail counter slice.
-
-### OpportunityRegenWatcher — PCR cross trigger
-**File:** `lifecycle/opportunity_regen_watcher.py`  
-**Issue:** v1 of the watcher only triggers on VIX % change and spot %  change. PCR-band-cross (neutral → strong-bullish/bearish or vice versa) is conceptually a strong regime-shift signal but the live WebSocket tick stream carries only LTP/depth — full chain OI is needed to compute PCR. Adding it would require rate-limited REST `quote()` calls or a dedicated chain-OI snapshot.  
-**Fix:** Either (a) piggy-back on `SubscriptionManager`'s 60s reload to also snapshot ATM±5 chain OI, recompute PCR, and emit `OPPORTUNITY_REGEN_HINT` on band crossings; or (b) add a separate intraday scheduler job that hits the public NSE chain JSON every 5 min and computes PCR.
+### Do not harden IV trajectory / OI PCR gates yet
+**Files:** `engine/confidence.py`  
+**Issue:** These gates are advisory `SOFT_FAIL` by design. An older note said to promote them to hard FAIL after 2–3 weeks.  
+**Status (2026-09-10):** Closed-trade review (16 trades, May–Jul 2026) did **not** show a clean win/loss split that would justify blocking. Hardening now would miss opportunities.  
+**Fix:** Keep as warnings. Revisit only after a larger closed set that includes both credit and debit, and both quiet and burst tapes. Tests stay skipped until that review says yes.  
+**Tests:** `tests/test_engine/test_confidence.py::test_iv_trajectory_gate_hardens_to_fail`, `::test_oi_momentum_gate_hardens_to_fail`
 
 ### Trade Action Panel — live spot SL in instruction priority
 **Files:** `lifecycle/live_risk_monitor.py`, `dashboard/static/dashboard.js`  
 **Issue:** The operator instruction banner (`renderTradeActionPanel`) uses today's `SL_TRIGGER` notification or static tags, not live underlying vs `actual_stop_loss_level` on every tick. Spot can breach before the alert/cache updates, so the panel may still say HOLD while spot SL is already violated.  
-**Fix:** Include `spot`, `spot_sl_breached`, and `spot_sl_side` (call/put/upper/lower) in the MTM SSE payload. Re-run the same priority stack with live spot for strategies that have a stored SL level (IC, IB, bear call, etc.), ahead of or alongside MTM loss limit per strategy rules.
+**Fix:** Include `spot`, `spot_sl_breached`, and `spot_sl_side` in the MTM SSE payload. Re-run the same priority stack with live spot for strategies that have a stored SL level.  
+**Test:** `tests/test_dashboard/test_trade_action_future.py::test_action_panel_uses_live_spot_sl_not_stale_alert`
 
 ### Trade Action Panel — leg-level close instructions
 **Files:** `dashboard/static/dashboard.js`, optional helper in `engine/exit_engine.py` or `lifecycle/trade_executor.py`  
-**Issue:** Instructions say "close entire trade" or "close call spread" but not concrete leg actions like "Buy back NIFTY 26000 PE @ ~₹120 (1 lot)". Operator still maps rules to Zerodha manually.  
-**Fix:** From executed open legs + live `leg_ltps`, render per-leg exit lines: BUY to close shorts, SELL to close longs, with strike/option type and last LTP. Optionally scroll/highlight matching rows in the Close Trade form.
+**Issue:** Instructions say "close entire trade" or "close call spread" but not concrete leg actions like "Buy back NIFTY 26000 PE @ ~₹120 (1 lot)".  
+**Fix:** From executed open legs + live `leg_ltps`, render per-leg exit lines.  
+**Test:** `tests/test_dashboard/test_trade_action_future.py::test_action_panel_lists_per_leg_exit_with_ltp`
 
 ### Trade Action Panel — per-leg intraday SL integration
 **Files:** `lifecycle/intraday_monitor.py`, `dashboard/static/dashboard.js`  
-**Issue:** `IntradayMonitor` fires per-short-leg `SL_TRIGGER` when premium doubles; the Trade Action Panel does not read that path. A single leg can be toxic while whole-trade MTM is still inside loss limit.  
-**Fix:** Feed leg-level breach state into the action panel (secondary priority or dedicated "Close leg N" instruction) with link to which short leg breached the multiplier.
+**Issue:** `IntradayMonitor` fires per-short-leg `SL_TRIGGER` when premium doubles; the Trade Action Panel does not read that path.  
+**Fix:** Feed leg-level breach state into the action panel.  
+**Test:** `tests/test_dashboard/test_trade_action_future.py::test_action_panel_surfaces_intraday_leg_sl_breach`
 
 ### Trade Action Panel — multi-condition summary
 **Files:** `dashboard/static/dashboard.js`  
-**Issue:** Priority stack shows one verb only (e.g. loss limit wins over profit floor). When multiple levels are active, context is hidden — user cannot see "also below profit floor" without expanding Live profit levels.  
-**Fix:** Keep single primary action; add an "Also active:" line listing secondary breached/warning levels with MTM vs threshold (e.g. floor breached while approaching loss limit).
+**Issue:** Priority stack shows one verb only. When multiple levels are active, context is hidden.  
+**Fix:** Keep single primary action; add an "Also active:" line listing secondary levels.  
+**Test:** `tests/test_dashboard/test_trade_action_future.py::test_action_panel_shows_secondary_active_levels`
 
 ### Breach history UI on trade card
 **Files:** `dashboard/server.py`, `dashboard/static/dashboard.js`, `database/models.py` (`TradeLevelEventRepo`)  
-**Issue:** `options_trade_level_events` logs ENTER/EXIT for TARGET / PROFIT_FLOOR / LOSS_LIMIT / SPOT_SL but there is no dashboard timeline. Whip-saw analysis requires SQL.  
-**Fix:** Add `GET /api/trades/<trade_id>/level-events` and a collapsible timeline on the trade card (time, level, ENTER/EXIT, MTM, threshold). Optional export CSV.
+**Issue:** `options_trade_level_events` logs ENTER/EXIT but there is no dashboard timeline.  
+**Fix:** `GET /api/trades/<trade_id>/level-events` and a collapsible timeline on the trade card.  
+**Test:** `tests/test_dashboard/test_trade_action_future.py::test_trade_card_renders_level_event_timeline`
 
 ### Broker order execution from action panel
 **Status:** Explicitly deferred — panel is advisory only.  
@@ -102,47 +73,44 @@ Pick up from here in future development sessions.
 
 ## 🟡 Strategy & Regime Coverage
 
+### Unused suggestion signals — validate before any implementation
+**Do not implement blindly. Do not add as hard FAIL. Go one signal at a time after a documented win/loss check.**
+
+Closed-trade join on 2026-09-10 (16 CLOSED rows, 4 wins / 12 losses) found **no unused signal with a usable edge**:
+
+| Candidate | Already in DB / WS? | Historical result | Allowed next step |
+|-----------|---------------------|-------------------|-------------------|
+| IV percentile | stored on `options_iv_history` | Tracks IV rank; same cheap-vol loss cluster | Display/warning only after a larger sample |
+| FII option OI (call/put long−short) | stored; only FII *futures* net is used | FII was net **buying** options on all 16 trades — no contrast | Wait until FII *writing* days exist in the book |
+| Max-pain vs spot | computed, unused | 8 above / 8 below, both 25% wins | Do not use for direction |
+| Volume burst z | computed on 5-min chain, unused in gates | Every entry was a quiet tape | Do not gate |
+| Smile / 25d-proxy risk reversal | per-strike IV exists | Means almost identical on wins vs losses | Ignore until wing IVs are trusted |
+
+**Rules if we ever pick one up:**
+1. Re-run the closed-trade join (need more **credit** trades and mixed FII regimes).
+2. If a split appears, ship as **advisory chip / SOFT_FAIL** only.
+3. Watch live cards for 2–3 weeks. Only then consider a tilt (prefer structure), never a veto, unless the sample is clearly large enough.
+4. Next candidate only after the previous one is accepted or dropped. No batch wiring.
+
+**Test:** `tests/test_engine/test_unused_signals_future.py::test_unused_signals_not_wired_until_validated`
+
 ### Same-direction concentration penalty across symbols
 **Files:** `lifecycle/suggestion_engine.py`, possibly new `lifecycle/portfolio_concentration.py`
-**Issue:** Two BULL_PUT_SPREAD suggestions on, say, NIFTY and BANKNIFTY (highly correlated) both fire on the same generation pass. The current cross-underlying dedup only collapses identical (expiry_type, strategy) keys, so correlated bets in the same direction can pile up in the portfolio with no penalty.
-**Fix:** After all underlyings are evaluated, score each surviving suggestion's directional exposure (BULL_*, BEAR_*, neutral). When two or more bullish (or two or more bearish) suggestions collide, demote the weaker (lower edge_score) to a NoSuggestion with reason "Concentration cap: already hold {primary_underlying} in same direction". Strategy isolation must be preserved — credit and debit verticals on the same direction should still both be allowed when they target different regimes.
-**Why deferred:** Requires re-architecting `_evaluate_underlying` to surface intermediate Suggestions to the orchestrator BEFORE persistence so the cross-symbol pass can run; current loop persists per-underlying inside the generator. Not safe for one commit alongside the per-strategy isolation work.
-
-### Mid-IV (30–50) sideways regime — missed trades
-**Issue:** Mid-IV sideways currently results in a `StrategyVeto` ("no actionable edge"). Calendar spreads or short iron flies with tight wings could work here.  
-**Fix:** Evaluate once backtest data shows how often this regime occurs. If frequent, add Calendar Spread build to `leg_builder.py` and route to it from `strategy_selector.py`.
+**Issue:** Two BULL_PUT_SPREAD suggestions on NIFTY and BANKNIFTY can both fire. Cross-underlying dedup only collapses identical (expiry_type, strategy) keys.
+**Fix:** After all underlyings are evaluated, demote the weaker same-direction suggestion. Preserve strategy isolation (credit vs debit verticals).
+**Why deferred:** Requires surfacing Suggestions to the orchestrator before persistence.
 
 ### Side-aware SL multiplier
-**Issue:** Put-side breach uses the same 1.5× multiplier as call-side. Markets fall faster than they rise — put-spread breaches tend to be more violent.  
-**Fix:** Add asymmetric multipliers (e.g. 1.5× call-side, 1.25× put-side) after backtest confirms asymmetric hit rates. Files: `engine/strategy_selector.py`, `lifecycle/exit_orchestrator.py`.
-
----
-
-## 🟡 Position Sizing
-
-### Lots hardcoded to 1
-**Files:** `lifecycle/suggestion_engine.py` (lines 319, 369)  
-**Issue:** `lots=1` is hardcoded. Optimal sizing = `risk_per_trade = capital × 0.02 / max_loss_per_lot`.  
-**Blocked by:** No capital input or broker margin info in the system yet.  
-**Fix:** Add a `trading_capital` config key, compute lots dynamically in the suggestion engine.
+**Issue:** Put-side breach uses the same 1.5× multiplier as call-side. Markets fall faster than they rise.
+**Fix:** Add asymmetric multipliers (e.g. 1.5× call-side, 1.25× put-side) **after backtest confirms** asymmetric hit rates. Files: `engine/strategy_selector.py`, `lifecycle/exit_orchestrator.py`.
 
 ---
 
 ## 🟡 Data Quality
 
-### OI change (delta) not tracked
-**File:** `engine/indicators.py`  
-**Issue:** Uses raw OI level from the chain. Day-over-day OI change per strike is a better conviction signal (OI building = real positioning, OI shedding = unwinding).  
-**Fix:** Track prior-day OI in `options_fo_eod` and compute delta in `build_indicators()`.
-
 ### HV-20 PASS_WARN escalation — silent data gap
 **Issue:** The HV-20 gate silently passes with `PASS_WARN` when < 22 days of history exist. For a new underlying with an ongoing data gap this never escalates to FAIL.  
-**Fix:** Add a counter to IV history repo; escalate to FAIL after N consecutive `PASS_WARN` days.
-
-### VIX live fallback stamps wrong trade_date on non-trading days
-**File:** `downloader/vix.py` — `_fetch_live_vix()`  
-**Issue:** Uses `today_ist()` as `trade_date`, creating ghost rows on holidays/weekends with stale OHLC (e.g. May 1 holiday, May 2 Saturday both got Apr 30's data with wrong dates).  
-**Fix:** Before inserting, check if `today_ist()` is a trading day. If not, skip the live fetch.
+**Fix:** Add a counter; escalate to FAIL after N consecutive `PASS_WARN` days.
 
 ---
 
@@ -150,58 +118,14 @@ Pick up from here in future development sessions.
 
 ### Time-series replay simulator
 **Files:** New `simulation/timeseries_replay.py`
-**Issue:** The 5-min `options_chain_5min` / `options_atm_iv_5min` history enables intraday backtesting against the new trajectory gates, but no replay harness exists. Without it we cannot quantify how often each gate would have fired on historical data, nor whether enabling them as hard FAILs would have helped or hurt P&L.
-**Fix:** Build a replay runner that reconstructs `ChainTrajectory` snapshots at any past `snapshot_at`, feeds them through `engine.confidence.evaluate()`, and tabulates gate-firing frequencies and downstream P&L if those suggestions had been taken.
-
-### Simulator ignores bid/ask slippage
-**File:** `simulation/simulator.py`  
-**Issue:** Fills assumed at mid-price. Real fills on far-OTM strikes can be 2–5% worse due to wide spreads and low liquidity. Makes simulated P&L look better than reality.  
-**Fix:** Add configurable `slippage_bps` parameter (default 0; suggest 50–100 bps for realistic runs). Apply as `fill_price = mid ± (mid × slippage_bps / 10000)`.
-
----
-
-## 🟢 Code Quality & Testing
-
-### Strategy selector unit tests — critical gap
-**Issue:** The 11-strategy decision tree has many branches. A silent regression here is catastrophic — a wrong strategy gets suggested with full confidence.  
-**Fix:** Add `tests/test_strategy_selector.py` covering all IV-regime × trend × PCR combinations.
-
-### Companion BPS/BCS strike optimization
-**Issue:** Companion BPS/BCS spreads reuse IC strike selection (which optimises for full-range neutrality). A standalone BPS/BCS may prefer strikes closer to the money.  
-**Fix:** Add independent strike selection for companions when they are the primary strategy.
-
-### Suggestion engine integration tests
-**Issue:** `lifecycle/suggestion_engine.py` (~480 lines) is the central orchestrator wiring downloader → indicators → strategy selector → leg builder → confidence → DB. Currently zero direct test coverage; only the underlying engine modules are unit-tested.  
-**Fix:** Build a fake-DB harness covering: (a) happy-path SUG-* row insert with legs, (b) NO_SUGGESTION when confidence below threshold, (c) deduplication via `has_suggestion_for`, (d) `expire_stale_pending` is called before fresh insert.  
-**Tests:** `tests/test_lifecycle/test_suggestion_engine_future.py` (4 stubs)
-
-### Trade executor unit tests
-**Issue:** `lifecycle/trade_executor.py` records actual fills and computes actual_max_profit/loss. Currently no direct tests.  
-**Fix:** Mock TradeRepo + verify TRD-* row written with correct economics from fill prices.  
-**Test:** `tests/test_lifecycle/test_suggestion_engine_future.py::test_trade_executor_records_fill_prices`
-
-### Dashboard route coverage — close/supplement/config endpoints
-**Issue:** Phase 4 added smoke + helper tests for `dashboard/server.py`, but the
-close-trade, supplement-trade, and config GET/PATCH routes are still stubbed.  
-**Fix:** Wire the remaining POST/PATCH routes to test fixtures and assert the
-DB writes happen as expected.  
-**Tests:** `tests/test_dashboard/test_server.py::test_close_trade_persists_exit_fills`,
-`::test_supplement_adds_remaining_legs`, `::test_config_get_and_patch`
+**Issue:** 5-min chain history exists, but no replay harness to quantify how often trajectory gates would have fired, or whether hardening them would have helped or hurt P&L. This is the right tool before promoting any unused signal or SOFT_FAIL gate.
+**Fix:** Reconstruct `ChainTrajectory` at past `snapshot_at`, run `engine.confidence.evaluate()`, tabulate gate-firing vs downstream P&L.  
+**Test:** `tests/test_simulation/test_simulator.py::test_timeseries_replay_runner_reconstructs_trajectory`
 
 ### Full multi-day simulation walkthrough
-**Issue:** Phase 4 covers `_classify_day1` and `_compute_day_pnl`, but no test
-walks a synthetic chain through every trading day of an iron condor's life.  
-**Fix:** Build a 14-day synthetic chain fixture and assert day-by-day P&L
-progression + correct expiry-day close.  
+**Issue:** No test walks a synthetic chain through every trading day of an iron condor's life.  
+**Fix:** 14-day synthetic chain fixture; day-by-day P&L + expiry close.  
 **Test:** `tests/test_simulation/test_simulator.py::test_full_simulation_walk_to_expiry`
-
-### Simulation: include estimated charges in net P&L
-**Issue:** `update_simulation` hardcodes `sim_charges=0.0`, so `sim_net_pnl`
-matches `sim_final_pnl`. Real-world net P&L is materially lower after STT,
-brokerage, and exchange fees.  
-**Fix:** Call `engine.charges.estimate_charges` on the simulated fills and
-subtract from gross P&L when writing the summary row.  
-**Test:** `tests/test_simulation/test_simulator.py::test_simulation_includes_charges_in_net_pnl`
 
 ---
 
@@ -211,14 +135,15 @@ subtract from gross P&L when writing the summary row.
 |---|---|
 | Broker-agnostic adapter layer (ZerodhaAdapter / NoOpAdapter) | Discussed only — not implementing yet |
 | Telegram / email notification dispatcher | Discussed only — not implementing yet |
-| Trade Action Panel — full rule fusion + broker execution | Advisory panel shipped May 2026; live spot, leg-level orders, intraday leg SL, history UI → see Risk & Monitoring |
+| Trade Action Panel — full rule fusion + broker execution | Advisory panel shipped May 2026; remaining UI items → Risk & Monitoring |
 | BANKNIFTY/FINNIFTY weekly options (NSE discontinued ~Nov 2024) | No fix needed — they reappear when monthly expiry DTE ≤ 21 |
 | VIX ghost rows on non-trading days (cosmetic) | Left as-is by user choice (May 2026) |
+| Unused suggestion signals as **hard** filters | Rejected until a larger closed-trade sample (Sep 2026 review) |
 
 ---
 
 ## References
 - Phases 1–4 implemented: `8763410`, `a64d158`, `d99f18c`, `fa2aea3`
 - UI enhancements (IV/HV chip, exec order badges, lot validation, confirm buttons): `2539eb4`, `289a41d`, `2cbaa6d`
+- Archive / laptop retry / SQL log shrink: `cabf7f0`, `d0eacd6`
 - Backtest runner: `python -m simulation.backtest_runner --start YYYY-MM-DD --end YYYY-MM-DD`
-- Backtest data window (as of May 2026): chain data available 2026-02-06 to 2026-04-30
