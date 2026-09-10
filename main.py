@@ -319,6 +319,10 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict) -> str:
         TradeLevelEventRepo(db).insert(payload)
         db.commit()
 
+    def _persist_mtm_peak(trade_id: str, peak: float | None) -> None:
+        TradeRepo(db).update_mtm_peak(trade_id, peak)
+        db.commit()
+
     from database.config_overlay import apply_strategy_overrides
     try:
         apply_strategy_overrides(db)
@@ -332,6 +336,7 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict) -> str:
         event_bus=bus,
         trailing_persister=lambda tid, floor, idx: TradeRepo(db).update_trailing(
             tid, trailing_pnl_floor=floor, trailing_step_idx=idx),
+        peak_persister=_persist_mtm_peak,
         mtm_snapshot_persister=_persist_mtm_snapshot,
         level_event_persister=_persist_level_event,
         events_repo=EventCalendarRepo(db),

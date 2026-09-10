@@ -1056,6 +1056,13 @@ class TradeRepo:
             [trailing_pnl_floor, int(trailing_step_idx), trade_id],
         ).close()
 
+    def update_mtm_peak(self, trade_id: str, mtm_peak_rs: Optional[float]) -> None:
+        """Persist the high-water MTM used by profit_milestone_alert."""
+        self.db.execute(
+            "UPDATE options_trades SET mtm_peak_rs = ? WHERE trade_id = ?",
+            [mtm_peak_rs, trade_id],
+        ).close()
+
     def update_status(self, trade_id: str, status: str, daily_status: Optional[str] = None,
                       exit_instruction: Optional[str] = None) -> None:
         self.db.execute(
@@ -1421,7 +1428,8 @@ class NotificationRepo:
 
         `category` is a virtual grouping over `notif_type` (not stored in DB):
           sl        → SL_TRIGGER, SL_HIT, PRE_BREACH_WARNING, LOSS_LIMIT_HIT, PROFIT_FLOOR_HIT
-          profit    → TARGET_HIT, TAKE_PROFIT, TARGET_LOCKED, PROFIT_FLOOR_SET
+          profit    → TARGET_HIT, TAKE_PROFIT, TARGET_LOCKED, PROFIT_FLOOR_SET,
+                      PROFIT_MILESTONE_HIT
           exit      → EXIT_TOMORROW, TIME_DECAY_DONE, EXPIRE, AUTO_SETTLED
           event     → EVENT_AHEAD_REVIEW
           system    → CIRCUIT_BREAKER, BROKEN_TRADE, DATA_REPAIR, KILL_SWITCH
@@ -1432,7 +1440,8 @@ class NotificationRepo:
                            "LOSS_MILESTONE_HIT", "LOSS_MILESTONE_CLOSE_FAILED",
                            "LOSS_LIMIT_HIT", "PROFIT_FLOOR_HIT"],
             "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED",
-                           "PROFIT_FLOOR_SET"],
+                           "PROFIT_FLOOR_SET", "PROFIT_MILESTONE_HIT",
+                           "PROFIT_MILESTONE_CLOSE_FAILED"],
             "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
             "event":      ["EVENT_AHEAD_REVIEW"],
             "system":     ["CIRCUIT_BREAKER", "BROKEN_TRADE", "DATA_REPAIR", "KILL_SWITCH"],
@@ -1487,7 +1496,8 @@ class NotificationRepo:
                            "LOSS_MILESTONE_HIT", "LOSS_MILESTONE_CLOSE_FAILED",
                            "LOSS_LIMIT_HIT", "PROFIT_FLOOR_HIT"],
             "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED",
-                           "PROFIT_FLOOR_SET"],
+                           "PROFIT_FLOOR_SET", "PROFIT_MILESTONE_HIT",
+                           "PROFIT_MILESTONE_CLOSE_FAILED"],
             "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
             "event":      ["EVENT_AHEAD_REVIEW"],
             "system":     ["CIRCUIT_BREAKER", "BROKEN_TRADE", "DATA_REPAIR", "KILL_SWITCH"],
@@ -1533,6 +1543,8 @@ class NotificationRepo:
             "LOSS_LIMIT_HIT": "sl", "PROFIT_FLOOR_HIT": "sl",
             "TARGET_HIT": "profit", "TAKE_PROFIT": "profit", "TARGET_LOCKED": "profit",
             "PROFIT_FLOOR_SET": "profit",
+            "PROFIT_MILESTONE_HIT": "profit",
+            "PROFIT_MILESTONE_CLOSE_FAILED": "profit",
             "EXIT_TOMORROW": "exit", "TIME_DECAY_DONE": "exit",
             "EXPIRE": "exit", "AUTO_SETTLED": "exit",
             "EVENT_AHEAD_REVIEW": "event",
@@ -1591,6 +1603,8 @@ class NotificationRepo:
             "                      'PROFIT_FLOOR_SET', 'PROFIT_FLOOR_HIT', "
             "                      'LOSS_MILESTONE_HIT', "
             "                      'LOSS_MILESTONE_CLOSE_FAILED', "
+            "                      'PROFIT_MILESTONE_HIT', "
+            "                      'PROFIT_MILESTONE_CLOSE_FAILED', "
             "                      'LOSS_LIMIT_HIT') "
             " ORDER BY created_at DESC",
             [trade_id, today_start],
@@ -1678,7 +1692,8 @@ class TradeLevelEventRepo:
     """
 
     _VALID_LEVELS = frozenset({
-        "TARGET", "PROFIT_FLOOR", "LOSS_LIMIT", "SPOT_SL",
+        "TARGET", "PROFIT_FLOOR", "PROFIT_MILESTONE", "LOSS_MILESTONE",
+        "LOSS_LIMIT", "SPOT_SL",
     })
     _VALID_EVENTS = frozenset({"ENTER", "EXIT"})
 

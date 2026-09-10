@@ -938,8 +938,9 @@ _THESIS_SIGNAL_STATUSES = frozenset({"THESIS_FAIL"})
 _PROFIT_SIGNAL_STATUSES = frozenset({"TAKE_PROFIT", "TARGET_HIT", "TARGET_LOCKED"})
 _SL_RISK_TYPES = frozenset({"LOSS_LIMIT_HIT", "SL_TRIGGER"})
 _MILESTONE_RISK_TYPES = frozenset({"LOSS_MILESTONE_HIT"})
+_PROFIT_MILESTONE_RISK_TYPES = frozenset({"PROFIT_MILESTONE_HIT"})
 _PROFIT_RISK_TYPES = frozenset({"TARGET_HIT", "TARGET_LOCKED"})
-_EXIT_RISK_TYPES = frozenset({"PROFIT_FLOOR_HIT"})
+_EXIT_RISK_TYPES = frozenset()
 _MTM_FLAT_RS = 0.5
 
 
@@ -1117,6 +1118,8 @@ def _signal_kind_for_open_trade(
         return "sl"
     if daily in _THESIS_SIGNAL_STATUSES or "thesis_fail" in exit_txt:
         return "thesis"
+    if risk in _PROFIT_MILESTONE_RISK_TYPES:
+        return "profit_milestone"
     if (
         daily in _PROFIT_SIGNAL_STATUSES
         or "take_profit" in exit_txt
@@ -1208,7 +1211,7 @@ def _today_risk_type_by_trade(
                     'TARGET_HIT', 'TARGET_LOCKED',
                     'LOSS_LIMIT_HIT', 'SL_TRIGGER',
                     'LOSS_MILESTONE_HIT',
-                    'PROFIT_FLOOR_HIT'
+                    'PROFIT_MILESTONE_HIT'
               )
             ORDER BY created_at DESC
             """,

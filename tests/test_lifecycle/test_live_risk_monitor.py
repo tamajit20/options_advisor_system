@@ -95,13 +95,19 @@ def _build_monitor(state, *, target_fraction=0.70, cooldown_minutes=15,
 
 
 @pytest.fixture(autouse=True)
-def _disable_default_loss_milestone():
-    """Default config now enables a 5% LOSS_MILESTONE_HIT. Tests that assert
-    PRE_BREACH_WARNING / SHORT_LEG_STRESS / cooldown isolation must not get
-    that earlier alert. TestLossMilestoneHit re-enables via patch.dict."""
+def _disable_default_milestones():
+    """Default config enables 5% loss and profit milestones. Tests that assert
+    PRE_BREACH / TARGET / SL isolation must not get those earlier alerts."""
     with patch.dict(
         "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
-        {"loss_milestone_alert": {"enabled": False, "pct_of_premium": 25.0}},
+        {
+            "loss_milestone_alert": {
+                "enabled": False, "pct_of_premium": 25.0, "confirm_seconds": 0,
+            },
+            "profit_milestone_alert": {
+                "enabled": False, "pct_of_premium": 5.0, "confirm_seconds": 0,
+            },
+        },
         clear=False,
     ):
         yield
@@ -467,7 +473,9 @@ class TestLossMilestoneHit:
     def test_loss_milestone_fires_at_configured_pct(self, mocker):
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
-            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 25.0}},
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "confirm_seconds": 0,
+            }},
             clear=False,
         )
         state = _make_state(max_loss=10000.0)
@@ -488,7 +496,9 @@ class TestLossMilestoneHit:
         """25% of premium (10k→−2.5k) fires at −3k MTM; 25% of max_loss (20k→−5k) would not."""
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
-            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 25.0}},
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "confirm_seconds": 0,
+            }},
             clear=False,
         )
         state = _make_state(max_loss=20000.0, credit=10000.0)
@@ -505,7 +515,9 @@ class TestLossMilestoneHit:
     def test_hard_sl_still_fires_when_milestone_enabled(self, mocker):
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
-            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 25.0}},
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "confirm_seconds": 0,
+            }},
             clear=False,
         )
         state = _make_state(max_loss=10000.0)
@@ -522,7 +534,9 @@ class TestLossMilestoneHit:
     def test_loss_milestone_disabled_skips_alert(self, mocker):
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
-            {"loss_milestone_alert": {"enabled": False, "pct_of_premium": 25.0}},
+            {"loss_milestone_alert": {
+                "enabled": False, "pct_of_premium": 25.0, "confirm_seconds": 0,
+            }},
             clear=False,
         )
         state = _make_state(max_loss=10000.0)
@@ -542,6 +556,7 @@ class TestLossMilestoneHit:
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
             {"loss_milestone_alert": {
                 "enabled": True, "pct_of_premium": 25.0, "auto_close": True,
+                "confirm_seconds": 0,
             }},
             clear=False,
         )
@@ -568,6 +583,7 @@ class TestLossMilestoneHit:
             {"loss_milestone_alert": {
                 "enabled": True, "pct_of_premium": 25.0, "auto_close": True,
                 "cooldown_minutes": None, "auto_close_retry_seconds": 60,
+                "confirm_seconds": 0,
             }},
             clear=False,
         )
@@ -619,6 +635,7 @@ class TestLossMilestoneHit:
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
             {"loss_milestone_alert": {
                 "enabled": True, "pct_of_premium": 25.0, "auto_close": False,
+                "confirm_seconds": 0,
             }},
             clear=False,
         )
@@ -638,7 +655,9 @@ class TestLossMilestoneHit:
     def test_milestone_waits_until_every_leg_has_ltp(self, mocker):
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
-            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 25.0}},
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "confirm_seconds": 0,
+            }},
             clear=False,
         )
         state = _make_state(max_loss=10000.0)
@@ -656,7 +675,9 @@ class TestLossMilestoneHit:
     def test_milestone_matches_datetime_expiry_and_mixed_case_ticks(self, mocker):
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
-            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 25.0}},
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "confirm_seconds": 0,
+            }},
             clear=False,
         )
         state = _make_state(max_loss=10000.0)
@@ -676,6 +697,7 @@ class TestLossMilestoneHit:
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
             {"loss_milestone_alert": {
                 "enabled": True, "pct_of_premium": 25.0, "auto_close": True,
+                "confirm_seconds": 0,
             }},
             clear=False,
         )
@@ -716,6 +738,336 @@ class TestLossMilestoneHit:
         assert sorted(e["leg_order"] for e in ctx.exits) == [1, 2, 3, 4]
         by_order = {e["leg_order"]: e["exit_price"] for e in ctx.exits}
         assert by_order == {1: 120.0, 2: 20.0, 3: 120.0, 4: 20.0}
+
+
+class TestProfitMilestoneHit:
+    def _enable(self, mocker, *, pct=5.0, auto_close=True, confirm_seconds=0):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": pct, "auto_close": auto_close,
+                "confirm_seconds": confirm_seconds,
+            }},
+            clear=False,
+        )
+
+    def test_giveback_from_peak_fires(self, mocker):
+        self._enable(mocker)
+        state = _make_state()
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999,
+                           "target_fraction_at_min_dte": 0.99,
+                           "target_fraction_at_max_dte": 0.99},
+        )
+        monitor._bind_profit_milestone_cfg()
+        # 80/80 → MTM +2000. Giveback 5% of 10k = 500 → line 1500. Still above.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 80.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 80.0))
+        assert state.mtm_peak_rs == pytest.approx(2000.0)
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "PROFIT_MILESTONE_HIT" not in types
+        notifier.reset_mock()
+        # 86/86 → MTM +1400 ≤ 1500.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 86.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 86.0))
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "PROFIT_MILESTONE_HIT"
+        assert state.mtm_peak_rs == pytest.approx(2000.0)
+
+    def test_line_ratchets_with_new_peak(self, mocker):
+        self._enable(mocker)
+        state = _make_state()
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999,
+                           "target_fraction_at_min_dte": 0.99,
+                           "target_fraction_at_max_dte": 0.99},
+        )
+        monitor._bind_profit_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 80.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 80.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 60.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 60.0))
+        assert state.mtm_peak_rs == pytest.approx(4000.0)
+        notifier.reset_mock()
+        # 64/64 → +3600 still above 3500.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 64.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 64.0))
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "PROFIT_MILESTONE_HIT" not in types
+        notifier.reset_mock()
+        # 66/66 → +3400 ≤ 3500.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 66.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 66.0))
+        assert notifier.notify.call_args.kwargs["notif_type"] == "PROFIT_MILESTONE_HIT"
+
+    def test_not_armed_below_giveback(self, mocker):
+        self._enable(mocker)
+        state = _make_state()
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
+        )
+        monitor._bind_profit_milestone_cfg()
+        # 98/98 → MTM +200 < 500 giveback.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 98.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 98.0))
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "PROFIT_MILESTONE_HIT" not in types
+
+    def test_disabled_skips(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {"enabled": False, "pct_of_premium": 5.0}},
+            clear=False,
+        )
+        state = _make_state()
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999,
+                           "target_fraction_at_min_dte": 0.99,
+                           "target_fraction_at_max_dte": 0.99},
+        )
+        monitor._bind_profit_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 80.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 80.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 86.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 86.0))
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "PROFIT_MILESTONE_HIT" not in types
+
+    def test_loss_limit_still_fires_on_loss_side(self, mocker):
+        self._enable(mocker)
+        state = _make_state(max_loss=10000.0)
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
+        )
+        monitor._bind_profit_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 250.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 250.0))
+        assert notifier.notify.call_args.kwargs["notif_type"] == "LOSS_LIMIT_HIT"
+
+    def test_offers_auto_exec(self, mocker):
+        hook = MagicMock()
+        self._enable(mocker, auto_close=True)
+        state = _make_state()
+        monitor, notifier, bus = _build_monitor_full(
+            state,
+            cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999,
+                           "target_fraction_at_min_dte": 0.99,
+                           "target_fraction_at_max_dte": 0.99},
+        )
+        monitor._auto_exec = hook
+        monitor._bind_profit_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 80.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 80.0))
+        hook.reset_mock()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 86.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 86.0))
+        hook.assert_called_once()
+        ctx = hook.call_args.args[0]
+        assert ctx.notif_type == "PROFIT_MILESTONE_HIT"
+        assert ctx.trade_id == "T-001"
+
+    def test_persists_peak(self, mocker):
+        self._enable(mocker)
+        state = _make_state()
+        snap = _Snapshot()
+        snap.trades[state.trade_id] = state
+        for leg in state.legs:
+            snap.index.setdefault(leg.key, []).append(state.trade_id)
+        persisted = []
+        bus = EventBus()
+        monitor = LiveRiskMonitor(
+            notifier=MagicMock(), snapshot_loader=lambda: snap, event_bus=bus,
+            config={
+                "enabled": True,
+                "target_fraction_at_min_dte": 0.99,
+                "target_fraction_at_max_dte": 0.99,
+                "cooldown_minutes": 15, "reload_interval_sec": 9999,
+                "pre_breach_fraction": 0.99, "stale_leg_seconds": 9999,
+            },
+            clock=lambda: datetime(2026, 5, 5, 11, 0),
+            peak_persister=lambda tid, peak: persisted.append((tid, peak)),
+        )
+        monitor._snapshot = snap
+        monitor._unsubscribe = bus.subscribe("tick", monitor._on_tick)
+        monitor._bind_profit_milestone_cfg()
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 80.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 80.0))
+        assert persisted
+        assert persisted[-1][0] == "T-001"
+        assert persisted[-1][1] == pytest.approx(2000.0)
+
+
+def _clocked_milestone_monitor(state, clock, *, cfg_overrides=None):
+    snap = _Snapshot()
+    snap.trades[state.trade_id] = state
+    for leg in state.legs:
+        snap.index.setdefault(leg.key, []).append(state.trade_id)
+    bus = EventBus()
+    notifier = MagicMock()
+    cfg = {
+        "enabled": True,
+        "cooldown_minutes": 15, "reload_interval_sec": 9999,
+        "session_start": "09:15", "session_end": "15:30",
+        "pre_breach_fraction": 0.99, "stale_leg_seconds": 9999,
+        "target_fraction_at_min_dte": 0.99,
+        "target_fraction_at_max_dte": 0.99,
+        "mtm_publish_interval_sec": 0,
+    }
+    if cfg_overrides:
+        cfg.update(cfg_overrides)
+    monitor = LiveRiskMonitor(
+        notifier=notifier, snapshot_loader=lambda: snap,
+        event_bus=bus, config=cfg, clock=lambda: clock["now"],
+    )
+    monitor._snapshot = snap
+    monitor._unsubscribe = bus.subscribe("tick", monitor._on_tick)
+    monitor._bind_loss_milestone_cfg()
+    monitor._bind_profit_milestone_cfg()
+    captured = []
+    bus.subscribe("trade_mtm", lambda p: captured.append(p))
+    return monitor, notifier, bus, captured
+
+
+def _tick_pair(bus, state, ce, pe):
+    bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", ce))
+    bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", pe))
+
+
+class TestMilestoneConfirmWindow:
+    def test_loss_waits_confirm_then_fires(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "confirm_seconds": 20,
+            }},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        _tick_pair(bus, state, 130.0, 130.0)
+        assert notifier.notify.call_count == 0
+        assert "LOSS_MILESTONE" in state.milestone_confirm_at
+        assert captured[-1].get("loss_milestone_confirming") is True
+
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 19)
+        _tick_pair(bus, state, 130.0, 130.0)
+        assert notifier.notify.call_count == 0
+
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 20)
+        _tick_pair(bus, state, 130.0, 130.0)
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "LOSS_MILESTONE_HIT"
+        assert captured[-1].get("loss_milestone_confirming") is False
+
+    def test_loss_bounce_resets_window(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "confirm_seconds": 20,
+            }},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        _tick_pair(bus, state, 130.0, 130.0)
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 2)
+        _tick_pair(bus, state, 100.0, 100.0)
+        assert "LOSS_MILESTONE" not in state.milestone_confirm_at
+        assert captured[-1].get("loss_milestone_confirming") is False
+
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 3)
+        _tick_pair(bus, state, 130.0, 130.0)
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 22)
+        _tick_pair(bus, state, 130.0, 130.0)
+        assert notifier.notify.call_count == 0
+
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 23)
+        _tick_pair(bus, state, 130.0, 130.0)
+        assert notifier.notify.call_args.kwargs["notif_type"] == "LOSS_MILESTONE_HIT"
+
+    def test_profit_waits_confirm_then_fires(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 20,
+            }},
+            clear=False,
+        )
+        state = _make_state()
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        _tick_pair(bus, state, 80.0, 80.0)
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "PROFIT_MILESTONE_HIT" not in types
+        notifier.reset_mock()
+
+        _tick_pair(bus, state, 86.0, 86.0)
+        assert notifier.notify.call_count == 0
+        assert "PROFIT_MILESTONE" in state.milestone_confirm_at
+        assert captured[-1].get("profit_milestone_confirming") is True
+
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 19)
+        _tick_pair(bus, state, 86.0, 86.0)
+        assert notifier.notify.call_count == 0
+
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 20)
+        _tick_pair(bus, state, 86.0, 86.0)
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "PROFIT_MILESTONE_HIT"
+        assert captured[-1].get("profit_milestone_confirming") is False
+
+    def test_profit_bounce_resets_window(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 20,
+            }},
+            clear=False,
+        )
+        state = _make_state()
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        _tick_pair(bus, state, 80.0, 80.0)
+        _tick_pair(bus, state, 86.0, 86.0)
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 2)
+        _tick_pair(bus, state, 80.0, 80.0)
+        assert "PROFIT_MILESTONE" not in state.milestone_confirm_at
+        assert captured[-1].get("profit_milestone_confirming") is False
+
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 3)
+        _tick_pair(bus, state, 86.0, 86.0)
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 22)
+        _tick_pair(bus, state, 86.0, 86.0)
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "PROFIT_MILESTONE_HIT" not in types
+
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 23)
+        _tick_pair(bus, state, 86.0, 86.0)
+        assert notifier.notify.call_args.kwargs["notif_type"] == "PROFIT_MILESTONE_HIT"
+
+    def test_hard_sl_still_immediate(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {
+                "loss_milestone_alert": {
+                    "enabled": True, "pct_of_premium": 25.0, "confirm_seconds": 20,
+                },
+            },
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, _ = _clocked_milestone_monitor(state, clock)
+        _tick_pair(bus, state, 250.0, 250.0)
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "LOSS_LIMIT_HIT"
 
 
 class TestDTEAwareTarget:
@@ -960,10 +1312,10 @@ def test_fat_finger_tick_is_rejected():
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 — #4 Trailing SL on profit
+# Profit-floor path retired — profit_milestone_alert is the profit-side exit
 # ---------------------------------------------------------------------------
-class TestTrailingSL:
-    def _build_with_trailing(self, *, steps, clock_at=datetime(2026, 5, 5, 11, 0)):
+class TestProfitFloorDisabled:
+    def test_configured_trailing_steps_do_not_arm_or_alert(self, mocker):
         state = _make_state()
         snap = _Snapshot()
         snap.trades[state.trade_id] = state
@@ -972,102 +1324,38 @@ class TestTrailingSL:
         bus = EventBus()
         notifier = MagicMock()
         persisted = []
-        cfg = {
-            "enabled": True,
-            "target_fraction_at_min_dte": 0.99,
-            "target_fraction_at_max_dte": 0.99,
-            "cooldown_minutes": 15,
-            "reload_interval_sec": 9999,
-            "pre_breach_fraction": 0.99,
-            "stale_leg_seconds": 600,
-            "trailing_sl_steps": steps,
-        }
         monitor = LiveRiskMonitor(
             notifier=notifier, snapshot_loader=lambda: snap, event_bus=bus,
-            config=cfg, clock=lambda: clock_at,
+            config={
+                "enabled": True,
+                "target_fraction_at_min_dte": 0.99,
+                "target_fraction_at_max_dte": 0.99,
+                "cooldown_minutes": 15,
+                "reload_interval_sec": 9999,
+                "pre_breach_fraction": 0.99,
+                "stale_leg_seconds": 600,
+                "trailing_sl_steps": [[0.50, 0.0], [0.80, 0.40]],
+            },
+            clock=lambda: datetime(2026, 5, 5, 11, 0),
             trailing_persister=lambda tid, floor, idx: persisted.append(
                 (tid, floor, idx)),
         )
         monitor._snapshot = snap
         monitor._unsubscribe = bus.subscribe("tick", monitor._on_tick)
-        return monitor, notifier, bus, state, persisted
-
-    def test_step_arms_at_50_percent_and_persists(self):
-        # Step: at 50% of max profit (₹5000), lock floor at 0% (breakeven).
-        m, notifier, bus, state, persisted = self._build_with_trailing(
-            steps=[[0.50, 0.0]])
-        # Premiums down to 50 each → MTM = 10000 + (-1*50*50) + (-1*50*50) = 5000
-        # = 50% of max_profit (10000). Triggers step.
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 50.0))
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 50.0))
-        assert state.trailing_step_idx == 1
-        assert state.trailing_pnl_floor == 0.0
-        assert persisted == [("T-001", 0.0, 1)]
-        # Floor persists even if TARGET_HIT (same 50% IC threshold) is the
-        # alert returned on this tick instead of PROFIT_FLOOR_SET.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 20.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 20.0))
+        assert state.trailing_pnl_floor is None
+        assert persisted == []
         types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
-        assert "TARGET_HIT" in types or "PROFIT_FLOOR_SET" in types
+        assert "PROFIT_FLOOR_SET" not in types
+        assert "PROFIT_FLOOR_HIT" not in types
 
-    def test_floor_breach_fires_profit_floor_hit(self):
-        # Two-step: 50% locks breakeven, 80% locks 40% of max.
-        m, notifier, bus, state, _ = self._build_with_trailing(
-            steps=[[0.50, 0.0], [0.80, 0.40]])
-        # Climb to 80% profit → MTM 8000. Premiums down to 20 each.
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 20.0))
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 20.0))
-        # Floor should now be 0.40 * 10000 = 4000.
-        assert state.trailing_pnl_floor == 4000.0
-        notifier.reset_mock()
-        # MTM falls back to 3000 (premiums 70/70). Below 4000 floor → SL.
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 70.0))
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 70.0))
-        sl_calls = [c for c in notifier.notify.call_args_list
-                    if c.kwargs.get("notif_type") == "PROFIT_FLOOR_HIT"]
-        assert len(sl_calls) == 1
-        assert "profit floor" in sl_calls[0].kwargs.get("body", "").lower()
-
-    def test_loss_limit_after_profit_floor_is_separate_alert(self):
-        """Floor breach and later loss limit use distinct notification types."""
-        m, notifier, bus, state, _ = self._build_with_trailing(
-            steps=[[0.50, 0.0], [0.80, 0.40]])
-        # Arm floor at 4000 via 80% profit.
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 20.0))
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 20.0))
-        assert state.trailing_pnl_floor == 4000.0
-        notifier.reset_mock()
-        # Profit floor breach (still above loss limit).
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 70.0))
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 70.0))
-        floor_calls = [c for c in notifier.notify.call_args_list
-                       if c.kwargs.get("notif_type") == "PROFIT_FLOOR_HIT"]
-        assert len(floor_calls) == 1
-        notifier.reset_mock()
-        # Deep loss crosses premium SL — separate alert type.
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 250.0))
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 250.0))
-        loss_calls = [c for c in notifier.notify.call_args_list
-                      if c.kwargs.get("notif_type") == "LOSS_LIMIT_HIT"]
-        assert len(loss_calls) == 1
-
-    def test_floor_never_lowers(self):
-        # If we cross 80% then drop to 60%, floor must remain 4000 (the 80% lock).
-        m, notifier, bus, state, _ = self._build_with_trailing(
-            steps=[[0.50, 0.20], [0.80, 0.40]])
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 20.0))  # 80%
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 20.0))
-        assert state.trailing_pnl_floor == 4000.0
-        # Drop to 60% — must NOT lower floor.
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 40.0))
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 40.0))
-        assert state.trailing_pnl_floor == 4000.0
-        assert state.trailing_step_idx == 2
-
-    def test_invalid_steps_fall_back_to_default(self):
-        # Non-ascending triggers — should warn and use defaults from _DEFAULTS.
+    def test_invalid_steps_fall_back_to_empty_default(self):
         from lifecycle.live_risk_monitor import _safe_cfg, _DEFAULTS
         out = _safe_cfg({"trailing_sl_steps": [[0.80, 0.4], [0.50, 0.0]]})
         assert out["trailing_sl_steps"] == [
             tuple(s) for s in _DEFAULTS["trailing_sl_steps"]]
+        assert out["trailing_sl_steps"] == []
 
 
 # ---------------------------------------------------------------------------

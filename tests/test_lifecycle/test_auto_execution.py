@@ -1,19 +1,25 @@
-"""Auto-execution registry: only LOSS_MILESTONE_HIT closes; profit/entry stay manual."""
+"""Auto-execution registry: milestone hits close; profit target / SL stay manual."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
 import pytest
 
-from lifecycle.auto_execution.close_on_milestone import CloseOnLossMilestone
+from lifecycle.auto_execution.close_on_milestone import (
+    CloseOnLossMilestone,
+    CloseOnProfitMilestone,
+)
 from lifecycle.auto_execution.registry import matching_actions, registered_notif_types
 from lifecycle.auto_execution.runner import dispatch_auto_execution
 from lifecycle.auto_execution.types import AutoExecContext
 from lifecycle.zerodha_executor import ZerodhaExecutionError
 
 
-def test_only_loss_milestone_is_registered():
-    assert registered_notif_types() == ("LOSS_MILESTONE_HIT",)
+def test_only_milestones_are_registered():
+    assert set(registered_notif_types()) == {
+        "LOSS_MILESTONE_HIT",
+        "PROFIT_MILESTONE_HIT",
+    }
 
 
 @pytest.mark.parametrize("notif_type", [
@@ -28,6 +34,10 @@ def test_manual_alerts_have_no_auto_action(notif_type, mocker):
         "lifecycle.auto_execution.close_on_milestone.loss_milestone_config",
         return_value={"enabled": True, "auto_close": True, "pct_of_premium": 5.0},
     )
+    mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.profit_milestone_config",
+        return_value={"enabled": True, "auto_close": True, "pct_of_premium": 5.0},
+    )
     assert matching_actions(notif_type) == []
 
 
@@ -36,7 +46,12 @@ def test_milestone_disabled_or_auto_close_off_matches_nothing(mocker):
         "lifecycle.auto_execution.close_on_milestone.loss_milestone_config",
         return_value={"enabled": True, "auto_close": False, "pct_of_premium": 5.0},
     )
+    mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.profit_milestone_config",
+        return_value={"enabled": True, "auto_close": False, "pct_of_premium": 5.0},
+    )
     assert matching_actions("LOSS_MILESTONE_HIT") == []
+    assert matching_actions("PROFIT_MILESTONE_HIT") == []
 
 
 def test_milestone_enabled_matches_close_action(mocker):
@@ -47,6 +62,16 @@ def test_milestone_enabled_matches_close_action(mocker):
     actions = matching_actions("LOSS_MILESTONE_HIT")
     assert len(actions) == 1
     assert isinstance(actions[0], CloseOnLossMilestone)
+
+
+def test_profit_milestone_enabled_matches_close_action(mocker):
+    mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.profit_milestone_config",
+        return_value={"enabled": True, "auto_close": True, "pct_of_premium": 10.0},
+    )
+    actions = matching_actions("PROFIT_MILESTONE_HIT")
+    assert len(actions) == 1
+    assert isinstance(actions[0], CloseOnProfitMilestone)
 
 
 def test_dispatch_skips_thread_when_no_action(mocker):

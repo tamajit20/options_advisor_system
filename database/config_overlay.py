@@ -89,6 +89,7 @@ _PNL_KEYS = frozenset({
     "long_premium_thesis_exit", "intraday_sl_multiplier",
     "live_risk_monitor", "adverse_move_warning_pct",
     "loss_milestone_alert",
+    "profit_milestone_alert",
 })
 
 _GROUP_META: Sequence[Tuple[str, str]] = (
@@ -151,10 +152,17 @@ _DESCRIPTIONS: Dict[str, str] = {
         "(paid for debits, received for credits — same as P&L % brackets). "
         "Zerodha trades flatten on Kite; manual trades close in the DB at live LTP. "
         "Separate from strategy SL. JSON: {enabled, pct_of_premium, auto_close, "
-        "cooldown_minutes, auto_close_retry_seconds}. Legacy key pct_of_max_loss "
-        "is still read if pct_of_premium is omitted.",
+        "confirm_seconds, cooldown_minutes, auto_close_retry_seconds}. "
+        "confirm_seconds (default 20) waits that long at/through the line "
+        "before auto-close. Legacy key pct_of_max_loss is still read if "
+        "pct_of_premium is omitted.",
+    "profit_milestone_alert":
+        "Auto-close to protect a winner: once peak MTM ≥ pct_of_premium % of "
+        "entry premium, sell if MTM gives back that amount from the peak "
+        "(line only ratchets up). SL stays on the loss side. Same JSON shape "
+        "as loss_milestone_alert including confirm_seconds. Independent percent.",
     "live_risk_monitor":
-        "Live alert engine (session, cooldown, trailing floor, pre-breach). Nested JSON.",
+        "Live alert engine (session, cooldown, pre-breach). Nested JSON.",
     "trading_capital_rs": "Notional capital for circuit-breaker and sizing.",
     "scheduler.jobs":
         "Per-job cron / enable flags. Job times take effect after a scheduler restart.",

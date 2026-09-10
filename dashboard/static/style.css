@@ -103,6 +103,16 @@ a { color: var(--accent); text-decoration: none; }
   height: 12px;
   border-radius: 1px;
 }
+.signal-tile--profit_milestone .signal-shape {
+  background: #0d9488;
+  clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
+  filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 8px rgba(13, 148, 136, .95));
+}
+.signal-tile--profit_milestone .signal-mark {
+  width: 3px;
+  height: 12px;
+  border-radius: 1px;
+}
 .signal-tile--thesis .signal-shape {
   background: #ea580c;
   clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
@@ -2017,6 +2027,11 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   background: rgba(239, 68, 68, .12);
   border: 1px solid rgba(239, 68, 68, .3);
 }
+.lpl-status-confirming {
+  color: #92400e;
+  background: rgba(245, 158, 11, .18);
+  border: 1px solid rgba(245, 158, 11, .35);
+}
 .lpl-floor-row.lpl-row-breach .lpl-status-breach {
   color: #92400e;
   background: rgba(245, 158, 11, .18);
@@ -2024,6 +2039,12 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 }
 .lpl-row-active.lpl-row-hit {
   background: rgba(34, 197, 94, .08);
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+}
+.lpl-row-active.lpl-row-confirming {
+  background: rgba(245, 158, 11, .08);
   border-radius: 4px;
   padding: 4px 6px;
   margin: -4px -6px;

@@ -12,14 +12,14 @@ uses) and emits a notification when:
 * ``PRE_BREACH_WARNING`` — current loss first crosses
   ``pre_breach_fraction × effective_sl_rs``. Soft warning; gives the user lead
   time before a hard loss limit. Fires once per trade per IST day.
-* ``PROFIT_FLOOR_SET`` — a trailing profit-lock step arms and raises the
-  trade's ``trailing_pnl_floor``.
-* ``PROFIT_FLOOR_HIT`` — live MTM drops below the armed profit floor.
 * ``LOSS_MILESTONE_HIT`` — user-configured ``pct_of_premium`` of entry
   premium (see ``loss_milestone_alert``). Alert only here; auto-close lives
   in ``lifecycle.auto_execution`` when ``auto_close`` is on.
+* ``PROFIT_MILESTONE_HIT`` — giveback from peak MTM
+  (``profit_milestone_alert``). SL is not shifted into profit. Auto-close
+  lives in ``lifecycle.auto_execution`` when ``auto_close`` is on.
 * ``LOSS_LIMIT_HIT`` — current PnL crosses the strategy effective loss limit
-  (``effective_sl_rs``). Alert only — no auto flatten.
+  (``effective_sl_rs``). Alert only — no auto flatten. Loss-side only.
 * ``SL_TRIGGER`` — underlying spot crosses ``actual_stop_loss_level`` (when
   set). Premium-based loss uses ``LOSS_LIMIT_HIT`` instead.
 * ``SHORT_LEG_STRESS`` — a SHORT leg's live LTP has risen above
@@ -87,6 +87,9 @@ from engine.sl_threshold import (
     effective_sl_rs,
     loss_milestone_config,
     loss_milestone_rs,
+    profit_milestone_config,
+    profit_milestone_line_rs,
+    profit_milestone_rs,
     trade_investment_rs,
 )
 from lifecycle.auto_execution.types import AutoExecContext
@@ -203,6 +206,8 @@ class _TradeState:
     conditions_json: Any = None
     last_direction_fit: Optional[str] = None
     trade_greeks: Optional[dict] = None
+    mtm_peak_rs: Optional[float] = None
+    milestone_confirm_at: Dict[str, datetime] = field(default_factory=dict)
 
 
 @dataclass
@@ -341,6 +346,9 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                                     if trade.get("trailing_pnl_floor") is not None
                                     else None),
                 trailing_step_idx=int(trade.get("trailing_step_idx") or 0),
+                mtm_peak_rs=(float(trade["mtm_peak_rs"])
+                             if trade.get("mtm_peak_rs") is not None
+                             else None),
                 entry_pop=entry_pop,
                 entry_spot=entry_spot,
                 atm_iv=atm_iv,
@@ -385,7 +393,7 @@ _DEFAULTS = {
     "mtm_state_path":             "data/live_mtm_state.json",
     # Phase 3 — #4 trailing SL on profit. List of [profit_trigger_fraction,
     # lock_floor_fraction_of_max_profit] tuples, ascending by trigger.
-    "trailing_sl_steps":          [[0.50, 0.0], [0.80, 0.40]],
+    "trailing_sl_steps":          [],
     # Phase 3 — #3 publish-rate throttle (seconds per trade).
     "mtm_publish_interval_sec":   1.0,
     "mtm_snapshot_interval_sec":  900,
@@ -489,6 +497,7 @@ class LiveRiskMonitor:
         config: Optional[dict] = None,
         clock: Callable[[], datetime] = now_ist,
         trailing_persister: Optional[Callable[[str, Optional[float], int], None]] = None,
+        peak_persister: Optional[Callable[[str, Optional[float]], None]] = None,
         mtm_snapshot_persister: Optional[Callable[[dict], None]] = None,
         level_event_persister: Optional[Callable[[dict], None]] = None,
         events_repo: Optional[object] = None,
@@ -501,6 +510,7 @@ class LiveRiskMonitor:
         self._bus = event_bus or get_event_bus()
         self._config_override = config
         self._trailing_persister = trailing_persister
+        self._peak_persister = peak_persister
         self._mtm_snapshot_persister = mtm_snapshot_persister
         self._level_event_persister = level_event_persister
         self._events_repo = events_repo
@@ -635,6 +645,7 @@ class LiveRiskMonitor:
         self._short_leg_stress_enabled = bool(cfg["short_leg_stress_enabled"])
         self._short_leg_stress_mult = float(cfg["short_leg_stress_multiplier"])
         self._bind_loss_milestone_cfg()
+        self._bind_profit_milestone_cfg()
 
     def _bind_loss_milestone_cfg(self) -> None:
         """Re-read loss_milestone_alert from STRATEGY_CONFIG."""
@@ -652,6 +663,29 @@ class LiveRiskMonitor:
         except (TypeError, ValueError):
             retry_sec = 60
         self._loss_milestone_retry = timedelta(seconds=retry_sec)
+        self._loss_milestone_confirm = timedelta(
+            seconds=int(lmc.get("confirm_seconds") or 0)
+        )
+
+    def _bind_profit_milestone_cfg(self) -> None:
+        """Re-read profit_milestone_alert from STRATEGY_CONFIG."""
+        pmc = profit_milestone_config()
+        self._profit_milestone_enabled = pmc["enabled"]
+        self._profit_milestone_pct = pmc["pct_of_premium"]
+        cd = pmc.get("cooldown_minutes")
+        self._profit_milestone_cooldown = (
+            timedelta(minutes=int(cd)) if cd is not None else None
+        )
+        self._profit_milestone_auto_close = bool(pmc.get("auto_close", True))
+        retry_sec = pmc.get("auto_close_retry_seconds", 60)
+        try:
+            retry_sec = max(0, int(retry_sec))
+        except (TypeError, ValueError):
+            retry_sec = 60
+        self._profit_milestone_retry = timedelta(seconds=retry_sec)
+        self._profit_milestone_confirm = timedelta(
+            seconds=int(pmc.get("confirm_seconds") or 0)
+        )
 
     def _reload(self, *, prime: bool = False) -> None:
         if self._config_reloader is not None:
@@ -688,12 +722,18 @@ class LiveRiskMonitor:
                     if new_state.atm_iv is None and old.atm_iv is not None:
                         new_state.atm_iv = old.atm_iv
                     new_state.last_direction_fit = old.last_direction_fit
+                    new_state.milestone_confirm_at = dict(old.milestone_confirm_at)
                     # Trailing SL: prefer the in-memory state if it's
                     # ahead of what the loader returned (the DB row may
                     # be slightly stale vs ticks since the last UPDATE).
                     if old.trailing_step_idx > new_state.trailing_step_idx:
                         new_state.trailing_step_idx = old.trailing_step_idx
                         new_state.trailing_pnl_floor = old.trailing_pnl_floor
+                    old_peak = old.mtm_peak_rs
+                    new_peak = new_state.mtm_peak_rs
+                    if old_peak is not None and (
+                            new_peak is None or old_peak > new_peak):
+                        new_state.mtm_peak_rs = old_peak
             self._snapshot = new_snap
             persist_mtm = self._prune_closed_mtm_locked()
             mtm_dump = dict(self._mtm_state) if persist_mtm else None
@@ -749,6 +789,7 @@ class LiveRiskMonitor:
         decisions: List[_PendingAlert] = []
         pending_mtm: List[dict] = []
         pending_trail: List[Tuple[str, Optional[float], int]] = []
+        pending_peaks: List[Tuple[str, Optional[float]]] = []
         pending_snapshots: List[dict] = []
         with self._lock:
             for tid in self._snapshot.index.get(key, ()):
@@ -757,6 +798,7 @@ class LiveRiskMonitor:
                     continue
                 state.leg_ltps[key] = ltp
                 state.leg_last_tick[key] = now
+                peak_before = state.mtm_peak_rs
                 alert, mtm, trail, snap = self._evaluate_locked(state, now, tick_key=key)
                 if alert is not None:
                     decisions.append(alert)
@@ -764,10 +806,16 @@ class LiveRiskMonitor:
                     pending_mtm.append(mtm)
                 if trail is not None:
                     pending_trail.append(trail)
+                if (state.mtm_peak_rs is not None
+                        and state.mtm_peak_rs != peak_before):
+                    pending_peaks.append((state.trade_id, state.mtm_peak_rs))
                 if snap is not None:
                     pending_snapshots.append(snap)
 
-        self._flush_outputs(decisions, pending_mtm, pending_trail, pending_snapshots)
+        self._flush_outputs(
+            decisions, pending_mtm, pending_trail, pending_snapshots,
+            pending_peaks,
+        )
 
     def _flush_outputs(
         self,
@@ -775,6 +823,7 @@ class LiveRiskMonitor:
         pending_mtm: List[dict],
         pending_trail: List[Tuple[str, Optional[float], int]],
         pending_snapshots: List[dict],
+        pending_peaks: Optional[List[Tuple[str, Optional[float]]]] = None,
     ) -> None:
         for d in decisions:
             self._dispatch(d)
@@ -795,6 +844,8 @@ class LiveRiskMonitor:
                     )
         for args in pending_trail:
             self._persist_trailing(*args)
+        for args in (pending_peaks or []):
+            self._persist_peak(*args)
 
     def _handle_spot_tick(self, quote: LiveQuote) -> None:
         sym = str(quote.symbol or "").upper()
@@ -807,6 +858,7 @@ class LiveRiskMonitor:
         decisions: List[_PendingAlert] = []
         pending_mtm: List[dict] = []
         pending_trail: List[Tuple[str, Optional[float], int]] = []
+        pending_peaks: List[Tuple[str, Optional[float]]] = []
         pending_snapshots: List[dict] = []
         with self._lock:
             tids = list(self._snapshot.spot_index.get(quote.symbol, ()))
@@ -823,6 +875,7 @@ class LiveRiskMonitor:
                 if (self._in_session(now)
                         and self._legs_fresh(state, now)
                         and self._mtm_throttle_elapsed(state, now)):
+                    peak_before = state.mtm_peak_rs
                     alert, mtm, trail, snap = self._evaluate_locked(state, now)
                     if alert is not None:
                         decisions.append(alert)
@@ -830,6 +883,9 @@ class LiveRiskMonitor:
                         pending_mtm.append(mtm)
                     if trail is not None:
                         pending_trail.append(trail)
+                    if (state.mtm_peak_rs is not None
+                            and state.mtm_peak_rs != peak_before):
+                        pending_peaks.append((state.trade_id, state.mtm_peak_rs))
                     if snap is not None:
                         pending_snapshots.append(snap)
                 if not self._spot_sl_enabled:
@@ -874,7 +930,10 @@ class LiveRiskMonitor:
                         # Reset cooldown so a new breach alerts immediately.
                         state.in_breach[key] = False
                         state.last_alert_at.pop(key, None)
-        self._flush_outputs(decisions, pending_mtm, pending_trail, pending_snapshots)
+        self._flush_outputs(
+            decisions, pending_mtm, pending_trail, pending_snapshots,
+            pending_peaks,
+        )
 
     def _mtm_throttle_elapsed(self, state: _TradeState, now: datetime) -> bool:
         if self._mtm_publish_interval.total_seconds() <= 0:
@@ -1005,37 +1064,18 @@ class LiveRiskMonitor:
             entry_net_credit=state.entry_net_credit,
         )
 
-        # Trailing SL ratchet (#4): when current_pnl crosses the next step's
-        # trigger (= step_trigger × max_profit), bump the floor up.
         trailing_persist: Optional[Tuple[str, Optional[float], int]] = None
-        trailing_lock_alert: Optional[_PendingAlert] = None
-        if state.max_profit > 0 and self._trailing_steps:
-            while state.trailing_step_idx < len(self._trailing_steps):
-                trig, lock = self._trailing_steps[state.trailing_step_idx]
-                if current_pnl < trig * state.max_profit:
-                    break
-                # Arm this step.
-                new_floor = lock * state.max_profit
-                # Only ratchet up — never lower an existing floor.
-                if (state.trailing_pnl_floor is None
-                        or new_floor > state.trailing_pnl_floor):
-                    state.trailing_pnl_floor = new_floor
-                state.trailing_step_idx += 1
-                self._counters["trailing_steps_armed"] += 1
-                trailing_persist = (
-                    state.trade_id, state.trailing_pnl_floor,
-                    state.trailing_step_idx,
-                )
-                trailing_lock_alert = _PendingAlert(
-                    state=state, notif_type="PROFIT_FLOOR_SET", severity="INFO",
-                    title=f"Profit floor set on {state.trade_name}",
-                    body=self._format_pnl_body(
-                        state, current_pnl,
-                        f"Reached {trig*100:.0f}% of max profit; profit floor "
-                        f"raised to ₹{state.trailing_pnl_floor:,.0f}",
-                    ),
-                    breach_key=f"TRAIL_{state.trailing_step_idx}",
-                )
+        if current_pnl > 0 and (
+                state.mtm_peak_rs is None or current_pnl > state.mtm_peak_rs):
+            state.mtm_peak_rs = current_pnl
+
+        investment = trade_investment_rs(entry_net_credit_rs=state.entry_net_credit)
+        milestone_rs, milestone_pct = loss_milestone_rs(investment_rs=investment)
+        profit_giveback_rs, profit_ms_pct = profit_milestone_rs(
+            investment_rs=investment)
+        profit_line = profit_milestone_line_rs(
+            peak_rs=state.mtm_peak_rs, giveback_rs=profit_giveback_rs,
+        )
 
         # MTM publish (#3) — throttled per trade.
         mtm_payload: Optional[dict] = None
@@ -1053,7 +1093,15 @@ class LiveRiskMonitor:
                 "far_dte": horizon.get("far_dte"),
                 "max_profit": state.max_profit,
                 "max_loss": state.max_loss,
-                "trailing_pnl_floor": state.trailing_pnl_floor,
+                "mtm_peak_rs": (
+                    round(state.mtm_peak_rs, 2)
+                    if state.mtm_peak_rs is not None else None
+                ),
+                "profit_milestone_line": (
+                    round(profit_line, 2) if profit_line is not None else None
+                ),
+                "profit_milestone_confirming": False,
+                "loss_milestone_confirming": False,
                 "as_of": now.isoformat(timespec="seconds"),
                 "leg_ltps": self._leg_ltps_dict(state),
             }
@@ -1089,12 +1137,8 @@ class LiveRiskMonitor:
                     ) if k in mtm_payload
                 }
 
-        trailing_breach = (
-            state.trailing_pnl_floor is not None
-            and current_pnl < state.trailing_pnl_floor
-        )
-
         # 1a. Hard loss limit (premium-based SL from exit engine).
+        # SL stays on the loss side — never shifted into profit.
         if decision.decision == "SL_HIT":
             alert = self._maybe_alert(
                 state, "LOSS_LIMIT_HIT", "CRITICAL",
@@ -1132,28 +1176,71 @@ class LiveRiskMonitor:
             )
             return alert, mtm_payload, trailing_persist, snapshot_payload
 
-        # 1b. Trailing profit floor breach (separate breach bucket / cooldown).
-        if trailing_breach:
+        profit_in_zone = (
+            self._profit_milestone_enabled
+            and profit_line is not None
+            and current_pnl <= profit_line
+        )
+        profit_ready = self._zone_confirmed(
+            state, "PROFIT_MILESTONE", now, profit_in_zone,
+            self._profit_milestone_confirm,
+        )
+        if mtm_payload is not None:
+            mtm_payload["profit_milestone_confirming"] = bool(
+                profit_in_zone and not profit_ready
+            )
+
+        # 1b. Profit milestone — giveback from peak (independent of loss SL).
+        if profit_in_zone:
+            if not profit_ready:
+                return None, mtm_payload, trailing_persist, snapshot_payload
+            prem_label = (
+                "premium received" if state.entry_net_credit > 0 else "premium paid"
+            )
+            close_note = (
+                "Auto-closing now."
+                if self._profit_milestone_auto_close
+                else "Consider booking — hard SL unchanged."
+            )
+            peak = state.mtm_peak_rs or 0.0
             reason = (
-                f"Live MTM ₹{current_pnl:,.0f} fell below profit floor "
-                f"₹{state.trailing_pnl_floor:,.0f}"
+                f"Profit milestone ({profit_ms_pct:.0f}% of {prem_label} ₹"
+                f"{investment:,.0f} = ₹{profit_giveback_rs:,.0f} giveback from "
+                f"peak ₹{peak:,.0f}): MTM ₹{current_pnl:,.0f} ≤ ₹{profit_line:,.0f} "
+                f"{self._held_for_phrase(self._profit_milestone_confirm)}. "
+                f"{close_note}"
             )
             alert = self._maybe_alert(
-                state, "PROFIT_FLOOR_HIT", "WARNING",
-                title=f"Profit floor hit on {state.trade_name}",
+                state, "PROFIT_MILESTONE_HIT", "WARNING",
+                title=f"Profit milestone hit on {state.trade_name}",
                 body=self._format_pnl_body(state, current_pnl, reason),
-                breach_key="PROFIT_FLOOR", now=now,
-                threshold_rs=state.trailing_pnl_floor,
+                breach_key="PROFIT_MILESTONE", now=now,
+                threshold_rs=profit_line,
+                cooldown=self._profit_milestone_cooldown,
             )
+            if alert is None:
+                alert = self._silent_profit_milestone_retry(state, now)
             return alert, mtm_payload, trailing_persist, snapshot_payload
 
+        loss_in_zone = (
+            self._loss_milestone_enabled
+            and milestone_rs > 0
+            and decision.decision != "SL_HIT"
+            and current_pnl <= -milestone_rs
+        )
+        loss_ready = self._zone_confirmed(
+            state, "LOSS_MILESTONE", now, loss_in_zone,
+            self._loss_milestone_confirm,
+        )
+        if mtm_payload is not None:
+            mtm_payload["loss_milestone_confirming"] = bool(
+                loss_in_zone and not loss_ready
+            )
+
         # 2. Loss milestone — user % of entry premium (independent of strategy SL).
-        investment = trade_investment_rs(entry_net_credit_rs=state.entry_net_credit)
-        milestone_rs, milestone_pct = loss_milestone_rs(investment_rs=investment)
-        if (self._loss_milestone_enabled
-                and milestone_rs > 0
-                and decision.decision != "SL_HIT"
-                and current_pnl <= -milestone_rs):
+        if loss_in_zone:
+            if not loss_ready:
+                return None, mtm_payload, trailing_persist, snapshot_payload
             prem_label = (
                 "premium received" if state.entry_net_credit > 0 else "premium paid"
             )
@@ -1165,7 +1252,8 @@ class LiveRiskMonitor:
             reason = (
                 f"Loss milestone ({milestone_pct:.0f}% of {prem_label} ₹"
                 f"{investment:,.0f} = ₹{milestone_rs:,.0f}): "
-                f"MTM ₹{current_pnl:,.0f}. {close_note}"
+                f"MTM ₹{current_pnl:,.0f} "
+                f"{self._held_for_phrase(self._loss_milestone_confirm)}. {close_note}"
             )
             alert = self._maybe_alert(
                 state, "LOSS_MILESTONE_HIT", "WARNING",
@@ -1229,15 +1317,10 @@ class LiveRiskMonitor:
         if milestone_rs > 0:
             self._clear_level_breach(
                 state, "LOSS_MILESTONE", now, current_pnl, milestone_rs)
-        if not trailing_breach:
+        if profit_line is not None:
             self._clear_level_breach(
-                state, "PROFIT_FLOOR", now, current_pnl,
-                state.trailing_pnl_floor)
+                state, "PROFIT_MILESTONE", now, current_pnl, profit_line)
         self._clear_level_breach(state, "TARGET", now, current_pnl, target_rs)
-        # If we armed a trailing step but no other alert fired, surface
-        # the lock confirmation. Otherwise return only the MTM payload.
-        if trailing_lock_alert is not None:
-            return trailing_lock_alert, mtm_payload, trailing_persist, snapshot_payload
         if structural_flip is not None:
             return structural_flip, mtm_payload, trailing_persist, snapshot_payload
         return None, mtm_payload, trailing_persist, snapshot_payload
@@ -1337,6 +1420,8 @@ class LiveRiskMonitor:
     _LEVEL_EVENT_KEYS = {
         "TARGET": "TARGET",
         "PROFIT_FLOOR": "PROFIT_FLOOR",
+        "PROFIT_MILESTONE": "PROFIT_MILESTONE",
+        "LOSS_MILESTONE": "LOSS_MILESTONE",
         "LOSS_LIMIT": "LOSS_LIMIT",
         "SPOT_SL": "SPOT_SL",
     }
@@ -1514,6 +1599,33 @@ class LiveRiskMonitor:
         state.in_breach[breach_key] = False
         state.last_alert_at.pop(breach_key, None)
 
+    @staticmethod
+    def _held_for_phrase(confirm: timedelta) -> str:
+        sec = int(confirm.total_seconds())
+        if sec <= 0:
+            return "on this print"
+        return f"for {sec}s"
+
+    def _zone_confirmed(
+        self,
+        state: _TradeState,
+        key: str,
+        now: datetime,
+        in_zone: bool,
+        confirm: timedelta,
+    ) -> bool:
+        """True when *in_zone* has held for ``confirm`` (0s = first tick)."""
+        if not in_zone:
+            state.milestone_confirm_at.pop(key, None)
+            return False
+        if confirm.total_seconds() <= 0:
+            return True
+        started = state.milestone_confirm_at.get(key)
+        if started is None:
+            state.milestone_confirm_at[key] = now
+            return False
+        return (now - started) >= confirm
+
     def _silent_milestone_retry(
         self, state: _TradeState, now: datetime,
     ) -> Optional["_PendingAlert"]:
@@ -1534,6 +1646,25 @@ class LiveRiskMonitor:
             title="",
             body="",
             breach_key="LOSS_MILESTONE",
+            silent=True,
+        )
+
+    def _silent_profit_milestone_retry(
+        self, state: _TradeState, now: datetime,
+    ) -> Optional["_PendingAlert"]:
+        """Re-attempt profit-milestone auto-close during alert cooldown."""
+        if not self._profit_milestone_auto_close or self._auto_exec is None:
+            return None
+        last = state.last_auto_exec_at
+        if last is not None and (now - last) < self._profit_milestone_retry:
+            return None
+        return _PendingAlert(
+            state=state,
+            notif_type="PROFIT_MILESTONE_HIT",
+            severity="WARNING",
+            title="",
+            body="",
+            breach_key="PROFIT_MILESTONE",
             silent=True,
         )
 
@@ -1651,6 +1782,15 @@ class LiveRiskMonitor:
         except Exception:
             logger.exception(
                 "LiveRiskMonitor: trailing_persister raised for %s", trade_id)
+
+    def _persist_peak(self, trade_id: str, mtm_peak_rs: Optional[float]) -> None:
+        if self._peak_persister is None:
+            return
+        try:
+            self._peak_persister(trade_id, mtm_peak_rs)
+        except Exception:
+            logger.exception(
+                "LiveRiskMonitor: peak_persister raised for %s", trade_id)
 
     def _format_pnl_body(self, state: _TradeState, current_pnl: float, reason: str) -> str:
         body = (

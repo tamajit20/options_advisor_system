@@ -47,8 +47,8 @@ function _lookupLegLtp(legLtps, symbol, strike, optionType, expiry) {
   if (!legLtps || typeof legLtps !== 'object') return null;
   if (expiry) {
     const want = _normLegKey(symbol, expiry, strike, optionType);
-    for (const [k, v] of Object.entries(legLtps)) {
-      const parts = k.split('|');
+  for (const [k, v] of Object.entries(legLtps)) {
+    const parts = k.split('|');
       if (parts.length === 4 && _normLegKey(parts[0], parts[1], parts[2], parts[3]) === want) return v;
     }
   }
@@ -878,6 +878,8 @@ function _buildMtmPayload(trade, snapTrade) {
     max_profit: st.max_profit ?? trade.actual_max_profit ?? sug.max_profit,
     max_loss: st.max_loss ?? trade.actual_max_loss ?? sug.max_loss,
     trailing_pnl_floor: st.trailing_pnl_floor ?? trade.trailing_pnl_floor,
+    mtm_peak_rs: st.mtm_peak_rs ?? trade.mtm_peak_rs,
+    profit_milestone_line: st.profit_milestone_line,
     mtm: liveMtm,
     close_now_ev: liveMtm ?? lo.close_now_ev,
     dte: lo.dte ?? st.dte,
@@ -897,6 +899,8 @@ function _bootstrapLiveLevelsForTrades(trades, snap) {
       max_loss: st.max_loss,
       dte: st.dte,
       trailing_pnl_floor: st.trailing_pnl_floor,
+      mtm_peak_rs: st.mtm_peak_rs,
+      profit_milestone_line: st.profit_milestone_line,
     });
     if (payload.mtm != null) {
       _updateCurrentPnlBadge(t.trade_id, payload.mtm, payload.as_of, false);
@@ -927,18 +931,34 @@ function _updateLiveRiskStrip(tradeId, state) {
       if (staticRa) staticRa.hidden = true;
       return;
     }
-    if (state.milestoneHit) {
+    if (state.milestoneConfirming) {
       el.className = 'tag tag-warn live-risk-live';
-      el.textContent = '\u26a0\ufe0f LOSS MILESTONE HIT';
-      el.title = 'Configured loss milestone reached — consider closing';
+      el.textContent = '\u23f3 LOSS MILESTONE CONFIRMING';
+      el.title = 'MTM is through the loss milestone — waiting for the confirm window so a wick does not flatten';
       el.hidden = false;
       if (staticRa) staticRa.hidden = true;
       return;
     }
-    if (state.floorBreach) {
+    if (state.milestoneHit) {
       el.className = 'tag tag-warn live-risk-live';
-      el.textContent = '\u26a0\ufe0f PROFIT FLOOR BREACHED';
-      el.title = 'Live MTM fell below the armed profit floor';
+      el.textContent = '\u26a0\ufe0f LOSS MILESTONE HIT';
+      el.title = 'Configured loss milestone reached — auto-closing';
+      el.hidden = false;
+      if (staticRa) staticRa.hidden = true;
+      return;
+    }
+    if (state.profitMilestoneConfirming) {
+      el.className = 'tag tag-warn live-risk-live';
+      el.textContent = '\u23f3 PROFIT MILESTONE CONFIRMING';
+      el.title = 'MTM is through the profit sell line — waiting for the confirm window so a wick does not flatten';
+      el.hidden = false;
+      if (staticRa) staticRa.hidden = true;
+      return;
+    }
+    if (state.profitMilestoneHit) {
+      el.className = 'tag tag-warn live-risk-live';
+      el.textContent = '\u26a0\ufe0f PROFIT MILESTONE HIT';
+      el.title = 'Peak giveback reached — auto-closing to protect profit';
       el.hidden = false;
       if (staticRa) staticRa.hidden = true;
       return;
@@ -973,16 +993,25 @@ function _resolveLiveLevelThresholds(section, payload) {
     strat, dte, (!isNaN(mp) && mp > 0 ? mp : null), entryCredit,
   );
   const lossRs = effectiveSlRs(strat, ml);
-  let floor = payload.trailing_pnl_floor;
-  if (floor == null && section.dataset.trailingFloor != null && section.dataset.trailingFloor !== '') {
-    floor = parseFloat(section.dataset.trailingFloor);
-  }
-  if (floor != null && isNaN(floor)) floor = null;
   const milestoneRs = lossMilestoneRs(
     (!isNaN(premiumRs) && premiumRs > 0) ? premiumRs : null,
   );
-  if (targetRs == null && lossRs == null && floor == null && milestoneRs == null) return null;
-  return { targetRs, lossRs, floor, milestoneRs };
+  let peakRs = payload.mtm_peak_rs;
+  if (peakRs == null && section.dataset.mtmPeak != null && section.dataset.mtmPeak !== '') {
+    peakRs = parseFloat(section.dataset.mtmPeak);
+  }
+  if (peakRs != null && isNaN(peakRs)) peakRs = null;
+  let profitLine = payload.profit_milestone_line;
+  if (profitLine == null) {
+    profitLine = profitMilestoneLineRs(
+      peakRs,
+      (!isNaN(premiumRs) && premiumRs > 0) ? premiumRs : null,
+    );
+  }
+  if (profitLine != null && isNaN(profitLine)) profitLine = null;
+  if (targetRs == null && lossRs == null && milestoneRs == null && profitLine == null
+      && !profitMilestoneEnabled()) return null;
+  return { targetRs, lossRs, milestoneRs, profitLine, peakRs };
 }
 
 function _setLiveLevelRowStatus(row, statusEl, active, label, variant) {
@@ -990,6 +1019,7 @@ function _setLiveLevelRowStatus(row, statusEl, active, label, variant) {
   row.classList.toggle('lpl-row-active', !!active);
   row.classList.toggle('lpl-row-hit', !!active && variant === 'hit');
   row.classList.toggle('lpl-row-breach', !!active && variant === 'breach');
+  row.classList.toggle('lpl-row-confirming', !!active && variant === 'confirming');
   if (active && label) {
     statusEl.textContent = label;
     statusEl.hidden = false;
@@ -1009,8 +1039,8 @@ function _clearLiveLevelLabels(section) {
     false, '', 'hit',
   );
   _setLiveLevelRowStatus(
-    section.querySelector('.lpl-floor-row'),
-    section.querySelector('.lpl-status-floor'),
+    section.querySelector('.lpl-profit-ms-row'),
+    section.querySelector('.lpl-status-profit-ms'),
     false, '', 'breach',
   );
   _setLiveLevelRowStatus(
@@ -1028,61 +1058,79 @@ function _clearLiveLevelLabels(section) {
 function _updateLiveProfitLevels(tradeId, payload) {
   if (!payload) return;
   const mtm = payload.mtm != null ? parseFloat(payload.mtm) : null;
-  const floorIn = payload.trailing_pnl_floor;
-  if (floorIn != null) {
-    _lastMtmByTrade[tradeId] = _lastMtmByTrade[tradeId] || {};
-    _lastMtmByTrade[tradeId].trailing_pnl_floor = floorIn;
-  }
   const liveMtm = mtm != null && !isNaN(mtm)
     ? mtm
     : (_lastMtmByTrade[tradeId] && _lastMtmByTrade[tradeId].mtm);
 
   let stripState = null;
   document.querySelectorAll(`.live-profit-levels[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(section => {
-    const floorVal = section.querySelector('.live-profit-floor-val');
-    const floorNote = section.querySelector('.live-profit-floor-note');
-    const floor = floorIn != null ? parseFloat(floorIn) : null;
-    if (floor != null && !isNaN(floor) && floorVal) {
-      section.dataset.trailingFloor = String(floor);
-      floorVal.textContent = '\u20b9' + fmt(floor);
-      floorVal.classList.remove('muted');
-      if (floorNote) {
-        floorNote.textContent = 'Trailing lock — alert if MTM falls below (always below target)';
+    const thresholds = _resolveLiveLevelThresholds(section, payload);
+    const profitLine = thresholds && thresholds.profitLine;
+    const peakRs = payload.mtm_peak_rs != null ? parseFloat(payload.mtm_peak_rs)
+      : (thresholds && thresholds.peakRs);
+    const lineEl = section.querySelector('.live-profit-ms-val');
+    const lineNote = section.querySelector('.live-profit-ms-note');
+    if (peakRs != null && !isNaN(peakRs)) {
+      section.dataset.mtmPeak = String(peakRs);
+    }
+    if (lineEl && profitMilestoneEnabled()) {
+      if (profitLine != null && !isNaN(profitLine)) {
+        lineEl.textContent = '\u20b9' + fmt(profitLine);
+        lineEl.classList.remove('muted');
+        if (lineNote) {
+          const pct = profitMilestonePct();
+          lineNote.textContent = `Auto-closes if MTM gives back ${Math.round(pct || 0)}% of premium from peak \u20b9${fmt(peakRs)}${milestoneConfirmNote(profitMilestoneConfig())}`;
+        }
+      } else {
+        const premRs = parseFloat(section.dataset.premiumRs);
+        const giveback = profitMilestoneGivebackRs(
+          (!isNaN(premRs) && premRs > 0) ? premRs : null,
+        );
+        lineEl.textContent = 'Not armed';
+        lineEl.classList.add('muted');
+        if (lineNote) {
+          lineNote.textContent = giveback != null
+            ? `Arms after profit \u2265 \u20b9${fmt(giveback)} (${Math.round(profitMilestonePct() || 0)}% of premium)`
+            : 'Profit-side auto-close from peak MTM';
+        }
       }
     }
 
-    const thresholds = _resolveLiveLevelThresholds(section, payload);
     if (!thresholds || liveMtm == null || isNaN(liveMtm)) {
       _clearLiveLevelLabels(section);
       return;
     }
 
-    const { targetRs, lossRs, floor: armedFloor, milestoneRs } = thresholds;
+    const { targetRs, lossRs, milestoneRs } = thresholds;
     const targetRow = section.querySelector('.lpl-target-row');
-    const floorRow = section.querySelector('.lpl-floor-row');
+    const profitMsRow = section.querySelector('.lpl-profit-ms-row');
     const lossRow = section.querySelector('.lpl-loss-row');
     const milestoneRow = section.querySelector('.lpl-milestone-row');
+    const profitConfirming = !!payload.profit_milestone_confirming;
+    const lossConfirming = !!payload.loss_milestone_confirming;
+    const profitInZone = profitLine != null && liveMtm <= profitLine;
+    const lossInZone = milestoneRs != null && liveMtm <= -milestoneRs;
 
     _setLiveLevelRowStatus(
       targetRow,
       section.querySelector('.lpl-status-target'),
-      targetRs != null && liveMtm >= targetRs,
+      targetRs != null && liveMtm >= targetRs && !profitConfirming,
       'HIT',
       'hit',
     );
     _setLiveLevelRowStatus(
-      floorRow,
-      section.querySelector('.lpl-status-floor'),
-      armedFloor != null && liveMtm < armedFloor,
-      'BREACHED',
-      'breach',
+      profitMsRow,
+      section.querySelector('.lpl-status-profit-ms'),
+      profitInZone,
+      profitConfirming ? 'CONFIRMING' : 'HIT',
+      profitConfirming ? 'confirming' : 'breach',
     );
     _setLiveLevelRowStatus(
       milestoneRow,
       section.querySelector('.lpl-status-milestone'),
-      milestoneRs != null && liveMtm <= -milestoneRs,
-      'HIT',
-      'breach',
+      lossInZone,
+      lossConfirming ? 'CONFIRMING' : 'HIT',
+      lossConfirming ? 'confirming' : 'breach',
     );
     _setLiveLevelRowStatus(
       lossRow,
@@ -1095,10 +1143,13 @@ function _updateLiveProfitLevels(tradeId, payload) {
     stripState = {
       liveMtm,
       lossHit: lossRs != null && liveMtm <= -lossRs,
-      milestoneHit: milestoneRs != null && liveMtm <= -milestoneRs,
-      floorBreach: armedFloor != null && liveMtm < armedFloor,
-      targetHit: targetRs != null && liveMtm >= targetRs,
+      milestoneHit: lossInZone && !lossConfirming,
+      milestoneConfirming: lossConfirming,
+      profitMilestoneHit: profitInZone && !profitConfirming,
+      profitMilestoneConfirming: profitConfirming,
+      targetHit: targetRs != null && liveMtm >= targetRs && !profitConfirming,
       milestoneRs,
+      profitLine,
       lossRs,
     };
     _lastMtmByTrade[tradeId] = {
@@ -1538,11 +1589,11 @@ const TERM_HELP = {
   },
   loss_milestone: {
     label: 'Loss milestone',
-    html: '<strong>Loss milestone</strong> — Auto-closes the trade when MTM loss reaches your configured % of <em>entry premium</em> (premium paid on debits, premium received on credits). Zerodha trades flatten on Kite; manual trades close at live prices. Separate from the hard stop-loss.',
+    html: '<strong>Loss milestone</strong> — Auto-closes the trade when MTM loss stays at your configured % of <em>entry premium</em> for the confirm window (default 20s, so a one-tick wick does not flatten). Premium paid on debits, premium received on credits. Zerodha trades flatten on Kite; manual trades close at live prices. Separate from the hard stop-loss.',
   },
-  profit_floor: {
-    label: 'Profit floor',
-    html: '<strong>Profit floor</strong> — Trailing lock: after profit builds, this is the minimum MTM you accept before an exit alert. Rises as target steps are hit.',
+  profit_milestone: {
+    label: 'Profit milestone',
+    html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner after the confirm window (default 20s). After peak MTM reaches your configured % of entry premium, the sell line is that many rupees below the peak and only moves up. Hard SL stays on the loss side.',
   },
   loss_limit: {
     label: 'Loss limit',
@@ -1562,7 +1613,7 @@ const TERM_HELP = {
   },
   live_profit_levels: {
     label: 'Live profit levels',
-    html: '<strong>Live profit levels</strong> — MTM-based exit rails: target, trailing floor, milestone, and loss limit. Breaches show here and send notifications.',
+    html: '<strong>Live profit levels</strong> — MTM-based exit rails: target, profit milestone (giveback from peak), loss milestone, and loss limit. Breaches show here and send notifications.',
   },
   pop: {
     label: 'PoP',
@@ -1792,26 +1843,26 @@ async function refreshIndexSpotStrip() {
 }
 
 function _renderIndexSpotStrip(host, data) {
-  const items = data.indices || [];
-  if (!items.length) {
-    host.innerHTML = '';
-    return;
-  }
-  host.innerHTML = items.map(item => {
-    const src = (item.source || '').toLowerCase();
-    const cls = src === 'live' ? 'idx-chip-live'
-      : src === 'eod' ? 'idx-chip-eod'
-      : 'idx-chip-unavailable';
-    const srcLabel = src === 'live' ? 'Live'
-      : src === 'eod' ? 'EOD'
-      : '—';
-    const tip = _indexSpotTitle(item);
+    const items = data.indices || [];
+    if (!items.length) {
+      host.innerHTML = '';
+      return;
+    }
+    host.innerHTML = items.map(item => {
+      const src = (item.source || '').toLowerCase();
+      const cls = src === 'live' ? 'idx-chip-live'
+        : src === 'eod' ? 'idx-chip-eod'
+        : 'idx-chip-unavailable';
+      const srcLabel = src === 'live' ? 'Live'
+        : src === 'eod' ? 'EOD'
+        : '—';
+      const tip = _indexSpotTitle(item);
     return `<div class="idx-chip ${cls}" data-symbol="${escapeHtml(item.symbol || '')}" title="${escapeHtml(tip)}">`
-      + `<span class="idx-chip-label">${escapeHtml(item.label || item.symbol || '')}</span>`
-      + `<span class="idx-chip-price">${escapeHtml(_fmtIndexPrice(item.symbol, item.price))}</span>`
-      + `<span class="idx-chip-src">${srcLabel}</span>`
-      + `</div>`;
-  }).join('');
+        + `<span class="idx-chip-label">${escapeHtml(item.label || item.symbol || '')}</span>`
+        + `<span class="idx-chip-price">${escapeHtml(_fmtIndexPrice(item.symbol, item.price))}</span>`
+        + `<span class="idx-chip-src">${srcLabel}</span>`
+        + `</div>`;
+    }).join('');
 }
 
 function _applyIndexSpotLiveUpdate(data) {
@@ -1876,6 +1927,7 @@ function stopIndexSpotStream() {
 const _SIGNAL_LABELS = {
   sl: 'Stop-loss — close now',
   milestone: 'Loss milestone — auto-closing',
+  profit_milestone: 'Profit milestone — auto-closing',
   thesis: 'Thesis failed — close now',
   profit: 'Take profit — target hit',
   exit: 'Close pending',
@@ -1898,22 +1950,29 @@ function _signalKindFromFields({ dailyStatus, exitInstruction, riskNotif, live }
     return 'sl';
   }
   if (daily === 'THESIS_FAIL' || exitTxt.includes('thesis_fail')) return 'thesis';
-  if (live && live.targetHit) return 'profit';
+  if (risk === 'PROFIT_MILESTONE_HIT'
+      || (live && live.profitMilestoneHit && !live.profitMilestoneConfirming)) {
+    return 'profit_milestone';
+  }
+  if (live && live.profitMilestoneConfirming) {
+    /* Confirm window: not auto-close yet. */
+  } else if (live && live.targetHit) return 'profit';
   if (['TAKE_PROFIT', 'TARGET_HIT', 'TARGET_LOCKED'].includes(daily)
       || exitTxt.includes('take_profit')
       || exitTxt.includes('take profit')
       || exitTxt.includes('target reached')
       || ['TARGET_HIT', 'TARGET_LOCKED'].includes(risk)) {
-    return 'profit';
+    if (!(live && live.profitMilestoneConfirming)) return 'profit';
   }
-  if (live && live.floorBreach) return 'exit';
   if (exitTxt.includes('close pending')
       || ['EXPIRE', 'EXIT_AT_OPEN'].includes(daily)
       || risk === 'PROFIT_FLOOR_HIT') {
     return 'exit';
   }
-  if (live && live.milestoneHit) return 'milestone';
-  if (risk === 'LOSS_MILESTONE_HIT') return 'milestone';
+  if (risk === 'LOSS_MILESTONE_HIT'
+      || (live && live.milestoneHit && !live.milestoneConfirming)) {
+    return 'milestone';
+  }
   const mtm = live && live.liveMtm != null ? Number(live.liveMtm) : NaN;
   if (!isNaN(mtm) && mtm < -_MTM_FLAT_RS) return 'in_loss';
   if (!isNaN(mtm) && mtm > _MTM_FLAT_RS) return 'in_profit';
@@ -1977,7 +2036,7 @@ function _mergePnlRailSignals(actionSignals) {
   });
   Object.entries(_lastMtmByTrade).forEach(([tid, rec]) => {
     if (!tid || actionIds.has(tid)) return;
-    if (rec.lossHit || rec.targetHit || rec.floorBreach || rec.milestoneHit) return;
+    if (rec.lossHit || rec.targetHit || rec.profitMilestoneHit || rec.milestoneHit) return;
     const kind = _pnlStatusFromMtm(rec && rec.mtm);
     if (!kind) return;
     byId[tid] = {
@@ -1997,6 +2056,7 @@ function _renderSignalRail(st) {
   const signals = Array.isArray(st && st.trade_signals) ? st.trade_signals : [];
   const sl = signals.filter(s => s.kind === 'sl');
   const milestone = signals.filter(s => s.kind === 'milestone');
+  const profitMs = signals.filter(s => s.kind === 'profit_milestone');
   const thesis = signals.filter(s => s.kind === 'thesis');
   const profit = signals.filter(s => s.kind === 'profit');
   const exitSig = signals.filter(s => s.kind === 'exit');
@@ -2008,6 +2068,7 @@ function _renderSignalRail(st) {
     kill: !!(st && st.kill_switch),
     sl: sl.map(s => s.trade_id),
     milestone: milestone.map(s => s.trade_id),
+    profit_milestone: profitMs.map(s => s.trade_id),
     thesis: thesis.map(s => s.trade_id),
     profit: profit.map(s => s.trade_id),
     exit: exitSig.map(s => s.trade_id),
@@ -2030,6 +2091,10 @@ function _renderSignalRail(st) {
   if (milestone.length) {
     const names = milestone.map(s => s.trade_name || s.trade_id).join(', ');
     tiles.push(_signalTile('milestone', milestone.length, `Loss milestone — auto-closing ${names}`, milestone[0].trade_id));
+  }
+  if (profitMs.length) {
+    const names = profitMs.map(s => s.trade_name || s.trade_id).join(', ');
+    tiles.push(_signalTile('profit_milestone', profitMs.length, `Profit milestone — auto-closing ${names}`, profitMs[0].trade_id));
   }
   if (thesis.length) {
     const names = thesis.map(s => s.trade_name || s.trade_id).join(', ');
@@ -2638,6 +2703,13 @@ const PNL_RULES = {
     enabled: true,
     pct_of_premium: 5.0,
     auto_close: true,
+    confirm_seconds: 20,
+  },
+  profit_milestone_alert: {
+    enabled: true,
+    pct_of_premium: 5.0,
+    auto_close: true,
+    confirm_seconds: 20,
   },
 };
 
@@ -2681,6 +2753,12 @@ function applyPnlRules(rules) {
       ...rules.loss_milestone_alert,
     };
   }
+  if (rules.profit_milestone_alert && typeof rules.profit_milestone_alert === 'object') {
+    PNL_RULES.profit_milestone_alert = {
+      ...PNL_RULES.profit_milestone_alert,
+      ...rules.profit_milestone_alert,
+    };
+  }
 }
 applyPnlRules(typeof window !== 'undefined' ? window.__PNL_RULES__ : null);
 
@@ -2722,7 +2800,20 @@ function slLossPctHint(strategy, maxLossRs) {
 }
 
 function lossMilestoneConfig() {
-  return PNL_RULES.loss_milestone_alert || { enabled: false, pct_of_premium: 25, auto_close: true };
+  return PNL_RULES.loss_milestone_alert || {
+    enabled: false, pct_of_premium: 25, auto_close: true, confirm_seconds: 20,
+  };
+}
+
+function milestoneConfirmSeconds(cfg) {
+  const n = parseInt(cfg && cfg.confirm_seconds, 10);
+  return (!isNaN(n) && n >= 0) ? n : 20;
+}
+
+function milestoneConfirmNote(cfg) {
+  const s = milestoneConfirmSeconds(cfg);
+  if (s <= 0) return '';
+  return ` after ${s}s at the line`;
 }
 
 function lossMilestoneEnabled() {
@@ -2755,6 +2846,34 @@ function lossMilestonePctSuffix(premiumKind) {
 function lossMilestonePctHint(premiumKind) {
   const s = lossMilestonePctSuffix(premiumKind);
   return s ? `<span class="pct-hint">${s}</span>` : '';
+}
+
+function profitMilestoneConfig() {
+  return PNL_RULES.profit_milestone_alert || {
+    enabled: false, pct_of_premium: 5, auto_close: true, confirm_seconds: 20,
+  };
+}
+
+function profitMilestoneEnabled() {
+  return !!profitMilestoneConfig().enabled;
+}
+
+function profitMilestonePct() {
+  const pct = parseFloat(profitMilestoneConfig().pct_of_premium);
+  return (!isNaN(pct) && pct > 0) ? pct : null;
+}
+
+function profitMilestoneGivebackRs(investmentRs) {
+  if (!profitMilestoneEnabled() || investmentRs == null || investmentRs <= 0) return null;
+  const pct = profitMilestonePct();
+  if (pct == null) return null;
+  return investmentRs * (pct / 100);
+}
+
+function profitMilestoneLineRs(peakRs, investmentRs) {
+  const giveback = profitMilestoneGivebackRs(investmentRs);
+  if (giveback == null || peakRs == null || isNaN(peakRs) || peakRs < giveback) return null;
+  return peakRs - giveback;
 }
 
 function slExitPlanText(strategy, maxLossRs) {
@@ -2888,28 +3007,26 @@ function renderLiveProfitLevels(t) {
   const investmentRs = premium ? premium.rs : null;
   const milestoneRs = lossMilestoneRs(investmentRs);
   const milestoneKind = premium ? premium.kind : 'paid';
-  const stepIdx = parseInt(t.trailing_step_idx || 0, 10);
-  const floor = t.trailing_pnl_floor != null ? parseFloat(t.trailing_pnl_floor) : null;
-  const steps = liveRiskMonitor().trailing_sl_steps || [];
-  const nextStep = stepIdx < steps.length ? steps[stepIdx] : null;
-
-  let floorValHtml;
-  let floorNote;
-  if (floor != null) {
-    floorValHtml = `<span class="lpl-val lpl-floor live-profit-floor-val">\u20b9${fmt(floor)}</span>`;
-    floorNote = 'Trailing lock — alert if MTM falls below (always below target)';
-  } else if (nextStep && mp != null && mp > 0) {
-    const trigRs = Math.round(mp * nextStep[0]);
-    const lockRs = Math.round(mp * nextStep[1]);
-    floorValHtml = `<span class="lpl-val muted live-profit-floor-val">Not armed</span>`;
-    floorNote = `Arms at \u20b9${fmt(trigRs)} profit (${Math.round(nextStep[0] * 100)}%) \u2192 floor \u20b9${fmt(lockRs)}`;
+  const peakRs = t.mtm_peak_rs != null ? parseFloat(t.mtm_peak_rs) : null;
+  const givebackRs = profitMilestoneGivebackRs(investmentRs);
+  const profitLine = profitMilestoneLineRs(peakRs, investmentRs);
+  const profitMsEnabled = profitMilestoneEnabled();
+  let profitMsValHtml;
+  let profitMsNote;
+  if (!profitMsEnabled) {
+    profitMsValHtml = `<span class="lpl-val muted live-profit-ms-val">Off</span>`;
+    profitMsNote = 'Enable profit_milestone_alert to auto-close on giveback from peak';
+  } else if (profitLine != null) {
+    profitMsValHtml = `<span class="lpl-val live-profit-ms-val">\u20b9${fmt(profitLine)}</span>`;
+    profitMsNote = `Auto-closes ${Math.round(profitMilestonePct())}% of premium below peak \u20b9${fmt(peakRs)}${milestoneConfirmNote(profitMilestoneConfig())}`;
   } else {
-    floorValHtml = `<span class="lpl-val muted live-profit-floor-val">\u2014</span>`;
-    floorNote = 'All trailing steps armed';
+    profitMsValHtml = `<span class="lpl-val muted live-profit-ms-val">Not armed</span>`;
+    profitMsNote = givebackRs != null
+      ? `Arms after profit \u2265 \u20b9${fmt(givebackRs)} (${Math.round(profitMilestonePct())}% of premium)`
+      : 'Arms after a real profit vs entry premium';
   }
 
   const targetNote = profitTargetNote(strat, dte, mp, entryCredit);
-  const floorAttr = floor != null ? String(floor) : '';
   const premData = premium
     ? ` data-premium-rs="${premium.rs}" data-premium-kind="${premium.kind}"`
     : '';
@@ -2928,11 +3045,20 @@ function renderLiveProfitLevels(t) {
          data-max-loss="${ml != null && !isNaN(ml) ? ml : ''}"
          data-strategy="${escapeHtml(strat)}"
          data-expiry="${expiry ? escapeHtml(String(expiry).slice(0, 10)) : ''}"
-         data-trailing-floor="${floorAttr}"${premData}>
+         data-mtm-peak="${peakRs != null && !isNaN(peakRs) ? peakRs : ''}"${premData}>
       <div class="sl-monitor-label">${labelWithHelp('Live profit levels', 'live_profit_levels')}</div>
       <div class="lpl-grid">
         ${currentRow}
         ${targetHtml}
+        ${profitMsEnabled ? `
+        <div class="lpl-row lpl-profit-ms-row">
+          <span class="lpl-label">${labelWithHelp('Profit milestone', 'profit_milestone')}</span>
+          <span class="lpl-val-line">
+            ${profitMsValHtml}
+            <span class="lpl-status lpl-status-profit-ms" hidden></span>
+          </span>
+          <span class="muted lpl-note live-profit-ms-note">${escapeHtml(profitMsNote)}</span>
+        </div>` : ''}
         ${milestoneRs != null ? `
         <div class="lpl-row lpl-milestone-row">
           <span class="lpl-label">${labelWithHelp('Loss milestone', 'loss_milestone')}</span>
@@ -2940,16 +3066,8 @@ function renderLiveProfitLevels(t) {
             <span class="lpl-val lpl-milestone">\u20b9${fmt(milestoneRs)} loss${lossMilestonePctHint(milestoneKind)}</span>
             <span class="lpl-status lpl-status-milestone" hidden></span>
           </span>
-          <span class="muted lpl-note">Auto-closes at ${Math.round(lossMilestonePct())}% loss on \u20b9${fmt(investmentRs)} ${milestoneKind === 'received' ? 'premium received' : 'premium paid'} \u2014 separate from hard SL</span>
+          <span class="muted lpl-note">Auto-closes at ${Math.round(lossMilestonePct())}% loss on \u20b9${fmt(investmentRs)} ${milestoneKind === 'received' ? 'premium received' : 'premium paid'}${milestoneConfirmNote(lossMilestoneConfig())} \u2014 separate from hard SL</span>
         </div>` : ''}
-        <div class="lpl-row lpl-floor-row">
-          <span class="lpl-label">${labelWithHelp('Profit floor', 'profit_floor')}</span>
-          <span class="lpl-val-line">
-            ${floorValHtml}
-            <span class="lpl-status lpl-status-floor" hidden></span>
-          </span>
-          <span class="muted lpl-note live-profit-floor-note">${floorNote}</span>
-        </div>
         <div class="lpl-row lpl-loss-row">
           <span class="lpl-label">${labelWithHelp('Loss limit', 'loss_limit')}</span>
           <span class="lpl-val-line">
@@ -3394,8 +3512,9 @@ function _fmtMtmSigned(v, premiumInfo) {
 
 function _computeTradeActionInstruction(opts) {
   const {
-    liveMtm, lossHit, milestoneHit, floorBreach, targetHit, preBreachNear,
-    lossRs, milestoneRs, targetRs, floor, strategy,
+    liveMtm, lossHit, milestoneHit, profitMilestoneHit, targetHit, preBreachNear,
+    milestoneConfirming, profitMilestoneConfirming,
+    lossRs, milestoneRs, profitLine, targetRs, strategy,
     dailyStatus, exitInstruction, riskNotif,
     premiumInfo, outlookSummary, outlook,
   } = opts;
@@ -3456,6 +3575,55 @@ function _computeTradeActionInstruction(opts) {
       cta: 'Review MTM and decide whether to reduce or exit.',
     };
   }
+  if (profitMilestoneConfirming && rn !== 'PROFIT_MILESTONE_HIT') {
+    const sec = milestoneConfirmSeconds(profitMilestoneConfig());
+    return {
+      tone: 'watch',
+      verb: 'CONFIRMING',
+      title: 'Profit milestone — waiting to confirm',
+      instruction: sec > 0
+        ? `MTM is through the sell line. Auto-close waits ${sec}s so a one-tick wick does not flatten. Bounce above the line cancels the clock.`
+        : 'MTM is through the sell line. Auto-close is armed.',
+      why: liveMtm != null && profitLine != null
+        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · sell line \u20b9${fmt(profitLine)}`
+        : 'Profit milestone confirm window is running.',
+      cta: 'No action unless it holds — then the system flattens.',
+    };
+  }
+  if (profitMilestoneHit || rn === 'PROFIT_MILESTONE_HIT') {
+    const pct = profitMilestonePct();
+    const premLbl = premiumInfo && premiumInfo.kind === 'received'
+      ? 'premium received' : 'premium paid';
+    const premRs = premiumInfo && premiumInfo.rs ? premiumInfo.rs : null;
+    return {
+      tone: 'critical',
+      verb: 'AUTO-CLOSE',
+      title: 'Profit milestone hit — closing to keep the gain',
+      instruction: pct != null && premRs
+        ? `Configured profit milestone (${Math.round(pct)}% of ${premLbl} \u20b9${fmt(premRs)} giveback from peak). `
+          + 'The system is flattening this on Zerodha, or booking the close at live prices for a manual trade.'
+        : 'Profit-side giveback from peak reached. Auto-closing now.',
+      why: liveMtm != null && profitLine != null
+        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · sell line \u20b9${fmt(profitLine)}`
+        : 'Profit milestone auto-close is active.',
+      cta: 'Watch broker orders. If auto-close fails, flatten on Kite then record the close.',
+    };
+  }
+  if (milestoneConfirming && rn !== 'LOSS_MILESTONE_HIT') {
+    const sec = milestoneConfirmSeconds(lossMilestoneConfig());
+    return {
+      tone: 'watch',
+      verb: 'CONFIRMING',
+      title: 'Loss milestone — waiting to confirm',
+      instruction: sec > 0
+        ? `MTM is through the loss milestone. Auto-close waits ${sec}s so a one-tick wick does not flatten. Bounce above the line cancels the clock.`
+        : 'MTM is through the loss milestone. Auto-close is armed.',
+      why: liveMtm != null && milestoneRs != null
+        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · milestone \u2212\u20b9${fmt(milestoneRs)}`
+        : 'Loss milestone confirm window is running.',
+      cta: 'No action unless it holds — then the system flattens.',
+    };
+  }
   if (milestoneHit || rn === 'LOSS_MILESTONE_HIT') {
     const pct = lossMilestonePct();
     const premLbl = premiumInfo && premiumInfo.kind === 'received'
@@ -3475,19 +3643,6 @@ function _computeTradeActionInstruction(opts) {
         ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · milestone \u2212\u20b9${fmt(milestoneRs)} (${Math.round(pct || 0)}% of premium)`
         : 'Loss milestone auto-close is active.',
       cta: 'Watch broker orders. If auto-close fails, flatten on Kite then record the close.',
-    };
-  }
-  if (floorBreach || rn === 'PROFIT_FLOOR_HIT') {
-    return {
-      tone: 'warn',
-      verb: 'CLOSE',
-      title: 'Close to protect profit',
-      instruction: 'MTM dropped below your trailing profit floor. Exit now if you accept the '
-        + '"lock gains" rule — don\'t wait for target again.',
-      why: liveMtm != null && floor != null
-        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · floor ₹${fmt(floor)} · target ₹${fmt(targetRs || 0)}`
-        : 'Profit floor breach is active.',
-      cta: 'Use Close Trade below.',
     };
   }
   if (targetHit || rn === 'TARGET_HIT') {
@@ -3560,7 +3715,7 @@ function _computeTradeActionInstruction(opts) {
       cta: 'Optional: Close Trade below to lock MTM.',
     };
   }
-  if (ol.direction_fit === 'against' && !lossHit && !milestoneHit && !floorBreach) {
+  if (ol.direction_fit === 'against' && !lossHit && !milestoneHit && !profitMilestoneHit) {
     return {
       tone: 'watch',
       verb: 'MONITOR',
@@ -3663,7 +3818,7 @@ function renderTradeKvGrid(t, legs) {
   const dteDisplay = t.suggestion && t.suggestion.expiry_date
     ? `${fmtDate(t.suggestion.expiry_date)}${dteLeft != null ? ` (${dteLeft} left)` : ''}${estDte != null && dteLeft == null ? ` · ${estDte} DTE at entry` : ''}`
     : (estDte != null
-      ? `${estDte}${dteLeft != null ? ` (${dteLeft} left)` : ''}`
+    ? `${estDte}${dteLeft != null ? ` (${dteLeft} left)` : ''}`
       : (dteLeft != null ? `${dteLeft} left` : null));
   const isOpenTrade = (t.status || '').toUpperCase() === 'ACTIVE';
   const execWithFills = legs.filter(l => l.executed && l.fill_price != null);
@@ -3770,13 +3925,15 @@ function _updateTradeActionPanel(tradeId, payload, stripState) {
       liveMtm,
       lossHit: stripState && stripState.lossHit,
       milestoneHit: stripState && stripState.milestoneHit,
-      floorBreach: stripState && stripState.floorBreach,
+      milestoneConfirming: stripState && stripState.milestoneConfirming,
+      profitMilestoneHit: stripState && stripState.profitMilestoneHit,
+      profitMilestoneConfirming: stripState && stripState.profitMilestoneConfirming,
       targetHit: stripState && stripState.targetHit,
       preBreachNear,
       lossRs,
       milestoneRs: (stripState && stripState.milestoneRs) || (thresholds && thresholds.milestoneRs),
+      profitLine: (stripState && stripState.profitLine) || (thresholds && thresholds.profitLine),
       targetRs: thresholds && thresholds.targetRs,
-      floor: thresholds && thresholds.floor,
       strategy: panel.dataset.strategy || '',
       dailyStatus: panel.dataset.dailyStatus,
       exitInstruction: panel.dataset.exitInstruction,
@@ -5334,7 +5491,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
   const summaryHtml = `
     <div class="card-head collapsible-card-head">
         <div class="card-head-title">
-          <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
+      <h3>${escapeHtml(s.trade_name || s.suggestion_id)}</h3>
           ${strategyGuideInfoBtn(s.strategy)}
         </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
@@ -5431,7 +5588,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
                    value="${baseLots}" data-suggested-lots="${baseLots}"
                    title="Applies to every leg, for both Zerodha orders and manual records">
             <span class="muted exec-lots-qty">lots · <span class="exec-qty-shown">${baseLots * baseLotSize}</span> qty per leg</span>
-          </div>
+        </div>
         </div>
         ${canExecute ? `
         <div class="sl-field">
@@ -6883,7 +7040,7 @@ function renderTrade(t, expanded = false) {
           exitInstruction: t.exit_instruction,
           riskNotif: t.risk_alert && t.risk_alert.notif_type,
         }))}</span>
-        <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
+      <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
         ${strategyGuideInfoBtn((t.suggestion && t.suggestion.strategy) || t.strategy)}
       </div>
       <div class="card-head-tags">
@@ -6896,6 +7053,7 @@ function renderTrade(t, expanded = false) {
             ra.notif_type === 'TARGET_LOCKED'      ? 'tag tag-ok'   :
             ra.notif_type === 'PROFIT_FLOOR_SET'   ? 'tag tag-ok'   :
             ra.notif_type === 'PROFIT_FLOOR_HIT'   ? 'tag tag-warn' :
+            ra.notif_type === 'PROFIT_MILESTONE_HIT' ? 'tag tag-warn' :
             ra.notif_type === 'LOSS_LIMIT_HIT'     ? 'tag tag-err'  :
             ra.notif_type === 'LOSS_MILESTONE_HIT' ? 'tag tag-err' :
             ra.notif_type === 'THESIS_FAIL'        ? 'tag tag-err'  :
@@ -6908,6 +7066,7 @@ function renderTrade(t, expanded = false) {
             ra.notif_type === 'TARGET_LOCKED'      ? '\ud83d\udd12 ' :
             ra.notif_type === 'PROFIT_FLOOR_SET'   ? '\ud83d\udd12 ' :
             ra.notif_type === 'PROFIT_FLOOR_HIT'   ? '\u26a0\ufe0f ' :
+            ra.notif_type === 'PROFIT_MILESTONE_HIT' ? '\u26a0\ufe0f ' :
             ra.notif_type === 'LOSS_LIMIT_HIT'     ? '\ud83d\uded1 ' :
             ra.notif_type === 'LOSS_MILESTONE_HIT' ? '\u26a0\ufe0f ' :
             ra.notif_type === 'THESIS_FAIL'        ? '\ud83d\uded1 ' :
@@ -9052,7 +9211,7 @@ const _NF_TYPE_CAT = {
   SL_TRIGGER: 'sl', SL_HIT: 'sl', PRE_BREACH_WARNING: 'sl',
   LOSS_MILESTONE_HIT: 'sl', LOSS_MILESTONE_CLOSE_FAILED: 'sl', LOSS_LIMIT_HIT: 'sl', THESIS_FAIL: 'sl', PROFIT_FLOOR_HIT: 'sl', SHORT_LEG_STRESS: 'sl',
   TARGET_HIT: 'profit', TAKE_PROFIT: 'profit', TARGET_LOCKED: 'profit',
-  PROFIT_FLOOR_SET: 'profit',
+  PROFIT_FLOOR_SET: 'profit', PROFIT_MILESTONE_HIT: 'profit', PROFIT_MILESTONE_CLOSE_FAILED: 'profit',
   EXIT_TOMORROW: 'exit', TIME_DECAY_DONE: 'exit', EXPIRE: 'exit', AUTO_SETTLED: 'exit',
   EVENT_AHEAD_REVIEW: 'event',
   CIRCUIT_BREAKER: 'system', BROKEN_TRADE: 'system', DATA_REPAIR: 'system', KILL_SWITCH: 'system',

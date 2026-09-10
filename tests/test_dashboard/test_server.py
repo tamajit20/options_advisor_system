@@ -969,6 +969,12 @@ class TestTradeSignalKind:
             risk_type="LOSS_MILESTONE_HIT",
         ) == "milestone"
 
+    def test_profit_milestone_beats_target(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "TAKE_PROFIT"},
+            risk_type="PROFIT_MILESTONE_HIT",
+        ) == "profit_milestone"
+
     def test_sl_beats_milestone_when_both_present(self):
         assert server._signal_kind_for_open_trade(
             {"daily_status": "OPEN"},
@@ -1151,33 +1157,6 @@ class TestApiSystemStatus:
         assert body["circuit_breaker_active"] is False
         assert body["kill_switch"] is False
         assert body["trade_execution_enabled"] is True
-
-
-# ---------------------------------------------------------------------------
-# Future-scope placeholders for routes not yet covered
-# ---------------------------------------------------------------------------
-@pytest.mark.future
-@pytest.mark.skip(reason="future: dashboard close-trade flow with leg fills "
-                  "(FUTURE_ENHANCEMENT_SCOPES.md → Code Quality)")
-def test_close_trade_persists_exit_fills():
-    """POST /api/trades/<id>/close should persist exit fills + transition status."""
-    pass
-
-
-@pytest.mark.future
-@pytest.mark.skip(reason="future: dashboard supplement-trade flow "
-                  "(FUTURE_ENHANCEMENT_SCOPES.md → Code Quality)")
-def test_supplement_adds_remaining_legs():
-    """POST /api/trades/<id>/supplement adds previously-unfilled legs."""
-    pass
-
-
-@pytest.mark.future
-@pytest.mark.skip(reason="future: dashboard config GET/PATCH endpoints "
-                  "(FUTURE_ENHANCEMENT_SCOPES.md → Code Quality)")
-def test_config_get_and_patch():
-    """Config tab: GET returns current overrides, PATCH writes a new one."""
-    pass
 
 
 # ---------------------------------------------------------------------------

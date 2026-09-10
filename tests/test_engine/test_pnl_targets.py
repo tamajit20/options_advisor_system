@@ -105,3 +105,8 @@ def test_pnl_rules_public_has_dashboard_keys():
     assert "CALENDAR_SPREAD" in rules["long_premium_target_strategies"]
     assert "BEAR_PUT_SPREAD" in rules["debit_spread_target_strategies"]
     assert rules["strategy_take_profit_fraction"]["IRON_BUTTERFLY"] == pytest.approx(0.75)
+    assert "profit_milestone_alert" in rules
+    assert "enabled" in rules["profit_milestone_alert"]
+    assert "pct_of_premium" in rules["profit_milestone_alert"]
+    assert rules["profit_milestone_alert"].get("confirm_seconds") == 20
+    assert rules["loss_milestone_alert"].get("confirm_seconds") == 20

@@ -731,7 +731,8 @@ STRATEGY_CONFIG = {
     # whole-trade MTM via engine.exit_engine.evaluate_exit() and emit:
     #   * LOSS_LIMIT_HIT — when current_pnl <= -effective_sl_rs(strategy, max_loss)
     #   * SHORT_LEG_STRESS — short leg premium >= intraday_sl_multiplier × entry
-    #   * PROFIT_FLOOR_SET / PROFIT_FLOOR_HIT — trailing profit-lock steps
+    #   * LOSS_MILESTONE_HIT / PROFIT_MILESTONE_HIT — % of premium (loss vs
+    #     peak giveback); auto-close is in lifecycle.auto_execution
     #   * TARGET_HIT  — same rupee target as Exit Plan / EOD TAKE_PROFIT
     #     (see engine.pnl_targets; longs use DTE-aware debit multiple,
     #     debit spreads use debit_spread_target_fraction, credits use
@@ -778,16 +779,9 @@ STRATEGY_CONFIG = {
         # `status_write_interval_sec`. Set to None to disable.
         "status_path": "data/live_risk_status.json",
         "status_write_interval_sec": 30,
-        # Trailing SL on profit (Phase 3 — #4).
-        # Each step is (profit_fraction_trigger, lock_floor_fraction_of_max_profit).
-        # When current_pnl crosses trigger, the trade's PnL floor is set to
-        # lock × max_profit; if PnL ever drops below the floor, fire PROFIT_FLOOR_HIT.
-        # Steps must be sorted by ascending trigger.
-        # Example: at 50% of target, lock breakeven (0.0); at 80% lock 40%.
-        "trailing_sl_steps": [
-            [0.50, 0.0],
-            [0.80, 0.40],
-        ],
+        # Legacy trailing profit-floor steps. Unused: profit protection is
+        # ``profit_milestone_alert`` (giveback from peak). Leave empty.
+        "trailing_sl_steps": [],
         # Live MTM streaming (Phase 3 — #3).
         # Throttle TOPIC_TRADE_MTM publishes to this many seconds per trade
         # so the SSE stream stays cheap on fast-ticking trades.
@@ -811,12 +805,30 @@ STRATEGY_CONFIG = {
     # cooldown_minutes None = use live_risk_monitor cooldown for alerts.
     # auto_close_retry_seconds re-attempts flatten while still in breach
     # without waiting for that alert cooldown (in-flight closes are skipped).
+    # confirm_seconds: MTM must stay at/through the line this long before
+    # auto-close (filters a one-tick wick). 0 = close on the first print.
     "loss_milestone_alert": {
         "enabled": True,
         "pct_of_premium": 5.0,
         "cooldown_minutes": None,
         "auto_close": True,
         "auto_close_retry_seconds": 60,
+        "confirm_seconds": 20,
+    },
+
+    # Profit milestone — MTM auto-exit while the trade is in profit.
+    # Independent of loss_milestone_alert and of strategy SL (SL stays
+    # loss-side only). After peak MTM ≥ pct_of_premium of entry premium,
+    # the sell line is peak − that rupee giveback and only ratchets up.
+    # auto_close flattens Zerodha trades on Kite / books manual at live LTP.
+    # confirm_seconds filters a one-tick wick (same meaning as loss milestone).
+    "profit_milestone_alert": {
+        "enabled": True,
+        "pct_of_premium": 5.0,
+        "cooldown_minutes": None,
+        "auto_close": True,
+        "auto_close_retry_seconds": 60,
+        "confirm_seconds": 20,
     },
 
     # Suggestion freshness (Phase 3 — #2).

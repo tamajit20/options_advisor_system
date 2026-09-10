@@ -6,12 +6,16 @@ from __future__ import annotations
 
 from typing import List, Sequence, Tuple
 
-from lifecycle.auto_execution.close_on_milestone import CloseOnLossMilestone
+from lifecycle.auto_execution.close_on_milestone import (
+    CloseOnLossMilestone,
+    CloseOnProfitMilestone,
+)
 from lifecycle.auto_execution.types import AutoExecAction
 
 # Entry, TARGET_HIT / profit booking, and hard SL stay off this list on purpose.
 REGISTERED_ACTIONS: Tuple[AutoExecAction, ...] = (
     CloseOnLossMilestone(),
+    CloseOnProfitMilestone(),
 )
 
 

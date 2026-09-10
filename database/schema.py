@@ -604,9 +604,10 @@ _TABLE_DDL: List[str] = [
 
     # ---------------- Trade level breach transitions (live session) ----------------
     # One row each time a monitored level is ENTERed or EXITed (TARGET,
-    # PROFIT_FLOOR, LOSS_LIMIT, SPOT_SL). Used to analyse whip-saw / time-in-
-    # breach without replaying tick data. Leg prices on ENTER are optional;
-    # full 15-min leg_ltps_json lives in options_trade_mtm_snapshot.
+    # PROFIT_MILESTONE, LOSS_MILESTONE, LOSS_LIMIT, SPOT_SL). Used to analyse
+    # whip-saw / time-in-breach without replaying tick data. Leg prices on
+    # ENTER are optional; full 15-min leg_ltps_json lives in
+    # options_trade_mtm_snapshot.
     """
     IF OBJECT_ID('options_trade_level_events', 'U') IS NULL
     CREATE TABLE options_trade_level_events (
@@ -753,6 +754,13 @@ _TABLE_DDL: List[str] = [
     IF NOT EXISTS (SELECT 1 FROM sys.columns
         WHERE object_id = OBJECT_ID('options_trades') AND name = 'trailing_step_idx')
     ALTER TABLE options_trades ADD trailing_step_idx INT NOT NULL DEFAULT 0
+    """,
+
+    # Peak MTM watermark for profit_milestone_alert (giveback from peak).
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'mtm_peak_rs')
+    ALTER TABLE options_trades ADD mtm_peak_rs DECIMAL(18,4) NULL
     """,
 
     # Notification provenance — links each alert back to its tick / cycle

@@ -12,11 +12,12 @@ Manual-only until explicitly registered here
 --------------------------------------------
 * Place orders / entry — dashboard **Place orders**
 * TARGET_HIT / profit booking — dashboard **Close Trade**
-* LOSS_LIMIT_HIT, SL_TRIGGER, PROFIT_FLOOR_HIT — alerts only
+* LOSS_LIMIT_HIT, SL_TRIGGER — alerts only (loss-side SL)
 
 Registered now
 --------------
 * LOSS_MILESTONE_HIT → close the open trade (Kite flatten or manual LTP book)
+* PROFIT_MILESTONE_HIT → close to protect peak profit (same flatten path)
 
 To add a later auto feature: implement ``AutoExecAction`` in this package and
 append it to ``REGISTERED_ACTIONS`` in ``registry.py``. Do not put order
