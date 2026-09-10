@@ -11,7 +11,7 @@ Do not ask the user to paste long prompts. Read linked docs only when you need
 detail. Run commands yourself. Ask the user ONLY for secrets and Azure Portal
 values you cannot infer.
 
-Last updated: 2026-09-08 (keep in sync — see Section 8)
+Last updated: 2026-09-10 (keep in sync — see Section 8)
 
 
 ================================================================================
@@ -25,7 +25,7 @@ SECTION 1 — WHAT YOU ARE SETTING UP
   SQL Server Express     Windows laptop     Cumulative archive (OptionsAdvisorDB_Archive)
   Scheduler              VM container       EOD, live suggestions, archive, logs
   Azure Automation       Azure cloud        VM start 08:55 / stop 15:45 Mon-Fri IST
-  Windows Task Scheduler Laptop             Mon-Fri 09:15 pull archive + merge
+  Windows Task Scheduler Laptop             Mon-Fri 09:15 pull; retry until done
 
   Manual forever: Zerodha login each trading morning (dashboard key icon).
 
@@ -117,14 +117,16 @@ SECTION 5 — AUTOMATED SCHEDULE (no daily user action)
   VM Mon-Fri 08:55-15:45     Azure Automation (VMUpTimeConfiguration.ps1)
 
   VM Friday 09:30            weekly_archive      copy hot rows -> *_Archive (hot stays)
-  VM Friday 09:35            weekly_log_cleanup  delete logs and alerts
+  VM Friday 09:35            weekly_log_cleanup  delete logs and alerts,
+                             then shrink SQL .ldf if it grew
   VM Friday 15:36            archive_export      .bak + PENDING.json on VM
   VM Friday 15:38            db_backup           OptionsAdvisorDB-latest.bak
                              + LAST_HOT_BACKUP.json (ACK refuses without this)
 
   Laptop Mon-Fri 09:15       Task OptionsAdvisor-ArchiveMerge
-                               pull hot .bak + archive chunk to laptop, then
-                               merge, then ACK (VM deletes only after that)
+                               one start: pull hot .bak + archive chunk,
+                               merge, ACK; retry in this run until success
+                               or 15:45, then wait for next 09:15
 
   Log retention (VM delete):  delete_keep_days = 7 (logs, alerts, job runs, Zerodha jobs)
   Hot retention (VM archive):  hot_archive_keep_days = 365 (every historical table)

@@ -90,7 +90,7 @@ OPT_DASHBOARD_API_KEY=...    # required for Zerodha execute APIs
 | Fri 09:35 | VM | `weekly_log_cleanup` |
 | Fri 15:36 | VM | `archive_export` |
 | Fri 15:38 | VM | `db_backup` |
-| Mon-Fri 09:15 | Laptop | `OptionsAdvisor-ArchiveMerge` |
+| Mon-Fri 09:15 (retry until done, then stop) | Laptop | `OptionsAdvisor-ArchiveMerge` |
 
 See [ARCHIVE-AUTOMATION.md](ARCHIVE-AUTOMATION.md).
 

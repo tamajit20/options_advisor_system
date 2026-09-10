@@ -108,6 +108,49 @@ class TestRunHotBackup:
             sql_backup.run_hot_backup(db)
 
 
+class TestShrinkTransactionLog:
+    def test_skips_when_already_near_target(self):
+        db = MagicMock()
+        db.fetch_one.return_value = {"file_name": "OptionsAdvisorDB_log", "size_mb": 140}
+        n = sql_backup.shrink_transaction_log(db, target_mb=128)
+        assert n == 140
+        db.execute.assert_not_called()
+
+    def test_skips_when_recovery_is_full(self):
+        db = MagicMock()
+        db.fetch_one.side_effect = [
+            {"file_name": "OptionsAdvisorDB_log", "size_mb": 1480},
+            {"m": "FULL"},
+        ]
+        n = sql_backup.shrink_transaction_log(db, target_mb=128)
+        assert n == 1480
+        db.execute.assert_not_called()
+
+    def test_checkpoint_and_shrinkfile_when_oversized(self):
+        db = MagicMock()
+        db.connection = MagicMock(autocommit=False)
+        db.fetch_one.side_effect = [
+            {"file_name": "OptionsAdvisorDB_log", "size_mb": 1480},
+            {"m": "SIMPLE"},
+            {"size_mb": 128},
+        ]
+        cur = MagicMock()
+        cur.nextset.return_value = False
+        db.execute.return_value = cur
+
+        n = sql_backup.shrink_transaction_log(db, target_mb=128)
+        assert n == 128
+        sqls = [c.args[0] for c in db.execute.call_args_list]
+        assert sqls[0] == "CHECKPOINT"
+        assert "DBCC SHRINKFILE (N'OptionsAdvisorDB_log', 128)" in sqls[1]
+        assert db.connection.autocommit is False
+
+    def test_quietly_swallows_errors(self):
+        db = MagicMock()
+        db.fetch_one.side_effect = RuntimeError("odbc")
+        assert sql_backup.shrink_transaction_log_quietly(db) == 0
+
+
 class TestArchiveExport:
     def test_skips_when_no_rows(self, tmp_path, mocker):
         mocker.patch(
@@ -226,11 +269,16 @@ class TestArchiveExport:
             "database.archive_repo.truncate_all_archive_tables",
             return_value=9,
         )
+        shrink = mocker.patch(
+            "lifecycle.sql_backup.shrink_transaction_log_quietly",
+            return_value=128,
+        )
         db = MagicMock()
         n = acknowledge_export(db)
         assert n == 4
         delete_hot.assert_called_once_with(db)
         truncate.assert_called_once_with(db)
+        shrink.assert_called_once_with(db)
         db.commit.assert_called()
         assert not bak.is_file()
         assert not (arch / "PENDING.json").is_file()

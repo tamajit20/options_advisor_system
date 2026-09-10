@@ -27,6 +27,8 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _BAK_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.bak$")
 _MIN_BAK_BYTES = 1024
 HOT_BACKUP_MARKER_NAME = "LAST_HOT_BACKUP.json"
+LOG_SHRINK_TARGET_MB = 128
+_LOG_SHRINK_SKIP_SLACK_MB = 32
 
 
 def sql_ident(name: str) -> str:
@@ -216,6 +218,77 @@ def _job_timeout(job_name: str, default: int) -> int:
 
     raw = SCHEDULER_CONFIG.get("job_timeout_seconds", {}).get(job_name, default)
     return max(60, int(raw) - 30)
+
+
+def shrink_transaction_log(
+    db: SQLServerConnection,
+    *,
+    target_mb: int = LOG_SHRINK_TARGET_MB,
+) -> int:
+    """Shrink the current database transaction log file if it is oversized.
+
+    Does **not** turn on SQL AUTO_SHRINK (that fragments data files). SIMPLE
+    recovery + CHECKPOINT, then DBCC SHRINKFILE down to ``target_mb``.
+    Returns the log size in MB after the attempt (unchanged if skipped).
+    """
+    target_mb = max(64, int(target_mb))
+    row = db.fetch_one(
+        """
+        SELECT TOP 1 df.name AS file_name,
+               CAST(df.size * 8.0 / 1024 AS INT) AS size_mb
+        FROM sys.database_files df
+        WHERE df.type_desc = N'LOG'
+        """
+    )
+    if not row or not row.get("file_name"):
+        logger.warning("sql log shrink: no LOG file found")
+        return 0
+    logical = sql_ident(str(row["file_name"]))
+    size_mb = int(row.get("size_mb") or 0)
+    if size_mb <= target_mb + _LOG_SHRINK_SKIP_SLACK_MB:
+        logger.info("sql log %s is %d MB; skip shrink", logical, size_mb)
+        return size_mb
+
+    rec = db.fetch_one(
+        "SELECT recovery_model_desc AS m FROM sys.databases WHERE name = DB_NAME()"
+    )
+    model = str((rec or {}).get("m") or "").upper()
+    if model != "SIMPLE":
+        logger.warning("sql log shrink skipped; recovery is %s (need SIMPLE)", model)
+        return size_mb
+
+    db._ensure_connected()
+    conn = db.connection
+    if conn is None:
+        raise RuntimeError("database is not connected")
+    old_ac = conn.autocommit
+    conn.autocommit = True
+    try:
+        cur = db.execute("CHECKPOINT")
+        cur.close()
+        cur = db.execute(f"DBCC SHRINKFILE (N'{logical}', {int(target_mb)})")
+        _consume_result_sets(cur)
+    finally:
+        conn.autocommit = old_ac
+
+    after = db.fetch_one(
+        """
+        SELECT CAST(size * 8.0 / 1024 AS INT) AS size_mb
+        FROM sys.database_files WHERE type_desc = N'LOG'
+        """
+    )
+    new_size = int((after or {}).get("size_mb") or 0)
+    logger.info("sql log %s shrunk %d MB -> %d MB", logical, size_mb, new_size)
+    return new_size
+
+
+def shrink_transaction_log_quietly(db: SQLServerConnection) -> int:
+    """Best-effort shrink so delete jobs still succeed if SHRINKFILE fails."""
+    try:
+        return shrink_transaction_log(db)
+    except Exception:
+        logger.exception("transaction log shrink failed")
+        return 0
 
 
 def run_hot_backup(db: SQLServerConnection) -> Path:

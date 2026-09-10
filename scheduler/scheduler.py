@@ -569,6 +569,9 @@ def job_weekly_log_cleanup():
             n += TradeMtmSnapshotRepo(db).archive_non_active()
             n += ZerodhaExecutionJobRepo(db).delete_older_than(cutoff)
             db.commit()
+            from lifecycle.sql_backup import shrink_transaction_log_quietly
+
+            shrink_transaction_log_quietly(db)
             return n
         finally:
             if conn is not None and old_to is not None:

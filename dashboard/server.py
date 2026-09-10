@@ -724,7 +724,7 @@ _JOB_META: Dict[str, Dict[str, str]] = {
     "weekly_archive":     {"icon": "📦", "name": "Weekly Archive",
                             "description": "Copy aged rows to *_Archive (Fri 09:30). Hot rows stay until the laptop has both .bak files and ACKs."},
     "weekly_log_cleanup": {"icon": "🪵", "name": "Log Cleanup",
-                            "description": "Delete system/job logs and alerts (Fri 09:35)."},
+                            "description": "Delete system/job logs and alerts (Fri 09:35), then shrink the SQL transaction log file."},
     "archive_export":     {"icon": "💾", "name": "Archive Export",
                             "description": "Export pending *_Archive .bak before VM stop (Fri 15:36)."},
     "db_backup":          {"icon": "💽", "name": "Hot DB Backup",

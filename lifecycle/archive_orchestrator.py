@@ -20,5 +20,8 @@ def run_archive(db: SQLServerConnection) -> int:
     today = today_ist()
     n = run_weekly_archive(db, today)
     db.commit()
+    from lifecycle.sql_backup import shrink_transaction_log_quietly
+
+    shrink_transaction_log_quietly(db)
     logger.info("weekly archive complete: ~%d rows copied", n)
     return n

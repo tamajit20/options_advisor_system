@@ -63,6 +63,13 @@ def _patch_log_cleanup_repos(mocker, *, logs=0, jobs=0, notifs=0, mtm=0, zjobs=0
 
 
 class TestWeeklyLogCleanup:
+    @pytest.fixture(autouse=True)
+    def _shrink_log(self, mocker):
+        self.shrink = mocker.patch(
+            "lifecycle.sql_backup.shrink_transaction_log_quietly",
+            return_value=128,
+        )
+
     def test_deletes_system_and_job_logs_only(self, patched_db, mocker):
         captured = _capture_cleanup_fn(mocker)
         mocker.patch("scheduler.scheduler.today_ist", return_value=date(2026, 9, 5))
@@ -85,6 +92,7 @@ class TestWeeklyLogCleanup:
         job_repo.delete_older_than.assert_called_once()
         broker_cls.assert_not_called()
         patched_db.commit.assert_called_once()
+        self.shrink.assert_called_once_with(patched_db)
 
     def test_log_cleanup_retention_days(self, patched_db, mocker):
         captured = _capture_cleanup_fn(mocker)

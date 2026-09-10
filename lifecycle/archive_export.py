@@ -251,6 +251,9 @@ def acknowledge_export(db: SQLServerConnection) -> int:
     n_hot = delete_hot_rows_present_in_archive(db)
     n_arch = truncate_all_archive_tables(db)
     db.commit()
+    from lifecycle.sql_backup import shrink_transaction_log_quietly
+
+    shrink_transaction_log_quietly(db)
     _remove_pending_export_files()
     logger.info(
         "archive export acknowledged: deleted %d hot rows, cleared %d archive rows",

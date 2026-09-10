@@ -7,7 +7,7 @@ VM uptime: **Mon–Fri 08:55–15:45 IST** (off weekends).
 | When (Fri) | Job | What |
 |------------|-----|------|
 | 09:30 | `weekly_archive` | Copy old rows → `*_Archive` (hot rows stay) |
-| 09:35 | `weekly_log_cleanup` | Delete logs and alerts |
+| 09:35 | `weekly_log_cleanup` | Delete logs and alerts; shrink SQL transaction log if oversized |
 | 15:36 | `archive_export` | `.bak` chunk + `PENDING.json` |
 | 15:38 | `db_backup` | Single `backups/OptionsAdvisorDB-latest.bak` + `LAST_HOT_BACKUP.json` |
 
@@ -22,14 +22,14 @@ cd D:\Share\StockAnalyzer\options_advisor_system
 .\deploy\azure\register-laptop-archive-task.ps1
 ```
 
-Task runs **Mon–Fri 09:15** (after VM is up; Monday catch-up if Friday’s laptop was off):
+Task runs **once Mon–Fri at 09:15**. If the laptop is off, it runs when you next log in (`StartWhenAvailable`). If the VM is off or pull/merge/ACK fails, **this same run** retries every 15 minutes until it succeeds or ~15:45, then **stops**. Task Scheduler does not start it again until the next weekday 09:15. After ACK, later 09:15 runs no-op until the next Friday `PENDING.json`.
 
 1. Download Friday's **hot** `OptionsAdvisorDB-latest.bak` onto the laptop (required).  
 2. Download `PENDING.json` + archive `.bak` and merge into **`OptionsAdvisorDB_Archive`**.  
 3. SSH ACK → VM deletes those hot rows, truncates `*_Archive`, deletes `PENDING.json` and export `.bak` files.  
    ACK **refuses** (VM files stay) if: the laptop never ran this script, `LAST_HOT_BACKUP.json` is missing/older than the export, or `*_Archive` grew after the export.
 
-If the laptop is off at 09:15, nothing is deleted on the VM. The task uses `StartWhenAvailable`; the next weekday the laptop is on, it pulls then ACKs.
+If the laptop is off at 09:15, nothing is deleted on the VM. When the laptop is on, that day's run keeps retrying until ACK or 15:45; after success it waits for the next 09:15 (and the next Friday export).
 
 If merge succeeded but ACK was refused, the next weekday retries ACK only (does not re-merge the same chunk). Friday `archive_export` **does not** delete last week's export `.bak` while `PENDING.json` is still waiting.
 
