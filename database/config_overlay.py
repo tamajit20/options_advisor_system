@@ -8,7 +8,8 @@ edits actually drive the engine, Exit Plan, charges, scheduler, and alerts.
 ``config.py`` remains the file default. Strategy keys are stored unprefixed
 (``take_profit_fraction``). Other namespaces use a prefix
 (``scheduler.timezone``, ``zerodha_charges.gst_pct``, ``events.calendar``).
-Secrets (passwords, API tokens) are never listed or writable.
+JSON objects merge: file defaults fill keys missing from a saved row, then
+saved keys win. Secrets (passwords, API tokens) are never listed or writable.
 """
 
 from __future__ import annotations
@@ -324,6 +325,33 @@ def _default_for(spec: _Spec) -> Any:
     return spec.defaults[spec.local_key]
 
 
+def merge_overlay(base: Any, overlay: Any) -> Any:
+    """File default as base; DB/UI keys win. Missing nested keys stay from *base*.
+
+    Lists and scalars in *overlay* replace. ``None`` in overlay is a real value
+    (e.g. cooldown_minutes: null), not "use default".
+    """
+    if isinstance(base, dict) and isinstance(overlay, dict):
+        out = copy.deepcopy(base)
+        for k, v in overlay.items():
+            if k in out and isinstance(out[k], dict) and isinstance(v, dict):
+                out[k] = merge_overlay(out[k], v)
+            else:
+                out[k] = copy.deepcopy(v)
+        return out
+    return copy.deepcopy(overlay)
+
+
+def resolved_value(key: str, overlay: Any) -> Any:
+    """Coerce then fill missing dict keys from file defaults."""
+    spec = resolve_spec(key)
+    default = json_safe(_default_for(spec))
+    coerced = coerce_value(key, overlay)
+    if spec.is_list_root:
+        return coerced
+    return merge_overlay(default, coerced)
+
+
 def coerce_value(key: str, value: Any) -> Any:
     spec = resolve_spec(key)
     default = _default_for(spec)
@@ -441,7 +469,7 @@ def apply_config_overrides(db=None) -> int:
                 continue
             try:
                 parsed = _parse_stored(row.get("config_value"))
-                _assign(spec, coerce_value(key, parsed))
+                _assign(spec, resolved_value(key, parsed))
                 applied += 1
             except Exception:
                 logger.warning("config overlay skipped %s", key, exc_info=True)
@@ -476,7 +504,7 @@ def catalog_items(db) -> List[Dict[str, Any]]:
             row = rows_by_key.get(spec.key)
         overridden = row is not None and row.get("config_value") is not None
         current = (
-            coerce_value(spec.key, _parse_stored(row["config_value"]))
+            resolved_value(spec.key, _parse_stored(row["config_value"]))
             if overridden else default
         )
         items.append({

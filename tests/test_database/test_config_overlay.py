@@ -16,6 +16,8 @@ from database.config_overlay import (
     apply_strategy_overrides,
     catalog_items,
     coerce_value,
+    merge_overlay,
+    resolved_value,
     restore_file_defaults,
     select_overlay_winners,
 )
@@ -185,3 +187,61 @@ def test_select_overlay_winners_prefers_canonical_key():
         {"config_key": "retention.job_log_keep_days", "config_value": "21"},
     ]))
     assert winners["retention.delete_keep_days"]["config_value"] == "7"
+
+
+def test_partial_json_override_keeps_new_default_keys():
+    restore_file_defaults()
+    db = MagicMock()
+    db.fetch_all.return_value = [{
+        "config_key": "loss_milestone_alert",
+        "config_value": '{"enabled": true, "pct_of_premium": 5, "cooldown_minutes": null}',
+        "last_modified": "2026-05-01",
+        "modified_by": "ui",
+        "is_locked": 0,
+    }]
+    try:
+        n = apply_strategy_overrides(db)
+        assert n == 1
+        cfg = STRATEGY_CONFIG["loss_milestone_alert"]
+        assert cfg["enabled"] is True
+        assert cfg["pct_of_premium"] == 5
+        assert cfg["cooldown_minutes"] is None
+        assert cfg["auto_close"] is True
+        assert cfg["confirm_seconds"] == 20
+        assert cfg["auto_close_retry_seconds"] == 60
+    finally:
+        restore_file_defaults()
+
+
+def test_catalog_fills_missing_keys_on_partial_override():
+    db = MagicMock()
+    db.fetch_all.return_value = [{
+        "config_key": "loss_milestone_alert",
+        "config_value": '{"enabled": true, "pct_of_premium": 5}',
+        "last_modified": "2026-05-01",
+        "modified_by": "ui",
+        "is_locked": 0,
+    }]
+    items = {row["key"]: row for row in catalog_items(db)}
+    item = items["loss_milestone_alert"]
+    assert item["overridden"] is True
+    assert item["value"]["pct_of_premium"] == 5
+    assert item["value"]["confirm_seconds"] == 20
+    assert item["value"]["auto_close"] is True
+    assert "confirm_seconds" in item["default"]
+
+
+def test_resolved_value_db_wins_over_default():
+    filled = resolved_value("loss_milestone_alert", {
+        "pct_of_premium": 12.0, "confirm_seconds": 0,
+    })
+    assert filled["pct_of_premium"] == pytest.approx(12.0)
+    assert filled["confirm_seconds"] == 0
+    assert filled["enabled"] is True
+    assert filled["auto_close"] is True
+
+
+def test_merge_overlay_nested_dict():
+    base = {"a": 1, "nested": {"x": 1, "y": 2}}
+    out = merge_overlay(base, {"nested": {"y": 9}})
+    assert out == {"a": 1, "nested": {"x": 1, "y": 9}}

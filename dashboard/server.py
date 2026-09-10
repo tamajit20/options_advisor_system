@@ -2955,7 +2955,7 @@ def create_app() -> Flask:
     @_with_db
     def api_config_set(db: SQLServerConnection, key: str):
         from database.config_overlay import (
-            apply_config_overrides, coerce_value, default_value_for, resolve_spec,
+            apply_config_overrides, default_value_for, resolve_spec, resolved_value,
         )
         payload = request.get_json(silent=True) or {}
         if "value" not in payload:
@@ -2972,7 +2972,7 @@ def create_app() -> Flask:
         if existing and existing.get("is_locked"):
             return jsonify({"error": f"Config key is locked: {key}"}), 403
         try:
-            value = coerce_value(key, payload.get("value"))
+            value = resolved_value(key, payload.get("value"))
         except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
             return jsonify({"error": str(exc)}), 400
         ConfigRepo(db).set(
@@ -3027,7 +3027,7 @@ def create_app() -> Flask:
     @_with_db
     def api_config_bulk_save(db: SQLServerConnection):
         from database.config_overlay import (
-            apply_config_overrides, coerce_value, default_value_for, resolve_spec,
+            apply_config_overrides, default_value_for, resolve_spec, resolved_value,
         )
         from database.runtime_flags import RuntimeFlagsRepo
         payload = request.get_json(silent=True) or {}
@@ -3061,7 +3061,7 @@ def create_app() -> Flask:
                 errors.append({"key": key, "error": "locked"})
                 continue
             try:
-                value = coerce_value(key, item.get("value"))
+                value = resolved_value(key, item.get("value"))
             except (KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
                 errors.append({"key": key, "error": str(exc)})
                 continue
