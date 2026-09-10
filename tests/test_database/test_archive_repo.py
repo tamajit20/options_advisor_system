@@ -32,6 +32,10 @@ def _legs_spec():
     return next(s for s in ARCHIVE_TABLE_SPECS if s.hot_table == "options_suggestion_legs")
 
 
+def _trades_spec():
+    return next(s for s in ARCHIVE_TABLE_SPECS if s.hot_table == "options_trades")
+
+
 def _broker_hot_cols():
     return [
         {"col_name": "id"},
@@ -265,6 +269,21 @@ class TestMoveBrokerOrders:
         assert "FROM options_suggestion_legs s" in ins_sql
         assert "s.suggestion_id IN" in ins_sql
         assert "DELETE FROM options_suggestion_legs" not in ins_sql
+
+    def test_closed_trades_skip_active_and_do_not_delete_hot(self):
+        db = MagicMock()
+        db.fetch_all.return_value = [
+            {"col_name": "trade_id"}, {"col_name": "closed_on"}, {"col_name": "status"},
+        ]
+        db.fetch_one.return_value = {"has_identity": 0}
+        db.execute.return_value = MagicMock(rowcount=2)
+
+        n = move_spec(db, _trades_spec(), "b1", date(2026, 9, 8))
+        assert n == 2
+        ins_sql = db.execute.call_args_list[0][0][0]
+        assert "status <> 'ACTIVE'" in ins_sql
+        assert "s.closed_on < ?" in ins_sql
+        assert "DELETE FROM options_trades" not in ins_sql
 
     def test_move_respects_retention_config_override(self, monkeypatch):
         from config import RETENTION_CONFIG

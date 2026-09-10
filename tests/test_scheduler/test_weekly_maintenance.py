@@ -128,6 +128,17 @@ class TestWeeklyLogCleanup:
         assert seen["timeout"] == 1800
         assert patched_db.connection.timeout == 60
 
+    def test_still_succeeds_if_log_shrink_is_a_noop(self, patched_db, mocker):
+        captured = _capture_cleanup_fn(mocker)
+        mocker.patch("scheduler.scheduler.today_ist", return_value=date(2026, 9, 5))
+        self.shrink.return_value = 0
+        _patch_log_cleanup_repos(mocker, logs=2, jobs=3, notifs=1, mtm=0, zjobs=0)
+
+        sched.job_weekly_log_cleanup()
+        n = captured["fn"](patched_db)
+        assert n == 6
+        self.shrink.assert_called_once_with(patched_db)
+
 
 class TestWeeklyArchive:
     def test_delegates_to_archive_orchestrator(self, patched_db, mocker):
@@ -167,3 +178,45 @@ class TestDbBackup:
 
         run_hot.assert_called_once_with(patched_db)
         assert n == 1
+
+
+class TestArchiveExportJob:
+    def test_delegates_to_run_archive_export_and_commits(self, patched_db, mocker):
+        captured = _capture_cleanup_fn(mocker)
+        run_export = mocker.patch(
+            "lifecycle.archive_export.run_archive_export",
+            return_value=1,
+        )
+
+        sched.job_archive_export()
+        n = captured["fn"](patched_db)
+
+        run_export.assert_called_once_with(patched_db)
+        patched_db.commit.assert_called_once()
+        assert n == 1
+
+
+class TestArchiveOrchestrator:
+    def test_copies_commits_then_shrinks(self, mocker):
+        db = MagicMock()
+        mocker.patch(
+            "lifecycle.archive_orchestrator.today_ist",
+            return_value=date(2026, 9, 11),
+        )
+        weekly = mocker.patch(
+            "lifecycle.archive_orchestrator.run_weekly_archive",
+            return_value=7,
+        )
+        shrink = mocker.patch(
+            "lifecycle.sql_backup.shrink_transaction_log_quietly",
+            return_value=128,
+        )
+        from lifecycle.archive_orchestrator import run_archive
+
+        n = run_archive(db)
+        assert n == 7
+        weekly.assert_called_once_with(db, date(2026, 9, 11))
+        db.commit.assert_called_once()
+        shrink.assert_called_once_with(db)
+        assert weekly.call_count == 1
+        assert db.commit.call_count == 1
