@@ -136,7 +136,7 @@ def evaluate(
     def _trend_gate():
         if indicators.atr_14 is None:
             return _PASS_WARN, "Insufficient spot history — ATR-14 unavailable, trend unverifiable"
-        trend_ok = indicators.trend in ("BULLISH", "BEARISH", "SIDEWAYS")
+        trend_ok = indicators.trend in ("BULLISH", "BEARISH", "SIDEWAYS", "MIXED")
         adx_v = indicators.adx_14
         slope_v = indicators.sma20_slope_pct
         diff_v = indicators.sma_diff_pct

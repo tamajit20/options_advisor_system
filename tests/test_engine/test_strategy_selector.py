@@ -129,6 +129,14 @@ class TestUnknownTrend:
         with pytest.raises(StrategyVeto):
             select_strategy(iv_rank=20.0, trend="WTF", indicators=_ind())
 
+    def test_mixed_trend_sits_out(self):
+        with pytest.raises(StrategyVeto, match="Mixed trend"):
+            select_strategy(iv_rank=60.0, trend="MIXED", indicators=_ind())
+        with pytest.raises(StrategyVeto, match="Mixed trend"):
+            select_strategy(iv_rank=25.0, trend="MIXED", indicators=_ind())
+        with pytest.raises(StrategyVeto, match="Mixed trend"):
+            select_strategy(iv_rank=40.0, trend="MIXED", indicators=_ind())
+
 
 # ---------------------------------------------------------------------------
 # FUTURE-SCOPE PLACEHOLDERS — paired with FUTURE_ENHANCEMENT_SCOPES.md entries

@@ -948,19 +948,22 @@ STRATEGY_CONFIG = {
     "trend_slope_days":       5,      # slope lookback on fast SMA
     "trend_slope_min_pct":    0.05,   # fast-SMA slope (% of price) minimum
     "trend_adx_min":          18.0,   # ADX-14 below this → SIDEWAYS (slightly lower with 10/20)
-    # Short-horizon return override (EOD + live) — recent % move vs N-day ago close
+    # Short-horizon return overlay (EOD + live) — recent % move vs N-day ago close
     "trend_return_lookback_days": 5,
     "trend_return_lookback_days_alt": 10,   # also check; use stronger |move|
     "trend_return_bullish_pct":   1.5,     # >= → BULLISH short-horizon signal
     "trend_return_bearish_pct":  -1.5,     # <= → BEARISH short-horizon signal
-    "trend_return_override_structural": True,  # lift SIDEWAYS when return is directional
-    "trend_return_confirm_structural": True, # structural vs return conflict → SIDEWAYS
+    # Off and unused: a 5–10 day dump/rally must not become a directional thesis
+    # while SMA is chop. Kept so an old DB overlay of True cannot re-enable that chase.
+    "trend_return_override_structural": False,
+    # SMA vs 5–10d tape opposite → MIXED (sit out). Not SIDEWAYS / Iron Condor.
+    "trend_return_confirm_structural": True,
     # Session / live trend (intraday; Zerodha OHLC + 5-min snapshots)
     "trend_session_lookback_days": 5,
     "trend_session_open_pct_min":  0.35,
     "trend_session_nday_pct_min":  0.60,
     "trend_live_session_override": True,
-    "trend_session_confirm_structural": True,
+    "trend_session_confirm_structural": True,  # SMA vs live session opposite → MIXED
     # Index spot backfill window (calendar days) for --backfill-index-spot
     "index_spot_backfill_days": 400,
 }

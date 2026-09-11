@@ -499,6 +499,16 @@ class TestEvaluateUnderlying:
         assert ns
         assert any("IV rank unavailable" in n.reason for n in ns)
 
+    def test_mixed_trend_sits_out_not_sideways_condor(self, mock_db, mocker):
+        self._patch_eval_to_confidence(mocker, trend="MIXED")
+        sugs, ns = se._evaluate_underlying(
+            mock_db, "NIFTY", date(2026, 4, 30), date(2026, 5, 1), "x",
+        )
+        assert sugs == []
+        assert ns
+        assert any("Mixed trend" in n.reason for n in ns)
+        assert not any("IV rank unavailable" in n.reason for n in ns)
+
     def test_directional_without_iv_rank_records_strategy_veto(self, mock_db, mocker):
         self._patch_eval_to_confidence(mocker, trend="BULLISH")
         sugs, ns = se._evaluate_underlying(

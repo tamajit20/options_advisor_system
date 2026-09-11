@@ -48,6 +48,7 @@ from database.models import (
 from engine.confidence import evaluate as evaluate_confidence
 from engine.em_calibration import band_dte, compute_calibration_warning
 from engine.indicators import build_indicators
+from engine.trend_model import MIXED_TREND, mixed_trend_sitout_reason
 from engine.market_data_provenance import (
     PricingProvenanceTracker,
     stamp_eod_rows,
@@ -668,6 +669,28 @@ def _evaluate_underlying(
             events_calendar_row_count=events_total,
         )
 
+        # MIXED = SMA vs recent tape disagree. Sit out with that reason (do not
+        # collapse to SIDEWAYS / Iron Condor, and do not assume BEARISH).
+        # DTE / other confidence failures still win when the gate already failed.
+        if indicators.trend == MIXED_TREND:
+            if not confidence.all_passed:
+                no_suggestions.append(NoSuggestion(
+                    generated_on=now_ist(),
+                    underlying=symbol,
+                    confidence=confidence,
+                    reason=f"[{expiry_type} {expiry}] Confidence "
+                           f"{confidence.score}/{confidence.total}: "
+                           + "; ".join(confidence.failed_reasons),
+                ))
+                continue
+            no_suggestions.append(NoSuggestion(
+                generated_on=now_ist(),
+                underlying=symbol,
+                confidence=confidence,
+                reason=f"[{expiry_type} {expiry}] {mixed_trend_sitout_reason()}",
+            ))
+            continue
+
         calendar_legs: Optional[dict] = None
         use_expiry = expiry
         use_chain = chain
@@ -681,12 +704,21 @@ def _evaluate_underlying(
         _has_lv_catalyst = event_repo.has_high_impact(entry_day, _catalyst_end)
 
         if iv_rank is not None:
-            picked = select_strategy(
-                iv_rank=iv_rank,
-                trend=indicators.trend,
-                indicators=indicators,
-                has_long_vol_catalyst=_has_lv_catalyst,
-            )
+            try:
+                picked = select_strategy(
+                    iv_rank=iv_rank,
+                    trend=indicators.trend,
+                    indicators=indicators,
+                    has_long_vol_catalyst=_has_lv_catalyst,
+                )
+            except StrategyVeto as veto:
+                no_suggestions.append(NoSuggestion(
+                    generated_on=now_ist(),
+                    underlying=symbol,
+                    confidence=confidence,
+                    reason=f"[{expiry_type} {expiry}] Strategy veto: {veto}",
+                ))
+                continue
             if picked == "CALENDAR_SPREAD":
                 calendar_legs = _resolve_calendar_legs(
                     fo, symbol, trade_date, entry_day,

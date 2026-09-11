@@ -3,7 +3,14 @@ engine/trend_model.py
 =====================
 
 Structural (SMA crossover + ADX), session (intraday), and short-horizon
-return overrides merged for strategy selection.
+return overlays merged for strategy selection.
+
+Effective labels: BULLISH | BEARISH | SIDEWAYS | MIXED.
+
+MIXED means SMA structure and the recent tape disagree. That is a sit-out,
+not a SIDEWAYS Iron Condor and not a directional spread. A 5–10 day drop
+does not mean the next week keeps falling (bounce is likely); the reverse
+is true of a 5–10 day rally.
 """
 
 from __future__ import annotations
@@ -12,6 +19,22 @@ from datetime import date
 from typing import List, Optional, Sequence
 
 from config import STRATEGY_CONFIG
+
+MIXED_TREND = "MIXED"
+_DIRECTIONAL = frozenset({"BULLISH", "BEARISH"})
+
+
+def mixed_trend_sitout_reason() -> str:
+    """NoSuggestion / StrategyVeto copy when SMA and recent tape disagree."""
+    return (
+        "Mixed trend: SMA structure and the recent tape disagree — "
+        "no directional edge. A 5–10 day drop can bounce (and a rally can fade). "
+        "Sitting out; not treating this as BEARISH, BULLISH, or SIDEWAYS."
+    )
+
+
+def _opposing_directions(a: Optional[str], b: Optional[str]) -> bool:
+    return a in _DIRECTIONAL and b in _DIRECTIONAL and a != b
 
 
 def has_real_ohlc(row: dict) -> bool:
@@ -110,6 +133,29 @@ def short_horizon_trend_from_return(return_pct: Optional[float]) -> Optional[str
     return "SIDEWAYS"
 
 
+def session_intraday_trend(
+    *,
+    spot_now: float,
+    session_bar: Optional[dict],
+) -> Optional[str]:
+    """Same-day trend from session open vs spot. None when there is no bar."""
+    if spot_now <= 0 or not session_bar:
+        return None
+    try:
+        open_px = float(session_bar.get("open_price") or 0) or None
+    except (TypeError, ValueError):
+        open_px = None
+    if not open_px or open_px <= 0:
+        return None
+    open_min = float(STRATEGY_CONFIG.get("trend_session_open_pct_min", 0.35))
+    m = _pct_change(spot_now, open_px)
+    if m is None:
+        return None
+    if abs(m) >= open_min:
+        return "BULLISH" if m > 0 else "BEARISH"
+    return "SIDEWAYS"
+
+
 def session_trend(
     *,
     spot_now: float,
@@ -117,37 +163,28 @@ def session_trend(
     spot_history: Sequence[dict],
     as_of: date,
 ) -> Optional[str]:
-    """Short-horizon trend from session open + recent daily closes (live)."""
+    """Live tape label: same-day open first, then N-day close (display / diagnostics)."""
     if spot_now <= 0:
         return None
 
-    open_min = float(STRATEGY_CONFIG.get("trend_session_open_pct_min", 0.35))
+    intra = session_intraday_trend(spot_now=spot_now, session_bar=session_bar)
+    if intra in _DIRECTIONAL:
+        return intra
+
     nday_min = float(STRATEGY_CONFIG.get("trend_session_nday_pct_min", 0.60))
     lookback = int(STRATEGY_CONFIG.get("trend_session_lookback_days", 5))
-
-    open_px: Optional[float] = None
-    if session_bar:
-        try:
-            open_px = float(session_bar.get("open_price") or 0) or None
-        except (TypeError, ValueError):
-            open_px = None
 
     hist = filter_spot_history(spot_history, as_of)
     closes = [float(r["close_price"]) for r in hist if r.get("close_price")]
     if not closes:
-        return None
-
-    if open_px and open_px > 0:
-        m = _pct_change(spot_now, open_px)
-        if m is not None and abs(m) >= open_min:
-            return "BULLISH" if m > 0 else "BEARISH"
+        return intra
 
     if len(closes) >= lookback:
         m = _pct_change(spot_now, closes[-lookback])
         if m is not None and abs(m) >= nday_min:
             return "BULLISH" if m > 0 else "BEARISH"
 
-    return "SIDEWAYS"
+    return intra if intra is not None else "SIDEWAYS"
 
 
 def resolve_trend(
@@ -156,7 +193,11 @@ def resolve_trend(
     *,
     live_mode: bool,
 ) -> str:
-    """Merge structural and session labels into the effective strategy trend."""
+    """Merge structural SMA with *same-day* session tape.
+
+    ``session`` must be the intraday (open vs spot) label, not the 5–10 day
+    tape. A multi-day dump does not lift chop SMA to BEARISH.
+    """
     if not live_mode or session is None:
         return structural
     if session == structural:
@@ -168,7 +209,7 @@ def resolve_trend(
     if structural == "SIDEWAYS":
         return session
     if STRATEGY_CONFIG.get("trend_session_confirm_structural", True):
-        return "SIDEWAYS"
+        return MIXED_TREND
     return session
 
 
@@ -177,27 +218,21 @@ def apply_return_override(
     structural: str,
     return_trend: Optional[str],
 ) -> str:
-    """Apply short-horizon return rules on top of structural + session merge."""
-    if return_trend is None or return_trend == "SIDEWAYS":
-        return effective
-    if not STRATEGY_CONFIG.get("trend_return_override_structural", True):
+    """Apply short-horizon return rules on top of structural + session merge.
+
+    Agreeing SMA + tape keep the directional label. Opposite labels become
+    MIXED (sit out). Structural SIDEWAYS is never lifted to BEARISH/BULLISH
+    from a 5–10 day return — that chase is disabled even if a saved config
+    overlay still has ``trend_return_override_structural`` True.
+    """
+    if return_trend is None:
         return effective
 
-    # A: structural SIDEWAYS + strong recent return → directional effective trend
-    if structural == "SIDEWAYS" and return_trend in ("BULLISH", "BEARISH"):
-        return return_trend
-
-    # Conflict: structural direction disagrees with recent tape
     if STRATEGY_CONFIG.get("trend_return_confirm_structural", True):
-        if structural == "BULLISH" and return_trend == "BEARISH":
-            return "SIDEWAYS"
-        if structural == "BEARISH" and return_trend == "BULLISH":
-            return "SIDEWAYS"
-
-    # Structural directional but return strongly opposes → neutralize credit bias
-    if structural in ("BULLISH", "BEARISH") and return_trend != structural:
-        if effective == structural:
-            return "SIDEWAYS"
+        if _opposing_directions(structural, return_trend):
+            return MIXED_TREND
+        if _opposing_directions(effective, return_trend):
+            return MIXED_TREND
 
     return effective
 
@@ -226,6 +261,13 @@ def compute_trends(
         if live_mode
         else None
     )
+    # Effective trend uses same-day open vs spot only — not the 5-day session
+    # lookback, which would re-introduce "dump last week ⇒ BEARISH today".
+    intraday = (
+        session_intraday_trend(spot_now=spot_now, session_bar=session_bar)
+        if live_mode
+        else None
+    )
 
     return_pct = short_horizon_return_pct(
         spot_history=hist,
@@ -234,7 +276,7 @@ def compute_trends(
     )
     return_trend = short_horizon_trend_from_return(return_pct)
 
-    effective = resolve_trend(structural, session, live_mode=live_mode)
+    effective = resolve_trend(structural, intraday, live_mode=live_mode)
     effective = apply_return_override(effective, structural, return_trend)
 
     return effective, structural, session, return_pct, return_trend

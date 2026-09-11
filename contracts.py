@@ -113,7 +113,7 @@ class MarketIndicators:
     pcr:           Optional[float]   # None = OI data absent (call OI was zero or chain empty)
     max_pain:      float
     atr_14:        Optional[float]   # None = insufficient spot history (< period+1 rows)
-    trend:         str               # Effective trend for strategy selection
+    trend:         str               # BULLISH | BEARISH | SIDEWAYS | MIXED (sit-out)
     vix_close:     Optional[float]   # None = VIX row not available today
     vix_regime:    str               # STABLE / RISING / SPIKING / UNKNOWN
     oi_walls_call: List[float]       # top call walls (strikes); empty when OI absent

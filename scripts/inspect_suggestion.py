@@ -78,7 +78,7 @@ if len(closes) >= slow_p:
         reasons.append(f"SMA{fast_p} slope not falling")
     if ret_tr != "BEARISH":
         reasons.append("5d/10d return not <= -1.5%")
-    print(f"  why not BEARISH (structural): {reasons or ['return override may still apply']}")
+    print(f"  why not BEARISH (structural): {reasons or ['SMA already bearish, or MIXED sit-out if tape disagrees']}")
 else:
     print(f"Only {len(hist_f)} rows (<{slow_p}) -> forced SIDEWAYS")
 

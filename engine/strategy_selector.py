@@ -25,6 +25,7 @@ from datetime import date, datetime
 from typing import Iterable, List, Mapping, Optional, Sequence
 
 from config import STRATEGY_CONFIG
+from engine.trend_model import MIXED_TREND, mixed_trend_sitout_reason
 from contracts import (
     ConfidenceResult,
     MarketIndicators,
@@ -80,11 +81,13 @@ def select_strategy(
 
     Selection axes:
         IV regime  : VERY_HIGH (>butterfly_min) | HIGH (>writing_min) | MID | LOW | VERY_LOW
-        Trend      : BULLISH | BEARISH | SIDEWAYS
+        Trend      : BULLISH | BEARISH | SIDEWAYS | MIXED (sit-out, no pick)
         Conviction : STRONG | MILD   (from PCR thresholds)
     """
     if iv_rank is None:
         raise StrategyVeto("IV rank unavailable — cannot select a strategy")
+    if trend == MIXED_TREND:
+        raise StrategyVeto(mixed_trend_sitout_reason())
 
     iv_writing_min   = STRATEGY_CONFIG["iv_rank_writing_min"]
     iv_buying_max    = STRATEGY_CONFIG["iv_rank_buying_max"]

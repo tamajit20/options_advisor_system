@@ -27,6 +27,25 @@ class TestEvaluate:
         assert result.total == 14
         assert result.score >= 9
 
+    def test_mixed_trend_is_identifiable_not_a_failed_gate(self, sample_indicators):
+        from dataclasses import replace
+        ind = replace(
+            sample_indicators,
+            trend="MIXED",
+            trend_structural="BULLISH",
+            trend_short_horizon="BEARISH",
+        )
+        result = evaluate(
+            iv_rank=60.0,
+            indicators=ind,
+            dte=14,
+            has_high_impact_event_this_week=False,
+            events_calendar_row_count=10,
+        )
+        trend_check = next(c for c in result.checks if c.label == "Trend identifiable")
+        assert trend_check.status == "PASS"
+        assert "MIXED" in trend_check.detail
+
     def test_dte_below_band_hard_fails(self, sample_indicators):
         result = evaluate(
             iv_rank=60.0,
