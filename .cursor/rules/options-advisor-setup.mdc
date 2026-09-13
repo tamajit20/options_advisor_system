@@ -28,7 +28,7 @@ Whenever you finish impactful work, update **`README.md`** in the **existing sec
 
 **Do not document**: tiny refactors, local-only debug, obvious one-liners, or prose that restates code. Prefer one short row or bullet in the right section over a new heading.
 
-Touch **"Last updated"** when bootstrap or automation schedule changes. After setup-related edits, run `python scripts/validate_setup_sync.py` and fix failures. Playbook map: **Part B12**.
+Touch **"Last updated"** when bootstrap or automation schedule changes. After setup-related edits, run `python scripts/validate_setup_sync.py` and fix failures. Playbook map: **Part B13**. Code call chains: **Part B12**.
 
 ## User says "deploy" (or "commit push deploy")
 
@@ -43,7 +43,7 @@ Do not stop after only one of those steps. If docs were already updated in the s
 
 ## When adding tables, scheduler jobs, or deploy scripts
 
-Before finishing, update **`README.md` Part B12** and related Part A rows (A4 scripts, A5 clock, A8 archive) plus schema/archive/config/scheduler/setup-manifest as needed.
+Before finishing, update **`README.md` Part B13** and related Part A rows (A4 scripts, A5 clock, A8 archive) plus schema/archive/config/scheduler/setup-manifest as needed.
 
 Run `python scripts/validate_setup_sync.py` and fix failures.
 
