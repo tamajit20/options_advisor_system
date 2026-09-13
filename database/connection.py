@@ -7,7 +7,7 @@ Standalone SQL Server connection wrapper for the options advisor.
 Notes:
     * Borrows the pyodbc driver-pick + Trusted/SQL-Auth pattern from the equity
       stock analyzer system, BUT deliberately COPIED (not imported) — the two
-      systems must remain independent. See ARCHITECTURE.txt.
+      systems must remain independent. See README.md.
     * Every public method is wrapped in try/except with logging; rollback is
       always safe (silently ignores a dead-connection rollback).
     * Connections are NOT pooled here. Each scheduler job and each Flask

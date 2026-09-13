@@ -16,6 +16,8 @@ This file is auto-loaded by GitHub Copilot at the start of every session in this
 
 ## Module boundaries (strict)
 
+Full guide: **`README.md`** (install + architecture SSOT).
+
 ```
 downloader/   →  database/   →  engine/   →  lifecycle/   →  dashboard/
                                   ↑
@@ -24,7 +26,8 @@ downloader/   →  database/   →  engine/   →  lifecycle/   →  dashboard/
 
 - `engine/` is **pure logic** — no DB, no HTTP, no I/O. Always testable without mocks.
 - `database/` wraps pyodbc; never imported by `engine/`.
-- `lifecycle/` orchestrates downloader → engine → database; no business logic of its own.
+- `lifecycle/` orchestrates downloader → engine → database / providers.
+- Database name: **`OptionsAdvisorDB`**; tables prefixed **`options_`**; port **5001**.
 
 ---
 

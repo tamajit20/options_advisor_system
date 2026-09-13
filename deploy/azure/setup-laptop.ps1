@@ -1,6 +1,6 @@
 # One-time laptop setup: config, folders, archive scheduled task, verification.
 #
-# Called by setup-new-environment.ps1. See readmefirst.txt at repo root.
+# Called by setup-new-environment.ps1. See README.md Part A at repo root.
 #   copy deploy\azure\laptop.config.ps1.example deploy\azure\laptop.config.ps1
 #   notepad deploy\azure\laptop.config.ps1
 #   .\deploy\azure\setup-laptop.ps1

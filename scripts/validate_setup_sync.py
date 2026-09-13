@@ -10,12 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 REQUIRED_SCRIPTS = [
-    "readmefirst.txt",
+    "README.md",
     "deploy/azure/setup-new-environment.ps1",
     "deploy/azure/setup-laptop.ps1",
     "deploy/azure/Test-EnvironmentSetup.ps1",
     "deploy/azure/setup-manifest.json",
-    "deploy/azure/MAINTAIN-SETUP.md",
     "deploy/archive-export.sh",
     "deploy/archive-truncate-vm.sh",
     "scripts/merge_archive_into_local.py",
@@ -58,17 +57,17 @@ def main() -> int:
         except json.JSONDecodeError as exc:
             errors.append(f"invalid JSON: {manifest}: {exc}")
 
-    readme = ROOT / "readmefirst.txt"
-    if readme.is_file():
-        text = readme.read_text(encoding="utf-8")
+    guide = ROOT / "README.md"
+    if guide.is_file():
+        text = guide.read_text(encoding="utf-8")
         for name in (
             "setup-new-environment.ps1",
             "Test-EnvironmentSetup.ps1",
             "validate_setup_sync.py",
-            "MAINTAIN-SETUP.md",
+            "weekly_archive",
         ):
             if name not in text:
-                warnings.append(f"readmefirst.txt does not mention {name}")
+                warnings.append(f"README.md does not mention {name}")
 
     from database.schema import list_tables
     from database.archive_registry import ARCHIVE_TABLE_SPECS

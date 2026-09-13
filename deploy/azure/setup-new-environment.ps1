@@ -1,6 +1,6 @@
 # Greenfield setup: new laptop + new Azure VM (config, VM install, uptime, laptop automation).
 #
-# Entry point for fresh install. See readmefirst.txt at repo root.
+# Entry point for fresh install. See README.md Part A at repo root.
 #
 # Usage:
 #   copy deploy\azure\laptop.config.ps1.example deploy\azure\laptop.config.ps1
