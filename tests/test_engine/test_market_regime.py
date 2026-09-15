@@ -16,14 +16,25 @@ class TestClassifyMarketRegime:
         r = classify_market_regime(38.0, 1.17)
         assert r["id"] == "dead_zone"
         assert "30" in r["summary"] or "50" in r["summary"]
+        assert "IV rank" in r["title"]
 
     def test_writing_regime(self):
         r = classify_market_regime(62.0, 1.1)
         assert r["id"] == "writing"
+        assert "IV rank" in r["title"]
 
-    def test_buying_regime(self):
+    def test_buying_regime_cheap_iv_hv(self):
         r = classify_market_regime(22.0, 0.95)
         assert r["id"] == "buying"
+        assert r["title"] == "Low IV rank — long premium favoured"
+
+    def test_buying_regime_rich_iv_hv_clarifies_banner(self):
+        """Low IV rank + rich IV/HV must not read as 'cheap options'."""
+        r = classify_market_regime(22.0, 1.69)
+        assert r["id"] == "buying"
+        assert "rich vs HV" in r["title"]
+        assert "1.69" in r["summary"]
+        assert "expensive" in r["summary"].lower()
 
 
 class TestParseConditionsMetrics:

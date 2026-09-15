@@ -13,6 +13,7 @@ from engine.leg_builder import (
     build_bear_put_spread,
     build_bull_call_spread,
     build_bull_put_spread,
+    build_calendar_spread,
     build_iron_butterfly,
     build_iron_condor,
     build_jade_lizard,
@@ -61,6 +62,13 @@ class TestMidAndBand:
 
     def test_zero_price_yields_zero_band(self):
         assert price_band({"settle_price": 0, "close_price": 0}) == (0.0, 0.0)
+
+    def test_falls_back_to_last_price(self):
+        """Bug 13: live rows often only have last_price."""
+        assert mid_price({"settle_price": 0, "close_price": 0, "last_price": 150.0}) == 150.0
+
+    def test_settle_still_beats_last_price(self):
+        assert mid_price({"settle_price": 100, "close_price": 0, "last_price": 150.0}) == 100.0
 
 
 class TestPopFromDelta:
@@ -207,6 +215,44 @@ class TestComplexCreditStrategies:
         # 2 sells, 1 buy
         actions = [l.action for l in legs]
         assert actions.count("SELL") == 2 and actions.count("BUY") == 1
+
+
+class TestCalendarSameStrike:
+    def _chain(self, strikes):
+        rows = []
+        for k in strikes:
+            for ot in ("CE", "PE"):
+                rows.append({
+                    "strike": float(k), "option_type": ot,
+                    "close_price": 50.0, "settle_price": 50.0,
+                    "open_interest": 1000,
+                })
+        return rows
+
+    def test_builds_same_strike_when_near_atm_on_far(self):
+        near = date(2026, 5, 14)
+        far = date(2026, 5, 28)
+        near_c = self._chain([22900, 23000, 23100])
+        far_c = self._chain([22900, 23000, 23100])
+        legs = build_calendar_spread(
+            underlying="NIFTY", near_expiry=near, far_expiry=far,
+            near_chain=near_c, far_chain=far_c,
+            spot=23000.0, lots=1, lot_size=75,
+        )
+        assert legs[0].strike == legs[1].strike == 23000.0
+
+    def test_raises_when_no_shared_strike(self):
+        """Bug 14: do not silently build a diagonal."""
+        near = date(2026, 5, 14)
+        far = date(2026, 5, 28)
+        near_c = self._chain([23000, 23050])
+        far_c = self._chain([23025, 23075])
+        with pytest.raises(ValueError, match="same strike"):
+            build_calendar_spread(
+                underlying="NIFTY", near_expiry=near, far_expiry=far,
+                near_chain=near_c, far_chain=far_c,
+                spot=23000.0, lots=1, lot_size=75,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -432,10 +478,10 @@ class TestEstimatePopLongPremium:
 
     def test_degenerate_inputs_return_safe_value(self):
         legs = _make_long_straddle_legs(strike=24100.0, debit_each_side=260.0)
-        # zero IV → BE-crossing falls back to neutral 50% from each side; clamp keeps it sensible
+        # zero IV → refuse fake 100% PoP (Bug 9)
         pop = estimate_pop(legs, spot=24100.0, dte=7, atm_iv=0.0,
                             strategy="LONG_STRADDLE")
-        assert 0.0 <= pop <= 100.0
+        assert pop == 0.0
 
 
 class TestLongPremiumTargetMultiple:

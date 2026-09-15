@@ -271,17 +271,19 @@ def evaluate(
             return (
                 _SOFT_FAIL,
                 f"OI delta PCR {oi_chg:.2f} > {oi_change_bearish_above:.1f}: "
-                f"puts building faster than calls (bearish money flow vs BULLISH trend)",
+                f"put OI rising faster than call OI (flow vs BULLISH trend — "
+                f"buyers vs writers not distinguished)",
             )
         if trend_dir == "BEARISH" and oi_chg < oi_change_bullish_below:
             return (
                 _SOFT_FAIL,
                 f"OI delta PCR {oi_chg:.2f} < {oi_change_bullish_below:.1f}: "
-                f"calls building faster than puts (bullish money flow vs BEARISH trend)",
+                f"call OI rising faster than put OI (flow vs BEARISH trend — "
+                f"buyers vs writers not distinguished)",
             )
         return (
             _PASS,
-            f"OI delta PCR {oi_chg:.2f} — money flow aligned with {trend_dir} trend",
+            f"OI delta PCR {oi_chg:.2f} — OI change flow aligned with {trend_dir} trend",
         )
 
     checks.append(_gate("OI change conviction aligned with trend", _oi_change_gate))

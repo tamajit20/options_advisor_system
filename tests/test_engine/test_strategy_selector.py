@@ -120,6 +120,14 @@ class TestMissingIvRank:
             select_strategy(iv_rank=None, trend="SIDEWAYS", indicators=_ind())
 
 
+class TestMissingPcr:
+    def test_none_pcr_does_not_typeerror(self):
+        """Bug 4: missing PCR must not crash; treat as neutral (no strong PCR)."""
+        ind = replace(_ind(), pcr=None, trend="BULLISH")
+        # High IV + bullish without strong PCR → BPS (not jade)
+        assert select_strategy(iv_rank=60.0, trend="BULLISH", indicators=ind) == "BULL_PUT_SPREAD"
+
+
 class TestUnknownTrend:
     def test_writing_unknown_trend_raises(self):
         with pytest.raises(StrategyVeto):

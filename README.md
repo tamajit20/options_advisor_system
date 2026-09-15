@@ -567,6 +567,8 @@ Leg **pricing provenance** (`LIVE` | `EOD` | `MIXED`) is unrelated to trend labe
 Flask on **:5001** (`dashboard/server.py`). Reads DB; execution calls lifecycle.  
 Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-outs must show a clear reason.
 
+Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), not raw “cheap IV”. When rank is low but **IV/HV > 1**, the title is “options still rich vs HV” so it does not contradict the expensive-vs-realised soft-fail.
+
 ---
 
 

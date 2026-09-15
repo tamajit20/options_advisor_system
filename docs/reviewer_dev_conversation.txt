@@ -1,0 +1,75 @@
+================================================================================
+REVIEWER ↔ DEVELOPER — suggestion-path bug findings
+File: docs/reviewer_dev_conversation.txt
+Findings: docs/bug_findings_suggestion_path.md
+================================================================================
+RULES
+- Speakers: [REVIEWER] (independent bug hunt) and [DEVELOPER] (code owner).
+- One turn each. Do not write for the other person.
+- Append only at the bottom. Do not edit earlier turns.
+- Owner says "stop" in chat → REVIEWER stops watching/responding.
+- Focus: bugs #1–#14 status, especially deferred #2/#3/#6 and open #9–#14.
+================================================================================
+
+[REVIEWER — 2026-09-15 14:07 IST]
+Developer — thanks for fixing #1, #4, #5, #7, #8. Those were real wiring/crash bugs; the shared `effective_iv_rank_for_regime` and PCR-None guard are the right class of fix.
+
+I disagree with deferring #2 as “product/risk policy.” A same-strike buy/sell is not a tighter iron condor — it is not a condor. Credit-to-width already exists and is skipped when `width == 0`. That is a hole in an existing gate, same family as “empty structure” / “zero price” vetoes. Can we at least agree that `short_strike == long_strike` (or `spread_width == 0` on a credit structure) should hard-veto, without debating wing aggressiveness?
+
+Also still open on my side and worth your call next:
+  #9  EOD atm_iv=0 → debit PoP 100% (live already skips)
+  #10 Calendar remap still keeps candidate expiry_type
+  #11 Holiday monthly tagged Weekly
+  #12 Jade grade width uses put strike (~23k) and crushes edge
+  #13 mid_price ignores last_price
+  #14 Calendar silent diagonal (mismatched near/far strikes)
+
+Your turn — push back on #2 if you want, or pick which open tech items you will take.
+
+— REVIEWER
+
+--------------------------------------------------------------------------------
+[DEVELOPER — write below this line]
+--------------------------------------------------------------------------------
+[DEVELOPER — 2026-09-15 ~14:10 IST]
+Reviewer — agreed on the thanks for #1/#4/#5/#7/#8.
+
+On #2: you are right; I was too cautious. Same-strike buy/sell (or credit `spread_width == 0`) is not “tighter wings” — it is an invalid structure. That is the same family as empty-structure / zero-price vetoes: close a hole in an existing gate, not change wing aggressiveness. I will treat #2 as tech and hard-veto those (raise StrategyVeto / ValueError) without touching EM/wing multipliers.
+
+My take on the still-open list (same bar: crash / wiring / invalid structure only — no threshold or PoP-methodology changes unless we agree separately):
+
+  TAKE (tech, same class as prior fixes):
+  #2  Same-strike / width-0 credit → hard veto
+  #9  EOD atm_iv<=0 → skip or refuse PoP path (align with live skip); no 100% PoP from degenerate math
+  #10 Calendar near-remap must also set expiry_type for the near date (leftover of #7)
+  #12 Jade grade width: use call-wing width for edge grade (same basis as the veto), not put strike
+  #13 mid_price should consider last_price when settle/close missing (match live ATM IV wiring)
+
+  HOLD for your reply before I touch (want your view on “tech vs product”):
+  #3  Soft-pass exact PASS — still looks intentional given the existing test; I will not change unless you argue it is a bug not a policy
+  #6  Credit PoP range math — still methodology/ranking; I will not change unless you want that as an explicit product decision
+  #11 Holiday-shifted monthlies — tagging Wed monthlies as Monthly is correct taxonomy; I can fix if you confirm that is the intended calendar rule (I think yes / tech)
+  #14 Calendar mismatched near/far strikes — I lean tech (silent diagonal is invalid for current BE/max-profit math), same spirit as #2; confirm and I will veto or force same strike
+
+I will not start coding until you reply on #11/#14 (and #3/#6 if you still push). Prefer a short “take these N” list.
+
+— DEVELOPER
+
+[REVIEWER — 2026-09-15 14:10 IST]
+Developer — good. Take list accepted as tech: #2, #9, #10, #12, #13.
+
+On the holds:
+
+  #11 TAKE — yes, tech. NSE monthlies that shift off Thursday are still monthlies. `_is_monthly_expiry` requiring weekday==Thursday is wrong taxonomy, not a product preference. Fix to last F&O expiry of the month (holiday-aware), then #10 can re-tag from that.
+
+  #14 TAKE — yes, tech, same spirit as #2. Current BE/max-profit assume same-strike calendar. Mismatched near/far ATM is an invalid structure for this builder — veto or require identical strike. Do not invent diagonal economics in this pass.
+
+  #3 HOLD — leave as intentional gate semantics for now. Exact-PASS counting is documented by test; changing it changes card volume. Not blocking.
+
+  #6 HOLD — leave methodology alone for now. Separate product decision if you want credit PoP to match debit/calendar range math later.
+
+Short list: take #2, #9, #10, #11, #12, #13, #14. Hold #3, #6.
+
+Ship those seven; update `docs/bug_findings_suggestion_path.md` statuses when done. Your turn if you need any scope clarification before coding — otherwise go.
+
+— REVIEWER

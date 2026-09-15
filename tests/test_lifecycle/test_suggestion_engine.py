@@ -132,8 +132,20 @@ class TestIsMonthlyExpiry:
         # 7 May 2026 is a Thursday but not last
         assert se._is_monthly_expiry(date(2026, 5, 7)) is False
 
-    def test_non_thursday_is_not_monthly(self):
+    def test_non_thursday_is_not_monthly_without_catalogue(self):
         assert se._is_monthly_expiry(date(2026, 5, 27)) is False  # Wed
+
+    def test_holiday_shifted_wednesday_is_monthly_with_catalogue(self):
+        """Bug 11: last F&O expiry of month need not be Thursday."""
+        catalogue = [
+            date(2026, 5, 7),
+            date(2026, 5, 14),
+            date(2026, 5, 21),
+            date(2026, 5, 27),  # holiday-shifted monthly (Wed)
+        ]
+        assert se._is_monthly_expiry(date(2026, 5, 27), catalogue) is True
+        assert se._is_monthly_expiry(date(2026, 5, 21), catalogue) is False
+        assert se._expiry_type_label(date(2026, 5, 27), catalogue) == "Monthly"
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +656,7 @@ class TestRunLiveSuggestionEngine:
 
 class TestIcIbCompanions:
     def test_skips_non_ic_ib(self, mocker):
-        assemble = mocker.patch("lifecycle.suggestion_engine.assemble_suggestion")
+        sized = mocker.patch("lifecycle.suggestion_engine._assemble_sized_suggestion")
         primary = MagicMock(strategy="BULL_CALL_SPREAD")
         se._append_ic_ib_companions(
             primary=primary,
@@ -656,7 +668,7 @@ class TestIcIbCompanions:
             provenance=None,
             db=MagicMock(),
         )
-        assemble.assert_not_called()
+        sized.assert_not_called()
 
     def test_builds_bps_and_bcs_for_iron_condor(self, mocker):
         mocker.patch(
@@ -664,8 +676,8 @@ class TestIcIbCompanions:
         )
         bps = MagicMock(trade_name="N-BPS")
         bcs = MagicMock(trade_name="N-BCS")
-        assemble = mocker.patch(
-            "lifecycle.suggestion_engine.assemble_suggestion",
+        sized = mocker.patch(
+            "lifecycle.suggestion_engine._assemble_sized_suggestion",
             side_effect=[bps, bcs],
         )
         repo = MagicMock()
@@ -692,8 +704,11 @@ class TestIcIbCompanions:
         assert [s.trade_name for s in out] == ["N-BPS", "N-BCS"]
         assert names == ["N-IC", "N-BPS", "N-BCS"]
         overrides = [
-            c.kwargs.get("strategy_override") for c in assemble.call_args_list
+            c.kwargs.get("strategy_override") for c in sized.call_args_list
         ]
         assert overrides == ["BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"]
-        assert all(c.kwargs.get("companion_mode") is True for c in assemble.call_args_list)
-        assert all(c.kwargs.get("lots") == 2 for c in assemble.call_args_list)
+        # Companions must go through capital sizing, not copy primary lots.
+        for c in sized.call_args_list:
+            assert c.kwargs.get("assemble_kw", {}).get("companion_mode") is True
+            assert "lots" not in c.kwargs.get("assemble_kw", {})
+

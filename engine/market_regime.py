@@ -66,7 +66,7 @@ def classify_market_regime(
     if iv_rank > write_min:
         return {
             "id": "writing",
-            "title": "High IV — premium selling favoured",
+            "title": "High IV rank — premium selling favoured",
             "summary": (
                 f"IV rank {iv_rank:.1f}% is above {write_min:.0f}% "
                 f"(credit structures have edge when other gates pass)."
@@ -77,10 +77,26 @@ def classify_market_regime(
         }
 
     if iv_rank < buy_max:
+        # IV rank (vs own history) ≠ IV/HV (vs realised vol). Low rank can still
+        # mean expensive options — say so on the banner so sit-out cards don't
+        # look contradictory when soft-fail / long-vol ceiling fire.
+        if iv_premium is not None and iv_premium > 1.0:
+            return {
+                "id": "buying",
+                "title": "Low IV rank — options still rich vs HV",
+                "summary": (
+                    f"IV rank {iv_rank:.1f}% is below {buy_max:.0f}% (buying regime), "
+                    f"but IV/HV {iv_premium:.2f}× — options expensive vs realised vol."
+                ),
+                "profit_note": (
+                    "Long-vol needs cheap IV/HV or a catalyst; debit spreads only when "
+                    "trend is clear and per-strategy IV/HV caps pass."
+                ),
+            }
         prem = f" IV/HV {iv_premium:.2f}×." if iv_premium is not None else ""
         return {
             "id": "buying",
-            "title": "Low IV — long premium favoured",
+            "title": "Low IV rank — long premium favoured",
             "summary": (
                 f"IV rank {iv_rank:.1f}% is below {buy_max:.0f}%.{prem}"
             ),
@@ -101,7 +117,7 @@ def classify_market_regime(
     )
     return {
         "id": "dead_zone",
-        "title": "Mid IV — sitting out (capital preservation)",
+        "title": "Mid IV rank — sitting out (capital preservation)",
         "summary": (
             f"IV rank {iv_rank:.1f}% is between {buy_max:.0f}% and {write_min:.0f}% "
             f"(not high enough to sell, not low enough to buy).{prem_txt}"

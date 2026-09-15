@@ -41,11 +41,14 @@ def get_chain_row(chain: Sequence[Mapping], strike: float, option_type: str) -> 
 
 
 def mid_price(row: Mapping) -> float:
-    """Use settle price if available; fallback to close."""
+    """Best available mark: settle → close → last (live chains often only have last)."""
     sp = float(row.get("settle_price") or 0.0)
     if sp > 0:
         return sp
-    return float(row.get("close_price") or 0.0)
+    cp = float(row.get("close_price") or 0.0)
+    if cp > 0:
+        return cp
+    return float(row.get("last_price") or 0.0)
 
 
 def price_band(row: Mapping, band_pct: float = 0.02) -> tuple[float, float]:
@@ -348,15 +351,25 @@ def build_calendar_spread(
     """
     near_strikes = sorted({float(r["strike"]) for r in near_chain})
     far_strikes  = sorted({float(r["strike"]) for r in far_chain})
+    if not near_strikes or not far_strikes:
+        raise ValueError("Calendar requires strikes on both near and far chains")
     atm_near = closest_strike(near_strikes, spot)
     atm_far  = closest_strike(far_strikes, spot)
-    # Prefer the same strike on both legs; fall back to closest on each chain.
+    # BE / max-profit math assumes a true calendar (identical strike). Never build
+    # a silent diagonal when the two ATMs differ and cannot be aligned.
     if atm_near in far_strikes:
-        atm_far = atm_near
+        atm = atm_near
+    elif atm_far in near_strikes:
+        atm = atm_far
+    else:
+        raise ValueError(
+            f"Calendar requires same strike on near/far; near ATM {atm_near} "
+            f"not on far chain and far ATM {atm_far} not on near chain"
+        )
     return [
-        _make_leg(1, 2, underlying, near_expiry, atm_near, "CE", "SELL", lots, lot_size, near_chain,
+        _make_leg(1, 2, underlying, near_expiry, atm, "CE", "SELL", lots, lot_size, near_chain,
                   "Calendar spread — short near-term call, collects faster theta decay"),
-        _make_leg(2, 1, underlying, far_expiry,  atm_far,  "CE", "BUY",  lots, lot_size, far_chain,
+        _make_leg(2, 1, underlying, far_expiry,  atm, "CE", "BUY",  lots, lot_size, far_chain,
                   "Calendar spread — long far-term call, retains time value after near expiry"),
     ]
 
@@ -561,6 +574,12 @@ def estimate_pop(
             return atm_iv
         iv, converged = _implied_vol(mkt, spot, leg.strike, dte, leg.option_type)
         return iv if converged and iv > 0 else atm_iv
+
+    # Debit / range PoP uses lognormal BE math — atm_iv<=0 makes _prob_below
+    # return 0.5/side → fake 100% PoP. Refuse that degeneracy (Bug 9).
+    if strategy in _RANGE_STRATEGIES_PoP or strategy in _DEBIT_STRATEGIES_PoP:
+        if atm_iv <= 0 or dte <= 0 or spot <= 0:
+            return 0.0
 
     # ---- Range debit (calendar): P(lower BE < S_T < upper BE) ----
     if strategy in _RANGE_STRATEGIES_PoP:

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, time, timedelta
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from config import NSE_MARKET_HOLIDAYS, STRATEGY_CONFIG
 from contracts import (
@@ -163,24 +163,20 @@ def _append_ic_ib_companions(
     for companion_strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
         try:
             comp_id = sug_repo.next_suggestion_id(id_date)
-            primary_lots = 1
-            try:
-                primary_lots = max(
-                    (int(getattr(l, "lots", 0) or 0) for l in (primary.legs or [])),
-                    default=1,
+            # Bug 8: size + max-loss cap via the same path as primaries — do not
+            # copy primary lots into assemble_suggestion (skips risk budget).
+            companion_kw = {
+                k: v for k, v in assemble_kw.items()
+                if k not in (
+                    "strategy_override", "companion_mode",
+                    "lots", "suggestion_id",
                 )
-            except (TypeError, ValueError):
-                primary_lots = 1
-            if primary_lots < 1:
-                primary_lots = 1
-            comp = assemble_suggestion(
+            }
+            companion_kw["companion_mode"] = True
+            comp = _assemble_sized_suggestion(
                 suggestion_id=comp_id,
-                lots=primary_lots,
-                companion_mode=True,
+                assemble_kw=companion_kw,
                 strategy_override=companion_strategy,
-                **{k: v for k, v in assemble_kw.items()
-                   if k not in ("strategy_override", "companion_mode",
-                                "lots", "suggestion_id")},
             )
             comp.pricing_provenance = provenance
             suggestions.append(comp)
@@ -311,11 +307,32 @@ def _next_trading_day(d: date) -> date:
     return nxt
 
 
-def _is_monthly_expiry(expiry: date) -> bool:
-    """True when expiry is the last Thursday of its calendar month (NSE monthly F&O)."""
-    if expiry.weekday() != 3:   # must be Thursday
+def _is_monthly_expiry(
+    expiry: date,
+    all_expiries: Optional[Sequence[date]] = None,
+) -> bool:
+    """True when *expiry* is the last F&O expiry in its calendar month.
+
+    Holiday-shifted monthlies (e.g. Wednesday when Thursday is a holiday) are
+    still monthlies — do not require weekday==Thursday (Bug 11).
+    When *all_expiries* is omitted, fall back to last-Thursday heuristic.
+    """
+    if all_expiries:
+        same_month = [
+            e for e in all_expiries
+            if e.year == expiry.year and e.month == expiry.month
+        ]
+        return bool(same_month) and expiry == max(same_month)
+    if expiry.weekday() != 3:   # Thursday fallback when no catalogue
         return False
     return (expiry + timedelta(days=7)).month != expiry.month
+
+
+def _expiry_type_label(
+    expiry: date,
+    all_expiries: Optional[Sequence[date]] = None,
+) -> str:
+    return "Monthly" if _is_monthly_expiry(expiry, all_expiries) else "Weekly"
 
 
 def _pick_expiries_in_band(
@@ -326,7 +343,7 @@ def _pick_expiries_in_band(
 
     Rules:
     - Collect all expiries within [dte_min, dte_max].
-    - If monthly and weekly fall on the same Thursday (last week of month),
+    - If monthly and weekly fall on the same date (last expiry of month),
       return only that date tagged as 'Monthly'.
     - Otherwise return nearest monthly + nearest weekly (both, if different dates).
 
@@ -347,8 +364,8 @@ def _pick_expiries_in_band(
     if not in_band:
         return []
 
-    monthly = sorted(e for e in in_band if _is_monthly_expiry(e))
-    weekly  = sorted(e for e in in_band if not _is_monthly_expiry(e))
+    monthly = sorted(e for e in in_band if _is_monthly_expiry(e, expiries))
+    weekly  = sorted(e for e in in_band if not _is_monthly_expiry(e, expiries))
 
     result: list[tuple[date, str]] = []
     chosen_monthly = monthly[0] if monthly else None
@@ -412,6 +429,59 @@ def _resolve_calendar_legs(
         "near_chain": near_chain,
         "far_chain": far_chain,
     }
+
+
+def _resolve_atm_iv_rank_for_chain(
+    *,
+    chain: list,
+    spot: float,
+    entry_dte: int,
+    expiry: date,
+    symbol: str,
+    trade_date: date,
+    live_mode: bool,
+    live_today: Optional[date],
+    iv_repo: IvHistoryRepo,
+    iv_rows: list,
+) -> tuple[float, Optional[float]]:
+    """ATM IV (+ rank) for a specific expiry/chain — used after calendar near remap."""
+    if live_mode:
+        as_of = live_today or trade_date
+        return _compute_live_atm_iv_rank(chain, spot, entry_dte, iv_repo, symbol, as_of)
+    iv_for_expiry = [r for r in iv_rows if r.get("expiry_date") == expiry]
+    if not iv_for_expiry:
+        return 0.0, None
+    atm = float(iv_for_expiry[0].get("atm_iv") or 0.0)
+    raw = iv_for_expiry[0].get("iv_rank")
+    rank = float(raw) if raw is not None else None
+    return atm, rank
+
+
+def _oi_rows_for_live_chain(
+    chain: list,
+    eod_chain: Optional[list],
+) -> tuple[Optional[list], Optional[list]]:
+    """Return (oi_change_rows, oi_abs_rows) for live absolute/change OI wiring."""
+    _has_live_oi = any((r.get("open_interest") or 0) > 0 for r in chain)
+    if _has_live_oi and eod_chain:
+        _eod_oi_idx = {
+            (float(r["strike"]), str(r["option_type"]).upper()):
+            (r.get("open_interest") or 0)
+            for r in eod_chain
+        }
+        oi_change_rows = [
+            {
+                "strike": float(r["strike"]),
+                "option_type": str(r["option_type"]).upper(),
+                "change_in_oi": (r.get("open_interest") or 0)
+                    - _eod_oi_idx.get(
+                        (float(r["strike"]), str(r["option_type"]).upper()), 0
+                    ),
+            }
+            for r in chain
+        ]
+        return oi_change_rows, None
+    return None, eod_chain
 
 
 def _compute_live_atm_iv_rank(
@@ -512,6 +582,7 @@ def _evaluate_underlying(
     )
     if not expiry_candidates:
         return [], []
+    all_expiries = fo.expiries_for(symbol, trade_date)
 
     # Shared data fetched once for all expiry candidates
     spot_history_since = trade_date - timedelta(days=120)
@@ -629,6 +700,12 @@ def _evaluate_underlying(
                 logger.warning("Suggestion: no IV rows for %s exp=%s (%s)", symbol, expiry, expiry_type)
                 continue
             atm_iv = float(iv_for_expiry[0].get("atm_iv") or 0.0)
+            if atm_iv <= 0:
+                logger.warning(
+                    "Suggestion: atm_iv<=0 for %s exp=%s (%s) — skipping (avoid fake PoP)",
+                    symbol, expiry, expiry_type,
+                )
+                continue
             _raw_iv_rank = iv_for_expiry[0].get("iv_rank")
             iv_rank: Optional[float] = float(_raw_iv_rank) if _raw_iv_rank is not None else None
 
@@ -693,6 +770,7 @@ def _evaluate_underlying(
 
         calendar_legs: Optional[dict] = None
         use_expiry = expiry
+        use_expiry_type = expiry_type
         use_chain = chain
         use_dte = entry_dte
         use_indicators = indicators
@@ -741,7 +819,41 @@ def _evaluate_underlying(
                 use_expiry = calendar_legs["near_expiry"]
                 use_chain = calendar_legs["near_chain"]
                 use_dte = max(days_between(entry_day, use_expiry), 0)
+                # Bug 10: near date remapped → retag Monthly/Weekly from catalogue
+                use_expiry_type = _expiry_type_label(use_expiry, all_expiries)
                 if use_expiry != expiry or use_dte != entry_dte:
+                    # Bug 7: recompute ATM IV (and OI rows) for the near expiry —
+                    # do not keep candidate-expiry IV with near DTE.
+                    use_atm_iv, use_iv_rank = _resolve_atm_iv_rank_for_chain(
+                        chain=use_chain,
+                        spot=spot,
+                        entry_dte=use_dte,
+                        expiry=use_expiry,
+                        symbol=symbol,
+                        trade_date=trade_date,
+                        live_mode=_live_mode,
+                        live_today=live_today,
+                        iv_repo=iv_repo,
+                        iv_rows=iv_rows,
+                    )
+                    if use_atm_iv <= 0:
+                        no_suggestions.append(NoSuggestion(
+                            generated_on=now_ist(),
+                            underlying=symbol,
+                            confidence=confidence,
+                            reason=(
+                                f"[{expiry_type} {use_expiry}] Strategy veto: "
+                                f"no ATM IV for calendar near expiry"
+                            ),
+                        ))
+                        continue
+                    use_oi_change = oi_change_rows
+                    use_oi_abs = oi_abs_rows
+                    if _live_mode:
+                        near_eod = fo.get_chain(symbol, trade_date, use_expiry)
+                        use_oi_change, use_oi_abs = _oi_rows_for_live_chain(
+                            use_chain, near_eod,
+                        )
                     use_indicators = build_indicators(
                         symbol=symbol,
                         as_of=_trend_as_of,
@@ -749,11 +861,11 @@ def _evaluate_underlying(
                         chain_rows=use_chain,
                         spot_history=spot_history,
                         vix_history=vix_history,
-                        atm_iv=atm_iv,
+                        atm_iv=use_atm_iv,
                         dte=use_dte,
                         fii_net_futures=fii_net_futures,
-                        oi_chain_rows=oi_abs_rows,
-                        oi_change_rows=oi_change_rows,
+                        oi_chain_rows=use_oi_abs,
+                        oi_change_rows=use_oi_change,
                         trajectory=load_trajectory(
                             db, symbol=symbol, expiry=use_expiry,
                         ) if _live_mode else None,
@@ -761,13 +873,16 @@ def _evaluate_underlying(
                         live_mode=_live_mode,
                     )
                     use_confidence = evaluate_confidence(
-                        iv_rank=iv_rank,
+                        iv_rank=use_iv_rank if use_iv_rank is not None else iv_rank,
                         indicators=use_indicators,
                         dte=use_dte,
                         has_high_impact_event_this_week=has_event,
                         high_impact_event_description=event_desc,
                         events_calendar_row_count=events_total,
                     )
+                    atm_iv = use_atm_iv
+                    if use_iv_rank is not None:
+                        iv_rank = use_iv_rank
 
         if not use_confidence.all_passed:
             no_suggestions.append(NoSuggestion(
@@ -785,7 +900,7 @@ def _evaluate_underlying(
         _assemble_kw = dict(
             underlying=symbol,
             expiry=use_expiry,
-            expiry_type=expiry_type,
+            expiry_type=use_expiry_type,
             dte=use_dte,
             spot=spot,
             chain=use_chain,
@@ -858,6 +973,30 @@ def _evaluate_underlying(
                     strat_chain = strat_calendar["near_chain"]
                     strat_dte = max(days_between(entry_day, strat_expiry), 0)
                     if strat_expiry != use_expiry or strat_dte != use_dte:
+                        strat_atm_iv, strat_iv_rank = _resolve_atm_iv_rank_for_chain(
+                            chain=strat_chain,
+                            spot=spot,
+                            entry_dte=strat_dte,
+                            expiry=strat_expiry,
+                            symbol=symbol,
+                            trade_date=trade_date,
+                            live_mode=_live_mode,
+                            live_today=live_today,
+                            iv_repo=iv_repo,
+                            iv_rows=iv_rows,
+                        )
+                        if strat_atm_iv <= 0:
+                            missing_reasons[ptype] = (
+                                f"{strat}: no ATM IV for calendar near expiry"
+                            )
+                            continue
+                        strat_oi_change = oi_change_rows
+                        strat_oi_abs = oi_abs_rows
+                        if _live_mode:
+                            near_eod = fo.get_chain(symbol, trade_date, strat_expiry)
+                            strat_oi_change, strat_oi_abs = _oi_rows_for_live_chain(
+                                strat_chain, near_eod,
+                            )
                         strat_indicators = build_indicators(
                             symbol=symbol,
                             as_of=_trend_as_of,
@@ -865,19 +1004,22 @@ def _evaluate_underlying(
                             chain_rows=strat_chain,
                             spot_history=spot_history,
                             vix_history=vix_history,
-                            atm_iv=atm_iv,
+                            atm_iv=strat_atm_iv,
                             dte=strat_dte,
                             fii_net_futures=fii_net_futures,
-                            oi_chain_rows=oi_abs_rows,
-                            oi_change_rows=oi_change_rows,
+                            oi_chain_rows=strat_oi_abs,
+                            oi_change_rows=strat_oi_change,
                             trajectory=load_trajectory(
                                 db, symbol=symbol, expiry=strat_expiry,
                             ) if _live_mode else None,
                             session_bar=_session_bar,
                             live_mode=_live_mode,
                         )
+                        _conf_rank = (
+                            strat_iv_rank if strat_iv_rank is not None else iv_rank
+                        )
                         strat_confidence = evaluate_confidence(
-                            iv_rank=iv_rank,
+                            iv_rank=_conf_rank,
                             indicators=strat_indicators,
                             dte=strat_dte,
                             has_high_impact_event_this_week=has_event,
@@ -891,6 +1033,10 @@ def _evaluate_underlying(
                                 + "; ".join(strat_confidence.failed_reasons)
                             )
                             continue
+                        strat_kw.update(
+                            atm_iv=strat_atm_iv,
+                            iv_rank=_conf_rank,
+                        )
                     strat_kw.update(
                         expiry=strat_expiry,
                         chain=strat_chain,
@@ -922,7 +1068,7 @@ def _evaluate_underlying(
             if pairing:
                 group = regime_pair_group_id(
                     underlying=symbol,
-                    expiry_type=expiry_type,
+                    expiry_type=use_expiry_type,
                     entry_date=entry_day,
                 )
                 pair_sugs, pair_ns = complete_regime_pair(

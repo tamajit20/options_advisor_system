@@ -70,6 +70,33 @@ def _long_vol_qualified(
     return iv_rank >= iv_min
 
 
+def effective_iv_rank_for_regime(
+    iv_rank: float,
+    indicators: MarketIndicators,
+) -> float:
+    """Apply live ATM-IV trajectory nudge used when classifying buy/write/mid.
+
+    Shared by ``select_strategy`` and ``assemble_suggestion`` so regime-gated
+    vetoes (sell-min / buy caps) see the same rank that picked the strategy.
+    No-op when trajectory fields are absent (EOD) or persistence is weak.
+    """
+    iv_writing_min = float(STRATEGY_CONFIG["iv_rank_writing_min"])
+    iv_buying_max = float(STRATEGY_CONFIG["iv_rank_buying_max"])
+    iv_traj_bias = float(STRATEGY_CONFIG.get("iv_traj_bias_slope_pct", 0.3))
+    iv_slope = getattr(indicators, "atm_iv_slope_5min", None)
+    iv_persist = getattr(indicators, "atm_iv_persistence", None)
+    rank = float(iv_rank)
+    if iv_slope is None or iv_persist is None or iv_persist < 0.7:
+        return rank
+    # Near buying boundary, IV rising sustainedly → treat as buying regime.
+    if iv_slope > iv_traj_bias and iv_buying_max <= rank < iv_buying_max + 5:
+        return iv_buying_max - 0.1
+    # Near writing boundary, IV falling sustainedly → treat as writing regime.
+    if iv_slope < -iv_traj_bias and iv_writing_min - 5 < rank <= iv_writing_min:
+        return iv_writing_min + 0.1
+    return rank
+
+
 def select_strategy(
     *,
     iv_rank: Optional[float],
@@ -96,33 +123,15 @@ def select_strategy(
     iv_naked_long_max = STRATEGY_CONFIG.get("iv_rank_naked_long_max", 20.0)
     pcr_bull = STRATEGY_CONFIG.get("pcr_strong_bullish_below", 0.55)
     pcr_bear = STRATEGY_CONFIG.get("pcr_strong_bearish_above", 1.55)
-    iv_traj_bias = STRATEGY_CONFIG.get("iv_traj_bias_slope_pct", 0.3)
 
-    pcr = getattr(indicators, "pcr", 1.0)
+    # PCR is Optional — missing OI → neutral 1.0 (no strong conviction). getattr
+    # default is useless when the field exists and is None.
+    pcr_raw = getattr(indicators, "pcr", None)
+    pcr = 1.0 if pcr_raw is None else float(pcr_raw)
     strong_bullish = pcr < pcr_bull
     strong_bearish = pcr > pcr_bear
 
-    # Trajectory bias (live-mode only — None in EOD mode).
-    # Sustained rising IV near the buying boundary → push into BUYING regime
-    # (debit spreads / longs). Sustained falling IV near the writing boundary →
-    # push into WRITING regime (credit spreads). Bias only applies when
-    # iv_rank is in the ambiguous mid-zone (within 5 points of either boundary)
-    # — well-classified rank values are not overridden.
-    iv_slope = getattr(indicators, "atm_iv_slope_5min", None)
-    iv_persist = getattr(indicators, "atm_iv_persistence", None)
-    if iv_slope is not None and iv_persist is not None and iv_persist >= 0.7:
-        # Near buying boundary, IV rising sustainedly → treat as buying regime.
-        if (
-            iv_slope > iv_traj_bias
-            and iv_buying_max <= iv_rank < iv_buying_max + 5
-        ):
-            iv_rank = iv_buying_max - 0.1   # nudge into buying
-        # Near writing boundary, IV falling sustainedly → treat as writing regime.
-        if (
-            iv_slope < -iv_traj_bias
-            and iv_writing_min - 5 < iv_rank <= iv_writing_min
-        ):
-            iv_rank = iv_writing_min + 0.1  # nudge into writing
+    iv_rank = effective_iv_rank_for_regime(iv_rank, indicators)
 
     # ---------- WRITING regime (high IV) ----------
     if iv_rank > iv_writing_min:
@@ -267,6 +276,20 @@ def _entry_veto(message: str, collected: list[str], *, defer: bool) -> None:
     raise StrategyVeto(message)
 
 
+def _has_collapsed_credit_wing(legs: Sequence) -> bool:
+    """True if any CE/PE sell+buy pair shares the same strike (invalid wing)."""
+    by_type: dict[str, list] = {"CE": [], "PE": []}
+    for leg in legs:
+        if leg.option_type in by_type:
+            by_type[leg.option_type].append(leg)
+    for opts in by_type.values():
+        sells = [l.strike for l in opts if l.action == "SELL"]
+        buys = [l.strike for l in opts if l.action == "BUY"]
+        if sells and buys and abs(float(buys[0]) - float(sells[0])) <= 0:
+            return True
+    return False
+
+
 def assemble_suggestion(
     *,
     suggestion_id: str,
@@ -323,13 +346,23 @@ def assemble_suggestion(
         has_long_vol_catalyst=has_long_vol_catalyst,
     )
 
+    # Same traj nudge select_strategy uses — regime gates must not see raw mid-zone
+    # rank after a writing/buying nudge picked the strategy (Bug 5).
+    regime_iv_rank = (
+        effective_iv_rank_for_regime(iv_rank, indicators)
+        if iv_rank is not None
+        else None
+    )
+
     try:
-        _enforce_long_vol_entry_gate(
-            strategy=strategy,
-            iv_rank=iv_rank,
-            indicators=indicators,
-            has_long_vol_catalyst=has_long_vol_catalyst,
-        )
+        _gate_iv = regime_iv_rank if regime_iv_rank is not None else iv_rank
+        if _gate_iv is not None:
+            _enforce_long_vol_entry_gate(
+                strategy=strategy,
+                iv_rank=float(_gate_iv),
+                indicators=indicators,
+                has_long_vol_catalyst=has_long_vol_catalyst,
+            )
     except StrategyVeto as veto:
         _entry_veto(str(veto), collected_vetoes, defer=defer_entry_vetoes)
 
@@ -362,7 +395,7 @@ def assemble_suggestion(
         iv_prem = getattr(indicators, "iv_premium", None)
         # Only enforce in the buying regime (IV rank low). Writing regime is unaffected.
         iv_buying_max_rank = STRATEGY_CONFIG["iv_rank_buying_max"]
-        in_buying_regime = (iv_rank is not None) and (iv_rank < iv_buying_max_rank)
+        in_buying_regime = (regime_iv_rank is not None) and (regime_iv_rank < iv_buying_max_rank)
         if in_buying_regime and iv_prem is not None and iv_prem > strat_iv_cap:
             _entry_veto(
                 f"{strategy} requires IV/HV \u2264 {strat_iv_cap:.2f}\u00d7 "
@@ -383,7 +416,7 @@ def assemble_suggestion(
     if sell_min is not None:
         iv_prem = getattr(indicators, "iv_premium", None)
         iv_writing_min_rank = STRATEGY_CONFIG["iv_rank_writing_min"]
-        in_writing_regime = (iv_rank is not None) and (iv_rank > iv_writing_min_rank)
+        in_writing_regime = (regime_iv_rank is not None) and (regime_iv_rank > iv_writing_min_rank)
         if in_writing_regime and iv_prem is not None and iv_prem < float(sell_min):
             _entry_veto(
                 f"{strategy} requires IV/HV \u2265 {float(sell_min):.2f}\u00d7 "
@@ -429,7 +462,7 @@ def assemble_suggestion(
     if buy_pass is not None:
         iv_prem = getattr(indicators, "iv_premium", None)
         iv_buying_max_rank = STRATEGY_CONFIG["iv_rank_buying_max"]
-        in_buying_regime = (iv_rank is not None) and (iv_rank < iv_buying_max_rank)
+        in_buying_regime = (regime_iv_rank is not None) and (regime_iv_rank < iv_buying_max_rank)
         tol = float(STRATEGY_CONFIG.get("iv_premium_buy_pass_tolerance", 0.10))
         threshold = float(buy_pass) * (1.0 + tol)
         if in_buying_regime and iv_prem is not None and iv_prem > threshold:
@@ -543,15 +576,24 @@ def assemble_suggestion(
     cw_default = STRATEGY_CONFIG.get("min_credit_to_width_ratio", 0.20)
     cw_overrides = STRATEGY_CONFIG.get("strategy_min_credit_to_width_ratio", {}) or {}
     min_cw_ratio = float(cw_overrides.get(strategy, cw_default))
-    spread_w_for_grade = leg_builder.spread_width(legs, strategy)
-    # Jade risk width includes the naked put; keep the ratio veto on the
-    # defined-risk call wing so a valid Jade is not rejected at 25% of ~23k.
-    spread_w_for_veto = (
-        leg_builder.spread_width(legs) if strategy == "JADE_LIZARD"
-        else spread_w_for_grade
-    )
+    # Jade: grade + credit-to-width veto both use call-wing width (defined-risk
+    # wing). Using put *strike* as "width" (~23k) crushes edge_score (Bug 12).
+    if strategy == "JADE_LIZARD":
+        spread_w_for_grade = leg_builder.spread_width(legs)  # call wing only
+        spread_w_for_veto = spread_w_for_grade
+    else:
+        spread_w_for_grade = leg_builder.spread_width(legs, strategy)
+        spread_w_for_veto = spread_w_for_grade
     if strategy in _CREDIT_STRATEGIES:
-        if spread_w_for_veto > 0 and np_per_share < min_cw_ratio * spread_w_for_veto:
+        # Bug 2: collapsed wings (same strike / width 0) are not a valid credit.
+        # Also reject when *any* CE/PE hedge pair is same-strike even if the
+        # other wing still has width (max-of-sides would otherwise hide it).
+        if spread_w_for_veto <= 0 or _has_collapsed_credit_wing(legs):
+            raise StrategyVeto(
+                f"{strategy}: invalid credit structure — zero spread width "
+                f"(collapsed / same-strike wings)"
+            )
+        if np_per_share < min_cw_ratio * spread_w_for_veto:
             _entry_veto(
                 f"Credit-to-width ratio too low: {np_per_share:.1f}/{spread_w_for_veto:.0f} = "
                 f"{np_per_share/spread_w_for_veto*100:.1f}% < {min_cw_ratio*100:.0f}% minimum",

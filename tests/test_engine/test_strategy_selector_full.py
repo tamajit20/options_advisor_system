@@ -598,6 +598,32 @@ class TestPerStrategyIvPremiumSellMin:
         )
         assert sug.strategy == "LONG_STRADDLE"
 
+    def test_traj_nudge_applies_sell_min_on_raw_mid_rank(self, sample_chain, mocker):
+        """Bug 5: falling IV traj nudges mid-rank into writing; sell-min must still fire."""
+        from config import STRATEGY_CONFIG
+        from dataclasses import replace
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+            "iv_rank_writing_min": 50.0,
+            "iv_traj_bias_slope_pct": 0.3,
+        })
+        ind = replace(
+            self._ind(iv_premium=0.70, adx=25.0, trend="SIDEWAYS"),
+            atm_iv_slope_5min=-0.5,
+            atm_iv_persistence=0.9,
+        )
+        with pytest.raises(StrategyVeto, match="strategy_iv_premium_sell_min"):
+            ss.assemble_suggestion(
+                suggestion_id="S-IC-NUDGE", underlying="NIFTY",
+                expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=sample_chain,
+                indicators=ind,
+                confidence=_all_pass_confidence(),
+                iv_rank=48.0, atm_iv=0.18, lots=1, lot_size=75,
+                strategy_override="IRON_CONDOR",
+            )
+
     def test_debit_strategies_unaffected(self, sample_chain, mocker):
         """BULL_CALL_SPREAD / BEAR_PUT_SPREAD are NOT in the sell_min map."""
         from config import STRATEGY_CONFIG
@@ -834,3 +860,138 @@ def test_expected_move_calibration_warning_when_realised_exceeds_expected():
         calm, underlying="NIFTY", dte=14,
         min_samples=4, deviation_threshold=0.25,
     ) is None
+
+
+class TestCreditWidthZeroVeto:
+    """Bug 2: collapsed credit wings must hard-veto, not skip the ratio gate."""
+
+    def test_iron_condor_zero_width_raises(self, sample_indicators, mocker):
+        from contracts import SuggestionLeg
+        from config import STRATEGY_CONFIG
+
+        expiry = date(2026, 5, 14)
+
+        def _leg(order, strike, ot, action, px, hedge=None):
+            return SuggestionLeg(
+                leg_order=order, hedge_pair_leg=hedge, symbol="NIFTY",
+                expiry_date=expiry, strike=strike, option_type=ot,
+                action=action, lots=1, lot_size=75,
+                suggested_price=px, suggested_price_low=px * 0.98,
+                suggested_price_high=px * 1.02, leg_purpose_note="test",
+            )
+
+        # Same-strike wings → spread_width 0
+        collapsed = [
+            _leg(1, 22800.0, "PE", "SELL", 40.0, 2),
+            _leg(2, 22800.0, "PE", "BUY", 20.0, 1),
+            _leg(3, 23200.0, "CE", "SELL", 40.0, 4),
+            _leg(4, 23200.0, "CE", "BUY", 20.0, 3),
+        ]
+        mocker.patch(
+            "engine.strategy_selector.leg_builder.build_iron_condor",
+            return_value=collapsed,
+        )
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+        })
+        with pytest.raises(StrategyVeto, match="zero spread width"):
+            ss.assemble_suggestion(
+                suggestion_id="S-W0", underlying="NIFTY",
+                expiry=expiry, expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=[{"strike": 23000, "option_type": "CE",
+                                       "close_price": 100}],
+                indicators=sample_indicators,
+                confidence=_all_pass_confidence(),
+                iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+                strategy_override="IRON_CONDOR",
+            )
+
+    def test_iron_condor_one_collapsed_wing_raises(self, sample_indicators, mocker):
+        """One same-strike wing is still invalid even if the other has width."""
+        from contracts import SuggestionLeg
+        from config import STRATEGY_CONFIG
+
+        expiry = date(2026, 5, 14)
+
+        def _leg(order, strike, ot, action, px, hedge=None):
+            return SuggestionLeg(
+                leg_order=order, hedge_pair_leg=hedge, symbol="NIFTY",
+                expiry_date=expiry, strike=strike, option_type=ot,
+                action=action, lots=1, lot_size=75,
+                suggested_price=px, suggested_price_low=px * 0.98,
+                suggested_price_high=px * 1.02, leg_purpose_note="test",
+            )
+
+        one_side = [
+            _leg(1, 22800.0, "PE", "SELL", 40.0, 2),
+            _leg(2, 22800.0, "PE", "BUY", 20.0, 1),   # collapsed put
+            _leg(3, 23200.0, "CE", "SELL", 40.0, 4),
+            _leg(4, 23300.0, "CE", "BUY", 20.0, 3),   # valid call wing
+        ]
+        mocker.patch(
+            "engine.strategy_selector.leg_builder.build_iron_condor",
+            return_value=one_side,
+        )
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+        })
+        with pytest.raises(StrategyVeto, match="zero spread width|same-strike"):
+            ss.assemble_suggestion(
+                suggestion_id="S-W1", underlying="NIFTY",
+                expiry=expiry, expiry_type="Weekly", dte=14,
+                spot=23000.0, chain=[{"strike": 23000, "option_type": "CE",
+                                       "close_price": 100}],
+                indicators=sample_indicators,
+                confidence=_all_pass_confidence(),
+                iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+                strategy_override="IRON_CONDOR",
+            )
+
+
+class TestJadeGradeUsesCallWing:
+    """Bug 12: Jade edge grade must use call-wing width, not put strike."""
+
+    def test_jade_credit_grade_not_crushed_by_put_strike(self, sample_indicators, mocker):
+        from contracts import SuggestionLeg
+        from config import STRATEGY_CONFIG
+
+        expiry = date(2026, 5, 14)
+
+        def _leg(order, strike, ot, action, px, hedge=None):
+            return SuggestionLeg(
+                leg_order=order, hedge_pair_leg=hedge, symbol="NIFTY",
+                expiry_date=expiry, strike=strike, option_type=ot,
+                action=action, lots=1, lot_size=75,
+                suggested_price=px, suggested_price_low=px * 0.98,
+                suggested_price_high=px * 1.02, leg_purpose_note="test",
+            )
+
+        # Call wing 200; credit 220 → grade strong on call width, crushed if put strike used
+        fat = [
+            _leg(1, 22700.0, "PE", "SELL", 180.0),
+            _leg(2, 23100.0, "CE", "SELL", 50.0, 3),
+            _leg(3, 23300.0, "CE", "BUY", 10.0, 2),
+        ]
+        mocker.patch(
+            "engine.strategy_selector.leg_builder.build_jade_lizard",
+            return_value=fat,
+        )
+        mocker.patch.dict(STRATEGY_CONFIG, {
+            "min_credit_to_width_ratio": 0.0,
+            "strategy_min_credit_to_width_ratio": {},
+        })
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-JL-G", underlying="NIFTY",
+            expiry=expiry, expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=[{"strike": 23000, "option_type": "CE",
+                                   "close_price": 100}],
+            indicators=sample_indicators,
+            confidence=_all_pass_confidence(),
+            iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+            strategy_override="JADE_LIZARD",
+        )
+        assert sug.economics.credit_grade in ("strong", "good")
+        # Put-strike-as-width would yield ~220/22700 → "weak"
+        assert sug.economics.credit_grade == "strong"

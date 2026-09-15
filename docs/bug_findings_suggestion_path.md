@@ -1,16 +1,27 @@
 # Bug findings: suggestion_engine → confidence → strategy_selector → leg_builder
 
 Date: 2026-09-13  
-Last review: 2026-09-15  
+Last review: 2026-09-15 (third pass — more findings after developer fixes)  
 Scope: failure modes only (not design opinions).
 
 ## Fix status summary
 
 | # | Issue | Status | Why |
 |---|---|---|---|
-| **1** | Missing VIX → `TypeError` in `_explain` → underlying dropped | **FIXED** | Pure tech crash (`None:.1f`). Guard in `engine/strategy_selector.py` `_explain`; test `test_explain_tolerates_missing_vix_close`. No confidence/config change. Outer-loop “persist NoSuggestion on any exception” **not** done (that would change sit-out bookkeeping, not stop the crash). |
-| **2** | Collapsed iron-condor wings (width 0 / max loss 0) | **NOT FIXED** | Not a type/exception crash. Fixing means new structure/veto rules (reject same-strike wings, treat width 0 as hard veto) — product/risk policy, not a format bug. Deferred until you ask for that change. |
-| **3** | `strategy_min_soft_pass` counts `"PASS"` only, not `.passed` | **NOT FIXED** | Intentional gate semantics. Existing test `test_long_call_pass_warn_does_not_count_as_soft_pass` encodes exact-`PASS` counting. Changing it would alter who gets cards (business/config). Deferred. |
+| **1** | Missing VIX → `TypeError` in `_explain` → underlying dropped | **FIXED** | Pure tech crash (`None:.1f`). Guard in `_explain`. |
+| **2** | Collapsed iron-condor wings (width 0 / max loss 0) | **FIXED** | Hard `StrategyVeto` when credit `spread_width <= 0` (invalid structure / existing gate hole). |
+| **3** | `strategy_min_soft_pass` counts `"PASS"` only, not `.passed` | **NOT FIXED** | Intentional gate semantics (existing test). Deferred. |
+| **4** | Missing PCR → `TypeError` in `select_strategy` | **FIXED** | Same class as #1. Neutral PCR `1.0` when `None` (getattr default was dead). |
+| **5** | Live IV-traj nudge vs writing sell-min desync | **FIXED** | Shared `effective_iv_rank_for_regime()` for pick + regime gates. No threshold changes. |
+| **6** | Credit multi-short PoP overstated (delta avg vs BE range) | **NOT FIXED** | Changes PoP/edge methodology and ranking — business/math, not a crash. Deferred. |
+| **7** | Calendar remap reuses candidate-expiry `atm_iv` with near DTE | **FIXED** | Data-flow wiring: recompute ATM IV (+ OI rows) for near expiry after remap. |
+| **8** | IC/IB companions skip capital sizing + max-loss cap | **FIXED** | Wiring: companions use `_assemble_sized_suggestion` (same path as primary). Concentration dedup left unchanged (product). |
+| **9** | EOD `atm_iv=0` → debit PoP collapses to **100%** | **FIXED** | EOD skip when `atm_iv<=0`; `estimate_pop` returns 0 for debit/range when IV/DTE/spot invalid. |
+| **10** | Calendar near-remap keeps candidate `expiry_type` | **FIXED** | Retag via `_expiry_type_label(near, all_expiries)` after remap. |
+| **11** | `_is_monthly_expiry` misses holiday-shifted monthlies | **FIXED** | Last F&O expiry in calendar month from catalogue (no Thursday requirement). |
+| **12** | Jade `spread_width(..., "JADE_LIZARD")` uses put **strike** (~23k) for edge grade | **FIXED** | Grade + credit-to-width veto both use call-wing width. |
+| **13** | `mid_price` ignores `last_price` | **FIXED** | Fallback order: settle → close → last. |
+| **14** | Calendar allows mismatched near/far strikes (silent diagonal) | **FIXED** | Require shared strike; `ValueError` when near/far ATMs cannot align. |
 
 ---
 
@@ -32,56 +43,27 @@ Hard failure. Entire underlying evaluation dies with `TypeError`. No suggestion 
 
 1. **`engine/confidence.py`** — `vix_close is None` → `PASS_WARN` (not a fail). Soft tally can still yield `all_passed=True`.
 
-```python
-def _vix_gate():
-    if indicators.vix_close is None:
-        return _PASS_WARN, "VIX data not available for today — cannot evaluate VIX regime"
-```
+2. **`engine/strategy_selector.py` → `_explain`** — *(was)* `VIX {indicators.vix_close:.1f}` → TypeError; *(now)* `VIX n/a`.
 
-2. **`engine/strategy_selector.py` → `_explain`** — *(was)* after legs are built, plain-English formatting assumed a float:
-
-```python
-# BEFORE (crashed): VIX {indicators.vix_close:.1f}
-# AFTER:  if vix_close is None → "VIX n/a"
-```
-
-3. **`lifecycle/suggestion_engine.py`** — only catches `StrategyVeto` inside assemble; any leftover `TypeError` still escapes to the outer loop (rare now that `_explain` is guarded).
-
-### Why this path was reachable
-`engine/indicators.py` sets `vix_close=None` when `vix_history` is empty. Confidence treats it as pass-with-warn; selector assumed a float.
+3. **`lifecycle/suggestion_engine.py`** — outer loop still swallows unexpected exceptions.
 
 ---
 
 ## Bug 2 — Collapsed iron-condor wings: zero width, zero max loss, veto skipped
 
-**Status: NOT FIXED** — deferred (policy / structure, not a crash).
+**Status: FIXED (2026-09-15)** — tech only (invalid structure / existing gate hole).
 
-### Why not fixed
-Rejecting same-strike wings or forcing a width-0 veto changes which condors can be suggested. That is risk/business logic, not a type mismatch. Left as documented risk until you request a product decision.
+### What was fixed
+Credit strategies with `spread_width <= 0` (same-strike / collapsed wings) raise `StrategyVeto` before the credit-to-width ratio check. No change to EM or wing multipliers.
 
-### Severity
+### What was not changed
+Wing aggressiveness, sizing when max_loss > 0, or which strategies are eligible.
+
+### Severity (original)
 Hard logic failure. Invalid structure can be assembled and sized as if risk were defined.
 
 ### Trace
-
-1. **`engine/leg_builder.py` → `build_iron_condor`** — long wings use `closest_strike` on `short ± wing_width`. Near the edge of a thin chain, long and short map to the **same** strike:
-
-```text
-strikes [('PE','SELL',24800), ('PE','BUY',24800), ('CE','SELL',25200), ('CE','BUY',25200)]
-width 0.0  net 0.0  max_profit 0.0  max_loss 0.0
-```
-
-2. **`engine/strategy_selector.py` → credit-to-width veto** — only fires when `spread_w_for_veto > 0`. Width 0 → veto skipped.
-
-3. **`lifecycle/suggestion_engine.py` → `_assemble_sized_suggestion`** — lot sizing only runs when `_one_lot_max_loss > 0`. Max loss 0 → stays at 1 lot and can proceed.
-
-### Proof (repro)
-
-Thin chain around spot with `expected_move` past the wing edge → `build_iron_condor` returns same-strike buy/sell pairs; `spread_width` / `max_profit_loss` report 0.
-
-### Possible fix (if approved later)
-- Reject structures where any hedge pair shares a strike (raise `ValueError` / `StrategyVeto`).
-- Treat `spread_width == 0` for credit strategies as a hard veto, not a skip.
+`closest_strike` can map long = short; credit-to-width veto skipped when width 0; sizing keeps 1 lot when max_loss 0.
 
 ---
 
@@ -90,38 +72,212 @@ Thin chain around spot with `expected_move` past the wing edge → `build_iron_c
 **Status: NOT FIXED** — deferred (intentional semantics / card volume).
 
 ### Why not fixed
-Counting `c.passed` (include `PASS_WARN`) would let more `LONG_CALL` / `LONG_PUT` (and similar) through. Current code + test require exact `"PASS"`. That is a product gate choice, not a crash.
+Counting `c.passed` would alter who gets cards. Covered by `test_long_call_pass_warn_does_not_count_as_soft_pass`.
+
+---
+
+## Bug 4 — Missing PCR: confidence passes, `select_strategy` crashes, underlying silently dropped
+
+**Status: FIXED (2026-09-15)** — tech only.
+
+### What was fixed
+`select_strategy` treats `pcr is None` as neutral `1.0` (no strong bullish/bearish PCR). Prevents `None < float` TypeError.
+
+### What was not changed
+Confidence still `PASS_WARN` on missing PCR.
+
+### Trace (original)
+`pcr = getattr(indicators, "pcr", 1.0)` returned `None` when the field existed; `pcr < pcr_bull` crashed.
+
+---
+
+## Bug 5 — Live IV-trajectory nudge vs writing sell-min desync
+
+**Status: FIXED (2026-09-15)** — tech desync only.
+
+### What was fixed
+Extracted `effective_iv_rank_for_regime()`; used by `select_strategy` and by `assemble_suggestion` regime gates (`strategy_iv_premium_sell_min` / buy caps / long-vol gate). Same nudge, same thresholds.
+
+### What was not changed
+Nudge thresholds and sell-min map values.
+
+### Trace (original)
+Selection nudged local `iv_rank` into writing; assemble still saw mid-zone raw rank → sell-min skipped.
+
+---
+
+## Bug 6 — Credit multi-short PoP overstated (avg short-delta vs BE-range probability)
+
+**Status: NOT FIXED** — deferred (methodology / ranking).
+
+### Why not fixed
+Switching credits to BE-range PoP changes persisted PoP and edge_score. Not a TypeError; product/math choice. Debit/calendar already use range math by design comments in `estimate_pop`.
+
+---
+
+## Bug 7 — Calendar remap keeps candidate-expiry `atm_iv` (and OI deltas) with near DTE
+
+**Status: FIXED (2026-09-15)** — data-flow wiring.
+
+### What was fixed
+After calendar near/far remap, recompute ATM IV (live or EOD IV rows) and rebuild live OI change/abs rows for the **near** expiry before `build_indicators` / confidence / assemble.
+
+### What was not changed
+Calendar DTE bands or strategy pick rules.
+
+---
+
+## Bug 8 — IC/IB companions inherit primary lots; skip capital sizing + max-loss cap
+
+**Status: FIXED (2026-09-15)** — wiring only.
+
+### What was fixed
+Companions call `_assemble_sized_suggestion` (1-lot dry-run + `max_loss_pct_of_capital`) instead of `assemble_suggestion(..., lots=primary_lots)`.
+
+### What was not changed
+Cross-underlying concentration / strategy dedup for companions (product call).
+
+---
+
+## Bug 9 — EOD `atm_iv=0` → debit PoP becomes 100%
+
+**Status: FIXED (2026-09-15)** — tech only. EOD skips `atm_iv<=0`; `estimate_pop` returns 0 for debit/range on invalid IV.
 
 ### Severity
-Logic mismatch on the confidence → selector handoff (or intentional strictness, depending on product view).
+Wrong persisted economics. Live path skips when `atm_iv <= 0`; EOD only requires an IV row and accepts `0.0`.
 
 ### Trace
 
-1. **`contracts.ConfidenceCheck.passed`** — `PASS`, `PASS_WARN`, and `PASS_ERROR` all count as passed.
+1. **`suggestion_engine` EOD** (`~680`): `atm_iv = float(iv_for_expiry[0].get("atm_iv") or 0.0)` — no `<= 0` continue.
+2. **`leg_builder._prob_below`**: `vol <= 0` → returns `0.5` (“no signal”).
+3. Debit two-sided PoP: `p_above + p_below` each 0.5 → **100%**. Credit path with Δ=0 → also ~100%.
 
-2. **`engine/confidence.py`** — intentional `PASS_WARN` bands exist (e.g. IV/HV between buy_pass and buy_max for buying regime).
-
-3. **`engine/strategy_selector.py` → `assemble_suggestion`**:
-
-```python
-soft_pass_count = sum(1 for c in soft_checks if c.status == "PASS")
-```
-
-`PASS_WARN` does **not** count. So `LONG_CALL` / `LONG_PUT` (config requires 8/8) can never clear when any soft gate is an intentional warn — even when `confidence.all_passed` is True.
-
-### Proof (repro)
+### Proof
 
 ```text
-LONG_CALL path: all_passed True
-soft statuses include IV premium PASS_WARN
-exact PASS count 6
-passed prop count 7
-LONG_CALL StrategyVeto: LONG_CALL requires 8/8 soft gates, got 6/8
+LONG_STRADDLE estimate_pop(..., atm_iv=0.0)  → 100.0
+LONG_STRADDLE estimate_pop(..., atm_iv=0.15) → ~52
 ```
 
-### Possible fix (if approved later)
-- Count with `c.passed`, **or**
-- Document that `strategy_min_soft_pass` means “exact PASS only” and keep current tests.
+`expected_move=0` blocks EM builders, but `LONG_STRADDLE` / ATM debit structures still assemble with fake PoP/edge.
+
+### Fix direction
+- EOD: `continue` / veto when `atm_iv <= 0` (match live), **and/or**
+- `estimate_pop`: refuse degenerate vol (return 50 or raise) instead of summing two 0.5s into 100.
+
+---
+
+## Bug 10 — Calendar near-remap keeps candidate `expiry_type`
+
+**Status: FIXED (2026-09-15)** — retag `use_expiry_type` from near date + catalogue after remap.
+
+### Severity
+Wrong persistence / dedup / expire keys. Near expiry date is remapped; `expiry_type` stays the loop tag (`"Monthly"`).
+
+### Trace
+`_assemble_kw` still sets `expiry_type=expiry_type` from the candidate loop while `expiry=use_expiry` is the near (often weekly) date. `has_suggestion_for`, `expire_stale_pending`, and cross-underlying dedup key on `(expiry_type, strategy)`.
+
+### Proof sketch
+
+```text
+Monthly candidate → CALENDAR_SPREAD
+near_expiry = weekly (≠ monthly)
+Suggestion.expiry_date = weekly
+Suggestion.expiry_type = "Monthly"   # unchanged
+```
+
+### Fix direction
+Re-tag `expiry_type` from `_is_monthly_expiry(use_expiry)` (after fixing #11), or from the resolved near leg’s true bucket.
+
+---
+
+## Bug 11 — `_is_monthly_expiry` misses holiday-shifted monthlies
+
+**Status: FIXED (2026-09-15)** — last F&O expiry in month from catalogue (no Thursday requirement).
+
+### Severity
+Wrong Weekly/Monthly bucket → wrong pick set and dedup keys.
+
+### Trace
+`suggestion_engine._is_monthly_expiry` requires `weekday() == 3` (Thursday). NSE monthlies that shift to Wednesday when Thursday is a holiday are tagged Weekly.
+
+### Proof
+
+```text
+_is_monthly_expiry(date(2024, 11, 27)) → False  # Wed monthly
+_is_monthly_expiry(date(2026, 5, 28))  → True   # last Thu
+```
+
+### Fix direction
+Last F&O expiry of the month (or holiday calendar), not “must be Thursday”.
+
+---
+
+## Bug 12 — Jade edge/grade width uses naked-put **strike**
+
+**Status: FIXED (2026-09-15)** — Jade grade + CW veto both use call-wing width.
+
+### Severity
+Systematically crushed `credit_grade` / `edge_score` for Jade vs peers. Veto path correctly uses call-wing-only width; grade path does not.
+
+### Trace
+`spread_width(legs, "JADE_LIZARD")` = `max(call_width, short_put_strike)`. Docstring claims this equals `max_loss + credit`, but feeding a ~23 000 “width” into a ratio designed for 50–200 pt spreads makes every Jade look ~0% credit/width.
+
+### Proof
+
+```text
+JL credit 50, call width 100, short put 22800
+spread_width(legs)              = 100
+spread_width(legs, "JADE_LIZARD") = 22800
+```
+
+### Fix direction
+Grade with call-wing width or true risk capital (`max_loss + credit` in **points of risk**, not raw strike as a faux spread width). Keep veto on call wing if that remains the JL definition check.
+
+---
+
+## Bug 13 — `mid_price` ignores `last_price`
+
+**Status: FIXED (2026-09-15)** — `mid_price`: settle → close → last.
+
+### Severity
+Hard veto or stale prices. Live ATM IV extracts `last_price|close|settle`; legs only use `settle` then `close`.
+
+### Trace
+`leg_builder.mid_price` vs `suggestion_engine._compute_live_atm_iv_rank` price extract. Row with only `last_price>0` → ATM IV OK, `suggested_price=0` → “Chain too thin”.
+
+### Proof
+
+```text
+mid_price({last_price:150, settle_price:0, close_price:0}) → 0.0
+```
+
+Current Zerodha/NSE providers usually mirror LTP into settle — so often masked — but the path still disagrees with itself.
+
+### Fix direction
+Align `mid_price` with live extract order: `last_price or settle or close`.
+
+---
+
+## Bug 14 — Calendar allows mismatched near/far strikes (silent diagonal)
+
+**Status: FIXED (2026-09-15)** — require shared strike; raise on silent diagonal.
+
+### Severity
+Builds a diagonal, labels/economics treat it as same-strike calendar.
+
+### Trace
+`build_calendar_spread`: if near ATM ∉ far strikes, far keeps its own ATM. No raise. BE / max-profit still assume a single ATM calendar.
+
+### Proof
+
+```text
+near {23000,23050}, far {23025,23075}, spot 23000
+→ SELL 23000 near / BUY 23025 far — no error
+```
+
+### Fix direction
+Require identical strike (or veto / StrategyVeto when far cannot match near ATM).
 
 ---
 
@@ -135,3 +291,4 @@ LONG_CALL StrategyVeto: LONG_CALL requires 8/8 soft gates, got 6/8
 | Legs / width / PoP | `engine/leg_builder.py` |
 | Indicator VIX None | `engine/indicators.py` |
 | Soft-pass config | `config.py` → `strategy_min_soft_pass` |
+| Writing sell-min map | `config.py` → `strategy_iv_premium_sell_min` |
