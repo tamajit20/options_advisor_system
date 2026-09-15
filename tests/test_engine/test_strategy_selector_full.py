@@ -183,6 +183,23 @@ class TestAssembleSuggestion:
         assert "ENTRY" in sug.plain_english
         assert "TIMELINE" in sug.plain_english
 
+    def test_explain_tolerates_missing_vix_close(self, sample_chain, sample_indicators, mocker):
+        """Bug 1 tech fix: missing VIX must not TypeError in plain_english formatting."""
+        from config import STRATEGY_CONFIG
+        from dataclasses import replace
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0, "strategy_min_credit_to_width_ratio": {}})
+        ind = replace(sample_indicators, vix_close=None, vix_regime="STABLE")
+        sug = ss.assemble_suggestion(
+            suggestion_id="S-VIX-NONE", underlying="NIFTY",
+            expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
+            spot=23000.0, chain=sample_chain,
+            indicators=ind,
+            confidence=_all_pass_confidence(),
+            iv_rank=60.0, atm_iv=0.18, lots=1, lot_size=75,
+        )
+        assert "VIX n/a" in sug.plain_english
+        assert "ENTRY" in sug.plain_english
+
     def test_long_call_pass_warn_does_not_count_as_soft_pass(self, sample_chain):
         ind = _make_indicators(trend="BULLISH", pcr=0.40, iv_premium=0.85)
         with pytest.raises(StrategyVeto, match="requires 8/8"):

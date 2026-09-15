@@ -710,8 +710,15 @@ def _explain(
 ) -> str:
     parts: List[str] = []
     parts.append(f"{strategy.replace('_', ' ').title()} on {underlying}.")
-    parts.append(f"IV Rank {iv_rank:.0f}, trend {indicators.trend.lower()}, "
-                 f"VIX {indicators.vix_close:.1f} ({indicators.vix_regime.lower()}).")
+    # vix_close is Optional — confidence allows PASS_WARN when missing; never crash format.
+    if indicators.vix_close is None:
+        vix_bit = "VIX n/a"
+    else:
+        regime = (indicators.vix_regime or "UNKNOWN").lower()
+        vix_bit = f"VIX {indicators.vix_close:.1f} ({regime})"
+    parts.append(
+        f"IV Rank {iv_rank:.0f}, trend {indicators.trend.lower()}, {vix_bit}."
+    )
     parts.append(f"Entry DTE {dte}, expected move \u00b1{indicators.expected_move:.0f} pts.")
     if econ.upper_breakeven is not None and econ.lower_breakeven is not None:
         parts.append(f"Profit zone: {econ.lower_breakeven:.0f}\u2013{econ.upper_breakeven:.0f}.")

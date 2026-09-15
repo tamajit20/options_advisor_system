@@ -1,13 +1,31 @@
 # Bug findings: suggestion_engine → confidence → strategy_selector → leg_builder
 
 Date: 2026-09-13  
+Last review: 2026-09-15  
 Scope: failure modes only (not design opinions).
+
+## Fix status summary
+
+| # | Issue | Status | Why |
+|---|---|---|---|
+| **1** | Missing VIX → `TypeError` in `_explain` → underlying dropped | **FIXED** | Pure tech crash (`None:.1f`). Guard in `engine/strategy_selector.py` `_explain`; test `test_explain_tolerates_missing_vix_close`. No confidence/config change. Outer-loop “persist NoSuggestion on any exception” **not** done (that would change sit-out bookkeeping, not stop the crash). |
+| **2** | Collapsed iron-condor wings (width 0 / max loss 0) | **NOT FIXED** | Not a type/exception crash. Fixing means new structure/veto rules (reject same-strike wings, treat width 0 as hard veto) — product/risk policy, not a format bug. Deferred until you ask for that change. |
+| **3** | `strategy_min_soft_pass` counts `"PASS"` only, not `.passed` | **NOT FIXED** | Intentional gate semantics. Existing test `test_long_call_pass_warn_does_not_count_as_soft_pass` encodes exact-`PASS` counting. Changing it would alter who gets cards (business/config). Deferred. |
 
 ---
 
 ## Bug 1 — Missing VIX: confidence passes, assemble crashes, underlying silently dropped
 
-### Severity
+**Status: FIXED (2026-09-15)** — tech only.
+
+### What was fixed
+`_explain` no longer formats `vix_close` when it is `None`; plain English shows `VIX n/a` instead of raising `TypeError`.
+
+### What was not changed
+- Confidence still `PASS_WARN` on missing VIX (no gate tightening).
+- Outer `suggestion_engine` loop still logs + `continue` on unexpected exceptions (no new `NoSuggestion` path).
+
+### Severity (original)
 Hard failure. Entire underlying evaluation dies with `TypeError`. No suggestion and no `NoSuggestion` persisted.
 
 ### Trace
@@ -20,47 +38,26 @@ def _vix_gate():
         return _PASS_WARN, "VIX data not available for today — cannot evaluate VIX regime"
 ```
 
-2. **`engine/strategy_selector.py` → `_explain`** — after legs are built, plain-English formatting assumes a float:
+2. **`engine/strategy_selector.py` → `_explain`** — *(was)* after legs are built, plain-English formatting assumed a float:
 
 ```python
-parts.append(
-    f"IV Rank {iv_rank:.0f}, trend {indicators.trend.lower()}, "
-    f"VIX {indicators.vix_close:.1f} ({indicators.vix_regime.lower()})."
-)
+# BEFORE (crashed): VIX {indicators.vix_close:.1f}
+# AFTER:  if vix_close is None → "VIX n/a"
 ```
 
-`None:.1f` → `TypeError: unsupported format string passed to NoneType.__format__`.
+3. **`lifecycle/suggestion_engine.py`** — only catches `StrategyVeto` inside assemble; any leftover `TypeError` still escapes to the outer loop (rare now that `_explain` is guarded).
 
-3. **`lifecycle/suggestion_engine.py` → `_evaluate_underlying`** — only catches `StrategyVeto`. The `TypeError` escapes to the outer loop:
-
-```python
-try:
-    sugs, nss = _evaluate_underlying(...)
-except Exception:
-    logger.exception("Suggestion eval failed for %s", symbol)
-    continue
-```
-
-Result: no suggestion, no no-suggestion row — the symbol vanishes for that run.
-
-### Why this path is reachable
-`engine/indicators.py` sets `vix_close=None` when `vix_history` is empty. That is a normal data gap. Confidence treats it as pass-with-warn; selector assumes a float.
-
-### Proof (repro)
-
-```text
-confidence.all_passed= True   # VIX gate PASS_WARN
-assemble CRASH: TypeError unsupported format string passed to NoneType.__format__
-```
-
-### Fix direction
-- Guard `_explain` for `vix_close is None` / missing regime, **or**
-- Treat missing VIX as a hard/soft fail consistently with what `_explain` requires, **and**
-- Catch non-`StrategyVeto` assemble failures per underlying and persist a `NoSuggestion` instead of swallowing the symbol.
+### Why this path was reachable
+`engine/indicators.py` sets `vix_close=None` when `vix_history` is empty. Confidence treats it as pass-with-warn; selector assumed a float.
 
 ---
 
 ## Bug 2 — Collapsed iron-condor wings: zero width, zero max loss, veto skipped
+
+**Status: NOT FIXED** — deferred (policy / structure, not a crash).
+
+### Why not fixed
+Rejecting same-strike wings or forcing a width-0 veto changes which condors can be suggested. That is risk/business logic, not a type mismatch. Left as documented risk until you request a product decision.
 
 ### Severity
 Hard logic failure. Invalid structure can be assembled and sized as if risk were defined.
@@ -82,7 +79,7 @@ width 0.0  net 0.0  max_profit 0.0  max_loss 0.0
 
 Thin chain around spot with `expected_move` past the wing edge → `build_iron_condor` returns same-strike buy/sell pairs; `spread_width` / `max_profit_loss` report 0.
 
-### Fix direction
+### Possible fix (if approved later)
 - Reject structures where any hedge pair shares a strike (raise `ValueError` / `StrategyVeto`).
 - Treat `spread_width == 0` for credit strategies as a hard veto, not a skip.
 
@@ -90,8 +87,13 @@ Thin chain around spot with `expected_move` past the wing edge → `build_iron_c
 
 ## Bug 3 — `strategy_min_soft_pass` counts only status `"PASS"`, not confidence “passed”
 
+**Status: NOT FIXED** — deferred (intentional semantics / card volume).
+
+### Why not fixed
+Counting `c.passed` (include `PASS_WARN`) would let more `LONG_CALL` / `LONG_PUT` (and similar) through. Current code + test require exact `"PASS"`. That is a product gate choice, not a crash.
+
 ### Severity
-Logic mismatch on the confidence → selector handoff. Strategies that confidence already cleared can be hard-vetoed for the wrong reason.
+Logic mismatch on the confidence → selector handoff (or intentional strictness, depending on product view).
 
 ### Trace
 
@@ -105,7 +107,7 @@ Logic mismatch on the confidence → selector handoff. Strategies that confidenc
 soft_pass_count = sum(1 for c in soft_checks if c.status == "PASS")
 ```
 
-`PASS_WARN` does **not** count. So `LONG_CALL` / `LONG_PUT` (config requires 8/8) can never clear when any soft gate is an intentional warn — even when `confidence.all_passed` is True and per-strategy IV/HV caps would allow the trade.
+`PASS_WARN` does **not** count. So `LONG_CALL` / `LONG_PUT` (config requires 8/8) can never clear when any soft gate is an intentional warn — even when `confidence.all_passed` is True.
 
 ### Proof (repro)
 
@@ -117,9 +119,9 @@ passed prop count 7
 LONG_CALL StrategyVeto: LONG_CALL requires 8/8 soft gates, got 6/8
 ```
 
-### Fix direction
-- Count with `c.passed` (or explicitly include `PASS_WARN` / `PASS_ERROR` if that is the intended bar), **or**
-- Document and enforce that `strategy_min_soft_pass` means “exact PASS only” and stop emitting `PASS_WARN` for bands that are meant to remain tradeable for those strategies.
+### Possible fix (if approved later)
+- Count with `c.passed`, **or**
+- Document that `strategy_min_soft_pass` means “exact PASS only” and keep current tests.
 
 ---
 
