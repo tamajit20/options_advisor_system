@@ -150,7 +150,7 @@ def _patch_entry_gate(mocker):
 
 def test_trade_execution_channel_from_provider(db_conn, mocker):
     mocker.patch(
-        "database.broker_order_repo.BrokerOrderRepo.has_kite_orders_for_trade",
+        "database.broker_order_repo.BrokerOrderRepo.has_entry_kite_fills_for_trade",
         return_value=False,
     )
     ch = trade_execution_channel(
@@ -159,9 +159,9 @@ def test_trade_execution_channel_from_provider(db_conn, mocker):
     assert ch == EXECUTION_CHANNEL_ZERODHA
 
 
-def test_trade_execution_channel_from_broker_orders(db_conn, mocker):
+def test_trade_execution_channel_from_entry_fills(db_conn, mocker):
     mocker.patch(
-        "database.broker_order_repo.BrokerOrderRepo.has_kite_orders_for_trade",
+        "database.broker_order_repo.BrokerOrderRepo.has_entry_kite_fills_for_trade",
         return_value=True,
     )
     ch = trade_execution_channel(
@@ -170,9 +170,21 @@ def test_trade_execution_channel_from_broker_orders(db_conn, mocker):
     assert ch == EXECUTION_CHANNEL_ZERODHA
 
 
+def test_trade_execution_channel_ignores_exit_only_kite_orders(db_conn, mocker):
+    """EXIT fills alone must not flip a paper trade to the Zerodha channel."""
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.has_entry_kite_fills_for_trade",
+        return_value=False,
+    )
+    ch = trade_execution_channel(
+        db_conn, {"trade_id": "TRD-1", "execution_provider": "manual"},
+    )
+    assert ch == EXECUTION_CHANNEL_MANUAL
+
+
 def test_trade_execution_channel_manual(db_conn, mocker):
     mocker.patch(
-        "database.broker_order_repo.BrokerOrderRepo.has_kite_orders_for_trade",
+        "database.broker_order_repo.BrokerOrderRepo.has_entry_kite_fills_for_trade",
         return_value=False,
     )
     ch = trade_execution_channel(

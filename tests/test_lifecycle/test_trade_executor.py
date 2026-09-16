@@ -422,6 +422,7 @@ class TestCircuitBreakerBlocks:
             "data_as_of": datetime(2026, 5, 4, 8, 0),
             "entry_date": None,
             "data_source": "LIVE",
+            "provider": "zerodha",  # market-data feed — must NOT become execution channel
             "trigger_type": "LIVE_RUN",
             "generated_on": datetime(2026, 5, 4, 8, 0),
         }
@@ -454,6 +455,9 @@ class TestCircuitBreakerBlocks:
         assert call_arg["spot_at_execution"] == 23000.0
         prov.assert_called_once()
         assert prov.call_args.kwargs.get("gate_passed") is False
+        # Paper path must stamp manual — never inherit suggestion.provider
+        # (live suggestions often have provider=zerodha for market data).
+        assert prov.call_args.kwargs.get("execution_provider") == "manual"
 
     def test_execute_at_suggested_skips_strategy_veto_gate(
         self, mock_db, mocker, fake_legs,

@@ -494,7 +494,16 @@ def mark_executed(
         trd.write_execution_provenance(
             trade_id,
             execution_data_source=suggestion.get("data_source"),
-            execution_provider=execution_provider or suggestion.get("provider"),
+            # NEVER inherit suggestion.provider — that is the *market-data*
+            # feed (often "zerodha" in live mode). Using it as the execution
+            # channel made paper "Record at suggested" trades look like Kite
+            # entries, so loss-milestone auto-close placed real EXIT orders
+            # for positions that never existed on the broker (2026-09-16).
+            execution_provider=(
+                execution_provider
+                if execution_provider is not None
+                else "manual"
+            ),
             gate_passed=gate_passed,
             time_from_suggestion_sec=time_from,
         )

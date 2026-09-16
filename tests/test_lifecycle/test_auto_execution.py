@@ -134,6 +134,7 @@ def test_zerodha_flattens_on_kite(mocker):
     )
     broker = MagicMock()
     broker.pending_for_trade.return_value = []
+    broker.has_entry_kite_fills_for_trade.return_value = True
     mocker.patch(
         "lifecycle.auto_execution.close_on_milestone.BrokerOrderRepo",
         return_value=broker,
@@ -156,6 +157,39 @@ def test_zerodha_flattens_on_kite(mocker):
     close.assert_not_called()
 
 
+def test_zerodha_stamp_without_entry_falls_back_to_manual(mocker):
+    """Paper trade mis-stamped as zerodha must not place EXIT on Kite."""
+    db = MagicMock()
+    mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.TradeRepo.get",
+        return_value={"trade_id": "T-1", "status": "ACTIVE",
+                      "execution_provider": "zerodha"},
+    )
+    mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.trade_execution_channel",
+        return_value="zerodha",
+    )
+    broker = MagicMock()
+    broker.has_entry_kite_fills_for_trade.return_value = False
+    mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.BrokerOrderRepo",
+        return_value=broker,
+    )
+    kite = mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.close_trade_in_zerodha_async"
+    )
+    close = mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.close_trade_with_fills"
+    )
+    exits = [{"leg_order": 1, "exit_price": 10.0}]
+    ctx = AutoExecContext(
+        notif_type="LOSS_MILESTONE_HIT", trade_id="T-1", exits=exits,
+    )
+    assert CloseOnLossMilestone().run(db, ctx) == "manual_fallback_no_entry"
+    close.assert_called_once_with(db, "T-1", exits)
+    kite.assert_not_called()
+
+
 def test_zerodha_in_flight_is_noop(mocker):
     db = MagicMock()
     mocker.patch(
@@ -167,6 +201,7 @@ def test_zerodha_in_flight_is_noop(mocker):
         return_value="zerodha",
     )
     broker = MagicMock()
+    broker.has_entry_kite_fills_for_trade.return_value = True
     broker.pending_for_trade.return_value = [{"id": 9}]
     mocker.patch(
         "lifecycle.auto_execution.close_on_milestone.BrokerOrderRepo",
@@ -191,6 +226,7 @@ def test_zerodha_running_job_is_noop(mocker):
         return_value="zerodha",
     )
     broker = MagicMock()
+    broker.has_entry_kite_fills_for_trade.return_value = True
     broker.pending_for_trade.return_value = []
     mocker.patch(
         "lifecycle.auto_execution.close_on_milestone.BrokerOrderRepo",
@@ -225,6 +261,7 @@ def test_zerodha_not_ready_raises(mocker):
         return_value=False,
     )
     broker = MagicMock()
+    broker.has_entry_kite_fills_for_trade.return_value = True
     broker.pending_for_trade.return_value = []
     mocker.patch(
         "lifecycle.auto_execution.close_on_milestone.BrokerOrderRepo",

@@ -569,6 +569,8 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), not raw “cheap IV”. When rank is low but **IV/HV > 1**, the title is “options still rich vs HV” so it does not contradict the expensive-vs-realised soft-fail.
 
+**Paper vs Zerodha:** “Record at suggested / Record my fills” always stamps `execution_provider=manual`. Never copy suggestion `provider` (that is the market-data feed, often `zerodha` in live mode). Auto-close only places Kite EXIT orders when an ENTRY fill exists on Kite.
+
 ---
 
 

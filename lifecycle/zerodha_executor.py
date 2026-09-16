@@ -150,12 +150,18 @@ def zerodha_execution_ready(db: SQLServerConnection) -> bool:
 
 
 def trade_execution_channel(db: SQLServerConnection, trade_row: dict) -> str:
-    """Return ``zerodha`` or ``manual`` for dashboard badges."""
+    """Return ``zerodha`` or ``manual`` for dashboard badges / auto-close.
+
+    Only an explicit ``execution_provider=zerodha`` stamp, or a completed
+    *ENTRY* Kite fill, marks the trade as a broker position. EXIT/ROLLBACK
+    rows must not flip the channel — a mistaken auto-close on a paper trade
+    would otherwise keep routing flatten to Kite forever.
+    """
     provider = str(trade_row.get("execution_provider") or "").lower()
     trade_id = trade_row.get("trade_id")
     if provider == EXECUTION_PROVIDER_ZERODHA:
         return EXECUTION_CHANNEL_ZERODHA
-    if trade_id and BrokerOrderRepo(db).has_kite_orders_for_trade(str(trade_id)):
+    if trade_id and BrokerOrderRepo(db).has_entry_kite_fills_for_trade(str(trade_id)):
         return EXECUTION_CHANNEL_ZERODHA
     return EXECUTION_CHANNEL_MANUAL
 

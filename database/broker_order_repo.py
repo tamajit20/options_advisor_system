@@ -268,9 +268,25 @@ class BrokerOrderRepo:
         )
 
     def has_kite_orders_for_trade(self, trade_id: str) -> bool:
+        """True if any Kite order id exists for this trade (entry or exit)."""
         row = self.db.fetch_one(
             "SELECT TOP 1 1 AS x FROM options_broker_orders "
             "WHERE trade_id = ? AND kite_order_id IS NOT NULL",
+            [trade_id],
+        )
+        return row is not None
+
+    def has_entry_kite_fills_for_trade(self, trade_id: str) -> bool:
+        """True only when an ENTRY leg was actually filled on Kite.
+
+        Used to classify broker vs paper trades. EXIT/ROLLBACK rows must not
+        count — they can appear after a mistaken auto-flatten of a manual trade.
+        """
+        row = self.db.fetch_one(
+            "SELECT TOP 1 1 AS x FROM options_broker_orders "
+            "WHERE trade_id = ? AND operation = 'ENTRY' "
+            "AND kite_order_id IS NOT NULL "
+            "AND UPPER(ISNULL(status, '')) = 'COMPLETE'",
             [trade_id],
         )
         return row is not None

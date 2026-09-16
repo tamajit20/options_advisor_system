@@ -37,6 +37,16 @@ def flatten_open_trade(db: SQLServerConnection, ctx: AutoExecContext) -> str:
 
     channel = trade_execution_channel(db, trade)
     if channel == EXECUTION_CHANNEL_ZERODHA:
+        # Extra belt: never place EXIT orders for a trade that never ENTRY-filled
+        # on Kite (paper trade mis-stamped as zerodha, or provider confusion).
+        if not BrokerOrderRepo(db).has_entry_kite_fills_for_trade(ctx.trade_id):
+            if not ctx.exits:
+                raise ValueError(
+                    f"Trade {ctx.trade_id} is stamped Zerodha but has no ENTRY "
+                    f"fills on Kite — refusing broker flatten; need live exit prices"
+                )
+            close_trade_with_fills(db, ctx.trade_id, list(ctx.exits))
+            return "manual_fallback_no_entry"
         if _flatten_already_moving(db, ctx.trade_id):
             return "in_flight"
         if not zerodha_execution_ready(db):
