@@ -148,7 +148,20 @@ def _patch_entry_gate(mocker):
     mocker.patch("lifecycle.zerodha_executor._circuit_breaker_on", return_value=False)
 
 
-def test_trade_execution_channel_from_provider(db_conn, mocker):
+def _patch_close_broker_gates(mocker):
+    """Opening fills + inventory so close tests exercise order path, not gates."""
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.has_entry_kite_fills_for_trade",
+        return_value=True,
+    )
+    mocker.patch(
+        "lifecycle.zerodha_executor.assert_reducing_positions_exist",
+        return_value=MagicMock(ok=True, message=""),
+    )
+
+
+def test_trade_execution_channel_ignores_provider_stamp_alone(db_conn, mocker):
+    """Stamp alone must not authorize Zerodha (paper→EXIT loss class)."""
     mocker.patch(
         "database.broker_order_repo.BrokerOrderRepo.has_entry_kite_fills_for_trade",
         return_value=False,
@@ -156,7 +169,7 @@ def test_trade_execution_channel_from_provider(db_conn, mocker):
     ch = trade_execution_channel(
         db_conn, {"trade_id": "TRD-1", "execution_provider": "zerodha"},
     )
-    assert ch == EXECUTION_CHANNEL_ZERODHA
+    assert ch == EXECUTION_CHANNEL_MANUAL
 
 
 def test_trade_execution_channel_from_entry_fills(db_conn, mocker):
@@ -396,6 +409,22 @@ def test_execute_rolls_back_when_mark_executed_fails(
     rollback.assert_called_once()
 
 
+def test_close_trade_rejects_without_opening_kite_fills(db_conn, mocker):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("database.models.TradeRepo.get", return_value={
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+    })
+    mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[{
+        "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
+    }])
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.has_entry_kite_fills_for_trade",
+        return_value=False,
+    )
+    with pytest.raises(ZerodhaExecutionError, match="no COMPLETE ENTRY/SUPPLEMENT"):
+        close_trade_in_zerodha(db_conn, "TRD-1")
+
+
 def test_close_trade_blocks_pending_exit_orders(db_conn, mocker):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
     mocker.patch("database.models.TradeRepo.get", return_value={
@@ -404,6 +433,7 @@ def test_close_trade_blocks_pending_exit_orders(db_conn, mocker):
     mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[{
         "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
     }])
+    _patch_close_broker_gates(mocker)
     mocker.patch(
         "database.broker_order_repo.BrokerOrderRepo.pending_for_trade",
         return_value=[{"status": "OPEN"}],
@@ -414,6 +444,7 @@ def test_close_trade_blocks_pending_exit_orders(db_conn, mocker):
 
 def test_close_trade_rolls_back_when_second_leg_fails(db_conn, mocker, mock_instrument):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    _patch_close_broker_gates(mocker)
     legs = [
         {
             "leg_order": 1, "executed": True, "exit_price": None, "action": "SELL",
@@ -480,6 +511,7 @@ def test_close_trade_rolls_back_when_second_leg_fails(db_conn, mocker, mock_inst
 
 def test_close_trade_happy_path(db_conn, mocker, mock_instrument):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    _patch_close_broker_gates(mocker)
     leg = {
         "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
         "option_type": "CE", "symbol": "NIFTY", "expiry_date": date(2026, 5, 28),
@@ -513,6 +545,7 @@ def test_close_trade_happy_path(db_conn, mocker, mock_instrument):
 
 def test_close_passes_execution_job_id_to_place(db_conn, mocker, mock_instrument):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    _patch_close_broker_gates(mocker)
     leg = {
         "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
         "option_type": "CE", "symbol": "NIFTY", "expiry_date": date(2026, 5, 28),
@@ -586,6 +619,7 @@ def test_supplement_rejects_live_prices_out_of_band(
 
 def test_preview_close_execution_ignores_entry_price_band(db_conn, mocker, mock_instrument):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    _patch_close_broker_gates(mocker)
     leg = {
         "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
         "option_type": "CE", "symbol": "NIFTY", "expiry_date": date(2026, 5, 28),

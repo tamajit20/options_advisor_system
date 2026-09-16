@@ -277,14 +277,16 @@ class BrokerOrderRepo:
         return row is not None
 
     def has_entry_kite_fills_for_trade(self, trade_id: str) -> bool:
-        """True only when an ENTRY leg was actually filled on Kite.
+        """True when an opening leg was actually filled on Kite.
 
-        Used to classify broker vs paper trades. EXIT/ROLLBACK rows must not
-        count — they can appear after a mistaken auto-flatten of a manual trade.
+        Counts COMPLETE ``ENTRY`` or ``SUPPLEMENT`` rows with a kite_order_id.
+        EXIT/ROLLBACK must not count — they can appear after a mistaken
+        auto-flatten of a manual trade, or leave hybrid paper+supplement
+        trades misclassified if SUPPLEMENT were ignored.
         """
         row = self.db.fetch_one(
             "SELECT TOP 1 1 AS x FROM options_broker_orders "
-            "WHERE trade_id = ? AND operation = 'ENTRY' "
+            "WHERE trade_id = ? AND operation IN ('ENTRY', 'SUPPLEMENT') "
             "AND kite_order_id IS NOT NULL "
             "AND UPPER(ISNULL(status, '')) = 'COMPLETE'",
             [trade_id],

@@ -1117,6 +1117,10 @@ ZERODHA_EXECUTION_CONFIG = {
     "margin_check_enabled": _env_bool("OPT_ZERODHA_MARGIN_CHECK", True),
     "margin_buffer_pct": float(_env("OPT_ZERODHA_MARGIN_BUFFER_PCT", "5")),
     "exposure_check_enabled": _env_bool("OPT_ZERODHA_EXPOSURE_CHECK", True),
+    # Before EXIT / auto-close / flatten-rollback: require matching Kite inventory
+    # so a close cannot open new exposure when the live position is missing.
+    # Flag is retained for ops visibility; the inventory gate always runs.
+    "exit_position_check_enabled": _env_bool("OPT_ZERODHA_EXIT_POSITION_CHECK", True),
     "position_reconcile_enabled": _env_bool("OPT_ZERODHA_POSITION_RECONCILE", True),
     "use_ws_order_updates": _env_bool("OPT_ZERODHA_WS_ORDER_UPDATES", True),
     "async_execution_default": _env_bool("OPT_ZERODHA_ASYNC_DEFAULT", True),

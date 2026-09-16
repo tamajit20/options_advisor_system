@@ -181,9 +181,10 @@ function _zerodhaBtnTitle(fallback, requireLiveGate) {
 }
 
 function tradeExecutionChannel(t) {
+  // Prefer server enrichment (opening Kite fills only). Never treat
+  // execution_provider stamp alone as Zerodha — that caused paper→EXIT losses.
   if (t?.execution_channel) return t.execution_channel;
-  const p = String(t?.execution_provider || '').toLowerCase();
-  return p === 'zerodha' ? 'zerodha' : 'manual';
+  return 'manual';
 }
 
 function executionChannelBadge(channel) {
@@ -6373,14 +6374,17 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
   if (!content) return;
   content.innerHTML = '<div class="muted">Loading legs…</div>';
   try {
-    const [data, sugg, snap] = await Promise.all([
+    const [data, sugg, snap, tradeMeta] = await Promise.all([
       API(`/api/trades/${tradeId}/executed-legs`),
       API(`/api/trades/${tradeId}/close-suggestion`).catch(() => ({legs: [], est_gross_pnl: 0})),
       API('/api/live/mtm/snapshot').catch(() => ({trades: {}})),
+      API(`/api/trades/${tradeId}`).catch(() => null),
     ]);
     if (!data.legs.length) {
       content.innerHTML = '<div class="muted">No executed legs found.</div>'; return;
     }
+    const brokerChannel = tradeExecutionChannel(tradeMeta || {});
+    const showZerodhaClose = brokerChannel === 'zerodha';
     const liveLtps = (snap.trades && snap.trades[tradeId] && snap.trades[tradeId].leg_ltps) || {};
     const marketOpen = _inMarketHours();
     const mktPriceMap = {};  // leg_order → current market price
@@ -6456,9 +6460,20 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       false,
       'Place closing LIMIT orders in Zerodha. Leave fill fields blank for auto limits.',
     );
-    const zCloseBtnClass = `btn btn-accent btn-zerodha-close${zCloseSt.ready ? '' : ' is-disabled'}`;
-    const zCloseAria = zCloseSt.ready ? '' : ' aria-disabled="true"';
-    const zCloseTitle = escapeHtml(zCloseSt.title);
+    const zCloseReady = showZerodhaClose && zCloseSt.ready;
+    const zCloseBtnClass = `btn btn-accent btn-zerodha-close${zCloseReady ? '' : ' is-disabled'}`;
+    const zCloseAria = zCloseReady ? '' : ' aria-disabled="true"';
+    const zCloseTitle = escapeHtml(
+      showZerodhaClose
+        ? zCloseSt.title
+        : 'Close in Zerodha is only available when this trade has ENTRY/SUPPLEMENT fills on Kite. Use Confirm & record fills for paper/manual trades.'
+    );
+    const zCloseBtnHtml = showZerodhaClose
+      ? `<button type="button" class="${zCloseBtnClass}"${zCloseAria} data-trade-id="${escapeHtml(tradeId)}" title="${zCloseTitle}">Close in Zerodha</button>`
+      : '';
+    const zCloseHintHtml = showZerodhaClose
+      ? `<p class="muted" style="font-size:.78rem;margin-top:6px">Close in Zerodha: leave fill prices blank for live auto limits, or enter your LIMIT per leg.</p>`
+      : `<p class="muted" style="font-size:.78rem;margin-top:6px">Paper/manual trade — record fills here. Close in Zerodha stays hidden until Kite ENTRY/SUPPLEMENT fills exist.</p>`;
 
     content.innerHTML = `
         <div class="close-two-col">
@@ -6488,9 +6503,9 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
             </div>
             <div class="btn-row" style="margin-top:8px">
               <button class="btn btn-danger btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm &amp; record fills</button>
-              <button type="button" class="${zCloseBtnClass}"${zCloseAria} data-trade-id="${escapeHtml(tradeId)}" title="${zCloseTitle}">Close in Zerodha</button>
+              ${zCloseBtnHtml}
             </div>
-            <p class="muted" style="font-size:.78rem;margin-top:6px">Close in Zerodha: leave fill prices blank for live auto limits, or enter your LIMIT per leg.</p>
+            ${zCloseHintHtml}
           </div>
 
         </div>`;

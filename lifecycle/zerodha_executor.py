@@ -47,6 +47,8 @@ from lifecycle.zerodha_execution_job import (
 from providers.zerodha.execution_checks import (
     MarginCheckResult,
     build_order_margin_params,
+    assert_exit_fill_reflected_for_reopen,
+    assert_reducing_positions_exist,
     check_exposure_conflicts,
     check_margin_for_orders,
     reconcile_positions_after_fill,
@@ -152,18 +154,26 @@ def zerodha_execution_ready(db: SQLServerConnection) -> bool:
 def trade_execution_channel(db: SQLServerConnection, trade_row: dict) -> str:
     """Return ``zerodha`` or ``manual`` for dashboard badges / auto-close.
 
-    Only an explicit ``execution_provider=zerodha`` stamp, or a completed
-    *ENTRY* Kite fill, marks the trade as a broker position. EXIT/ROLLBACK
-    rows must not flip the channel — a mistaken auto-close on a paper trade
-    would otherwise keep routing flatten to Kite forever.
+    Broker channel requires a completed *opening* Kite fill (ENTRY or
+    SUPPLEMENT). The ``execution_provider`` stamp alone is **not** enough —
+    paper trades used to inherit ``zerodha`` from the market-data feed and
+    that stamp must never authorize live EXIT orders.
     """
-    provider = str(trade_row.get("execution_provider") or "").lower()
     trade_id = trade_row.get("trade_id")
-    if provider == EXECUTION_PROVIDER_ZERODHA:
-        return EXECUTION_CHANNEL_ZERODHA
     if trade_id and BrokerOrderRepo(db).has_entry_kite_fills_for_trade(str(trade_id)):
         return EXECUTION_CHANNEL_ZERODHA
     return EXECUTION_CHANNEL_MANUAL
+
+
+def _require_opening_kite_fills(db: SQLServerConnection, trade_id: str) -> None:
+    """Refuse EXIT unless this trade actually opened inventory on Kite."""
+    if BrokerOrderRepo(db).has_entry_kite_fills_for_trade(trade_id):
+        return
+    raise ZerodhaExecutionError(
+        f"Trade {trade_id} has no COMPLETE ENTRY/SUPPLEMENT fill on Kite — "
+        "refusing Close in Zerodha (would open new exposure if broker is flat). "
+        "Use Record fills for paper/manual trades."
+    )
 
 
 def _assert_entry_execution_allowed(db: SQLServerConnection, suggestion_id: str) -> None:
@@ -850,11 +860,34 @@ def _reverse_partial_leg(
         leg_order=partial.leg_order,
     ):
         return
+    lo = int(leg["leg_order"])
+    qty = int(partial.filled_quantity)
+    map_for_check = {lo: inst}
+    if mode == "exit":
+        inventory = assert_exit_fill_reflected_for_reopen(
+            facade,
+            [leg],
+            map_for_check,
+            close_transaction_fn=lambda _: close_txn,
+            quantity_overrides={lo: qty},
+        )
+    else:
+        inventory = assert_reducing_positions_exist(
+            facade,
+            [leg],
+            map_for_check,
+            transaction_fn=lambda _: reverse_txn,
+            quantity_overrides={lo: qty},
+        )
+    if not inventory.ok:
+        raise ZerodhaExecutionError(inventory.message)
     key = _kite_symbol_key(inst)
     ltp = _fetch_ltps(facade, [key]).get(key)
     if ltp is None:
-        logger.error("partial reverse: no LTP for leg %s", partial.leg_order)
-        return
+        raise ZerodhaExecutionError(
+            f"partial reverse: no LTP for leg {partial.leg_order} — "
+            "manual cleanup required"
+        )
     try:
         _place_and_monitor_leg(
             db, facade,
@@ -920,6 +953,35 @@ def _rollback_filled_legs(
             reverse_txn = "SELL" if close_txn == "BUY" else "BUY"
         else:
             reverse_txn = _transaction_type_for_leg(leg, "rollback")
+        qty = int(
+            fill.filled_quantity
+            if fill.filled_quantity > 0
+            else (fill.planned_quantity or 0)
+        )
+        map_for_check = {lo: inst}
+        if mode == "exit":
+            inventory = assert_exit_fill_reflected_for_reopen(
+                facade,
+                [leg],
+                map_for_check,
+                close_transaction_fn=lambda _: close_txn,
+                quantity_overrides={lo: qty} if qty > 0 else None,
+            )
+        else:
+            inventory = assert_reducing_positions_exist(
+                facade,
+                [leg],
+                map_for_check,
+                transaction_fn=lambda _: reverse_txn,
+                quantity_overrides={lo: qty} if qty > 0 else None,
+            )
+        if not inventory.ok:
+            logger.error(
+                "rollback inventory check failed for leg %s: %s",
+                lo, inventory.message,
+            )
+            failed.append(lo)
+            continue
         key = _kite_symbol_key(inst)
         ltp = _fetch_ltps(facade, [key]).get(key)
         if ltp is None:
@@ -1310,6 +1372,13 @@ def _run_pre_trade_checks(
         if not exposure.ok:
             raise ZerodhaExecutionError(exposure.message)
         return margin
+
+    # Close / EXIT: never place reducing orders unless Kite still holds inventory.
+    inventory = assert_reducing_positions_exist(
+        facade, ordered, inst_map, transaction_fn=txn_fn,
+    )
+    if not inventory.ok:
+        raise ZerodhaExecutionError(inventory.message)
     return None
 
 
@@ -1774,6 +1843,7 @@ def preview_close_execution(
     open_exits = [l for l in all_legs if l.get("executed") and l.get("exit_price") is None]
     if not open_exits:
         raise ZerodhaExecutionError("No open legs to close")
+    _require_opening_kite_fills(db, trade_id)
     facade, master = _build_client()
     live_map, inst_map = _live_ltp_map(facade, master, open_exits)
     strategy = ""
@@ -1782,6 +1852,14 @@ def preview_close_execution(
         strategy = str((sug_row or {}).get("strategy") or "")
     ordered = legs_in_execution_order(open_exits, strategy, mode="close")
     plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="close", strategy=strategy)
+    inventory = assert_reducing_positions_exist(
+        facade,
+        ordered,
+        inst_map,
+        transaction_fn=lambda leg: _transaction_type_for_leg(leg, "close"),
+    )
+    if not inventory.ok:
+        raise ZerodhaExecutionError(inventory.message)
     return ExecutionPreview(
         operation="EXIT",
         suggestion_id=trade.get("suggestion_id"),
@@ -1833,6 +1911,8 @@ def close_trade_in_zerodha(
         open_exits = [l for l in executed_legs if l.get("exit_price") is None]
         if not open_exits:
             raise ZerodhaExecutionError("All legs already have exit fills recorded")
+
+        _require_opening_kite_fills(db, trade_id)
 
         pending = BrokerOrderRepo(db).pending_for_trade(trade_id, operation="EXIT")
         if pending:
@@ -2067,6 +2147,16 @@ def execute_supplement_in_zerodha(
             for f in completed
         ]
         supplement_trade(db, trade_id, fills)
+        try:
+            TradeRepo(db).write_execution_provenance(
+                trade_id, execution_provider=EXECUTION_PROVIDER_ZERODHA,
+            )
+            db.commit()
+        except Exception:
+            logger.exception(
+                "failed to stamp execution_provider=zerodha after supplement %s",
+                trade_id,
+            )
 
         recon = reconcile_positions_after_fill(
             facade, ordered, inst_map,
@@ -2099,6 +2189,7 @@ def close_trade_in_zerodha_async(
 ) -> ExecutionOutcome:
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
+    _require_opening_kite_fills(db, trade_id)
     _assert_execution_not_in_flight(db, trade_id=trade_id)
 
     trd = TradeRepo(db)

@@ -158,3 +158,125 @@ def test_margin_fail_closed_when_usable_funds_absent():
     out = check_margin_for_orders(facade, [{"variety": "regular"}])
     assert not out.ok
     assert "did not report available margin" in out.message
+
+
+def test_reducing_positions_blocks_exit_when_flat():
+    from providers.zerodha.execution_checks import assert_reducing_positions_exist
+
+    facade = MagicMock()
+    facade.positions.return_value = {"net": []}
+    legs = [{"leg_order": 1, "action": "SELL", "lots": 1, "lot_size": 50}]
+    inst_map = {1: _inst("NIFTY26MAY23000CE")}
+    out = assert_reducing_positions_exist(
+        facade, legs, inst_map,
+        transaction_fn=lambda leg: leg["action"],
+    )
+    assert not out.ok
+    assert "no matching open position" in out.message
+
+
+def test_reducing_positions_allows_sell_when_long():
+    from providers.zerodha.execution_checks import assert_reducing_positions_exist
+
+    facade = MagicMock()
+    facade.positions.return_value = {
+        "net": [{"tradingsymbol": "NIFTY26MAY23000CE", "quantity": 50}],
+    }
+    legs = [{"leg_order": 1, "action": "SELL", "lots": 1, "lot_size": 50}]
+    inst_map = {1: _inst("NIFTY26MAY23000CE")}
+    out = assert_reducing_positions_exist(
+        facade, legs, inst_map,
+        transaction_fn=lambda leg: leg["action"],
+    )
+    assert out.ok
+
+
+def test_reducing_positions_allows_buy_when_short():
+    from providers.zerodha.execution_checks import assert_reducing_positions_exist
+
+    facade = MagicMock()
+    facade.positions.return_value = {
+        "net": [{"tradingsymbol": "NIFTY26MAY23000CE", "quantity": -50}],
+    }
+    legs = [{"leg_order": 1, "action": "BUY", "lots": 1, "lot_size": 50}]
+    inst_map = {1: _inst("NIFTY26MAY23000CE")}
+    out = assert_reducing_positions_exist(
+        facade, legs, inst_map,
+        transaction_fn=lambda leg: leg["action"],
+    )
+    assert out.ok
+
+
+def test_reducing_positions_fail_closed_on_positions_error():
+    from providers.zerodha.execution_checks import assert_reducing_positions_exist
+
+    facade = MagicMock()
+    facade.positions.side_effect = RuntimeError("kite down")
+    legs = [{"leg_order": 1, "action": "SELL", "lots": 1, "lot_size": 50}]
+    inst_map = {1: _inst("NIFTY26MAY23000CE")}
+    out = assert_reducing_positions_exist(
+        facade, legs, inst_map,
+        transaction_fn=lambda leg: leg["action"],
+    )
+    assert not out.ok
+    assert "Could not fetch Zerodha positions" in out.message
+
+
+def test_reducing_positions_ignores_disable_flag(monkeypatch):
+    from providers.zerodha import execution_checks as ec
+
+    monkeypatch.setitem(ec.ZERODHA_EXECUTION_CONFIG, "exit_position_check_enabled", False)
+    facade = MagicMock()
+    facade.positions.return_value = {"net": []}
+    legs = [{"leg_order": 1, "action": "SELL", "lots": 1, "lot_size": 50}]
+    inst_map = {1: _inst("NIFTY26MAY23000CE")}
+    out = ec.assert_reducing_positions_exist(
+        facade, legs, inst_map,
+        transaction_fn=lambda leg: leg["action"],
+    )
+    assert not out.ok
+
+
+def test_exposure_fail_closed_on_positions_error():
+    facade = MagicMock()
+    facade.positions.side_effect = RuntimeError("kite down")
+    legs = [{"leg_order": 1, "action": "BUY", "lots": 1, "lot_size": 50}]
+    inst_map = {1: _inst("NIFTY26MAY23000CE")}
+    out = check_exposure_conflicts(
+        facade, legs, inst_map,
+        transaction_fn=lambda leg: leg["action"],
+    )
+    assert not out.ok
+    assert "could not fetch zerodha positions" in out.message.lower()
+
+
+def test_exit_reopen_refuses_when_exit_not_on_broker():
+    from providers.zerodha.execution_checks import assert_exit_fill_reflected_for_reopen
+
+    facade = MagicMock()
+    # Still fully long — EXIT SELL never happened on Kite
+    facade.positions.return_value = {
+        "net": [{"tradingsymbol": "NIFTY26MAY23000CE", "quantity": 50}],
+    }
+    legs = [{"leg_order": 1, "lots": 1, "lot_size": 50}]
+    inst_map = {1: _inst("NIFTY26MAY23000CE")}
+    out = assert_exit_fill_reflected_for_reopen(
+        facade, legs, inst_map,
+        close_transaction_fn=lambda _: "SELL",
+    )
+    assert not out.ok
+    assert "still long" in out.message
+
+
+def test_exit_reopen_allows_when_flat_after_exit():
+    from providers.zerodha.execution_checks import assert_exit_fill_reflected_for_reopen
+
+    facade = MagicMock()
+    facade.positions.return_value = {"net": []}
+    legs = [{"leg_order": 1, "lots": 1, "lot_size": 50}]
+    inst_map = {1: _inst("NIFTY26MAY23000CE")}
+    out = assert_exit_fill_reflected_for_reopen(
+        facade, legs, inst_map,
+        close_transaction_fn=lambda _: "SELL",
+    )
+    assert out.ok

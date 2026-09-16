@@ -37,6 +37,188 @@ class PositionReconcileResult:
     message: str = ""
 
 
+@dataclass
+class ReducingPositionCheckResult:
+    """Result of verifying broker inventory before EXIT / flatten / rollback."""
+
+    ok: bool
+    missing: List[str] = field(default_factory=list)
+    message: str = ""
+
+
+def _broker_net_by_symbol(facade: Any) -> Dict[str, int]:
+    """Net qty by tradingsymbol from Kite positions (fail loudly to caller)."""
+    pos = facade.positions()
+    net_rows = pos.get("net") or pos.get("day") or []
+    by_sym: Dict[str, int] = {}
+    for row in net_rows:
+        sym = str(row.get("tradingsymbol") or "")
+        qty = int(row.get("quantity") or 0)
+        if sym:
+            by_sym[sym] = by_sym.get(sym, 0) + qty
+    return by_sym
+
+
+def _planned_qty(
+    leg: dict,
+    inst: Instrument,
+    *,
+    quantity_override: Optional[int] = None,
+) -> int:
+    if quantity_override is not None:
+        return int(quantity_override)
+    lots = int(leg.get("lots_actual") or leg.get("lots") or 1)
+    return lots * int(inst.lot_size or leg.get("lot_size") or 0)
+
+
+def assert_reducing_positions_exist(
+    facade: Any,
+    legs: List[dict],
+    inst_map: Dict[int, Instrument],
+    *,
+    transaction_fn,
+    quantity_overrides: Optional[Dict[int, int]] = None,
+) -> ReducingPositionCheckResult:
+    """
+    Fail closed before EXIT / close / entry-rollback orders.
+
+    An EXIT (or flatten rollback) with no opposing broker position *opens*
+    new exposure instead of closing. Require enough net inventory:
+
+    - BUY exit/flatten needs short: net_qty <= -planned_qty
+    - SELL exit/flatten needs long: net_qty >= planned_qty
+    """
+    if not ZERODHA_EXECUTION_CONFIG.get("exit_position_check_enabled", True):
+        # Config flag retained for ops visibility, but EXIT/rollback inventory
+        # checks are never skipped — disabling caused EXIT-without-position losses.
+        logger.warning(
+            "exit_position_check_enabled=False ignored; inventory gate always on"
+        )
+    if not legs:
+        return ReducingPositionCheckResult(ok=True)
+    try:
+        by_sym = _broker_net_by_symbol(facade)
+    except Exception as exc:
+        return ReducingPositionCheckResult(
+            ok=False,
+            message=(
+                "Could not fetch Zerodha positions to verify exit inventory "
+                f"({exc})"
+            ),
+        )
+
+    missing: List[str] = []
+    overrides = quantity_overrides or {}
+    for leg in legs:
+        lo = int(leg["leg_order"])
+        inst = inst_map[lo]
+        sym = inst.tradingsymbol
+        qty = _planned_qty(leg, inst, quantity_override=overrides.get(lo))
+        if qty <= 0:
+            missing.append(f"leg {lo}: planned qty must be > 0 (got {qty})")
+            continue
+        txn = str(transaction_fn(leg) or "").upper()
+        have = int(by_sym.get(sym, 0))
+        if txn == "BUY":
+            if have > -qty:
+                missing.append(
+                    f"leg {lo}: BUY exit needs short ≥{qty} of {sym} "
+                    f"(broker net={have})"
+                )
+        elif txn == "SELL":
+            if have < qty:
+                missing.append(
+                    f"leg {lo}: SELL exit needs long ≥{qty} of {sym} "
+                    f"(broker net={have})"
+                )
+        else:
+            missing.append(f"leg {lo}: unknown transaction_type={txn!r}")
+
+    if missing:
+        return ReducingPositionCheckResult(
+            ok=False,
+            missing=missing,
+            message=(
+                "Zerodha has no matching open position to close/revert — "
+                "refusing EXIT that would open new exposure. "
+                + "; ".join(missing)
+            ),
+        )
+    return ReducingPositionCheckResult(ok=True)
+
+
+def assert_exit_fill_reflected_for_reopen(
+    facade: Any,
+    legs: List[dict],
+    inst_map: Dict[int, Instrument],
+    *,
+    close_transaction_fn,
+    quantity_overrides: Optional[Dict[int, int]] = None,
+) -> ReducingPositionCheckResult:
+    """
+    Before re-opening after a failed EXIT leg (close rollback).
+
+    Refuse the reopen order if broker inventory still looks like the EXIT
+    never took effect — otherwise a "rollback" would add exposure on top
+    of the still-open position.
+    """
+    if not ZERODHA_EXECUTION_CONFIG.get("exit_position_check_enabled", True):
+        # Config flag retained for ops visibility, but EXIT/rollback inventory
+        # checks are never skipped — disabling caused EXIT-without-position losses.
+        logger.warning(
+            "exit_position_check_enabled=False ignored; inventory gate always on"
+        )
+    if not legs:
+        return ReducingPositionCheckResult(ok=True)
+    try:
+        by_sym = _broker_net_by_symbol(facade)
+    except Exception as exc:
+        return ReducingPositionCheckResult(
+            ok=False,
+            message=(
+                "Could not fetch Zerodha positions to verify exit rollback "
+                f"({exc})"
+            ),
+        )
+
+    missing: List[str] = []
+    overrides = quantity_overrides or {}
+    for leg in legs:
+        lo = int(leg["leg_order"])
+        inst = inst_map[lo]
+        sym = inst.tradingsymbol
+        qty = _planned_qty(leg, inst, quantity_override=overrides.get(lo))
+        if qty <= 0:
+            missing.append(f"leg {lo}: planned qty must be > 0 (got {qty})")
+            continue
+        close_txn = str(close_transaction_fn(leg) or "").upper()
+        have = int(by_sym.get(sym, 0))
+        # EXIT SELL flattened a long — after a real fill, net should be < qty.
+        if close_txn == "SELL" and have >= qty:
+            missing.append(
+                f"leg {lo}: EXIT SELL not reflected for {sym} "
+                f"(still long net={have}, refuse reopen BUY)"
+            )
+        elif close_txn == "BUY" and have <= -qty:
+            missing.append(
+                f"leg {lo}: EXIT BUY not reflected for {sym} "
+                f"(still short net={have}, refuse reopen SELL)"
+            )
+        elif close_txn not in ("BUY", "SELL"):
+            missing.append(f"leg {lo}: unknown close transaction_type={close_txn!r}")
+
+    if missing:
+        return ReducingPositionCheckResult(
+            ok=False,
+            missing=missing,
+            message=(
+                "Zerodha still shows the pre-exit position — refusing rollback "
+                "reopen that would add exposure. " + "; ".join(missing)
+            ),
+        )
+    return ReducingPositionCheckResult(ok=True)
+
+
 def _available_cash(margins: dict) -> Optional[float]:
     """Usable equity funds — same preference as account_snapshot (live_balance)."""
     eq = margins.get("equity") or {}
@@ -237,8 +419,14 @@ def check_exposure_conflicts(
     try:
         pos = facade.positions()
     except Exception as exc:
-        logger.debug("positions fetch failed: %s", exc)
-        return ExposureCheckResult(ok=True, message=f"exposure check skipped: {exc}")
+        logger.warning("positions fetch failed for exposure check: %s", exc)
+        return ExposureCheckResult(
+            ok=False,
+            message=(
+                "Execution blocked: could not fetch Zerodha positions for "
+                f"exposure check ({exc})"
+            ),
+        )
 
     net_rows = pos.get("net") or pos.get("day") or []
     by_sym: Dict[str, int] = {}
