@@ -6724,14 +6724,18 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     const zCloseTitle = escapeHtml(
       showZerodhaClose
         ? zCloseSt.title
-        : 'Close in Zerodha is only available when this trade has ENTRY/SUPPLEMENT fills on Kite. Use Confirm & record fills for paper/manual trades.'
+        : 'Close in Zerodha is only available when this trade has ENTRY/SUPPLEMENT fills on Kite.'
     );
+    // Zerodha-channel trades must flatten on Kite — hide DB-only record fills.
+    const manualCloseBtnHtml = showZerodhaClose
+      ? ''
+      : `<button class="btn btn-danger btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm &amp; record fills</button>`;
     const zCloseBtnHtml = showZerodhaClose
       ? `<button type="button" class="${zCloseBtnClass}"${zCloseAria} data-trade-id="${escapeHtml(tradeId)}" title="${zCloseTitle}">Close in Zerodha</button>`
       : '';
     const zCloseHintHtml = showZerodhaClose
-      ? `<p class="muted" style="font-size:.78rem;margin-top:6px">Leave prices blank to use live market (Zerodha auto LIMIT or record at LTP). Typed values override.</p>`
-      : `<p class="muted" style="font-size:.78rem;margin-top:6px">Leave prices blank to record at the live market price shown on the left. Typed values override.</p>`;
+      ? `<p class="muted" style="font-size:.78rem;margin-top:6px">Zerodha trade — close places EXIT orders on Kite (blank = live auto LIMIT; typed = your LIMIT). DB-only record is blocked.</p>`
+      : `<p class="muted" style="font-size:.78rem;margin-top:6px">Paper/manual trade — leave prices blank to record at live LTP, or type fills. Close in Zerodha stays hidden until Kite ENTRY/SUPPLEMENT fills exist.</p>`;
 
     content.innerHTML = `
         <div class="close-two-col">
@@ -6751,7 +6755,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
 
           <!-- RIGHT: actual fills entry -->
           <div class="close-col close-col-fills">
-            ${execOrderFillsSection(data.legs, closeStrategy, '\u270f\ufe0f Enter your actual fills')}
+            ${execOrderFillsSection(data.legs, closeStrategy, showZerodhaClose ? '\u270f\ufe0f Optional LIMIT overrides' : '\u270f\ufe0f Enter your actual fills')}
             <div class="leg-exit-grid">${fillLegsHtml}</div>
             <div class="fill-pnl-preview" id="fill-pnl-${escapeHtml(tradeId)}"${closePremium ? ` data-premium-rs="${closePremium.rs}" data-premium-kind="${closePremium.kind}"` : ''}>
               <div class="live-pnl-label">P&amp;L based on your fills</div>
@@ -6760,8 +6764,8 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
               <div>Net P&amp;L: <strong class="fill-pnl-value">\u2014</strong><span class="fill-pnl-pct pnl-pct-bracket muted"></span></div>
             </div>
             <div class="btn-row" style="margin-top:8px">
-              <button class="btn btn-danger btn-close-submit" data-trade-id="${escapeHtml(tradeId)}">Confirm &amp; record fills</button>
               ${zCloseBtnHtml}
+              ${manualCloseBtnHtml}
             </div>
             ${zCloseHintHtml}
           </div>
@@ -6852,7 +6856,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     // Live prices come from SSE only during market hours — do NOT poll
     // close-suggestion (EOD bhavcopy) as it fights live ticks and flickers.
 
-    panel.querySelector('.btn-close-submit').addEventListener('click', () =>
+    panel.querySelector('.btn-close-submit')?.addEventListener('click', () =>
       submitClose(tradeId, content));
     const zClose = panel.querySelector('.btn-zerodha-close');
     if (zClose) {
@@ -6956,6 +6960,14 @@ function _resolveCloseExitPrice(panel, row) {
 }
 
 async function submitClose(tradeId, panel) {
+  // Belt-and-suspenders: Zerodha-channel trades must use Close in Zerodha.
+  try {
+    const meta = await API(`/api/trades/${tradeId}`).catch(() => null);
+    if (tradeExecutionChannel(meta || {}) === 'zerodha') {
+      toast('This is a Zerodha trade — use Close in Zerodha so orders hit Kite', 'warn');
+      return;
+    }
+  } catch (_) { /* fall through to server 409 */ }
   const requiredRows = $$('.leg-exit-row[data-leg-order]', panel);
   const exits = requiredRows.map(row => {
     const lo = parseInt(row.dataset.legOrder, 10);

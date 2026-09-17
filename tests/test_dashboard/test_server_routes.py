@@ -127,6 +127,12 @@ class TestSupplementRoute:
 
 class TestCloseRoute:
     def test_returns_400_on_value_error(self, client, mocker):
+        mocker.patch(
+            "lifecycle.zerodha_executor.trade_execution_channel",
+            return_value="manual",
+        )
+        mocker.patch("dashboard.server.TradeRepo.get",
+                     return_value={"trade_id": "TRD-X"})
         mocker.patch("dashboard.server.close_trade_with_fills",
                      side_effect=ValueError("no legs"))
         resp = client.post("/api/trades/TRD-X/close",
@@ -135,6 +141,12 @@ class TestCloseRoute:
         assert resp.status_code == 400
 
     def test_ok_on_success(self, client, mocker):
+        mocker.patch(
+            "lifecycle.zerodha_executor.trade_execution_channel",
+            return_value="manual",
+        )
+        mocker.patch("dashboard.server.TradeRepo.get",
+                     return_value={"trade_id": "TRD-1"})
         mocker.patch("dashboard.server.close_trade_with_fills", return_value=None)
         resp = client.post("/api/trades/TRD-1/close",
                             data=json.dumps({"exits": [
@@ -142,6 +154,23 @@ class TestCloseRoute:
                             ]}),
                             content_type="application/json")
         assert resp.status_code == 200
+
+    def test_rejects_db_only_close_for_zerodha_channel(self, client, mocker):
+        mocker.patch("dashboard.server.TradeRepo.get",
+                     return_value={"trade_id": "TRD-Z"})
+        mocker.patch(
+            "lifecycle.zerodha_executor.trade_execution_channel",
+            return_value="zerodha",
+        )
+        close = mocker.patch("dashboard.server.close_trade_with_fills")
+        resp = client.post("/api/trades/TRD-Z/close",
+                            data=json.dumps({"exits": [
+                                {"leg_order": 1, "exit_price": 25.0}
+                            ]}),
+                            content_type="application/json")
+        assert resp.status_code == 409
+        assert "Close in Zerodha" in resp.get_json()["error"]
+        close.assert_not_called()
 
 
 class TestVoidTrade:

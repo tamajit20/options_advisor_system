@@ -1947,6 +1947,20 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/close", methods=["POST"])
     @_with_db
     def api_close_trade(db: SQLServerConnection, trade_id: str):
+        from lifecycle.zerodha_executor import (
+            EXECUTION_CHANNEL_ZERODHA,
+            trade_execution_channel,
+        )
+        trade = TradeRepo(db).get(trade_id)
+        if trade is None:
+            return jsonify({"error": f"Unknown trade: {trade_id}"}), 404
+        if trade_execution_channel(db, trade) == EXECUTION_CHANNEL_ZERODHA:
+            return jsonify({
+                "error": (
+                    "This trade opened on Zerodha — use Close in Zerodha so "
+                    "orders hit Kite. Manual record-fills is only for paper/manual trades."
+                ),
+            }), 409
         payload = request.get_json(silent=True) or {}
         exits_in = payload.get("exits") or []
         exits = []
