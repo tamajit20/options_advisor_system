@@ -1235,10 +1235,14 @@ class ExecutionPreview:
     all_limits_in_band: bool
     limit_vetoes: List[str]
     spot_at_execution: Optional[float]
-    margin_required: Optional[float] = None
+    margin_required: Optional[float] = None  # peak (gate)
     margin_available: Optional[float] = None
     margin_ok: Optional[bool] = None
     margin_message: Optional[str] = None
+    margin_final_required: Optional[float] = None
+    margin_peak_required: Optional[float] = None
+    margin_buffer_pct: Optional[float] = None
+    margin_path_steps: Optional[List[dict]] = None
 
     def to_dict(self) -> dict:
         return {
@@ -1255,6 +1259,10 @@ class ExecutionPreview:
             "margin_available": self.margin_available,
             "margin_ok": self.margin_ok,
             "margin_message": self.margin_message,
+            "margin_final_required": self.margin_final_required,
+            "margin_peak_required": self.margin_peak_required,
+            "margin_buffer_pct": self.margin_buffer_pct,
+            "margin_path_steps": self.margin_path_steps or [],
         }
 
 
@@ -1525,6 +1533,10 @@ def preview_suggestion_execution(
         margin_available=margin.available if margin else None,
         margin_ok=margin.ok if margin else None,
         margin_message=margin.message if margin else None,
+        margin_final_required=margin.final_required if margin else None,
+        margin_peak_required=margin.peak_required if margin else None,
+        margin_buffer_pct=margin.buffer_pct if margin else None,
+        margin_path_steps=list(margin.path_steps) if margin else None,
     )
 
 

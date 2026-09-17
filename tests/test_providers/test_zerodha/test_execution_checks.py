@@ -117,7 +117,70 @@ def test_margin_ok_when_usable_covers_required_plus_buffer():
     out = check_margin_for_orders(facade, [{"variety": "regular"}])
     assert out.ok
     assert out.required == 20000.0
+    assert out.peak_required == 20000.0
+    assert out.final_required == 20000.0
     assert out.available == 25000.0
+
+
+def test_margin_gates_on_path_peak_not_final():
+    """Legs can spike mid-sequence above the finished-structure margin."""
+    facade = MagicMock()
+
+    def _basket(orders, **_kwargs):
+        totals = {1: 100.0, 2: 300.0, 3: 250.0, 4: 100.0}
+        return {"final": {"total": totals[len(orders)]}}
+
+    facade.basket_order_margins.side_effect = _basket
+    # Peak 300 + 5% = 315; final is only 100 — must still fail.
+    facade.margins.return_value = {
+        "equity": {"available": {"live_balance": 280.0}},
+    }
+    params = [
+        {
+            "variety": "regular", "exchange": "NFO", "tradingsymbol": f"LEG{i}",
+            "transaction_type": "SELL" if i <= 2 else "BUY",
+            "quantity": 50, "product": "NRML", "order_type": "LIMIT",
+            "price": 10.0, "leg_order": i,
+        }
+        for i in range(1, 5)
+    ]
+    out = check_margin_for_orders(facade, params)
+    assert not out.ok
+    assert out.peak_required == 300.0
+    assert out.final_required == 100.0
+    assert out.required == 300.0
+    assert len(out.path_steps) == 4
+    assert out.path_steps[0]["delta"] == 100.0
+    assert out.path_steps[1]["delta"] == 200.0
+    assert out.path_steps[2]["delta"] == -50.0
+    assert out.path_steps[3]["delta"] == -150.0
+    assert "peak" in out.message.lower()
+
+
+def test_margin_path_peak_ok_when_available_covers_peak():
+    facade = MagicMock()
+
+    def _basket(orders, **_kwargs):
+        totals = {1: 100.0, 2: 300.0, 3: 250.0, 4: 100.0}
+        return {"final": {"total": totals[len(orders)]}}
+
+    facade.basket_order_margins.side_effect = _basket
+    facade.margins.return_value = {
+        "equity": {"available": {"live_balance": 400.0}},
+    }
+    params = [
+        {
+            "variety": "regular", "exchange": "NFO", "tradingsymbol": f"LEG{i}",
+            "transaction_type": "BUY", "quantity": 50, "product": "NRML",
+            "order_type": "LIMIT", "price": 10.0, "leg_order": i,
+        }
+        for i in range(1, 5)
+    ]
+    out = check_margin_for_orders(facade, params)
+    assert out.ok
+    assert out.peak_required == 300.0
+    assert out.final_required == 100.0
+    assert facade.basket_order_margins.call_count == 4
 
 
 def test_margin_fail_closed_when_balance_unreadable():

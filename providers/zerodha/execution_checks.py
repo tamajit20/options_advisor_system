@@ -18,9 +18,13 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MarginCheckResult:
     ok: bool
-    required: float = 0.0
+    required: float = 0.0  # peak (gate); same as peak_required
     available: float = 0.0
     message: str = ""
+    final_required: float = 0.0
+    peak_required: float = 0.0
+    buffer_pct: float = 0.0
+    path_steps: List[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -277,51 +281,117 @@ def _required_from_margin_response(resp: Any) -> Optional[float]:
     return None
 
 
+_KITE_MARGIN_PARAM_KEYS = (
+    "variety",
+    "exchange",
+    "tradingsymbol",
+    "transaction_type",
+    "quantity",
+    "product",
+    "order_type",
+    "price",
+)
+
+
+def _params_for_kite(order_params: List[dict]) -> List[dict]:
+    """Drop UI-only keys (e.g. leg_order) before calling Kite margin APIs."""
+    out: List[dict] = []
+    for p in order_params:
+        out.append({k: p[k] for k in _KITE_MARGIN_PARAM_KEYS if k in p})
+    return out
+
+
+def _estimate_basket_required(
+    facade: Any,
+    order_params: List[dict],
+    *,
+    errors: List[str],
+) -> Optional[float]:
+    kite_params = _params_for_kite(order_params)
+    if hasattr(facade, "basket_order_margins"):
+        try:
+            return _required_from_margin_response(
+                facade.basket_order_margins(kite_params)
+            )
+        except Exception as exc:
+            errors.append(f"basket_order_margins: {exc}")
+            logger.warning("basket_order_margins failed: %s", exc)
+    if len(kite_params) == 1 and hasattr(facade, "order_margins"):
+        try:
+            return _required_from_margin_response(
+                facade.order_margins(kite_params)
+            )
+        except Exception as exc:
+            errors.append(f"order_margins: {exc}")
+            logger.warning("order_margins failed: %s", exc)
+    return None
+
+
+def _build_margin_path_steps(
+    order_params: List[dict],
+    cumulatives: List[float],
+) -> List[dict]:
+    steps: List[dict] = []
+    prev = 0.0
+    for i, cum in enumerate(cumulatives):
+        p = order_params[i] if i < len(order_params) else {}
+        delta = cum - prev
+        steps.append({
+            "step": i + 1,
+            "leg_order": p.get("leg_order"),
+            "tradingsymbol": str(p.get("tradingsymbol") or ""),
+            "transaction_type": str(p.get("transaction_type") or ""),
+            "cumulative": round(cum, 2),
+            "delta": round(delta, 2),
+        })
+        prev = cum
+    return steps
+
+
 def check_margin_for_orders(
     facade: Any,
     order_params: List[dict],
     *,
     fallback_required: Optional[float] = None,
 ) -> MarginCheckResult:
-    """Estimate margin for planned orders and compare to available margin.
+    """Estimate margin along the execution path; gate on peak, not only final.
 
-    Fail-closed: if Kite cannot report required margin or available funds,
-    execution is blocked. Multi-leg structures use basket margins so hedge
-    benefit is counted; a single-leg order can use ``order_margins``.
+    For multi-leg orders we call Kite basket margins on each prefix of the
+    planned sequence (same order as placement). Peak = max(cumulative);
+    final = full basket. Available cash must cover peak × (1 + buffer).
     """
     if not order_params:
         return MarginCheckResult(ok=True)
     if not ZERODHA_EXECUTION_CONFIG.get("margin_check_enabled", True):
         return MarginCheckResult(ok=True)
 
-    required: Optional[float] = None
     errors: List[str] = []
+    cumulatives: List[float] = []
+    for i in range(1, len(order_params) + 1):
+        req = _estimate_basket_required(
+            facade, order_params[:i], errors=errors,
+        )
+        if req is None:
+            break
+        cumulatives.append(float(req))
 
-    if hasattr(facade, "basket_order_margins"):
-        try:
-            required = _required_from_margin_response(
-                facade.basket_order_margins(order_params)
-            )
-        except Exception as exc:
-            errors.append(f"basket_order_margins: {exc}")
-            logger.warning("basket_order_margins failed: %s", exc)
+    final_required: Optional[float] = None
+    peak_required: Optional[float] = None
+    path_steps: List[dict] = []
 
-    if required is None and len(order_params) == 1:
+    if len(cumulatives) == len(order_params):
+        final_required = cumulatives[-1]
+        peak_required = max(cumulatives)
+        path_steps = _build_margin_path_steps(order_params, cumulatives)
+    elif fallback_required is not None:
         try:
-            required = _required_from_margin_response(
-                facade.order_margins(order_params)
-            )
-        except Exception as exc:
-            errors.append(f"order_margins: {exc}")
-            logger.warning("order_margins failed: %s", exc)
-
-    if required is None and fallback_required is not None:
-        try:
-            required = abs(float(fallback_required))
+            final_required = abs(float(fallback_required))
+            peak_required = final_required
         except (TypeError, ValueError):
-            required = None
+            final_required = None
+            peak_required = None
 
-    if required is None:
+    if peak_required is None or final_required is None:
         detail = "; ".join(errors) if errors else "empty Kite margin response"
         return MarginCheckResult(
             ok=False,
@@ -336,7 +406,10 @@ def check_margin_for_orders(
     except Exception as exc:
         return MarginCheckResult(
             ok=False,
-            required=required,
+            required=peak_required,
+            peak_required=peak_required,
+            final_required=final_required,
+            path_steps=path_steps,
             message=(
                 "Execution blocked: could not read Zerodha account balance "
                 f"({exc})"
@@ -346,23 +419,44 @@ def check_margin_for_orders(
     if available is None:
         return MarginCheckResult(
             ok=False,
-            required=required,
+            required=peak_required,
+            peak_required=peak_required,
+            final_required=final_required,
+            path_steps=path_steps,
             message="Execution blocked: Zerodha did not report available margin",
         )
     buffer_pct = float(ZERODHA_EXECUTION_CONFIG.get("margin_buffer_pct", 5)) / 100.0
-    need = required * (1.0 + buffer_pct)
+    need = peak_required * (1.0 + buffer_pct)
     if available < need:
         return MarginCheckResult(
             ok=False,
-            required=required,
+            required=peak_required,
+            peak_required=peak_required,
+            final_required=final_required,
             available=available,
+            buffer_pct=buffer_pct * 100.0,
+            path_steps=path_steps,
             message=(
-                f"Insufficient funds in Zerodha: need ~₹{need:,.0f} "
-                f"(required ₹{required:,.0f} + {buffer_pct * 100:.0f}% buffer), "
+                f"Insufficient funds in Zerodha: need ~₹{need:,.0f} at peak "
+                f"(peak ₹{peak_required:,.0f} + {buffer_pct * 100:.0f}% buffer; "
+                f"final structure ₹{final_required:,.0f}), "
                 f"available ₹{available:,.0f}"
             ),
         )
-    return MarginCheckResult(ok=True, required=required, available=available)
+    return MarginCheckResult(
+        ok=True,
+        required=peak_required,
+        peak_required=peak_required,
+        final_required=final_required,
+        available=available,
+        buffer_pct=buffer_pct * 100.0,
+        path_steps=path_steps,
+        message=(
+            f"Peak during place ₹{peak_required:,.0f}; "
+            f"final structure ₹{final_required:,.0f} "
+            f"(+{buffer_pct * 100:.0f}% buffer on peak)"
+        ),
+    )
 
 
 def build_order_margin_params(
@@ -395,6 +489,7 @@ def build_order_margin_params(
             "product": product,
             "order_type": "LIMIT",
             "price": limit_px,
+            "leg_order": lo,
         })
     return out
 

@@ -722,22 +722,71 @@ function _renderZerodhaPreviewTable(preview) {
     </div>`;
 }
 
+function _renderZerodhaMarginPathHelp(preview) {
+  const steps = preview.margin_path_steps || [];
+  if (!steps.length) {
+    return 'Peak is the highest Zerodha margin along the place sequence; final is the full structure. A buffer is applied on the peak.';
+  }
+  const rows = steps.map(s => {
+    const side = escapeHtml(s.transaction_type || '');
+    const sym = escapeHtml(s.tradingsymbol || '');
+    const delta = Number(s.delta);
+    const deltaTxt = (delta >= 0 ? '+' : '') + `\u20b9${fmt(Math.abs(delta))}`;
+    return `<tr>
+      <td class="num">${s.step}</td>
+      <td>${side}</td>
+      <td>${sym}</td>
+      <td class="num">${deltaTxt}</td>
+      <td class="num">\u20b9${fmt(s.cumulative)}</td>
+    </tr>`;
+  }).join('');
+  const peak = preview.margin_peak_required != null ? preview.margin_peak_required : preview.margin_required;
+  const fin = preview.margin_final_required != null ? preview.margin_final_required : preview.margin_required;
+  const buf = preview.margin_buffer_pct != null ? preview.margin_buffer_pct : null;
+  return `
+    <strong>How max required is calculated</strong><br>
+    Same order as placement. Each row is Kite basket margin after that step.<br>
+    Peak = max(cumulative); Final = last step.${buf != null ? ` Buffer ${fmt(buf)}% applies on peak.` : ''}<br>
+    <table class="dt" style="margin-top:6px;font-size:.78rem;width:100%">
+      <thead><tr>
+        <th class="num">Step</th><th>Side</th><th>Symbol</th>
+        <th class="num">Delta</th><th class="num">Cumulative</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="margin-top:4px">Peak <strong>\u20b9${fmt(peak)}</strong> \u00b7 Final <strong>\u20b9${fmt(fin)}</strong></div>`;
+}
+
 function _renderZerodhaFundsBlock(preview) {
   if (!preview) return '';
   if (preview.margin_required == null && preview.margin_available == null
-      && preview.margin_ok == null && !preview.margin_message) {
+      && preview.margin_ok == null && !preview.margin_message
+      && preview.margin_peak_required == null && preview.margin_final_required == null) {
     return '';
   }
-  const need = preview.margin_required != null ? `\u20b9${fmt(preview.margin_required)}` : '\u2014';
+  const peak = preview.margin_peak_required != null
+    ? preview.margin_peak_required
+    : preview.margin_required;
+  const fin = preview.margin_final_required != null
+    ? preview.margin_final_required
+    : preview.margin_required;
+  const peakTxt = peak != null ? `\u20b9${fmt(peak)}` : '\u2014';
+  const finalTxt = fin != null ? `\u20b9${fmt(fin)}` : '\u2014';
   const have = preview.margin_available != null ? `\u20b9${fmt(preview.margin_available)}` : '\u2014';
   const blocked = preview.margin_ok === false;
   const note = preview.margin_message
     || (blocked
-      ? 'Not enough funds in Zerodha to place these orders'
-      : 'Available margin covers this order (incl. buffer)');
+      ? 'Not enough funds in Zerodha for the peak margin during place'
+      : 'Available margin covers peak during place (incl. buffer)');
+  const helpHtml = _renderZerodhaMarginPathHelp(preview);
   return `
     <div class="${blocked ? 'pending-close-alert' : ''}" style="margin:0 0 10px;padding:8px 10px;border:1px solid #2a3744;border-radius:6px">
-      <div><strong>Amount needed</strong> ${need} \u00b7 <strong>Available margin</strong> ${have}</div>
+      <div>
+        <strong>Final</strong> ${finalTxt}
+        \u00b7 <strong>Max required (peak)</strong> ${peakTxt}
+        <span class="term-help" tabindex="0" aria-label="Margin path calculation">\u24d8<span class="term-help-popup">${helpHtml}</span></span>
+        \u00b7 <strong>Available</strong> ${have}
+      </div>
       <div class="muted" style="font-size:.82rem;margin-top:4px">${escapeHtml(note)}</div>
     </div>`;
 }
@@ -750,6 +799,9 @@ function showZerodhaConfirmModal(preview, { title, submitLabel, onConfirm }) {
   const modal = _ensureZerodhaConfirmModal();
   delete modal.dataset.ownerKey;
   _setZerodhaModalBody(title || 'Confirm Zerodha orders', _renderZerodhaPreviewTable(preview));
+  if (typeof wireTermHelpToggle === 'function') {
+    wireTermHelpToggle(modal);
+  }
   const submit = document.getElementById('zerodha-confirm-submit');
   submit.hidden = false;
   const fundsBlocked = preview && preview.operation !== 'EXIT' && preview.margin_ok === false;
@@ -759,6 +811,9 @@ function showZerodhaConfirmModal(preview, { title, submitLabel, onConfirm }) {
     submit.onclick = null;
     modal.hidden = false;
     document.body.classList.add('sg-modal-open');
+    if (typeof wireTermHelpToggle === 'function') {
+      wireTermHelpToggle(modal);
+    }
     return;
   }
   submit.onclick = async () => {
@@ -1550,7 +1605,7 @@ const TERM_HELP = {
   },
   margin_required: {
     label: 'Amount needed',
-    html: '<strong>Amount needed</strong> — Approximate margin Zerodha must have available to open this defined-risk spread (spread width minus net credit). Available margin is re-checked before orders are placed.',
+    html: '<strong>Amount needed</strong> — Approximate margin Zerodha must have available to open this defined-risk spread (spread width minus net credit). Before live place, the system also checks the <em>peak</em> margin along the leg sequence (not only the final structure) plus a buffer.',
   },
   capital_required: {
     label: 'Amount needed',

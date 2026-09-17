@@ -694,14 +694,23 @@ def test_preview_includes_margin_snapshot(
         "lifecycle.zerodha_executor._run_pre_trade_checks",
         return_value=MarginCheckResult(
             ok=True, required=18450.0, available=120000.0,
+            peak_required=18450.0, final_required=15000.0,
+            buffer_pct=5.0,
+            path_steps=[
+                {"step": 1, "leg_order": 1, "tradingsymbol": "X",
+                 "transaction_type": "BUY", "cumulative": 18450.0, "delta": 18450.0},
+            ],
         ),
     )
     mocker.patch("lifecycle.zerodha_executor._spot_ltp", return_value=23010.0)
     preview = preview_suggestion_execution(db_conn, "SUG-1")
     body = preview.to_dict()
     assert body["margin_required"] == 18450.0
+    assert body["margin_peak_required"] == 18450.0
+    assert body["margin_final_required"] == 15000.0
     assert body["margin_available"] == 120000.0
     assert body["margin_ok"] is True
+    assert body["margin_path_steps"][0]["cumulative"] == 18450.0
 
 
 def test_assert_ignores_the_job_the_async_worker_just_inserted(db_conn, mocker):
