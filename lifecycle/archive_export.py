@@ -21,6 +21,7 @@ from lifecycle.sql_backup import (
     bak_filename,
     host_backup_dir,
     hot_backup_marker_path,
+    make_host_readable,
     prepare_backup_dirs,
     prune_bak_files,
     sql_autocommit,
@@ -80,6 +81,7 @@ def run_archive_export(db: SQLServerConnection) -> int:
         dest_dir=dest_dir,
         sql_subdir="archive",
     )
+    make_host_readable(dest_dir / bak_name)
     # Keep older export chunks until laptop ACK. Pruning here would delete last
     # week's .bak while the laptop was off.
 
@@ -96,6 +98,7 @@ def run_archive_export(db: SQLServerConnection) -> int:
         "exported_at": now_ist().isoformat(),
     }
     manifest.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    make_host_readable(manifest)
     logger.info(
         "archive_export ready: %s (%d rows across %d tables)",
         rel_bak, total, sum(1 for v in counts.values() if v),

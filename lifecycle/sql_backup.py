@@ -100,6 +100,7 @@ def write_hot_backup_marker(*, bak_name: str, size_bytes: int) -> Path:
         "bytes": int(size_bytes),
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    make_host_readable(path)
     logger.info("hot backup confirmed: %s", path)
     return path
 
@@ -116,6 +117,14 @@ def prepare_backup_dirs() -> Path:
         except OSError:
             logger.debug("chmod 777 %s failed", path, exc_info=True)
     return root
+
+
+def make_host_readable(path: Path) -> None:
+    """SQL Server writes as uid 10001 with 640; laptop scp uses azureuser."""
+    try:
+        path.chmod(0o644)
+    except OSError:
+        logger.debug("chmod 644 %s failed", path, exc_info=True)
 
 
 def sql_backup_disk(filename: str, *, subdir: str = "") -> str:
@@ -304,6 +313,7 @@ def run_hot_backup(db: SQLServerConnection) -> Path:
     timeout = _job_timeout("db_backup", 1800)
     dest = prepare_backup_dirs()
     path = backup_database(db, db_name, filename, timeout=timeout)
+    make_host_readable(path)
     prune_bak_files(dest, keep_names={filename})
     write_hot_backup_marker(bak_name=filename, size_bytes=path.stat().st_size)
     return path

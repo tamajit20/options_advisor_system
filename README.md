@@ -139,7 +139,7 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 | `deploy/azure/remote-vm-install.ps1`                                              | VM Docker + app + port 5001         |
 | `deploy/azure/VMUpTimeConfiguration.ps1`                                          | Azure start/stop schedules          |
 | `deploy/azure/backup-database-to-laptop.ps1` / `restore-database-from-laptop.ps1` | Hot DB move                         |
-| `deploy/azure/pull-archive-and-merge.ps1` / `register-laptop-archive-task.ps1`    | Archive pull + ACK                  |
+| `deploy/azure/pull-archive-and-merge.ps1` / `register-laptop-archive-task.ps1`    | Archive pull + ACK (retries every 15m until ACK or ~15:45) |
 | `deploy/vm-restart.sh` / `deploy/update.sh`                                       | Rebuild/restart app                 |
 | `deploy/backup.sh` / `deploy/restore.sh` / `deploy/archive-export.sh`             | VM backup helpers                   |
 | `deploy/archive-truncate-vm.sh`                                                   | VM ACK truncate after laptop merge  |
@@ -159,7 +159,7 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
  Mon-Fri (VM up 08:55-15:45)
  08:55  Azure starts VM
  09:00  morning_eod_catchup  (+ events_seed on Monday)
- 09:15  Laptop archive task (retry until ACK or ~15:45)
+ 09:15  Laptop archive task (retry every 15m until ACK or ~15:45; needs readable VM ``*-latest.bak``)
  09:30  Fri: weekly_archive
  09:35  Fri: weekly_log_cleanup | daily: intraday_validator
  09:45 / 11:00 / 13:00 / 14:30  live_suggestion_engine
