@@ -1457,6 +1457,47 @@ def _assert_execution_not_in_flight(
             )
 
 
+def _mid_loop_live_price_check(
+    remaining: List[dict],
+    live_map: Dict[int, float],
+    *,
+    leg_order: int,
+    warnings: List[str],
+    structure_committed: bool,
+    label: str = "leg",
+) -> None:
+    """Refresh-time live gate. Hard-abort only when quotes are missing.
+
+    Once any leg of the structure is already filled (this run or prior), band
+    drift must **not** abort — that leaves one-sided broker exposure. LIMIT
+    pricing still uses the refreshed LTP; warn and continue.
+    """
+    price_gate = validate_live_prices(remaining, live_map)
+    if price_gate.ok:
+        return
+    hard = [
+        v for v in price_gate.vetoes
+        if any(m in v.lower() for m in ("unavailable", "missing", "invalid suggested"))
+    ]
+    if hard:
+        raise ZerodhaExecutionError(
+            f"Live prices unavailable before {label} {leg_order}: "
+            + "; ".join(hard)
+        )
+    msg = (
+        f"Live price drift before {label} {leg_order}: {price_gate.reason()}"
+    )
+    if structure_committed:
+        warnings.append(msg)
+        logger.warning(
+            "zerodha_executor: continuing after partial fill — %s", msg,
+        )
+        return
+    raise ZerodhaExecutionError(
+        f"Live prices out of band before {label} {leg_order}: {price_gate.reason()}"
+    )
+
+
 def _entry_context(
     db: SQLServerConnection,
     suggestion_id: str,
@@ -1689,11 +1730,13 @@ def execute_suggestion_in_zerodha(
                 remaining = [l for l in legs if int(l["leg_order"]) not in {
                     f.leg_order for f in completed
                 }]
-                price_gate = validate_live_prices(remaining, live_map)
-                if not price_gate.ok:
-                    raise ZerodhaExecutionError(
-                        f"Live prices out of band before leg {lo}: {price_gate.reason()}"
-                    )
+                _mid_loop_live_price_check(
+                    remaining, live_map,
+                    leg_order=lo,
+                    warnings=warnings,
+                    structure_committed=bool(completed),
+                    label="leg",
+                )
                 plan = plan_by_order[lo]
                 txn = _transaction_type_for_leg(leg, "entry")
                 if txn != plan.transaction_type:
@@ -2136,12 +2179,14 @@ def execute_supplement_in_zerodha(
                 remaining = [l for l in pending_legs if int(l["leg_order"]) not in {
                     f.leg_order for f in completed
                 }]
-                price_gate = validate_live_prices(remaining, live_map)
-                if not price_gate.ok:
-                    raise ZerodhaExecutionError(
-                        f"Live prices out of band before supplement leg {lo}: "
-                        f"{price_gate.reason()}"
-                    )
+                # Supplement = structure already open on Kite — never abort on band.
+                _mid_loop_live_price_check(
+                    remaining, live_map,
+                    leg_order=lo,
+                    warnings=warnings,
+                    structure_committed=True,
+                    label="supplement leg",
+                )
                 txn = _transaction_type_for_leg(leg, "entry")
                 user_lim = (leg_limits or {}).get(lo)
                 qmap = fetch_quote_map(facade, [_kite_symbol_key(inst_map[lo])])

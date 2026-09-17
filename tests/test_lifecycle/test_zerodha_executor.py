@@ -587,13 +587,14 @@ def test_close_passes_execution_job_id_to_place(db_conn, mocker, mock_instrument
     assert place.call_args.kwargs["execution_job_id"] == 9
 
 
-def test_supplement_rejects_live_prices_out_of_band(
+def test_supplement_continues_when_live_band_drifts(
     db_conn, mocker, mock_instrument, sample_leg,
 ):
+    """Partial structure is already open — band drift must not abort remaining legs."""
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
     mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     filled = {**sample_leg, "leg_order": 1, "executed": True, "fill_price": 100.0}
-    pending = {**sample_leg, "leg_order": 2, "executed": False}
+    pending = {**sample_leg, "leg_order": 2, "executed": False, "action": "BUY"}
     mocker.patch("database.models.TradeRepo.get", return_value={
         "trade_id": "TRD-1", "suggestion_id": "SUG-1",
     })
@@ -622,12 +623,42 @@ def test_supplement_rejects_live_prices_out_of_band(
     mocker.patch("lifecycle.zerodha_executor._enforce_limit_band")
     mocker.patch(
         "lifecycle.zerodha_executor.validate_live_prices",
-        return_value=MagicMock(ok=False, reason=lambda: "CE slipped"),
+        return_value=MagicMock(
+            ok=False,
+            vetoes=["leg 2: LTP ₹115.25 below band ₹120.44"],
+            reason=lambda: "leg 2: LTP ₹115.25 below band ₹120.44",
+        ),
     )
-    place = mocker.patch("lifecycle.zerodha_executor._place_and_monitor_leg")
-    with pytest.raises(ZerodhaExecutionError, match="Live prices out of band"):
-        execute_supplement_in_zerodha(db_conn, "TRD-1")
-    place.assert_not_called()
+    mocker.patch("lifecycle.zerodha_executor._refresh_leg_ltp", return_value=115.25)
+    mocker.patch(
+        "lifecycle.zerodha_executor.fetch_quote_map",
+        return_value={},
+    )
+    from lifecycle.zerodha_executor import LegFillOutcome
+    place = mocker.patch(
+        "lifecycle.zerodha_executor._place_and_monitor_leg",
+        return_value=LegFillOutcome(
+            leg_order=2, fill_price=115.25, fill_time=now_ist(),
+            kite_order_id="OID-2", broker_row_id=2,
+        ),
+    )
+    mocker.patch("lifecycle.zerodha_executor.supplement_trade")
+    outcome = execute_supplement_in_zerodha(db_conn, "TRD-1")
+    place.assert_called_once()
+    assert any("drift" in w.lower() or "band" in w.lower() for w in (outcome.warnings or []))
+
+
+def test_mid_loop_hard_blocks_missing_quote_even_when_committed():
+    from lifecycle.zerodha_executor import _mid_loop_live_price_check, ZerodhaExecutionError
+    warnings: list = []
+    with pytest.raises(ZerodhaExecutionError, match="unavailable"):
+        _mid_loop_live_price_check(
+            [{"leg_order": 2}],
+            {},
+            leg_order=2,
+            warnings=warnings,
+            structure_committed=True,
+        )
 
 
 def test_preview_close_execution_ignores_entry_price_band(db_conn, mocker, mock_instrument):
