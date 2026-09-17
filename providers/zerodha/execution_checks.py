@@ -75,6 +75,132 @@ def _planned_qty(
     return lots * int(inst.lot_size or leg.get("lot_size") or 0)
 
 
+def is_structure_flat_on_broker(
+    facade: Any,
+    legs: List[dict],
+    inst_map: Dict[int, Instrument],
+) -> bool:
+    """True when every leg's tradingsymbol has broker net qty 0."""
+    if not legs:
+        return True
+    by_sym = _broker_net_by_symbol(facade)
+    for leg in legs:
+        lo = int(leg["leg_order"])
+        sym = inst_map[lo].tradingsymbol
+        if int(by_sym.get(sym, 0)) != 0:
+            return False
+    return True
+
+
+def find_external_exit_fills(
+    facade: Any,
+    legs: List[dict],
+    inst_map: Dict[int, Instrument],
+    *,
+    transaction_fn,
+    after_ts: Optional[Any] = None,
+    quantity_overrides: Optional[Dict[int, int]] = None,
+) -> Tuple[Dict[int, dict], List[str]]:
+    """Match COMPLETE Kite day-orders to close each leg (manual flatten case).
+
+    Returns ``({leg_order: {fill_price, fill_time, kite_order_id, quantity}}, missing)``.
+    """
+    try:
+        orders = list(facade.orders() or [])
+    except Exception as exc:
+        return {}, [f"Could not fetch Zerodha orders ({exc})"]
+
+    complete = []
+    for row in orders:
+        status = str(row.get("status") or "").upper()
+        if status != "COMPLETE":
+            continue
+        avg = row.get("average_price")
+        try:
+            avg_f = float(avg) if avg is not None else 0.0
+        except (TypeError, ValueError):
+            avg_f = 0.0
+        if avg_f <= 0:
+            continue
+        complete.append(row)
+
+    used_oids: set = set()
+    found: Dict[int, dict] = {}
+    missing: List[str] = []
+    overrides = quantity_overrides or {}
+
+    for leg in legs:
+        lo = int(leg["leg_order"])
+        inst = inst_map[lo]
+        sym = inst.tradingsymbol
+        qty = _planned_qty(leg, inst, quantity_override=overrides.get(lo))
+        txn = str(transaction_fn(leg) or "").upper()
+        candidates = []
+        for row in complete:
+            oid = str(row.get("order_id") or "")
+            if oid and oid in used_oids:
+                continue
+            if str(row.get("tradingsymbol") or "") != sym:
+                continue
+            if str(row.get("transaction_type") or "").upper() != txn:
+                continue
+            filled_qty = int(
+                row.get("filled_quantity")
+                or row.get("quantity")
+                or 0
+            )
+            if qty > 0 and filled_qty > 0 and filled_qty != qty:
+                # Prefer exact qty; keep as weaker candidate if nothing exact.
+                pass
+            ts_raw = (
+                row.get("order_timestamp")
+                or row.get("exchange_timestamp")
+                or row.get("order_time")
+            )
+            if after_ts is not None and ts_raw is not None:
+                try:
+                    from datetime import datetime as _dt
+                    if hasattr(ts_raw, "timestamp"):
+                        ts = ts_raw
+                    else:
+                        ts = _dt.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                    after = after_ts
+                    if hasattr(after, "tzinfo") and after.tzinfo is None and hasattr(ts, "tzinfo") and ts.tzinfo is not None:
+                        ts = ts.replace(tzinfo=None)
+                    if ts < after:
+                        continue
+                except Exception:
+                    pass
+            exact = filled_qty == qty
+            candidates.append((0 if exact else 1, ts_raw or "", row))
+
+        if not candidates:
+            missing.append(
+                f"leg {lo}: no COMPLETE {txn} fill for {sym} on Kite today"
+            )
+            continue
+        candidates.sort(key=lambda x: (x[0], str(x[1])))
+        # Prefer exact qty, then latest timestamp among those.
+        exact = [c for c in candidates if c[0] == 0]
+        pool = exact or candidates
+        pool.sort(key=lambda x: str(x[1]), reverse=True)
+        _rank, _ts, row = pool[0]
+        oid = str(row.get("order_id") or "")
+        if oid:
+            used_oids.add(oid)
+        avg_f = float(row.get("average_price"))
+        found[lo] = {
+            "fill_price": avg_f,
+            "fill_time": row.get("order_timestamp") or row.get("exchange_timestamp"),
+            "kite_order_id": oid,
+            "quantity": int(row.get("filled_quantity") or row.get("quantity") or 0),
+            "tradingsymbol": sym,
+            "transaction_type": txn,
+        }
+
+    return found, missing
+
+
 def assert_reducing_positions_exist(
     facade: Any,
     legs: List[dict],

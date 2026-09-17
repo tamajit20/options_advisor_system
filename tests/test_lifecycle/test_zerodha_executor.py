@@ -158,6 +158,10 @@ def _patch_close_broker_gates(mocker):
         "lifecycle.zerodha_executor.assert_reducing_positions_exist",
         return_value=MagicMock(ok=True, message=""),
     )
+    mocker.patch(
+        "lifecycle.zerodha_executor.is_structure_flat_on_broker",
+        return_value=False,
+    )
 
 
 def test_trade_execution_channel_ignores_provider_stamp_alone(db_conn, mocker):
@@ -552,6 +556,101 @@ def test_close_trade_happy_path(db_conn, mocker, mock_instrument):
     assert out.ok
     assert out.trade_id == "TRD-1"
     close.assert_called_once()
+
+
+def test_close_syncs_db_when_kite_already_flat(db_conn, mocker, mock_instrument):
+    """Flat on Kite → book exit prices from COMPLETE orders; no new EXIT."""
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.has_entry_kite_fills_for_trade",
+        return_value=True,
+    )
+    mocker.patch("lifecycle.zerodha_executor._assert_execution_not_in_flight")
+    leg = {
+        "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
+        "option_type": "CE", "symbol": "NIFTY", "expiry_date": date(2026, 5, 28),
+        "strike": 23000, "lots": 1, "lot_size": 50,
+        "fill_time": datetime(2026, 5, 12, 10, 0, 0),
+        "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
+    }
+    mocker.patch("database.models.TradeRepo.get", return_value={
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+    })
+    mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_trade", return_value=[])
+    kite, facade, _master = _mock_kite_facade(mocker, mock_instrument)
+    kite.positions.return_value = {"net": []}
+    facade.positions.return_value = {"net": []}
+    kite.orders.return_value = [{
+        "order_id": "EXIT-9",
+        "status": "COMPLETE",
+        "tradingsymbol": mock_instrument.tradingsymbol,
+        "transaction_type": "SELL",
+        "average_price": 87.5,
+        "filled_quantity": 50,
+        "quantity": 50,
+        "order_timestamp": datetime(2026, 5, 12, 14, 30, 0),
+    }]
+    facade.orders.return_value = kite.orders.return_value
+    place = mocker.patch("lifecycle.zerodha_executor._place_and_monitor_leg")
+    close = mocker.patch("lifecycle.zerodha_executor.close_trade_with_fills")
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.by_trade",
+        return_value=[],
+    )
+
+    out = close_trade_in_zerodha(db_conn, "TRD-1")
+    assert out.ok
+    assert "already flat" in out.message.lower()
+    place.assert_not_called()
+    close.assert_called_once()
+    exits = close.call_args.args[2]
+    assert exits[0]["leg_order"] == 1
+    assert exits[0]["exit_price"] == 87.5
+
+
+def test_preview_close_sync_from_kite_when_flat(db_conn, mocker, mock_instrument):
+    from lifecycle.zerodha_executor import preview_close_execution
+
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.has_entry_kite_fills_for_trade",
+        return_value=True,
+    )
+    leg = {
+        "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
+        "option_type": "CE", "symbol": "NIFTY", "expiry_date": date(2026, 5, 28),
+        "strike": 23000, "lots": 1, "lot_size": 50,
+        "fill_time": datetime(2026, 5, 12, 10, 0, 0),
+        "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
+    }
+    mocker.patch("database.models.TradeRepo.get", return_value={
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+        "trade_name": "t",
+    })
+    mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
+    mocker.patch("database.models.SuggestionRepo.get", return_value={"strategy": "long_call"})
+    kite, facade, _master = _mock_kite_facade(mocker, mock_instrument)
+    kite.positions.return_value = {"net": []}
+    facade.positions.return_value = {"net": []}
+    kite.orders.return_value = [{
+        "order_id": "EXIT-9",
+        "status": "COMPLETE",
+        "tradingsymbol": mock_instrument.tradingsymbol,
+        "transaction_type": "SELL",
+        "average_price": 91.0,
+        "filled_quantity": 50,
+        "quantity": 50,
+        "order_timestamp": datetime(2026, 5, 12, 14, 30, 0),
+    }]
+    facade.orders.return_value = kite.orders.return_value
+
+    preview = preview_close_execution(db_conn, "TRD-1")
+    assert preview.sync_from_kite is True
+    assert preview.legs[0].limit_price == 91.0
+    d = preview.to_dict()
+    assert d["sync_from_kite"] is True
 
 
 def test_close_passes_execution_job_id_to_place(db_conn, mocker, mock_instrument):

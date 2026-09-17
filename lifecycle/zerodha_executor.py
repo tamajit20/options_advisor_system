@@ -51,6 +51,8 @@ from providers.zerodha.execution_checks import (
     assert_reducing_positions_exist,
     check_exposure_conflicts,
     check_margin_for_orders,
+    find_external_exit_fills,
+    is_structure_flat_on_broker,
     reconcile_positions_after_fill,
 )
 from providers.zerodha.execution_facade import KiteExecutionFacade
@@ -187,6 +189,81 @@ def _require_opening_kite_fills(db: SQLServerConnection, trade_id: str) -> None:
         "refusing Close in Zerodha (would open new exposure if broker is flat). "
         "Use Record fills for paper/manual trades."
     )
+
+
+def _earliest_entry_fill_time(legs: List[dict]) -> Optional[datetime]:
+    """Oldest entry fill among legs — used to ignore unrelated same-day Kite orders."""
+    best: Optional[datetime] = None
+    for leg in legs:
+        raw = leg.get("fill_time") or leg.get("entry_time")
+        if raw is None:
+            continue
+        ts = _coerce_fill_time(raw)
+        if best is None or ts < best:
+            best = ts
+    return best
+
+
+def _coerce_fill_time(raw: Any) -> datetime:
+    if isinstance(raw, datetime):
+        return raw
+    if raw is None:
+        return now_ist()
+    try:
+        text = str(raw).replace("Z", "+00:00")
+        return datetime.fromisoformat(text)
+    except Exception:
+        return now_ist()
+
+
+def _match_external_exit_fills(
+    facade: KiteExecutionFacade,
+    open_exits: List[dict],
+    inst_map: Dict[int, Instrument],
+) -> Dict[int, dict]:
+    """Resolve COMPLETE Kite exit fills for a structure that is already flat."""
+    fills, missing = find_external_exit_fills(
+        facade,
+        open_exits,
+        inst_map,
+        transaction_fn=lambda leg: _transaction_type_for_leg(leg, "close"),
+        after_ts=_earliest_entry_fill_time(open_exits),
+    )
+    if missing:
+        raise ZerodhaExecutionError(
+            "Kite is already flat for this trade, but exit fills could not be "
+            "matched from today's COMPLETE orders — refusing to invent prices. "
+            + "; ".join(missing)
+        )
+    return fills
+
+
+def _exits_from_external_fills(fills: Dict[int, dict]) -> List[dict]:
+    return [
+        {
+            "leg_order": lo,
+            "exit_price": float(f["fill_price"]),
+            "exit_time": _coerce_fill_time(f.get("fill_time")),
+        }
+        for lo, f in sorted(fills.items())
+    ]
+
+
+def _leg_fills_from_external(fills: Dict[int, dict]) -> List[LegFillOutcome]:
+    out: List[LegFillOutcome] = []
+    for lo, f in sorted(fills.items()):
+        out.append(
+            LegFillOutcome(
+                leg_order=lo,
+                fill_price=float(f["fill_price"]),
+                fill_time=_coerce_fill_time(f.get("fill_time")),
+                kite_order_id=str(f.get("kite_order_id") or ""),
+                broker_row_id=0,
+                filled_quantity=int(f.get("quantity") or 0),
+                planned_quantity=int(f.get("quantity") or 0),
+            )
+        )
+    return out
 
 
 def _assert_entry_execution_allowed(db: SQLServerConnection, suggestion_id: str) -> None:
@@ -1256,6 +1333,9 @@ class ExecutionPreview:
     margin_peak_required: Optional[float] = None
     margin_buffer_pct: Optional[float] = None
     margin_path_steps: Optional[List[dict]] = None
+    # When Kite is already flat, Close syncs exit fills instead of placing EXIT.
+    sync_from_kite: bool = False
+    message: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -1276,6 +1356,8 @@ class ExecutionPreview:
             "margin_peak_required": self.margin_peak_required,
             "margin_buffer_pct": self.margin_buffer_pct,
             "margin_path_steps": self.margin_path_steps or [],
+            "sync_from_kite": self.sync_from_kite,
+            "message": self.message,
         }
 
 
@@ -1932,6 +2014,34 @@ def preview_close_execution(
         strategy = str((sug_row or {}).get("strategy") or "")
     ordered = legs_in_execution_order(open_exits, strategy, mode="close")
     plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="close", strategy=strategy)
+
+    if is_structure_flat_on_broker(facade, ordered, inst_map):
+        fills = _match_external_exit_fills(facade, ordered, inst_map)
+        for plan in plans:
+            f = fills.get(plan.leg_order)
+            if f is None:
+                continue
+            px = float(f["fill_price"])
+            plan.limit_price = px
+            plan.ltp = px
+            plan.auto_priced = False
+        return ExecutionPreview(
+            operation="EXIT",
+            suggestion_id=trade.get("suggestion_id"),
+            trade_id=trade_id,
+            trade_name=trade.get("trade_name"),
+            strategy=strategy or None,
+            legs=plans,
+            all_limits_in_band=True,
+            limit_vetoes=[],
+            spot_at_execution=None,
+            sync_from_kite=True,
+            message=(
+                "Kite is already flat — confirming will record Zerodha exit "
+                "prices into the DB (no new EXIT orders)."
+            ),
+        )
+
     inventory = assert_reducing_positions_exist(
         facade,
         ordered,
@@ -2012,6 +2122,32 @@ def close_trade_in_zerodha(
             strategy = str((sug_row or {}).get("strategy") or "")
 
         ordered = legs_in_execution_order(open_exits, strategy, mode="close")
+
+        # Already flat on Kite (manual flatten / auto elsewhere) — book DB from
+        # COMPLETE exit fills instead of placing new EXIT orders.
+        if is_structure_flat_on_broker(facade, ordered, inst_map):
+            fills = _match_external_exit_fills(facade, ordered, inst_map)
+            close_trade_with_fills(db, trade_id, _exits_from_external_fills(fills))
+            completed = _leg_fills_from_external(fills)
+            broker_rows = (
+                BrokerOrderRepo(db).by_job(execution_job_id)
+                if execution_job_id is not None else []
+            )
+            if not broker_rows:
+                broker_rows = BrokerOrderRepo(db).by_trade(trade_id, operation="EXIT")
+            return ExecutionOutcome(
+                ok=True,
+                trade_id=trade_id,
+                message=(
+                    "Kite already flat — recorded Zerodha exit prices into the DB "
+                    "(no new EXIT orders placed)"
+                ),
+                leg_fills=completed,
+                broker_orders=broker_rows,
+                warnings=[],
+                job_id=execution_job_id,
+            )
+
         _run_pre_trade_checks(
             facade, open_exits, inst_map, ordered, leg_limits, mode="close",
             live_map=live_map,

@@ -343,3 +343,48 @@ def test_exit_reopen_allows_when_flat_after_exit():
         close_transaction_fn=lambda _: "SELL",
     )
     assert out.ok
+
+
+def test_is_structure_flat_on_broker():
+    from providers.zerodha.execution_checks import is_structure_flat_on_broker
+
+    facade = MagicMock()
+    facade.positions.return_value = {"net": []}
+    legs = [{"leg_order": 1}, {"leg_order": 2}]
+    inst_map = {
+        1: _inst("NIFTY26MAY23000CE"),
+        2: _inst("NIFTY26MAY23100PE"),
+    }
+    assert is_structure_flat_on_broker(facade, legs, inst_map) is True
+
+    facade.positions.return_value = {
+        "net": [{"tradingsymbol": "NIFTY26MAY23000CE", "quantity": 50}],
+    }
+    assert is_structure_flat_on_broker(facade, legs, inst_map) is False
+
+
+def test_find_external_exit_fills_matches_complete_order():
+    from providers.zerodha.execution_checks import find_external_exit_fills
+
+    facade = MagicMock()
+    facade.orders.return_value = [
+        {
+            "order_id": "O1",
+            "status": "COMPLETE",
+            "tradingsymbol": "NIFTY26MAY23000CE",
+            "transaction_type": "SELL",
+            "average_price": 42.5,
+            "filled_quantity": 50,
+            "quantity": 50,
+            "order_timestamp": "2026-05-12 14:00:00",
+        },
+    ]
+    legs = [{"leg_order": 1, "lots": 1, "lot_size": 50}]
+    inst_map = {1: _inst("NIFTY26MAY23000CE")}
+    found, missing = find_external_exit_fills(
+        facade, legs, inst_map,
+        transaction_fn=lambda _: "SELL",
+    )
+    assert not missing
+    assert found[1]["fill_price"] == 42.5
+    assert found[1]["kite_order_id"] == "O1"

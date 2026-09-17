@@ -6734,7 +6734,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       ? `<button type="button" class="${zCloseBtnClass}"${zCloseAria} data-trade-id="${escapeHtml(tradeId)}" title="${zCloseTitle}">Close in Zerodha</button>`
       : '';
     const zCloseHintHtml = showZerodhaClose
-      ? `<p class="muted" style="font-size:.78rem;margin-top:6px">Zerodha trade — close places EXIT orders on Kite (blank = live auto LIMIT; typed = your LIMIT). DB-only record is blocked.</p>`
+      ? `<p class="muted" style="font-size:.78rem;margin-top:6px">Zerodha trade — close places EXIT orders on Kite (blank = live auto LIMIT; typed = your LIMIT). If already flat on Kite, confirming syncs those exit prices into the app. Paper/manual trades use record fills only.</p>`
       : `<p class="muted" style="font-size:.78rem;margin-top:6px">Paper/manual trade — leave prices blank to record at live LTP, or type fills. Close in Zerodha stays hidden until Kite ENTRY/SUPPLEMENT fills exist.</p>`;
 
     content.innerHTML = `
@@ -6888,21 +6888,33 @@ async function submitZerodhaClose(tradeId, btn, panel) {
     if (!preview || !(preview.legs || []).length) {
       throw new Error('Close preview returned no legs');
     }
+    const syncFromKite = !!preview.sync_from_kite;
     showZerodhaConfirmModal(preview, {
-      title: 'Confirm Zerodha close orders',
-      submitLabel: 'Place close orders',
+      title: syncFromKite
+        ? 'Kite already flat — sync exit prices'
+        : 'Confirm Zerodha close orders',
+      submitLabel: syncFromKite
+        ? 'Record Kite exit fills'
+        : 'Place close orders',
       onConfirm: async () => {
-        _setZerodhaModalBody('Closing in Zerodha…', _renderZerodhaExecutionProgress(preview));
+        _setZerodhaModalBody(
+          syncFromKite ? 'Syncing exit fills from Kite…' : 'Closing in Zerodha…',
+          _renderZerodhaExecutionProgress(preview),
+        );
         const submit = document.getElementById('zerodha-confirm-submit');
         if (submit) submit.hidden = true;
         const closeMeta = { tradeId, label: `Close ${tradeId}`, claimStrip: true };
         _setZerodhaModalOwner(closeMeta);
         const execBody = { ...body };
-        const stopPoll = _startZerodhaOrderPolling(
-          `/api/trades/${tradeId}/zerodha-orders`,
-          preview,
-          closeMeta,
-        );
+        // Flat sync is a DB update — no need for async EXIT job / order polling.
+        if (syncFromKite) execBody.async = false;
+        const stopPoll = syncFromKite
+          ? () => {}
+          : _startZerodhaOrderPolling(
+              `/api/trades/${tradeId}/zerodha-orders`,
+              preview,
+              closeMeta,
+            );
         let r;
         try {
           r = await API(`/api/trades/${tradeId}/zerodha-close`, {
@@ -6920,7 +6932,7 @@ async function submitZerodhaClose(tradeId, btn, panel) {
           stopPoll();
         }
         _setZerodhaModalBody(
-          'Close complete',
+          syncFromKite ? 'Exit fills recorded' : 'Close complete',
           _renderZerodhaExecutionResult(preview, r),
         );
         if (submit) {
@@ -6929,7 +6941,13 @@ async function submitZerodhaClose(tradeId, btn, panel) {
           submit.disabled = false;
           submit.onclick = () => _closeZerodhaConfirmModal();
         }
-        toast(r.message || `Trade ${tradeId} closed in Zerodha`, 'ok');
+        toast(
+          r.message
+            || (syncFromKite
+              ? `Trade ${tradeId} closed from Kite fills`
+              : `Trade ${tradeId} closed in Zerodha`),
+          'ok',
+        );
         if (r.account) _applyZerodhaAccountUi(r.account, { valid: true, user_id: r.account.user_id });
         loadZerodhaStatus(true);
         loadTrades();
