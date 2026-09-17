@@ -123,6 +123,21 @@ class ZerodhaExecutionJobRepo:
             seen,
         ) or []
 
+    def list_for_trades(self, trade_ids: List[str]) -> List[dict]:
+        seen: List[str] = []
+        for tid in trade_ids:
+            text = (tid or "").strip()
+            if text and text not in seen:
+                seen.append(text)
+        if not seen:
+            return []
+        placeholders = ",".join("?" * len(seen))
+        return self.db.fetch_all(
+            "SELECT * FROM options_zerodha_execution_jobs "
+            f"WHERE trade_id IN ({placeholders}) ORDER BY id",
+            seen,
+        ) or []
+
     def latest_for_trade(self, trade_id: str, *, operation: Optional[str] = None) -> Optional[dict]:
         if operation:
             return self.db.fetch_one(

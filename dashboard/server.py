@@ -2906,9 +2906,29 @@ def create_app() -> Flask:
                 trade_names[tid] = t["trade_name"]
 
         sids = [r["suggestion_id"] for r in rows if r.get("suggestion_id")]
-        jobs = [_row(j) for j in ZerodhaExecutionJobRepo(db).list_for_suggestions(sids)]
+        tids = [r["trade_id"] for r in rows if r.get("trade_id")]
+        job_repo = ZerodhaExecutionJobRepo(db)
+        jobs_by_key: dict = {}
+        for j in job_repo.list_for_suggestions(sids):
+            jobs_by_key[j["id"]] = _row(j)
+        for j in job_repo.list_for_trades(tids):
+            jobs_by_key[j["id"]] = _row(j)
+        jobs = list(jobs_by_key.values())
+
+        close_triggers: dict = {}
+        try:
+            from database.models import NotificationRepo
+            close_triggers = NotificationRepo(db).milestone_close_triggers_for_trades(
+                list(trade_ids),
+            )
+        except Exception:
+            logger.debug("milestone close triggers lookup skipped", exc_info=True)
+
         groups = group_broker_orders(
-            [_row(r) for r in rows], trade_names=trade_names, jobs=jobs,
+            [_row(r) for r in rows],
+            trade_names=trade_names,
+            jobs=jobs,
+            close_triggers=close_triggers,
         )
         try:
             from lifecycle.execution_reversal import attach_reversals_to_groups

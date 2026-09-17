@@ -61,6 +61,7 @@ def submit_execution_job(
     trade_id: Optional[str],
     total_legs: int,
     runner: Callable[[SQLServerConnection, int], Any],
+    message: Optional[str] = None,
 ) -> int:
     """Insert job row and start background thread. Returns job id."""
     if not _can_start_job():
@@ -96,7 +97,7 @@ def submit_execution_job(
             "status": "RUNNING",
             "total_legs": total_legs,
             "filled_legs": 0,
-            "message": "Starting…",
+            "message": (message or "").strip() or "Starting…",
             "created_at": now,
             "updated_at": now,
         })

@@ -2404,6 +2404,7 @@ def close_trade_in_zerodha_async(
     *,
     leg_limits: Optional[Dict[int, float]] = None,
     ack_out_of_band: bool = False,
+    close_trigger: Optional[str] = None,
 ) -> ExecutionOutcome:
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
@@ -2413,14 +2414,24 @@ def close_trade_in_zerodha_async(
     trd = TradeRepo(db)
     all_legs = trd.legs_with_suggestion_info(trade_id)
     open_exits = [l for l in all_legs if l.get("executed") and l.get("exit_price") is None]
+    trigger = str(close_trigger or "").strip().upper() or None
+    start_msg = (
+        f"{trigger}: system auto-close starting…"
+        if trigger else "Starting…"
+    )
 
     def _runner(wdb: SQLServerConnection, job_id: int) -> ExecutionOutcome:
-        return close_trade_in_zerodha(
+        out = close_trade_in_zerodha(
             wdb, trade_id,
             leg_limits=leg_limits,
             ack_out_of_band=ack_out_of_band,
             execution_job_id=job_id,
         )
+        if trigger and out.message and trigger not in out.message.upper():
+            out.message = f"{trigger}: {out.message}"
+        elif trigger and not out.message:
+            out.message = f"{trigger}: closed"
+        return out
 
     job_id = submit_execution_job(
         db,
@@ -2429,10 +2440,14 @@ def close_trade_in_zerodha_async(
         trade_id=trade_id,
         total_legs=len(open_exits),
         runner=_runner,
+        message=start_msg,
     )
     return ExecutionOutcome(
         ok=True,
-        message="Zerodha close execution started",
+        message=(
+            f"{trigger}: Zerodha close execution started"
+            if trigger else "Zerodha close execution started"
+        ),
         job_id=job_id,
         async_started=True,
     )

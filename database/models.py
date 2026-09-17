@@ -1411,6 +1411,36 @@ class NotificationRepo:
             [trade_id, -int(minutes)],
         )
 
+    def milestone_close_triggers_for_trades(
+        self, trade_ids: List[str],
+    ) -> Dict[str, str]:
+        """Latest profit/loss milestone hit per trade (for Zerodha log headlines)."""
+        seen: List[str] = []
+        for tid in trade_ids:
+            text = (tid or "").strip()
+            if text and text not in seen:
+                seen.append(text)
+        if not seen:
+            return {}
+        placeholders = ",".join("?" * len(seen))
+        rows = self.db.fetch_all(
+            "SELECT related_trade_id, notif_type, created_at "
+            "FROM options_notifications "
+            f"WHERE related_trade_id IN ({placeholders}) "
+            "AND notif_type IN ('PROFIT_MILESTONE_HIT', 'LOSS_MILESTONE_HIT') "
+            "ORDER BY created_at DESC, id DESC",
+            seen,
+        ) or []
+        out: Dict[str, str] = {}
+        for row in rows:
+            tid = (row.get("related_trade_id") or "").strip()
+            if not tid or tid in out:
+                continue
+            ntype = str(row.get("notif_type") or "").upper()
+            if ntype in ("PROFIT_MILESTONE_HIT", "LOSS_MILESTONE_HIT"):
+                out[tid] = ntype
+        return out
+
     def filtered(
         self,
         *,

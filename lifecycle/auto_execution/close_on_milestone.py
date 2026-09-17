@@ -54,7 +54,7 @@ def flatten_open_trade(db: SQLServerConnection, ctx: AutoExecContext) -> str:
                 "Zerodha execution is not ready — cannot auto-flatten. "
                 "Enable trade execution, log in, then flatten on Kite."
             )
-        close_trade_in_zerodha_async(db, ctx.trade_id)
+        close_trade_in_zerodha_async(db, ctx.trade_id, close_trigger=ctx.notif_type)
         return "zerodha"
 
     if not ctx.exits:

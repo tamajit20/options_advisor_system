@@ -13,6 +13,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 _TERMINAL_FAIL = frozenset({"FAILED", "REJECTED", "CANCELLED"})
+_PROFIT_MILESTONE_TRIGGERS = frozenset({"PROFIT_MILESTONE_HIT", "PROFIT_MILESTONE"})
+_LOSS_MILESTONE_TRIGGERS = frozenset({"LOSS_MILESTONE_HIT", "LOSS_MILESTONE"})
 
 
 def _as_dt(v) -> Optional[datetime]:
@@ -26,18 +28,59 @@ def _as_dt(v) -> Optional[datetime]:
         return None
 
 
+def _normalize_close_trigger(raw: Optional[str]) -> Optional[str]:
+    """Map notif / job tags to PROFIT_MILESTONE_HIT or LOSS_MILESTONE_HIT."""
+    if not raw:
+        return None
+    text = str(raw).upper()
+    for token in _PROFIT_MILESTONE_TRIGGERS:
+        if token in text:
+            return "PROFIT_MILESTONE_HIT"
+    for token in _LOSS_MILESTONE_TRIGGERS:
+        if token in text:
+            return "LOSS_MILESTONE_HIT"
+    return None
+
+
+def _close_trigger_from_job(job: Optional[dict]) -> Optional[str]:
+    if not job:
+        return None
+    for key in ("message", "error_message"):
+        hit = _normalize_close_trigger(job.get(key))
+        if hit:
+            return hit
+    raw = job.get("result_json")
+    if raw:
+        try:
+            import json
+            payload = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(payload, dict):
+                hit = _normalize_close_trigger(payload.get("message"))
+                if hit:
+                    return hit
+        except Exception:
+            pass
+    return None
+
+
 def group_broker_orders(
     rows: Iterable[dict],
     *,
     trade_names: Optional[Dict[str, str]] = None,
     jobs: Optional[Iterable[dict]] = None,
+    close_triggers: Optional[Dict[str, str]] = None,
 ) -> List[dict]:
     """Cluster order rows by job, then trade, then suggestion.
 
     ``jobs`` is optional ``options_zerodha_execution_jobs`` rows used to
     explain *why* an attempt failed or was flattened.
+
+    ``close_triggers`` maps ``trade_id`` → notif type (e.g. PROFIT_MILESTONE_HIT)
+    for EXIT cards that were system auto-closes (including older jobs that
+    were not stamped).
     """
     trade_names = trade_names or {}
+    close_triggers = close_triggers or {}
     buckets: Dict[str, dict] = {}
 
     for row in rows:
@@ -100,7 +143,11 @@ def group_broker_orders(
         if bucket.get("last_at") is not None:
             last = bucket["last_at"]
             bucket["last_at"] = last.isoformat() if isinstance(last, datetime) else str(last)
-        bucket.update(describe_broker_group(bucket, jobs_by_id))
+        bucket.update(
+            describe_broker_group(
+                bucket, jobs_by_id, close_triggers=close_triggers,
+            )
+        )
 
     out.sort(
         key=lambda g: g.get("last_at") or "",
@@ -247,6 +294,8 @@ def _human_error(msg: Optional[str]) -> Optional[str]:
 def describe_broker_group(
     group: dict,
     jobs_by_id: Optional[Dict[int, dict]] = None,
+    *,
+    close_triggers: Optional[Dict[str, str]] = None,
 ) -> dict:
     """Actor headline + reason for the audit card (collapsed row)."""
     orders = group.get("orders") or []
@@ -266,7 +315,46 @@ def describe_broker_group(
     any_fail = bool(statuses & _TERMINAL_FAIL)
     all_fail = bool(statuses) and statuses <= _TERMINAL_FAIL
 
+    tid = (group.get("trade_id") or "").strip()
+    milestone = (
+        _close_trigger_from_job(job)
+        or _normalize_close_trigger((close_triggers or {}).get(tid))
+    )
+
+    def _milestone_exit_card(*, failed: bool) -> dict:
+        if milestone == "PROFIT_MILESTONE_HIT":
+            label = "Profit milestone hit — system closed"
+            detail = reason or (
+                "MTM gave back the configured amount from peak; "
+                "the system flattened on Kite."
+            )
+        else:
+            label = "Loss milestone hit — system closed"
+            detail = reason or (
+                "MTM stayed through the configured loss milestone; "
+                "the system flattened on Kite."
+            )
+        if failed:
+            label = f"{label} — failed"
+            detail = reason or "System auto-close failed on Kite."
+        return {
+            "actor": "system",
+            "headline": label,
+            "detail": detail,
+            "badge": "FAILED" if failed else (group.get("overall_status") or "COMPLETE"),
+            "close_trigger": milestone,
+        }
+
     if has_entry and has_exit and not has_rollback:
+        if milestone:
+            ms = _milestone_exit_card(failed=False)
+            return {
+                "actor": "both",
+                "headline": f"You placed entry · {ms['headline']}",
+                "detail": ms["detail"],
+                "badge": group.get("overall_status") or "COMPLETE",
+                "close_trigger": milestone,
+            }
         return {
             "actor": "you",
             "headline": "You placed entry, then closed",
@@ -294,6 +382,8 @@ def describe_broker_group(
             "badge": "REVERTED",
         }
     if has_exit and not has_entry:
+        if milestone:
+            return _milestone_exit_card(failed=all_fail)
         if all_fail:
             return {
                 "actor": "you",

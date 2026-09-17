@@ -153,7 +153,7 @@ def test_zerodha_flattens_on_kite(mocker):
     )
     ctx = AutoExecContext(notif_type="LOSS_MILESTONE_HIT", trade_id="T-1")
     assert CloseOnLossMilestone().run(db, ctx) == "zerodha"
-    kite.assert_called_once_with(db, "T-1")
+    kite.assert_called_once_with(db, "T-1", close_trigger="LOSS_MILESTONE_HIT")
     close.assert_not_called()
 
 

@@ -31,6 +31,18 @@ def test_execution_logs_returns_hot_archive_retention(logs_client, mocker):
         "database.broker_order_repo.BrokerOrderRepo.list_since",
         return_value=[],
     )
+    mocker.patch(
+        "database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo.list_for_suggestions",
+        return_value=[],
+    )
+    mocker.patch(
+        "database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo.list_for_trades",
+        return_value=[],
+    )
+    mocker.patch(
+        "database.models.NotificationRepo.milestone_close_triggers_for_trades",
+        return_value={},
+    )
     resp = logs_client.get("/api/zerodha/execution-logs")
     assert resp.status_code == 200
     data = resp.get_json()
@@ -48,6 +60,18 @@ def test_execution_logs_queries_since_hot_archive_window(logs_client, mocker):
     list_since = mocker.patch(
         "database.broker_order_repo.BrokerOrderRepo.list_since",
         return_value=[],
+    )
+    mocker.patch(
+        "database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo.list_for_suggestions",
+        return_value=[],
+    )
+    mocker.patch(
+        "database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo.list_for_trades",
+        return_value=[],
+    )
+    mocker.patch(
+        "database.models.NotificationRepo.milestone_close_triggers_for_trades",
+        return_value={},
     )
     before = now_ist()
     logs_client.get("/api/zerodha/execution-logs")
@@ -80,6 +104,18 @@ def test_execution_logs_groups_rows(logs_client, mocker):
     mocker.patch(
         "database.models.TradeRepo.get",
         return_value={"trade_name": "Test trade"},
+    )
+    mocker.patch(
+        "database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo.list_for_suggestions",
+        return_value=[],
+    )
+    mocker.patch(
+        "database.zerodha_execution_job_repo.ZerodhaExecutionJobRepo.list_for_trades",
+        return_value=[],
+    )
+    mocker.patch(
+        "database.models.NotificationRepo.milestone_close_triggers_for_trades",
+        return_value={},
     )
     resp = logs_client.get("/api/zerodha/execution-logs")
     data = resp.get_json()

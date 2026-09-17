@@ -229,3 +229,52 @@ def test_recorded_entry_headline():
     assert groups[0]["headline"] == "You placed entry"
     assert groups[0]["detail"] == "Trade TRD-9 recorded."
     assert groups[0]["badge"] == "COMPLETE"
+
+
+def test_exit_manual_still_says_you_closed():
+    rows = [
+        {
+            "id": 1, "trade_id": "TRD-1", "suggestion_id": "S1",
+            "execution_job_id": 11, "operation": "EXIT", "leg_order": 1,
+            "status": "COMPLETE", "created_at": datetime(2026, 9, 17, 14, 0),
+        },
+    ]
+    groups = group_broker_orders(rows, jobs=[{"id": 11, "message": "All close legs filled"}])
+    assert groups[0]["headline"] == "You closed the trade"
+    assert groups[0]["actor"] == "you"
+
+
+def test_exit_profit_milestone_from_job_message():
+    rows = [
+        {
+            "id": 1, "trade_id": "TRD-1", "suggestion_id": "S1",
+            "execution_job_id": 12, "operation": "EXIT", "leg_order": 1,
+            "status": "COMPLETE", "created_at": datetime(2026, 9, 17, 14, 0),
+        },
+    ]
+    jobs = [{
+        "id": 12,
+        "message": "PROFIT_MILESTONE_HIT: All close legs filled in Zerodha; trade closed",
+    }]
+    groups = group_broker_orders(rows, jobs=jobs)
+    assert groups[0]["headline"] == "Profit milestone hit — system closed"
+    assert groups[0]["actor"] == "system"
+    assert groups[0]["close_trigger"] == "PROFIT_MILESTONE_HIT"
+
+
+def test_exit_loss_milestone_from_close_triggers_map():
+    """Older EXIT jobs had no stamp — notifications map still labels them."""
+    rows = [
+        {
+            "id": 1, "trade_id": "TRD-2", "suggestion_id": "S1",
+            "execution_job_id": 13, "operation": "EXIT", "leg_order": 1,
+            "status": "COMPLETE", "created_at": datetime(2026, 9, 17, 14, 0),
+        },
+    ]
+    groups = group_broker_orders(
+        rows,
+        jobs=[{"id": 13, "message": "All close legs filled"}],
+        close_triggers={"TRD-2": "LOSS_MILESTONE_HIT"},
+    )
+    assert groups[0]["headline"] == "Loss milestone hit — system closed"
+    assert groups[0]["actor"] == "system"
