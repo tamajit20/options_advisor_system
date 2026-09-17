@@ -143,6 +143,19 @@ def zerodha_session_ready() -> bool:
     return session is not None and is_token_valid(session)
 
 
+def zerodha_margin_quote_ready() -> bool:
+    """True when Kite can quote basket margins (session + API key).
+
+    Does **not** require ``trade_execution_enabled`` — Amount needed Final/Peak
+    should still hydrate while place-orders is toggled off.
+    """
+    if not zerodha_execution_config_enabled():
+        return False
+    if not ZERODHA_API_CONFIG.get("api_key"):
+        return False
+    return zerodha_session_ready()
+
+
 def zerodha_execution_ready(db: SQLServerConnection) -> bool:
     if not zerodha_execution_enabled(db):
         return False
@@ -1343,6 +1356,7 @@ def _run_pre_trade_checks(
     allow_existing_positions: bool = False,
     live_map: Optional[Dict[int, float]] = None,
     fallback_required: Optional[float] = None,
+    soft_fail: bool = False,
 ) -> Optional[MarginCheckResult]:
     cfg = ZERODHA_EXECUTION_CONFIG
     txn_fn = (
@@ -1370,14 +1384,15 @@ def _run_pre_trade_checks(
         margin = check_margin_for_orders(
             facade, margin_params, fallback_required=fallback_required,
         )
-        if not margin.ok:
+        # Preview / Amount needed still wants Final/Peak when cash is short.
+        if not margin.ok and not soft_fail:
             raise ZerodhaExecutionError(margin.message)
 
         exposure = check_exposure_conflicts(
             facade, ordered, inst_map, transaction_fn=txn_fn,
             allow_existing_positions=allow_existing_positions,
         )
-        if not exposure.ok:
+        if not exposure.ok and not soft_fail:
             raise ZerodhaExecutionError(exposure.message)
         return margin
 
@@ -1502,6 +1517,7 @@ def _entry_context(
         facade, legs, inst_map, ordered, leg_limits, mode="entry",
         live_map=live_map,
         fallback_required=fallback_required,
+        soft_fail=soft_live_price_gate,
     )
     return suggestion, legs, facade, master, live_map, inst_map, ordered, strategy, margin
 
@@ -1514,8 +1530,10 @@ def preview_suggestion_execution(
     spot_at_execution: Optional[float] = None,
     lots_override: Optional[int] = None,
 ) -> ExecutionPreview:
-    if not zerodha_execution_enabled(db):
-        raise ZerodhaExecutionError("Zerodha execution is disabled")
+    if not zerodha_margin_quote_ready():
+        raise ZerodhaExecutionError(
+            "Zerodha session not ready for margin quote — log in first"
+        )
     suggestion, legs, facade, _master, live_map, inst_map, ordered, strategy, margin = (
         _entry_context(
             db, suggestion_id, leg_limits, lots_override,

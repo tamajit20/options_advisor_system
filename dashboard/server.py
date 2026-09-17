@@ -1723,10 +1723,10 @@ def create_app() -> Flask:
             parse_leg_limits,
             parse_lots_override,
             preview_suggestion_execution,
-            zerodha_execution_ready,
+            zerodha_margin_quote_ready,
         )
-        if not zerodha_execution_ready(db):
-            return jsonify({"error": "Zerodha execution is not ready"}), 403
+        if not zerodha_margin_quote_ready():
+            return jsonify({"error": "Zerodha session not ready for margin quote"}), 403
         payload = request.get_json(silent=True) or {}
         spot_raw = payload.get("spot_at_execution")
         leg_limits = parse_leg_limits(payload.get("leg_limits"))

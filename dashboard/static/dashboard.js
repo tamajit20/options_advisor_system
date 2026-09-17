@@ -125,6 +125,17 @@ function _zerodhaExecuteDisabledReason(requireLiveGate) {
   return '';
 }
 
+/** Final/Peak under Amount needed only needs a valid session — not place-orders. */
+function _zerodhaMarginQuoteDisabledReason() {
+  if (!_zerodhaExecutionConfigEnabled) {
+    return 'Enable zerodha_execution.enabled in Config → Zerodha broker execution';
+  }
+  if (!_zerodhaHasSession || !_zerodhaValid) {
+    return 'Log in to Zerodha first (header pill or WS Monitor tab)';
+  }
+  return '';
+}
+
 function _zerodhaExecuteReady(requireLiveGate) {
   return !_zerodhaExecuteDisabledReason(requireLiveGate);
 }
@@ -743,8 +754,14 @@ function _formatZerodhaMarginOnCard(preview) {
 
 function _applyZerodhaMarginToCard(card, preview) {
   const info = _formatZerodhaMarginOnCard(preview);
-  if (!info) return;
   const el = card.querySelector('[data-econ-z-margin]');
+  if (!info) {
+    if (el) {
+      el.textContent = 'Zerodha Final / Peak unavailable';
+      el.classList.remove('cb-status-ok', 'cb-status-warn');
+    }
+    return;
+  }
   if (el) {
     el.hidden = false;
     el.removeAttribute('hidden');
@@ -763,8 +780,8 @@ function _applyZerodhaMarginToCard(card, preview) {
 async function _hydrateOneSuggestionZerodhaMargin(card) {
   const sid = card?.dataset?.sugId;
   if (!sid) return;
-  if (typeof _zerodhaExecuteDisabledReason === 'function'
-      && _zerodhaExecuteDisabledReason(false)) {
+  if (typeof _zerodhaMarginQuoteDisabledReason === 'function'
+      && _zerodhaMarginQuoteDisabledReason()) {
     return;
   }
   try {
@@ -781,16 +798,21 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
     if (prev?.preview) {
       card.dataset.marginHydrated = '1';
       _applyZerodhaMarginToCard(card, prev.preview);
+      return;
     }
   } catch (_) {
-    // Zerodha not ready / preview failed — keep engine Amount needed only.
-    delete card.dataset.marginHydrated;
+    // fall through
+  }
+  delete card.dataset.marginHydrated;
+  const el = card.querySelector('[data-econ-z-margin]');
+  if (el && !el.textContent.includes('Final')) {
+    el.textContent = 'Zerodha Final / Peak unavailable';
   }
 }
 
 async function _hydrateSuggestionZerodhaMargins(root) {
-  if (typeof _zerodhaExecuteDisabledReason === 'function'
-      && _zerodhaExecuteDisabledReason(false)) {
+  if (typeof _zerodhaMarginQuoteDisabledReason === 'function'
+      && _zerodhaMarginQuoteDisabledReason()) {
     return;
   }
   const cards = [...(root || document).querySelectorAll('.card[data-sug-id]')];
@@ -5720,7 +5742,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       ${s.expiry_date ? `<div>${kvLabel('Options expiry', 'dte')}<br><span class="v">${fmtDate(s.expiry_date)}${s.dte != null ? ` <span class="muted">(${s.dte} DTE)</span>` : ''}</span></div>` : (s.dte != null ? `<div>${kvLabel('DTE', 'dte')}<br><span class="v">${s.dte}</span></div>` : '')}
       <div>${kvLabel('Net credit (per unit)', 'credit_per_unit')}<br><span class="v econ-np">₹${fmt(econ.np)}</span></div>
       <div>${kvLabel('Total credit')}<br><span class="v econ-tot-credit">₹${fmt(baseTotalCredit)}<span class="econ-qty-hint muted" style="font-size:.75rem"> (×${baseQty})</span></span></div>
-      ${capitalReq.rs != null ? `<div>${kvLabel(capitalReq.label, capitalReq.key)}<br><span class="v econ-cap-req">₹${fmt(capitalReq.rs)}</span><span class="econ-z-margin muted" data-econ-z-margin hidden style="font-size:.75rem;display:block;margin-top:2px"></span>${capitalReq.hint ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">${escapeHtml(capitalReq.hint)}</span>` : ''}</div>` : ''}
+      ${capitalReq.rs != null ? `<div>${kvLabel(capitalReq.label, capitalReq.key)}<br><span class="v econ-cap-req">₹${fmt(capitalReq.rs)}</span><span class="econ-z-margin muted" data-econ-z-margin style="font-size:.75rem;display:block;margin-top:2px">Fetching Zerodha Final / Peak…</span>${capitalReq.hint ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">${escapeHtml(capitalReq.hint)}</span>` : ''}</div>` : ''}
       <div>${kvLabel('Max profit', 'max_profit')}<br><span class="v econ-mp">₹${fmt(econ.mp)}</span></div>
       <div>${kvLabel('Max loss', 'max_loss')}<br><span class="v econ-ml">₹${fmt(econ.ml)}<span class="econ-ml-hint">${pctHint(econ.ml, econ.np, 'credit')}</span></span></div>
       <div>${kvLabel('PoP', 'pop')}<br><span class="v">${fmtPct(econ.pop)}</span></div>
@@ -9358,6 +9380,12 @@ async function loadZerodhaStatus(refreshAccount = false) {
     }
     _refreshAllFeedTags();
     _refreshZerodhaExecButtons();
+    // Suggestions often paint before /api/zerodha/status returns; retry Final/Peak
+    // hydrate now that session flags are known (place-orders toggle not required).
+    if (!_zerodhaMarginQuoteDisabledReason()
+        && typeof _hydrateSuggestionZerodhaMargins === 'function') {
+      _hydrateSuggestionZerodhaMargins(document);
+    }
     // Update header pill (always present)
     if (headerBtn && headerIcon && headerLabel) {
       if (!d.has_session) {

@@ -210,6 +210,7 @@ def test_validate_execution_receives_circuit_breaker_flag(
     db_conn, mocker, sample_leg, sample_suggestion, mock_instrument,
 ):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
     mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
@@ -251,6 +252,7 @@ def test_execution_disabled_without_config(db_conn, mocker):
 
 def test_execute_rejects_non_pending(db_conn, mocker, mock_instrument):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.SuggestionRepo.get", return_value={
         "suggestion_id": "SUG-1",
         "status": "EXECUTED",
@@ -277,6 +279,7 @@ def test_execute_rejects_non_pending(db_conn, mocker, mock_instrument):
 
 def test_execute_rejects_existing_trade_even_if_pending(db_conn, mocker, mock_instrument):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.SuggestionRepo.get", return_value={
         "suggestion_id": "SUG-1",
         "status": "PENDING",
@@ -307,6 +310,7 @@ def test_execute_rejects_existing_trade_even_if_pending(db_conn, mocker, mock_in
 
 def test_execute_blocks_orphan_broker_fills(db_conn, mocker):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.SuggestionRepo.get", return_value={
         "suggestion_id": "SUG-1",
         "status": "PENDING",
@@ -336,6 +340,7 @@ def test_execute_blocks_orphan_broker_fills(db_conn, mocker):
 
 def test_execute_blocks_circuit_breaker_before_orders(db_conn, mocker):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.SuggestionRepo.get", return_value={
         "suggestion_id": "SUG-1",
         "status": "PENDING",
@@ -369,6 +374,7 @@ def test_execute_happy_path_single_leg(
     db_conn, mocker, mock_instrument, sample_leg, sample_suggestion,
 ):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
     mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
     _patch_entry_gate(mocker)
@@ -392,6 +398,7 @@ def test_execute_rolls_back_when_mark_executed_fails(
     db_conn, mocker, mock_instrument, sample_leg, sample_suggestion,
 ):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
     mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
     _patch_entry_gate(mocker)
@@ -411,6 +418,7 @@ def test_execute_rolls_back_when_mark_executed_fails(
 
 def test_close_trade_rejects_without_opening_kite_fills(db_conn, mocker):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.TradeRepo.get", return_value={
         "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
     })
@@ -427,6 +435,7 @@ def test_close_trade_rejects_without_opening_kite_fills(db_conn, mocker):
 
 def test_close_trade_blocks_pending_exit_orders(db_conn, mocker):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.TradeRepo.get", return_value={
         "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
     })
@@ -444,6 +453,7 @@ def test_close_trade_blocks_pending_exit_orders(db_conn, mocker):
 
 def test_close_trade_rolls_back_when_second_leg_fails(db_conn, mocker, mock_instrument):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     _patch_close_broker_gates(mocker)
     legs = [
         {
@@ -511,6 +521,7 @@ def test_close_trade_rolls_back_when_second_leg_fails(db_conn, mocker, mock_inst
 
 def test_close_trade_happy_path(db_conn, mocker, mock_instrument):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     _patch_close_broker_gates(mocker)
     leg = {
         "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
@@ -545,6 +556,7 @@ def test_close_trade_happy_path(db_conn, mocker, mock_instrument):
 
 def test_close_passes_execution_job_id_to_place(db_conn, mocker, mock_instrument):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     _patch_close_broker_gates(mocker)
     leg = {
         "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
@@ -579,6 +591,7 @@ def test_supplement_rejects_live_prices_out_of_band(
     db_conn, mocker, mock_instrument, sample_leg,
 ):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     filled = {**sample_leg, "leg_order": 1, "executed": True, "fill_price": 100.0}
     pending = {**sample_leg, "leg_order": 2, "executed": False}
     mocker.patch("database.models.TradeRepo.get", return_value={
@@ -619,6 +632,7 @@ def test_supplement_rejects_live_prices_out_of_band(
 
 def test_preview_close_execution_ignores_entry_price_band(db_conn, mocker, mock_instrument):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     _patch_close_broker_gates(mocker)
     leg = {
         "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
@@ -672,6 +686,7 @@ def test_preview_includes_margin_snapshot(
     from providers.zerodha.execution_checks import MarginCheckResult
 
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
     mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
@@ -721,6 +736,7 @@ def test_preview_softens_live_price_gate_for_margin(
     from providers.zerodha.execution_checks import MarginCheckResult
 
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
     mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
