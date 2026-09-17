@@ -1448,6 +1448,8 @@ def _entry_context(
     leg_limits: Optional[Dict[int, float]],
     lots_override: Optional[int] = None,
     execution_job_id: Optional[int] = None,
+    *,
+    soft_live_price_gate: bool = False,
 ) -> Tuple[dict, List[dict], KiteExecutionFacade, InstrumentMaster, Dict[int, float], Dict[int, Instrument], List[dict], str, Optional[MarginCheckResult]]:
     sug = SuggestionRepo(db)
     suggestion = sug.get(suggestion_id)
@@ -1475,7 +1477,9 @@ def _entry_context(
     facade, master = _build_client()
     live_map, inst_map = _live_ltp_map(facade, master, legs)
     price_gate = validate_live_prices(legs, live_map)
-    if not price_gate.ok:
+    # Preview softens this so Amount needed can still show Final/Peak when
+    # individual legs sit outside band (place path still hard-blocks).
+    if not price_gate.ok and not soft_live_price_gate:
         raise ZerodhaExecutionError(
             f"Live prices out of band: {price_gate.reason()}"
         )
@@ -1513,7 +1517,10 @@ def preview_suggestion_execution(
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
     suggestion, legs, facade, _master, live_map, inst_map, ordered, strategy, margin = (
-        _entry_context(db, suggestion_id, leg_limits, lots_override)
+        _entry_context(
+            db, suggestion_id, leg_limits, lots_override,
+            soft_live_price_gate=True,
+        )
     )
     plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="entry", strategy=strategy)
     limit_map = {p.leg_order: p.limit_price for p in plans}

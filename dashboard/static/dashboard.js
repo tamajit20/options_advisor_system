@@ -747,6 +747,7 @@ function _applyZerodhaMarginToCard(card, preview) {
   const el = card.querySelector('[data-econ-z-margin]');
   if (el) {
     el.hidden = false;
+    el.removeAttribute('hidden');
     el.textContent = info.line;
     el.classList.toggle('cb-status-warn', !!info.blocked);
     el.classList.toggle('cb-status-ok', preview.margin_ok === true);
@@ -754,7 +755,36 @@ function _applyZerodhaMarginToCard(card, preview) {
   const compact = card.querySelector('[data-econ-z-margin-compact]');
   if (compact) {
     compact.hidden = false;
+    compact.removeAttribute('hidden');
     compact.innerHTML = ` <span class="muted">(Final \u20b9${fmt(info.fin)} \u00b7 Peak \u20b9${fmt(info.peak)})</span>`;
+  }
+}
+
+async function _hydrateOneSuggestionZerodhaMargin(card) {
+  const sid = card?.dataset?.sugId;
+  if (!sid) return;
+  if (typeof _zerodhaExecuteDisabledReason === 'function'
+      && _zerodhaExecuteDisabledReason(false)) {
+    return;
+  }
+  try {
+    const body = {};
+    if (typeof _collectExecLots === 'function') {
+      const lots = _collectExecLots(card);
+      if (lots != null && lots !== 'invalid') body.lots = lots;
+    }
+    const prev = await API(`/api/suggestion/${sid}/zerodha-preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (prev?.preview) {
+      card.dataset.marginHydrated = '1';
+      _applyZerodhaMarginToCard(card, prev.preview);
+    }
+  } catch (_) {
+    // Zerodha not ready / preview failed — keep engine Amount needed only.
+    delete card.dataset.marginHydrated;
   }
 }
 
@@ -766,26 +796,7 @@ async function _hydrateSuggestionZerodhaMargins(root) {
   const cards = [...(root || document).querySelectorAll('.card[data-sug-id]')];
   for (const card of cards) {
     if (card.dataset.marginHydrated === '1') continue;
-    const sid = card.dataset.sugId;
-    if (!sid) continue;
-    try {
-      const body = {};
-      if (typeof _collectExecLots === 'function') {
-        const lots = _collectExecLots(card);
-        if (lots != null) body.lots = lots;
-      }
-      const prev = await API(`/api/suggestion/${sid}/zerodha-preview`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (prev?.preview) {
-        card.dataset.marginHydrated = '1';
-        _applyZerodhaMarginToCard(card, prev.preview);
-      }
-    } catch (_) {
-      // Zerodha not ready / preview failed — keep engine Amount needed only.
-    }
+    await _hydrateOneSuggestionZerodhaMargin(card);
   }
 }
 
@@ -6028,6 +6039,9 @@ function bindSuggestionActions() {
           inp.hasAttribute('data-leg-price')) {
         if (inp.classList.contains('exec-lots-input')) {
           inp.classList.toggle('input-error', _collectExecLots(card) === 'invalid');
+          // Lots change the Kite Final/Peak quote — refresh under Amount needed.
+          delete card.dataset.marginHydrated;
+          _hydrateOneSuggestionZerodhaMargin(card);
         }
         recalc();
       }

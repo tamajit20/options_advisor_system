@@ -713,6 +713,45 @@ def test_preview_includes_margin_snapshot(
     assert body["margin_path_steps"][0]["cumulative"] == 18450.0
 
 
+def test_preview_softens_live_price_gate_for_margin(
+    db_conn, mocker, sample_leg, sample_suggestion, mock_instrument,
+):
+    """Amount needed hydrates from preview even when legs are outside band."""
+    from lifecycle.zerodha_executor import preview_suggestion_execution
+    from providers.zerodha.execution_checks import MarginCheckResult
+
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
+    mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
+    mocker.patch("lifecycle.zerodha_executor._circuit_breaker_on", return_value=False)
+    mocker.patch(
+        "lifecycle.zerodha_executor.validate_execution",
+        return_value=MagicMock(ok=True, reason=lambda: "OK"),
+    )
+    mocker.patch(
+        "lifecycle.zerodha_executor.validate_live_prices",
+        return_value=MagicMock(ok=False, reason=lambda: "leg 1: LTP below band"),
+    )
+    mocker.patch("lifecycle.zerodha_executor._build_client", return_value=(MagicMock(), MagicMock()))
+    mocker.patch(
+        "lifecycle.zerodha_executor._live_ltp_map",
+        return_value=({1: 90.0}, {1: mock_instrument}),
+    )
+    mocker.patch(
+        "lifecycle.zerodha_executor._run_pre_trade_checks",
+        return_value=MarginCheckResult(
+            ok=True, required=8855.0, available=50000.0,
+            peak_required=8855.0, final_required=8000.0, buffer_pct=5.0,
+        ),
+    )
+    mocker.patch("lifecycle.zerodha_executor._spot_ltp", return_value=23010.0)
+    preview = preview_suggestion_execution(db_conn, "SUG-1")
+    assert preview.margin_peak_required == 8855.0
+    assert preview.margin_final_required == 8000.0
+
+
 def test_assert_ignores_the_job_the_async_worker_just_inserted(db_conn, mocker):
     """Regression: async entry inserts RUNNING, then the worker preflight
     used to abort on that same row with 'already running'."""
