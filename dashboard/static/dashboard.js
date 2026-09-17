@@ -705,11 +705,13 @@ function _renderZerodhaPreviewTable(preview) {
     preview.spot_at_execution != null ? `Nifty spot \u20b9${fmt(preview.spot_at_execution)}` : null,
   ].filter(Boolean).join(' \u00b7 ');
   const funds = _renderZerodhaFundsBlock(preview);
+  const livePrem = _renderZerodhaLivePremiumBlock(preview);
   const bandHeaders = showBand
     ? '<th class="num">Suggested band</th><th>Band check</th>'
     : '';
   return `${warn}
     ${meta ? `<div class="muted" style="font-size:.82rem;margin-bottom:8px">${meta}</div>` : ''}
+    ${livePrem}
     ${funds}
     <div class="hist-legs-scroll">
       <table class="dt">
@@ -719,6 +721,129 @@ function _renderZerodhaPreviewTable(preview) {
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
+    </div>`;
+}
+
+function _formatZerodhaMarginOnCard(preview) {
+  const peak = preview.margin_peak_required != null
+    ? preview.margin_peak_required
+    : preview.margin_required;
+  const fin = preview.margin_final_required != null
+    ? preview.margin_final_required
+    : preview.margin_required;
+  if (peak == null && fin == null) return null;
+  const blocked = preview.margin_ok === false;
+  let line = `Zerodha Final \u20b9${fmt(fin)} \u00b7 Peak \u20b9${fmt(peak)}`;
+  if (preview.margin_available != null) {
+    line += ` \u00b7 Avail \u20b9${fmt(preview.margin_available)}`;
+  }
+  if (blocked) line += ' \u2014 insufficient for peak';
+  return { line, blocked, fin, peak };
+}
+
+function _applyZerodhaMarginToCard(card, preview) {
+  const info = _formatZerodhaMarginOnCard(preview);
+  if (!info) return;
+  const el = card.querySelector('[data-econ-z-margin]');
+  if (el) {
+    el.hidden = false;
+    el.textContent = info.line;
+    el.classList.toggle('cb-status-warn', !!info.blocked);
+    el.classList.toggle('cb-status-ok', preview.margin_ok === true);
+  }
+  const compact = card.querySelector('[data-econ-z-margin-compact]');
+  if (compact) {
+    compact.hidden = false;
+    compact.innerHTML = ` <span class="muted">(Final \u20b9${fmt(info.fin)} \u00b7 Peak \u20b9${fmt(info.peak)})</span>`;
+  }
+}
+
+async function _hydrateSuggestionZerodhaMargins(root) {
+  if (typeof _zerodhaExecuteDisabledReason === 'function'
+      && _zerodhaExecuteDisabledReason(false)) {
+    return;
+  }
+  const cards = [...(root || document).querySelectorAll('.card[data-sug-id]')];
+  for (const card of cards) {
+    if (card.dataset.marginHydrated === '1') continue;
+    const sid = card.dataset.sugId;
+    if (!sid) continue;
+    try {
+      const body = {};
+      if (typeof _collectExecLots === 'function') {
+        const lots = _collectExecLots(card);
+        if (lots != null) body.lots = lots;
+      }
+      const prev = await API(`/api/suggestion/${sid}/zerodha-preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (prev?.preview) {
+        card.dataset.marginHydrated = '1';
+        _applyZerodhaMarginToCard(card, prev.preview);
+      }
+    } catch (_) {
+      // Zerodha not ready / preview failed — keep engine Amount needed only.
+    }
+  }
+}
+
+function _renderZerodhaLivePremiumBlock(preview) {
+  if (!preview || preview.operation === 'EXIT') return '';
+  const legs = preview.legs || [];
+  if (!legs.length) return '';
+  const parts = [];
+  let net = 0;
+  let netLow = 0;
+  let netHigh = 0;
+  let haveBands = true;
+  for (const l of legs) {
+    const action = String(l.action || '').toUpperCase();
+    const px = Number(l.ltp);
+    if (!action || !Number.isFinite(px) || px <= 0) return '';
+    const sign = action === 'SELL' ? 1 : -1;
+    net += sign * px;
+    const mid = Number(l.suggested_price);
+    const pLow = Number(l.band_lo != null ? l.band_lo : mid);
+    const pHigh = Number(l.band_hi != null ? l.band_hi : mid);
+    if (!Number.isFinite(pLow) || !Number.isFinite(pHigh)) {
+      haveBands = false;
+    } else {
+      netLow += sign * (action === 'SELL' ? pLow : pHigh);
+      netHigh += sign * (action === 'SELL' ? pHigh : pLow);
+    }
+    const cls = action === 'SELL' ? 'cb-live-credit' : 'cb-live-debit';
+    parts.push(
+      `<span class="${cls}">${sign > 0 ? '+' : '\u2212'}\u20b9${fmt(px)}</span>`
+    );
+  }
+  let verdictHtml = '';
+  if (haveBands && Math.abs(netHigh - netLow) > 0.5) {
+    const lo = Math.min(netLow, netHigh);
+    const hi = Math.max(netLow, netHigh);
+    if (net >= lo && net <= hi) {
+      verdictHtml = '<span class="cb-live-verdict cb-status-ok">\u2713 within acceptable range</span>';
+    } else if (net > hi) {
+      verdictHtml = '<span class="cb-live-verdict cb-status-ok">\u2191 better than suggested</span>';
+    } else {
+      const gap = lo - net;
+      verdictHtml = `<span class="cb-live-verdict cb-status-warn">\u2193 \u20b9${fmt(gap)}/unit worse than the minimum \u2014 wait</span>`;
+    }
+  }
+  const eqHtml = parts.join('<span class="cb-sep"> + </span>')
+    + '<span class="cb-sep"> = </span>'
+    + `<span class="cb-live-net ${net >= 0 ? 'cb-live-credit' : 'cb-live-debit'}">`
+    + `\u20b9${fmt(Math.abs(net))}/unit</span>`
+    + `<span class="muted"> ${net >= 0 ? 'credit' : 'debit'}</span>`;
+  return `
+    <div class="credit-breakdown" style="margin:0 0 10px">
+      <div class="cb-live-row" style="display:flex;flex-wrap:wrap;align-items:center;gap:6px">
+        <span class="cb-live-tag">Live</span>
+        <span class="cb-live-eq">${eqHtml}</span>
+        ${verdictHtml}
+      </div>
+      <div class="cb-label muted" style="margin-top:4px">Live LTPs at confirm time (per unit)</div>
     </div>`;
 }
 
@@ -1605,11 +1730,11 @@ const TERM_HELP = {
   },
   margin_required: {
     label: 'Amount needed',
-    html: '<strong>Amount needed</strong> — Approximate margin Zerodha must have available to open this defined-risk spread (spread width minus net credit). Before live place, the system also checks the <em>peak</em> margin along the leg sequence (not only the final structure) plus a buffer.',
+    html: '<strong>Amount needed</strong> — Engine estimate of funds to open the structure. When Zerodha is ready, <em>Final</em> (full basket) and <em>Peak</em> (highest margin while placing legs one-by-one) appear underneath, plus available cash. Peak + buffer is what must clear before orders place.',
   },
   capital_required: {
     label: 'Amount needed',
-    html: '<strong>Amount needed</strong> — Premium you pay upfront to buy this position. Available margin is checked before orders are placed.',
+    html: '<strong>Amount needed</strong> — Premium you pay upfront to buy this position. When Zerodha is ready, Final / Peak margin from Kite also show under this line.',
   },
   est_net_max_profit: {
     label: 'Est. net at max profit',
@@ -2562,6 +2687,7 @@ async function loadSuggestion() {
     _scanInflightZerodhaExecutions();
     _refreshZerodhaExecButtons();
     _startSuggestionLivePrices();
+    _hydrateSuggestionZerodhaMargins(c);
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -5566,7 +5692,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     <div class="collapsible-preview">
       <span>PoP <strong>${fmtPct(econ.pop)}</strong></span>
       <span>Credit <strong>₹${fmt(econ.np)}</strong>/u</span>
-      ${capitalReq.rs != null ? `<span>Amount needed <strong>₹${fmt(capitalReq.rs)}</strong></span>` : ''}
+      ${capitalReq.rs != null ? `<span>Amount needed <strong class="econ-cap-req-compact">₹${fmt(capitalReq.rs)}</strong><span class="econ-z-margin-compact" data-econ-z-margin-compact hidden></span></span>` : ''}
       <span>Max loss <strong>₹${fmt(econ.ml)}</strong></span>
       ${s.dte != null ? `<span>DTE <strong>${s.dte}</strong></span>` : ''}
     </div>`;
@@ -5583,7 +5709,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       ${s.expiry_date ? `<div>${kvLabel('Options expiry', 'dte')}<br><span class="v">${fmtDate(s.expiry_date)}${s.dte != null ? ` <span class="muted">(${s.dte} DTE)</span>` : ''}</span></div>` : (s.dte != null ? `<div>${kvLabel('DTE', 'dte')}<br><span class="v">${s.dte}</span></div>` : '')}
       <div>${kvLabel('Net credit (per unit)', 'credit_per_unit')}<br><span class="v econ-np">₹${fmt(econ.np)}</span></div>
       <div>${kvLabel('Total credit')}<br><span class="v econ-tot-credit">₹${fmt(baseTotalCredit)}<span class="econ-qty-hint muted" style="font-size:.75rem"> (×${baseQty})</span></span></div>
-      ${capitalReq.rs != null ? `<div>${kvLabel(capitalReq.label, capitalReq.key)}<br><span class="v econ-cap-req">₹${fmt(capitalReq.rs)}</span>${capitalReq.hint ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">${escapeHtml(capitalReq.hint)}</span>` : ''}</div>` : ''}
+      ${capitalReq.rs != null ? `<div>${kvLabel(capitalReq.label, capitalReq.key)}<br><span class="v econ-cap-req">₹${fmt(capitalReq.rs)}</span><span class="econ-z-margin muted" data-econ-z-margin hidden style="font-size:.75rem;display:block;margin-top:2px"></span>${capitalReq.hint ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">${escapeHtml(capitalReq.hint)}</span>` : ''}</div>` : ''}
       <div>${kvLabel('Max profit', 'max_profit')}<br><span class="v econ-mp">₹${fmt(econ.mp)}</span></div>
       <div>${kvLabel('Max loss', 'max_loss')}<br><span class="v econ-ml">₹${fmt(econ.ml)}<span class="econ-ml-hint">${pctHint(econ.ml, econ.np, 'credit')}</span></span></div>
       <div>${kvLabel('PoP', 'pop')}<br><span class="v">${fmtPct(econ.pop)}</span></div>
@@ -6024,6 +6150,8 @@ function bindSuggestionActions() {
       if (!preview || !(preview.legs || []).length) {
         throw new Error('Preview returned no legs — check Zerodha session and suggestion legs');
       }
+      card.dataset.marginHydrated = '1';
+      _applyZerodhaMarginToCard(card, preview);
       showZerodhaConfirmModal(preview, {
         title: preview.all_limits_in_band
           ? 'Confirm Zerodha entry orders'
