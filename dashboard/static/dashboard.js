@@ -1490,6 +1490,45 @@ function _applyLegLtpsToClosePanel(tradeId, legLtps) {
     if (c) c.textContent = `\u20b9${fmt(charges)}`;
     _setPnlLine(preview.querySelector('.live-pnl-value'), preview.querySelector('.live-pnl-pct'), net, prem);
   }
+  // Fill-side preview: blank boxes track live LTP; typed values stay fixed.
+  const fillRows = [...closePanel.querySelectorAll('.leg-exit-row')];
+  if (fillRows.length) {
+    let fGross = 0; let fOk = true;
+    const fEntry = [], fExit = [];
+    fillRows.forEach(row => {
+      const action = row.dataset.action;
+      const ep = parseFloat(row.dataset.fillPrice) || 0;
+      const lots = parseInt(row.dataset.lots) || 1;
+      const ls = parseInt(row.dataset.lotSize) || 1;
+      const typed = (row.querySelector('.close-price')?.value || '').trim();
+      let cp = typed ? parseFloat(typed) : NaN;
+      if (!typed) {
+        const lo = row.dataset.legOrder;
+        cp = parseFloat(
+          closePanel.querySelector(
+            `.cf-live-leg[data-leg-order="${lo}"] .cf-live-price`
+          )?.dataset?.ltp
+        );
+      }
+      if (isNaN(cp) || cp <= 0) { fOk = false; return; }
+      fGross += action === 'SELL' ? (ep - cp) * lots * ls : (cp - ep) * lots * ls;
+      fEntry.push({ action, fill_price: ep, lots, lot_size: ls });
+      fExit.push({
+        action: action === 'SELL' ? 'BUY' : 'SELL',
+        fill_price: cp, lots, lot_size: ls,
+      });
+    });
+    const fillPreview = closePanel.querySelector('.fill-pnl-preview');
+    if (fillPreview && fOk) {
+      const charges = estChargesOneSide([...fEntry, ...fExit]);
+      const net = fGross - charges;
+      const prem = _premiumFromDataset(fillPreview);
+      _setPnlLine(fillPreview.querySelector('.fill-pnl-gross'), fillPreview.querySelector('.fill-pnl-gross-pct'), fGross, prem);
+      const c = fillPreview.querySelector('.fill-pnl-charges');
+      if (c) c.textContent = `\u20b9${fmt(charges)}`;
+      _setPnlLine(fillPreview.querySelector('.fill-pnl-value'), fillPreview.querySelector('.fill-pnl-pct'), net, prem);
+    }
+  }
   return anyUpdated;
 }
 
@@ -6669,7 +6708,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
           <div class="leg-exit-input">
             <span class="muted" style="font-size:.8rem">${escapeHtml(closeAction)} @ \u20b9</span>
             <input type="number" step="0.05" class="close-price" data-leg="${l.leg_order}"
-                   value="${prefill}" placeholder="Enter actual fill or Zerodha limit">
+                   value="${prefill}" placeholder="Blank = live market">
           </div>
         </div>`;
     }).join('');
@@ -6691,8 +6730,8 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       ? `<button type="button" class="${zCloseBtnClass}"${zCloseAria} data-trade-id="${escapeHtml(tradeId)}" title="${zCloseTitle}">Close in Zerodha</button>`
       : '';
     const zCloseHintHtml = showZerodhaClose
-      ? `<p class="muted" style="font-size:.78rem;margin-top:6px">Close in Zerodha: leave fill prices blank for live auto limits, or enter your LIMIT per leg.</p>`
-      : `<p class="muted" style="font-size:.78rem;margin-top:6px">Paper/manual trade — record fills here. Close in Zerodha stays hidden until Kite ENTRY/SUPPLEMENT fills exist.</p>`;
+      ? `<p class="muted" style="font-size:.78rem;margin-top:6px">Leave prices blank to use live market (Zerodha auto LIMIT or record at LTP). Typed values override.</p>`
+      : `<p class="muted" style="font-size:.78rem;margin-top:6px">Leave prices blank to record at the live market price shown on the left. Typed values override.</p>`;
 
     content.innerHTML = `
         <div class="close-two-col">
@@ -6789,10 +6828,17 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       }
     }
 
-    // RIGHT panel: recalc from user fill inputs
+    // RIGHT panel: typed fills, or live LTP when a box is left blank
     function recalcFillPnl() {
       const rows = [...content.querySelectorAll('.leg-exit-row')];
-      const result = _calcPnl(rows, row => row.querySelector('.close-price')?.value);
+      const result = _calcPnl(rows, row => {
+        const typed = (row.querySelector('.close-price')?.value || '').trim();
+        if (typed) return typed;
+        const lo = row.dataset.legOrder;
+        return content.querySelector(
+          `.cf-live-leg[data-leg-order="${lo}"] .cf-live-price`
+        )?.dataset?.ltp;
+      });
       _renderPnl(content.querySelector('.fill-pnl-preview'), result);
     }
 
@@ -6894,19 +6940,38 @@ async function submitZerodhaClose(tradeId, btn, panel) {
   }
 }
 
+/** Exit price for a close row: typed value wins; blank uses live LTP. */
+function _resolveCloseExitPrice(panel, row) {
+  const typed = (row.querySelector('.close-price')?.value || '').trim();
+  if (typed) {
+    const p = parseFloat(typed);
+    return (p && !isNaN(p) && p > 0) ? p : null;
+  }
+  const lo = row.dataset.legOrder;
+  const ltp = parseFloat(
+    panel.querySelector(`.cf-live-leg[data-leg-order="${lo}"] .cf-live-price`)
+      ?.dataset?.ltp
+  );
+  return (ltp && !isNaN(ltp) && ltp > 0) ? ltp : null;
+}
+
 async function submitClose(tradeId, panel) {
-  const exits = $$('.leg-exit-row[data-leg-order]', panel).map(row => {
-    const lo = parseInt(row.dataset.legOrder);
-    const price = row.querySelector('.close-price').value;
+  const requiredRows = $$('.leg-exit-row[data-leg-order]', panel);
+  const exits = requiredRows.map(row => {
+    const lo = parseInt(row.dataset.legOrder, 10);
     return {
       leg_order: lo,
-      exit_price: price !== '' ? parseFloat(price) : null,
+      exit_price: _resolveCloseExitPrice(panel, row),
       exit_time: new Date().toISOString(),
     };
-  }).filter(e => e.exit_price != null);
-  const requiredRows = $$('.leg-exit-row[data-leg-order]', panel);
-  if (exits.length !== requiredRows.length) {
-    toast('Enter an exit price for every executed leg', 'warn'); return;
+  });
+  const missing = exits.filter(e => e.exit_price == null).map(e => e.leg_order);
+  if (missing.length) {
+    toast(
+      `No live market price for leg(s) ${missing.join(', ')} — type an exit price or wait for LTP`,
+      'warn',
+    );
+    return;
   }
 
   // ── 2-step confirm ────────────────────────────────────────────────────────
