@@ -1745,14 +1745,13 @@ window.toast = toast;
 // ---------------- Tab switching ----------------
 const TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
 window.TABS = TABS;
-/** Advisor top tabs only — not Logs/Jobs/WS Monitor (those are under Menu). */
-const ADVISOR_TABS = ['suggestion', 'trades', 'learn', 'history', 'config'];
+const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'config'];
 const SYSTEM_TABS = ['logs', 'jobs', 'wsmon'];
 const TAB_LOADERS = {};
 const TAB_LEAVE = {};
 
 function isOptionsTab(name) {
-  return ADVISOR_TABS.includes(name);
+  return OPTIONS_TABS.includes(name);
 }
 
 /** Extension point for separate dashboard tab modules. */

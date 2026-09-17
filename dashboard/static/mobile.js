@@ -5,9 +5,8 @@
   'use strict';
 
   const MOBILE_MQ = window.matchMedia('(max-width: 1024px)');
-  const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'config'];
+  const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'config'];
   const SYSTEM_TABS = ['logs', 'jobs', 'wsmon'];
-  const ADVISOR_RESTORE_TABS = OPTIONS_TABS;
 
   function getActiveTab() {
     if (typeof window.TABS === 'object' && Array.isArray(window.TABS)) {
@@ -78,7 +77,7 @@
           let tab = 'suggestion';
           try {
             const saved = localStorage.getItem('activeTab');
-            if (saved && ADVISOR_RESTORE_TABS.includes(saved)) tab = saved;
+            if (saved && OPTIONS_TABS.includes(saved)) tab = saved;
           } catch (_) {}
           if (typeof window.switchTab === 'function') window.switchTab(tab);
         }
