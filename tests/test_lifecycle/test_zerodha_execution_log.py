@@ -262,6 +262,24 @@ def test_exit_profit_milestone_from_job_message():
     assert groups[0]["close_trigger"] == "PROFIT_MILESTONE_HIT"
 
 
+def test_exit_loss_milestone_from_close_triggers_map():
+    """Older EXIT jobs had no stamp — notifications map still labels them."""
+    rows = [
+        {
+            "id": 1, "trade_id": "TRD-2", "suggestion_id": "S1",
+            "execution_job_id": 13, "operation": "EXIT", "leg_order": 1,
+            "status": "COMPLETE", "created_at": datetime(2026, 9, 17, 14, 0),
+        },
+    ]
+    groups = group_broker_orders(
+        rows,
+        jobs=[{"id": 13, "message": "All close legs filled"}],
+        close_triggers={"TRD-2": "LOSS_MILESTONE_HIT"},
+    )
+    assert groups[0]["headline"] == "Loss milestone hit — system closed"
+    assert groups[0]["actor"] == "system"
+
+
 def test_exit_profit_pct_from_job_message():
     rows = [
         {
