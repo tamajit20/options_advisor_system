@@ -7,7 +7,7 @@ from database.broker_order_repo import BrokerOrderRepo
 from database.connection import SQLServerConnection
 from database.models import TradeRepo
 from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
-from engine.sl_threshold import loss_milestone_config, profit_milestone_config
+from engine.sl_threshold import loss_milestone_config, profit_milestone_config, profit_pct_auto_close_config
 from lifecycle.auto_execution.types import AutoExecAction, AutoExecContext
 from lifecycle.trade_executor import close_trade_with_fills
 from lifecycle.zerodha_executor import (
@@ -83,6 +83,21 @@ class CloseOnProfitMilestone(AutoExecAction):
 
     def enabled(self) -> bool:
         cfg = profit_milestone_config()
+        return bool(cfg.get("enabled") and cfg.get("auto_close", True))
+
+    def run(self, db: SQLServerConnection, ctx: AutoExecContext) -> str:
+        return flatten_open_trade(db, ctx)
+
+
+class CloseOnProfitPct(AutoExecAction):
+    """Hard profit % of entry premium — close immediately, no confirm."""
+
+    name = "close_on_profit_pct"
+    notif_types: FrozenSet[str] = frozenset({"PROFIT_PCT_HIT"})
+    failure_notif_type = "PROFIT_PCT_CLOSE_FAILED"
+
+    def enabled(self) -> bool:
+        cfg = profit_pct_auto_close_config()
         return bool(cfg.get("enabled") and cfg.get("auto_close", True))
 
     def run(self, db: SQLServerConnection, ctx: AutoExecContext) -> str:

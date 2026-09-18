@@ -91,6 +91,7 @@ _PNL_KEYS = frozenset({
     "live_risk_monitor", "adverse_move_warning_pct",
     "loss_milestone_alert",
     "profit_milestone_alert",
+    "profit_pct_auto_close",
 })
 
 _GROUP_META: Sequence[Tuple[str, str]] = (
@@ -162,6 +163,11 @@ _DESCRIPTIONS: Dict[str, str] = {
         "entry premium, sell if MTM gives back that amount from the peak "
         "(line only ratchets up). SL stays on the loss side. Same JSON shape "
         "as loss_milestone_alert including confirm_seconds. Independent percent.",
+    "profit_pct_auto_close":
+        "Hard profit take: {enabled, pct_of_premium}. When MTM profit reaches "
+        "that % of entry premium, auto-close immediately (no confirm window). "
+        "Zerodha flattens on Kite; paper/manual books at live LTP. Independent "
+        "of profit_milestone_alert (peak giveback).",
     "live_risk_monitor":
         "Live alert engine (session, cooldown, pre-breach). Nested JSON.",
     "trading_capital_rs": "Notional capital for circuit-breaker and sizing.",

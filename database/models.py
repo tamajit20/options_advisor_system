@@ -1427,7 +1427,9 @@ class NotificationRepo:
             "SELECT related_trade_id, notif_type, created_at "
             "FROM options_notifications "
             f"WHERE related_trade_id IN ({placeholders}) "
-            "AND notif_type IN ('PROFIT_MILESTONE_HIT', 'LOSS_MILESTONE_HIT') "
+            "AND notif_type IN ("
+            "'PROFIT_MILESTONE_HIT', 'LOSS_MILESTONE_HIT', 'PROFIT_PCT_HIT'"
+            ") "
             "ORDER BY created_at DESC, id DESC",
             seen,
         ) or []
@@ -1437,7 +1439,9 @@ class NotificationRepo:
             if not tid or tid in out:
                 continue
             ntype = str(row.get("notif_type") or "").upper()
-            if ntype in ("PROFIT_MILESTONE_HIT", "LOSS_MILESTONE_HIT"):
+            if ntype in (
+                "PROFIT_MILESTONE_HIT", "LOSS_MILESTONE_HIT", "PROFIT_PCT_HIT",
+            ):
                 out[tid] = ntype
         return out
 
@@ -1471,7 +1475,8 @@ class NotificationRepo:
                            "LOSS_LIMIT_HIT", "PROFIT_FLOOR_HIT"],
             "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED",
                            "PROFIT_FLOOR_SET", "PROFIT_MILESTONE_HIT",
-                           "PROFIT_MILESTONE_CLOSE_FAILED"],
+                           "PROFIT_MILESTONE_CLOSE_FAILED",
+                           "PROFIT_PCT_HIT", "PROFIT_PCT_CLOSE_FAILED"],
             "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
             "event":      ["EVENT_AHEAD_REVIEW"],
             "system":     ["CIRCUIT_BREAKER", "BROKEN_TRADE", "DATA_REPAIR", "KILL_SWITCH"],
@@ -1527,7 +1532,8 @@ class NotificationRepo:
                            "LOSS_LIMIT_HIT", "PROFIT_FLOOR_HIT"],
             "profit":     ["TARGET_HIT", "TAKE_PROFIT", "TARGET_LOCKED",
                            "PROFIT_FLOOR_SET", "PROFIT_MILESTONE_HIT",
-                           "PROFIT_MILESTONE_CLOSE_FAILED"],
+                           "PROFIT_MILESTONE_CLOSE_FAILED",
+                           "PROFIT_PCT_HIT", "PROFIT_PCT_CLOSE_FAILED"],
             "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
             "event":      ["EVENT_AHEAD_REVIEW"],
             "system":     ["CIRCUIT_BREAKER", "BROKEN_TRADE", "DATA_REPAIR", "KILL_SWITCH"],
@@ -1575,6 +1581,8 @@ class NotificationRepo:
             "PROFIT_FLOOR_SET": "profit",
             "PROFIT_MILESTONE_HIT": "profit",
             "PROFIT_MILESTONE_CLOSE_FAILED": "profit",
+            "PROFIT_PCT_HIT": "profit",
+            "PROFIT_PCT_CLOSE_FAILED": "profit",
             "EXIT_TOMORROW": "exit", "TIME_DECAY_DONE": "exit",
             "EXPIRE": "exit", "AUTO_SETTLED": "exit",
             "EVENT_AHEAD_REVIEW": "event",
@@ -1635,6 +1643,8 @@ class NotificationRepo:
             "                      'LOSS_MILESTONE_CLOSE_FAILED', "
             "                      'PROFIT_MILESTONE_HIT', "
             "                      'PROFIT_MILESTONE_CLOSE_FAILED', "
+            "                      'PROFIT_PCT_HIT', "
+            "                      'PROFIT_PCT_CLOSE_FAILED', "
             "                      'LOSS_LIMIT_HIT') "
             " ORDER BY created_at DESC",
             [trade_id, today_start],

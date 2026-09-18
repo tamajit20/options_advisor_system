@@ -145,3 +145,30 @@ class TestProfitMilestoneThreshold:
         ):
             assert loss_milestone_config()["pct_of_premium"] == 5.0
             assert profit_milestone_config()["pct_of_premium"] == 12.0
+
+
+class TestProfitPctAutoClose:
+    def test_disabled_by_default_shape(self):
+        from engine.sl_threshold import profit_pct_auto_close_config, profit_pct_auto_close_rs
+
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_pct_auto_close": {"enabled": False, "pct_of_premium": 5.0}},
+        ):
+            cfg = profit_pct_auto_close_config()
+            assert cfg["enabled"] is False
+            assert cfg["pct_of_premium"] == 5.0
+            rs, pct = profit_pct_auto_close_rs(investment_rs=10_000.0)
+            assert rs == 0.0
+            assert pct == 5.0
+
+    def test_enabled_computes_target(self):
+        from engine.sl_threshold import profit_pct_auto_close_rs
+
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_pct_auto_close": {"enabled": True, "pct_of_premium": 5.0}},
+        ):
+            rs, pct = profit_pct_auto_close_rs(investment_rs=10_000.0)
+            assert rs == 500.0
+            assert pct == 5.0

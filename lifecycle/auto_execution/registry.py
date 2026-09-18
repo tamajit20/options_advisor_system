@@ -9,6 +9,7 @@ from typing import List, Sequence, Tuple
 from lifecycle.auto_execution.close_on_milestone import (
     CloseOnLossMilestone,
     CloseOnProfitMilestone,
+    CloseOnProfitPct,
 )
 from lifecycle.auto_execution.types import AutoExecAction
 
@@ -16,6 +17,7 @@ from lifecycle.auto_execution.types import AutoExecAction
 REGISTERED_ACTIONS: Tuple[AutoExecAction, ...] = (
     CloseOnLossMilestone(),
     CloseOnProfitMilestone(),
+    CloseOnProfitPct(),
 )
 
 

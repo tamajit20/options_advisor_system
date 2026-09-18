@@ -545,7 +545,7 @@ stateDiagram-v2
   IGNORED --> SIM: simulation_update
 ```
 
-Monitoring: WS ticks -> `live_risk_monitor` (MTM, profit/loss milestones with confirm); fallback job `intraday_sl_fallback`; daily `exit_engine`.  
+Monitoring: WS ticks -> `live_risk_monitor` (MTM, profit/loss milestones with confirm, optional hard `profit_pct_auto_close`); fallback job `intraday_sl_fallback`; daily `exit_engine`.  
 **Which files:** [B12](#b12-code-flows).
 
 ---

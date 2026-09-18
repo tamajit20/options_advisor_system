@@ -832,6 +832,14 @@ STRATEGY_CONFIG = {
         "confirm_seconds": 20,
     },
 
+    # Hard profit % take — close as soon as MTM ≥ this % of entry premium.
+    # No confirm window, no peak/giveback. Independent of profit_milestone_alert.
+    # Zerodha → flatten on Kite; paper/manual → book at live LTP.
+    "profit_pct_auto_close": {
+        "enabled": False,
+        "pct_of_premium": 5.0,
+    },
+
     # Suggestion freshness (Phase 3 — #2).
     # A PENDING suggestion older than this many minutes is considered STALE.
     # The execution validator (and dashboard badge) gates executions of stale

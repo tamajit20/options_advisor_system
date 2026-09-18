@@ -19,6 +19,7 @@ def test_only_milestones_are_registered():
     assert set(registered_notif_types()) == {
         "LOSS_MILESTONE_HIT",
         "PROFIT_MILESTONE_HIT",
+        "PROFIT_PCT_HIT",
     }
 
 
@@ -38,6 +39,10 @@ def test_manual_alerts_have_no_auto_action(notif_type, mocker):
         "lifecycle.auto_execution.close_on_milestone.profit_milestone_config",
         return_value={"enabled": True, "auto_close": True, "pct_of_premium": 5.0},
     )
+    mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.profit_pct_auto_close_config",
+        return_value={"enabled": True, "auto_close": True, "pct_of_premium": 5.0},
+    )
     assert matching_actions(notif_type) == []
 
 
@@ -50,8 +55,13 @@ def test_milestone_disabled_or_auto_close_off_matches_nothing(mocker):
         "lifecycle.auto_execution.close_on_milestone.profit_milestone_config",
         return_value={"enabled": True, "auto_close": False, "pct_of_premium": 5.0},
     )
+    mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.profit_pct_auto_close_config",
+        return_value={"enabled": False, "auto_close": True, "pct_of_premium": 5.0},
+    )
     assert matching_actions("LOSS_MILESTONE_HIT") == []
     assert matching_actions("PROFIT_MILESTONE_HIT") == []
+    assert matching_actions("PROFIT_PCT_HIT") == []
 
 
 def test_milestone_enabled_matches_close_action(mocker):
@@ -72,6 +82,18 @@ def test_profit_milestone_enabled_matches_close_action(mocker):
     actions = matching_actions("PROFIT_MILESTONE_HIT")
     assert len(actions) == 1
     assert isinstance(actions[0], CloseOnProfitMilestone)
+
+
+def test_profit_pct_enabled_matches_close_action(mocker):
+    from lifecycle.auto_execution.close_on_milestone import CloseOnProfitPct
+
+    mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.profit_pct_auto_close_config",
+        return_value={"enabled": True, "auto_close": True, "pct_of_premium": 5.0},
+    )
+    actions = matching_actions("PROFIT_PCT_HIT")
+    assert len(actions) == 1
+    assert isinstance(actions[0], CloseOnProfitPct)
 
 
 def test_dispatch_skips_thread_when_no_action(mocker):

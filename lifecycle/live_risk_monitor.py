@@ -90,6 +90,8 @@ from engine.sl_threshold import (
     profit_milestone_config,
     profit_milestone_line_rs,
     profit_milestone_rs,
+    profit_pct_auto_close_config,
+    profit_pct_auto_close_rs,
     trade_investment_rs,
 )
 from lifecycle.auto_execution.types import AutoExecContext
@@ -646,6 +648,7 @@ class LiveRiskMonitor:
         self._short_leg_stress_mult = float(cfg["short_leg_stress_multiplier"])
         self._bind_loss_milestone_cfg()
         self._bind_profit_milestone_cfg()
+        self._bind_profit_pct_auto_close_cfg()
 
     def _bind_loss_milestone_cfg(self) -> None:
         """Re-read loss_milestone_alert from STRATEGY_CONFIG."""
@@ -686,6 +689,19 @@ class LiveRiskMonitor:
         self._profit_milestone_confirm = timedelta(
             seconds=int(pmc.get("confirm_seconds") or 0)
         )
+
+    def _bind_profit_pct_auto_close_cfg(self) -> None:
+        """Re-read profit_pct_auto_close — hard % take, no confirm."""
+        ppc = profit_pct_auto_close_config()
+        self._profit_pct_enabled = ppc["enabled"]
+        self._profit_pct = ppc["pct_of_premium"]
+        self._profit_pct_auto_close = bool(ppc.get("auto_close", True))
+        retry_sec = ppc.get("auto_close_retry_seconds", 60)
+        try:
+            retry_sec = max(0, int(retry_sec))
+        except (TypeError, ValueError):
+            retry_sec = 60
+        self._profit_pct_retry = timedelta(seconds=retry_sec)
 
     def _reload(self, *, prime: bool = False) -> None:
         if self._config_reloader is not None:
@@ -1076,6 +1092,9 @@ class LiveRiskMonitor:
         profit_line = profit_milestone_line_rs(
             peak_rs=state.mtm_peak_rs, giveback_rs=profit_giveback_rs,
         )
+        profit_pct_rs, profit_pct_val = profit_pct_auto_close_rs(
+            investment_rs=investment,
+        )
 
         # MTM publish (#3) — throttled per trade.
         mtm_payload: Optional[dict] = None
@@ -1174,6 +1193,33 @@ class LiveRiskMonitor:
                 breach_key="GREEK_STRESS", now=now,
                 cooldown=timedelta(hours=4),
             )
+            return alert, mtm_payload, trailing_persist, snapshot_payload
+
+        # 1a-iii. Hard profit % of entry premium — close immediately, no confirm.
+        profit_pct_hit = (
+            self._profit_pct_enabled
+            and profit_pct_rs > 0
+            and current_pnl >= profit_pct_rs
+        )
+        if profit_pct_hit:
+            prem_label = (
+                "premium received" if state.entry_net_credit > 0 else "premium paid"
+            )
+            reason = (
+                f"Profit {profit_pct_val:.0f}% of {prem_label} ₹{investment:,.0f} "
+                f"(= ₹{profit_pct_rs:,.0f}) reached — MTM ₹{current_pnl:,.0f}. "
+                f"Auto-closing now."
+            )
+            alert = self._maybe_alert(
+                state, "PROFIT_PCT_HIT", "WARNING",
+                title=f"Profit {profit_pct_val:.0f}% hit on {state.trade_name}",
+                body=self._format_pnl_body(state, current_pnl, reason),
+                breach_key="PROFIT_PCT", now=now,
+                threshold_rs=profit_pct_rs,
+                cooldown=timedelta(minutes=15),
+            )
+            if alert is None:
+                alert = self._silent_profit_pct_retry(state, now)
             return alert, mtm_payload, trailing_persist, snapshot_payload
 
         profit_in_zone = (
@@ -1320,6 +1366,9 @@ class LiveRiskMonitor:
         if profit_line is not None:
             self._clear_level_breach(
                 state, "PROFIT_MILESTONE", now, current_pnl, profit_line)
+        if profit_pct_rs > 0:
+            self._clear_level_breach(
+                state, "PROFIT_PCT", now, current_pnl, profit_pct_rs)
         self._clear_level_breach(state, "TARGET", now, current_pnl, target_rs)
         if structural_flip is not None:
             return structural_flip, mtm_payload, trailing_persist, snapshot_payload
@@ -1422,6 +1471,7 @@ class LiveRiskMonitor:
         "PROFIT_FLOOR": "PROFIT_FLOOR",
         "PROFIT_MILESTONE": "PROFIT_MILESTONE",
         "LOSS_MILESTONE": "LOSS_MILESTONE",
+        "PROFIT_PCT": "PROFIT_PCT",
         "LOSS_LIMIT": "LOSS_LIMIT",
         "SPOT_SL": "SPOT_SL",
     }
@@ -1665,6 +1715,25 @@ class LiveRiskMonitor:
             title="",
             body="",
             breach_key="PROFIT_MILESTONE",
+            silent=True,
+        )
+
+    def _silent_profit_pct_retry(
+        self, state: _TradeState, now: datetime,
+    ) -> Optional["_PendingAlert"]:
+        """Re-attempt hard profit-% auto-close during alert cooldown."""
+        if not self._profit_pct_auto_close or self._auto_exec is None:
+            return None
+        last = state.last_auto_exec_at
+        if last is not None and (now - last) < self._profit_pct_retry:
+            return None
+        return _PendingAlert(
+            state=state,
+            notif_type="PROFIT_PCT_HIT",
+            severity="WARNING",
+            title="",
+            body="",
+            breach_key="PROFIT_PCT",
             silent=True,
         )
 

@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional
 _TERMINAL_FAIL = frozenset({"FAILED", "REJECTED", "CANCELLED"})
 _PROFIT_MILESTONE_TRIGGERS = frozenset({"PROFIT_MILESTONE_HIT", "PROFIT_MILESTONE"})
 _LOSS_MILESTONE_TRIGGERS = frozenset({"LOSS_MILESTONE_HIT", "LOSS_MILESTONE"})
+_PROFIT_PCT_TRIGGERS = frozenset({"PROFIT_PCT_HIT", "PROFIT_PCT"})
 
 
 def _as_dt(v) -> Optional[datetime]:
@@ -29,10 +30,13 @@ def _as_dt(v) -> Optional[datetime]:
 
 
 def _normalize_close_trigger(raw: Optional[str]) -> Optional[str]:
-    """Map notif / job tags to PROFIT_MILESTONE_HIT or LOSS_MILESTONE_HIT."""
+    """Map notif / job tags to a canonical close-trigger label."""
     if not raw:
         return None
     text = str(raw).upper()
+    for token in _PROFIT_PCT_TRIGGERS:
+        if token in text:
+            return "PROFIT_PCT_HIT"
     for token in _PROFIT_MILESTONE_TRIGGERS:
         if token in text:
             return "PROFIT_MILESTONE_HIT"
@@ -322,7 +326,13 @@ def describe_broker_group(
     )
 
     def _milestone_exit_card(*, failed: bool) -> dict:
-        if milestone == "PROFIT_MILESTONE_HIT":
+        if milestone == "PROFIT_PCT_HIT":
+            label = "Profit % hit — system closed"
+            detail = reason or (
+                "Configured profit % of entry premium was reached; "
+                "the system flattened immediately."
+            )
+        elif milestone == "PROFIT_MILESTONE_HIT":
             label = "Profit milestone hit — system closed"
             detail = reason or (
                 "MTM gave back the configured amount from peak; "

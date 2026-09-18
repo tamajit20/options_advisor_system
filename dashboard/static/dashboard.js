@@ -1848,6 +1848,10 @@ const TERM_HELP = {
     label: 'Profit milestone',
     html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner after the confirm window (default 20s). After peak MTM reaches your configured % of entry premium, the sell line is that many rupees below the peak and only moves up. Hard SL stays on the loss side.',
   },
+  profit_pct_auto_close: {
+    label: 'Profit % auto-close',
+    html: '<strong>Profit % auto-close</strong> — When enabled, closes as soon as MTM profit reaches the configured % of entry premium. No confirm window, no peak giveback. Zerodha and paper/manual both auto-close.',
+  },
   loss_limit: {
     label: 'Loss limit',
     html: '<strong>Loss limit</strong> — Hard MTM stop: exit alert when loss reaches this rupee amount (often a % of max loss). Separate from Nifty spot stop levels.',
@@ -2181,6 +2185,7 @@ const _SIGNAL_LABELS = {
   sl: 'Stop-loss — close now',
   milestone: 'Loss milestone — auto-closing',
   profit_milestone: 'Profit milestone — auto-closing',
+  profit_pct: 'Profit % hit — auto-closing',
   thesis: 'Thesis failed — close now',
   profit: 'Take profit — target hit',
   exit: 'Close pending',
@@ -2203,6 +2208,7 @@ function _signalKindFromFields({ dailyStatus, exitInstruction, riskNotif, live }
     return 'sl';
   }
   if (daily === 'THESIS_FAIL' || exitTxt.includes('thesis_fail')) return 'thesis';
+  if (risk === 'PROFIT_PCT_HIT') return 'profit_pct';
   if (risk === 'PROFIT_MILESTONE_HIT'
       || (live && live.profitMilestoneHit && !live.profitMilestoneConfirming)) {
     return 'profit_milestone';
@@ -2310,6 +2316,7 @@ function _renderSignalRail(st) {
   const sl = signals.filter(s => s.kind === 'sl');
   const milestone = signals.filter(s => s.kind === 'milestone');
   const profitMs = signals.filter(s => s.kind === 'profit_milestone');
+  const profitPct = signals.filter(s => s.kind === 'profit_pct');
   const thesis = signals.filter(s => s.kind === 'thesis');
   const profit = signals.filter(s => s.kind === 'profit');
   const exitSig = signals.filter(s => s.kind === 'exit');
@@ -2322,6 +2329,7 @@ function _renderSignalRail(st) {
     sl: sl.map(s => s.trade_id),
     milestone: milestone.map(s => s.trade_id),
     profit_milestone: profitMs.map(s => s.trade_id),
+    profit_pct: profitPct.map(s => s.trade_id),
     thesis: thesis.map(s => s.trade_id),
     profit: profit.map(s => s.trade_id),
     exit: exitSig.map(s => s.trade_id),
@@ -2348,6 +2356,10 @@ function _renderSignalRail(st) {
   if (profitMs.length) {
     const names = profitMs.map(s => s.trade_name || s.trade_id).join(', ');
     tiles.push(_signalTile('profit_milestone', profitMs.length, `Profit milestone — auto-closing ${names}`, profitMs[0].trade_id));
+  }
+  if (profitPct.length) {
+    const names = profitPct.map(s => s.trade_name || s.trade_id).join(', ');
+    tiles.push(_signalTile('profit_pct', profitPct.length, `Profit % hit — auto-closing ${names}`, profitPct[0].trade_id));
   }
   if (thesis.length) {
     const names = thesis.map(s => s.trade_name || s.trade_id).join(', ');
@@ -2965,6 +2977,10 @@ const PNL_RULES = {
     auto_close: true,
     confirm_seconds: 20,
   },
+  profit_pct_auto_close: {
+    enabled: false,
+    pct_of_premium: 5.0,
+  },
 };
 
 function applyPnlRules(rules) {
@@ -3011,6 +3027,12 @@ function applyPnlRules(rules) {
     PNL_RULES.profit_milestone_alert = {
       ...PNL_RULES.profit_milestone_alert,
       ...rules.profit_milestone_alert,
+    };
+  }
+  if (rules.profit_pct_auto_close && typeof rules.profit_pct_auto_close === 'object') {
+    PNL_RULES.profit_pct_auto_close = {
+      ...PNL_RULES.profit_pct_auto_close,
+      ...rules.profit_pct_auto_close,
     };
   }
 }

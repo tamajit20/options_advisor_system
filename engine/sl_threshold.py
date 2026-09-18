@@ -173,6 +173,37 @@ def profit_milestone_rs(*, investment_rs: float) -> Tuple[float, float]:
     return investment_rs * (pct / 100.0), pct
 
 
+def profit_pct_auto_close_config() -> Dict[str, Any]:
+    """Hard profit-% take: close when MTM ≥ pct of entry premium (no confirm)."""
+    raw = STRATEGY_CONFIG.get("profit_pct_auto_close") or {}
+    enabled = bool(raw.get("enabled", False))
+    try:
+        pct = float(
+            raw.get("pct_of_premium")
+            if raw.get("pct_of_premium") is not None
+            else 5.0
+        )
+    except (TypeError, ValueError):
+        pct = 5.0
+    pct = max(0.0, min(100.0, pct))
+    return {
+        "enabled": enabled,
+        "pct_of_premium": pct,
+        # Always flattens when enabled — no separate auto_close toggle.
+        "auto_close": True,
+        "auto_close_retry_seconds": 60,
+    }
+
+
+def profit_pct_auto_close_rs(*, investment_rs: float) -> Tuple[float, float]:
+    """Return (target_rs, pct) when enabled; else (0.0, pct)."""
+    cfg = profit_pct_auto_close_config()
+    pct = cfg["pct_of_premium"]
+    if not cfg["enabled"] or investment_rs <= 0 or pct <= 0:
+        return 0.0, pct
+    return investment_rs * (pct / 100.0), pct
+
+
 def profit_milestone_line_rs(
     *, peak_rs: Optional[float], giveback_rs: float,
 ) -> Optional[float]:

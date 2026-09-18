@@ -18,6 +18,7 @@ Registered now
 --------------
 * LOSS_MILESTONE_HIT → close the open trade (Kite flatten or manual LTP book)
 * PROFIT_MILESTONE_HIT → close to protect peak profit (same flatten path)
+* PROFIT_PCT_HIT → close when MTM hits configured % of entry premium (no confirm)
 
 To add a later auto feature: implement ``AutoExecAction`` in this package and
 append it to ``REGISTERED_ACTIONS`` in ``registry.py``. Do not put order
