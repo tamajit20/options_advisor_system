@@ -175,6 +175,10 @@ _DESCRIPTIONS: Dict[str, str] = {
         "Telegram channel. Channel objects are built at process start — restart after changing.",
     "alerts.email_enabled":
         "Email channel. Channel objects are built at process start — restart after changing.",
+    "calendar_near_dte_max":
+        "Calendar short (near) leg: max DTE. Default 14 so ~11–14 DTE monthlies can still be near.",
+    "calendar_far_dte_min":
+        "Calendar long (far) leg: min DTE, and expiry must be after near. Default 14.",
     "zerodha_api.enabled":
         "Hard kill switch for the Kite adapter. Restart the WS runner after changing.",
     "zerodha_execution.enabled":
