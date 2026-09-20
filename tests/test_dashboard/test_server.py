@@ -717,6 +717,38 @@ class TestApiTradesOpen:
         assert trade["last_mtm"] == -176.25
         assert trade["last_mtm_at"] == "2026-08-21 15:29:00"
 
+    def test_outlook_only_live_payload_does_not_wipe_stored_mtm(self, client, mocker):
+        """Off-market seed writes outlook without mtm — keep DB last_mtm."""
+        trade_row = {
+            "trade_id": "TRD-2",
+            "suggestion_id": None,
+            "trade_name": "BANK-TEST",
+            "status": "ACTIVE",
+            "executed_on": datetime(2026, 5, 20, 10, 0),
+        }
+        mocker.patch("dashboard.server.TradeRepo.open_trades", return_value=[trade_row])
+        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info", return_value=[])
+        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alert_for_trade", return_value=None)
+        mocker.patch("dashboard.server._stored_mtm_payloads", return_value={
+            "TRD-2": {"mtm": 420.5, "as_of": "2026-08-21 15:29:00"},
+        })
+        mocker.patch("dashboard.server._read_live_mtm_state", return_value={
+            "as_of": "2026-08-22T18:00:00",
+            "trades": {
+                "TRD-2": {
+                    "trade_id": "TRD-2",
+                    "live_pop": 0.55,
+                    "close_now_ev": 420.5,
+                    "as_of": "2026-08-22T18:00:00",
+                },
+            },
+        })
+        mocker.patch("dashboard.server._trade_live_outlook", return_value=None)
+        mocker.patch("dashboard.server._enrich_trade_execution_channel", return_value=None)
+        trade = client.get("/api/trades/open").get_json()["trades"][0]
+        assert trade["last_mtm"] == 420.5
+        assert trade["last_mtm_at"] == "2026-08-21 15:29:00"
+
 
 class TestLiveMTMSnapshot:
     def test_empty_when_no_live_or_stored(self, client, mocker):
@@ -749,6 +781,61 @@ class TestLiveMTMSnapshot:
         data = client.get("/api/live/mtm/snapshot").get_json()
         assert data["trades"]["T-001"]["mtm"] == 1234.0
         assert data["as_of"] == "2026-08-22T10:00:00"
+
+
+class TestSuggestionLiveLtpSnapshot:
+    def test_empty_when_no_ws_file(self, client, mocker):
+        mocker.patch(
+            "lifecycle.intraday_monitor.read_suggestion_ltp_state",
+            return_value={},
+        )
+        resp = client.get("/api/suggestion/live-ltp/snapshot")
+        assert resp.status_code == 200
+        assert resp.get_json()["suggestions"] == {}
+
+    def test_returns_ws_suggestions(self, client, mocker):
+        mocker.patch(
+            "lifecycle.intraday_monitor.read_suggestion_ltp_state",
+            return_value={
+                "as_of": "2026-05-04T10:00:00",
+                "source": "ws",
+                "suggestions": {
+                    "SUG-1": {
+                        "available": True,
+                        "source": "ws",
+                        "legs": [{"leg_order": 1, "ltp": 91.5, "in_band": True}],
+                    },
+                },
+            },
+        )
+        data = client.get("/api/suggestion/live-ltp/snapshot").get_json()
+        assert data["source"] == "ws"
+        assert data["suggestions"]["SUG-1"]["legs"][0]["ltp"] == 91.5
+
+    def test_live_prices_prefers_ws_over_rest(self, client, mocker):
+        mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[
+            {"leg_order": 1, "symbol": "NIFTY", "strike": 22000, "option_type": "CE"},
+        ])
+        mocker.patch(
+            "lifecycle.intraday_monitor.read_suggestion_ltp_state",
+            return_value={
+                "suggestions": {
+                    "SUG-1": {
+                        "available": True,
+                        "as_of": "2026-05-04T10:00:00",
+                        "legs": [{"leg_order": 1, "ltp": 88.0, "in_band": True}],
+                    },
+                },
+            },
+        )
+        rest = mocker.patch(
+            "providers.zerodha.leg_quotes.fetch_leg_live_prices",
+            return_value={"available": True, "legs": [{"leg_order": 1, "ltp": 1.0}]},
+        )
+        data = client.get("/api/suggestion/SUG-1/live-prices").get_json()
+        assert data["source"] == "ws"
+        assert data["legs"][0]["ltp"] == 88.0
+        rest.assert_not_called()
 
 
 class TestApiHistorySuggestions:

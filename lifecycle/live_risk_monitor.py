@@ -1514,7 +1514,7 @@ class LiveRiskMonitor:
                 outlook = self._live_outlook_fields(state, now=now)
                 if outlook.get("spot") is None and outlook.get("live_pop") is None:
                     continue
-                pending.append({
+                payload = {
                     "trade_id": state.trade_id,
                     "trade_name": state.trade_name,
                     "dte": outlook.get("dte"),
@@ -1522,7 +1522,18 @@ class LiveRiskMonitor:
                     "max_loss": state.max_loss,
                     "as_of": now.isoformat(timespec="seconds"),
                     **outlook,
-                })
+                }
+                # Off-market seed often has close_now_ev but no mtm key — surface
+                # it so the dashboard header keeps last P&L instead of blanking.
+                if payload.get("mtm") is None and payload.get("close_now_ev") is not None:
+                    payload["mtm"] = payload["close_now_ev"]
+                elif payload.get("mtm") is None:
+                    prev = self._mtm_state.get(state.trade_id) or {}
+                    if prev.get("mtm") is not None:
+                        payload["mtm"] = prev["mtm"]
+                        if not payload.get("as_of") and prev.get("as_of"):
+                            payload["as_of"] = prev["as_of"]
+                pending.append(payload)
         for payload in pending:
             try:
                 self._bus.publish(TOPIC_TRADE_MTM, payload)

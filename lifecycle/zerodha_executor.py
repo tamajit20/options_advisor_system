@@ -1599,19 +1599,22 @@ def _entry_context(
     sug_lots = _suggested_lots(legs)
     legs = _with_lots_override(legs, lots_override)
     status = (suggestion.get("status") or "").upper()
-    dup = duplicate_execution_reason(
-        db, suggestion_id, suggestion_status=status,
-    )
-    if dup:
-        raise ZerodhaExecutionError(dup)
-    _assert_execution_not_in_flight(
-        db, suggestion_id=suggestion_id, except_job_id=execution_job_id,
-    )
-    _assert_entry_execution_allowed(db, suggestion_id)
-    cb_active = _circuit_breaker_on(db)
-    gate = validate_execution(suggestion, legs, circuit_breaker_active=cb_active)
-    if not gate.ok:
-        raise ZerodhaExecutionError(f"Execution blocked: {gate.reason()}")
+    # Place-orders path keeps hard gates. Margin quote / Amount needed hydrate
+    # (soft_live_price_gate) only needs a session + basket margins.
+    if not soft_live_price_gate:
+        dup = duplicate_execution_reason(
+            db, suggestion_id, suggestion_status=status,
+        )
+        if dup:
+            raise ZerodhaExecutionError(dup)
+        _assert_execution_not_in_flight(
+            db, suggestion_id=suggestion_id, except_job_id=execution_job_id,
+        )
+        _assert_entry_execution_allowed(db, suggestion_id)
+        cb_active = _circuit_breaker_on(db)
+        gate = validate_execution(suggestion, legs, circuit_breaker_active=cb_active)
+        if not gate.ok:
+            raise ZerodhaExecutionError(f"Execution blocked: {gate.reason()}")
     facade, master = _build_client()
     live_map, inst_map = _live_ltp_map(facade, master, legs)
     price_gate = validate_live_prices(legs, live_map)
@@ -1663,9 +1666,32 @@ def preview_suggestion_execution(
             soft_live_price_gate=True,
         )
     )
-    plans = _build_leg_plans(ordered, inst_map, live_map, leg_limits, mode="entry", strategy=strategy)
-    limit_map = {p.leg_order: p.limit_price for p in plans}
-    limit_gate = validate_limit_prices(legs, limit_map)
+    # Prefer live LTP; fall back to suggested mid so Amount needed still hydrates
+    # when a quote is briefly missing (confirm modal has the same need).
+    enriched_live = dict(live_map)
+    for leg in ordered:
+        lo = int(leg["leg_order"])
+        if enriched_live.get(lo) is not None:
+            continue
+        sug_px = leg.get("suggested_price")
+        try:
+            if sug_px is not None and float(sug_px) > 0:
+                enriched_live[lo] = float(sug_px)
+        except (TypeError, ValueError):
+            pass
+    try:
+        plans = _build_leg_plans(
+            ordered, inst_map, enriched_live, leg_limits, mode="entry", strategy=strategy,
+        )
+        limit_map = {p.leg_order: p.limit_price for p in plans}
+        limit_gate = validate_limit_prices(legs, limit_map)
+        vetoes = limit_gate.vetoes
+        in_band = limit_gate.ok
+    except ZerodhaExecutionError:
+        # Margin fields are still useful under Amount needed without leg rows.
+        plans = []
+        vetoes = []
+        in_band = True
     spot = _resolve_execution_spot(facade, suggestion, spot_at_execution)
     return ExecutionPreview(
         operation="ENTRY",
@@ -1674,8 +1700,8 @@ def preview_suggestion_execution(
         trade_name=suggestion.get("trade_name"),
         strategy=strategy,
         legs=plans,
-        all_limits_in_band=limit_gate.ok,
-        limit_vetoes=limit_gate.vetoes,
+        all_limits_in_band=in_band,
+        limit_vetoes=vetoes,
         spot_at_execution=spot,
         margin_required=margin.required if margin else None,
         margin_available=margin.available if margin else None,

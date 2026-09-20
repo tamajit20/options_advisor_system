@@ -735,6 +735,17 @@ function _renderZerodhaPreviewTable(preview) {
     </div>`;
 }
 
+function _setSuggestionMarginStatus(card, text, { ok = false, warn = false } = {}) {
+  const el = card.querySelector('[data-econ-z-margin]');
+  if (el) {
+    el.hidden = false;
+    el.removeAttribute('hidden');
+    el.textContent = text;
+    el.classList.toggle('cb-status-ok', !!ok);
+    el.classList.toggle('cb-status-warn', !!warn);
+  }
+}
+
 function _formatZerodhaMarginOnCard(preview) {
   const peak = preview.margin_peak_required != null
     ? preview.margin_peak_required
@@ -754,21 +765,14 @@ function _formatZerodhaMarginOnCard(preview) {
 
 function _applyZerodhaMarginToCard(card, preview) {
   const info = _formatZerodhaMarginOnCard(preview);
-  const el = card.querySelector('[data-econ-z-margin]');
   if (!info) {
-    if (el) {
-      el.textContent = 'Zerodha Final / Peak unavailable';
-      el.classList.remove('cb-status-ok', 'cb-status-warn');
-    }
+    _setSuggestionMarginStatus(card, 'Zerodha Final / Peak unavailable', { warn: true });
     return;
   }
-  if (el) {
-    el.hidden = false;
-    el.removeAttribute('hidden');
-    el.textContent = info.line;
-    el.classList.toggle('cb-status-warn', !!info.blocked);
-    el.classList.toggle('cb-status-ok', preview.margin_ok === true);
-  }
+  _setSuggestionMarginStatus(card, info.line, {
+    ok: preview.margin_ok === true,
+    warn: !!info.blocked,
+  });
   const compact = card.querySelector('[data-econ-z-margin-compact]');
   if (compact) {
     compact.hidden = false;
@@ -780,10 +784,20 @@ function _applyZerodhaMarginToCard(card, preview) {
 async function _hydrateOneSuggestionZerodhaMargin(card) {
   const sid = card?.dataset?.sugId;
   if (!sid) return;
-  if (typeof _zerodhaMarginQuoteDisabledReason === 'function'
-      && _zerodhaMarginQuoteDisabledReason()) {
+  // '1' = success, '0' = failed this render, 'pending' = in flight.
+  // Skip all three so status polls / parallel hydrate do not re-hit Kite.
+  // Lots change / suggestion reload clears the flag and quotes again.
+  const state = card.dataset.marginHydrated;
+  if (state === '1' || state === '0' || state === 'pending') return;
+  const blockedReason = typeof _zerodhaMarginQuoteDisabledReason === 'function'
+    ? _zerodhaMarginQuoteDisabledReason()
+    : '';
+  if (blockedReason) {
+    _setSuggestionMarginStatus(card, blockedReason, { warn: true });
     return;
   }
+  card.dataset.marginHydrated = 'pending';
+  _setSuggestionMarginStatus(card, 'Fetching Zerodha Final / Peak\u2026');
   try {
     const body = {};
     if (typeof _collectExecLots === 'function') {
@@ -795,29 +809,44 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (prev?.preview) {
+    if (prev?.preview && (
+      prev.preview.margin_peak_required != null
+      || prev.preview.margin_final_required != null
+      || prev.preview.margin_required != null
+    )) {
       card.dataset.marginHydrated = '1';
       _applyZerodhaMarginToCard(card, prev.preview);
       return;
     }
-  } catch (_) {
-    // fall through
-  }
-  delete card.dataset.marginHydrated;
-  const el = card.querySelector('[data-econ-z-margin]');
-  if (el && !el.textContent.includes('Final')) {
-    el.textContent = 'Zerodha Final / Peak unavailable';
+    card.dataset.marginHydrated = '0';
+    _setSuggestionMarginStatus(
+      card,
+      (prev?.preview?.margin_message) || 'Zerodha Final / Peak unavailable',
+      { warn: true },
+    );
+  } catch (err) {
+    card.dataset.marginHydrated = '0';
+    _setSuggestionMarginStatus(
+      card,
+      (err && err.message) ? String(err.message) : 'Zerodha Final / Peak unavailable',
+      { warn: true },
+    );
   }
 }
 
 async function _hydrateSuggestionZerodhaMargins(root) {
-  if (typeof _zerodhaMarginQuoteDisabledReason === 'function'
-      && _zerodhaMarginQuoteDisabledReason()) {
+  const cards = [...(root || document).querySelectorAll('.card[data-sug-id]')];
+  if (!cards.length) return;
+  const blockedReason = typeof _zerodhaMarginQuoteDisabledReason === 'function'
+    ? _zerodhaMarginQuoteDisabledReason()
+    : '';
+  if (blockedReason) {
+    cards.forEach(card => _setSuggestionMarginStatus(card, blockedReason, { warn: true }));
     return;
   }
-  const cards = [...(root || document).querySelectorAll('.card[data-sug-id]')];
   for (const card of cards) {
-    if (card.dataset.marginHydrated === '1') continue;
+    const state = card.dataset.marginHydrated;
+    if (state === '1' || state === '0' || state === 'pending') continue;
     await _hydrateOneSuggestionZerodhaMargin(card);
   }
 }
@@ -1079,12 +1108,26 @@ function _updateFeedTag(tradeId, opts = {}) {
   }
 }
 
+/** Best available MTM for header / Live P&L (live tick, DB snapshot, or outlook). */
+function _resolveTradeMtm(trade, snapTrade) {
+  const st = snapTrade || {};
+  const lo = (trade && trade.live_outlook) || {};
+  const candidates = [st.mtm, trade && trade.last_mtm, lo.close_now_ev, lo.mtm];
+  for (const v of candidates) {
+    if (v == null || v === '') continue;
+    const n = typeof v === 'number' ? v : parseFloat(v);
+    if (!isNaN(n)) return n;
+  }
+  return null;
+}
+
 function _buildMtmPayload(trade, snapTrade) {
   const sug = trade.suggestion || {};
   const st = snapTrade || {};
   const lo = trade.live_outlook || {};
   // Snap file can hold stale outlook; API live_outlook is recomputed on each page load.
-  const liveMtm = st.mtm ?? trade.last_mtm;
+  // Off-market: keep last live/DB MTM (or outlook close-now) so the header is not blank.
+  const liveMtm = _resolveTradeMtm(trade, st);
   return {
     ...st,
     ...lo,
@@ -1097,7 +1140,7 @@ function _buildMtmPayload(trade, snapTrade) {
     mtm: liveMtm,
     close_now_ev: liveMtm ?? lo.close_now_ev,
     dte: lo.dte ?? st.dte,
-    as_of: st.as_of ?? trade.last_mtm_at,
+    as_of: st.as_of ?? trade.last_mtm_at ?? lo.data_as_of,
   };
 }
 
@@ -1377,14 +1420,23 @@ function _updateLiveProfitLevels(tradeId, payload) {
 }
 
 function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
-  if (mtm != null) {
-    _lastMtmByTrade[tradeId] = {
-      ...(_lastMtmByTrade[tradeId] || {}),
-      mtm,
-      as_of: asOf,
-      receivedAt: liveTick ? Date.now() : (_parseMtmAsOf(asOf) || Date.now()),
-    };
+  // Never blank the header when a tick/outlook event omits MTM (common off-market).
+  let displayMtm = mtm;
+  if (displayMtm == null || (typeof displayMtm === 'number' && isNaN(displayMtm))) {
+    const cached = _lastMtmByTrade[tradeId];
+    if (cached && cached.mtm != null && !isNaN(cached.mtm)) {
+      displayMtm = cached.mtm;
+      asOf = asOf || cached.as_of;
+    } else {
+      return;
+    }
   }
+  _lastMtmByTrade[tradeId] = {
+    ...(_lastMtmByTrade[tradeId] || {}),
+    mtm: displayMtm,
+    as_of: asOf,
+    receivedAt: liveTick ? Date.now() : (_parseMtmAsOf(asOf) || Date.now()),
+  };
   document.querySelectorAll(`.live-mtm[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
     const valEl = el.querySelector('.cpnl-val') || el.querySelector('.lpl-current-val');
     const pctEl = el.querySelector('.cpnl-pct-bracket') || el.querySelector('.lpl-current-pct');
@@ -1392,16 +1444,14 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
     const premInfo = premRs > 0
       ? { rs: premRs, kind: el.dataset.premiumKind || 'paid' }
       : null;
-    const txt = mtm != null
-      ? (mtm >= 0 ? '+' : '\u2212') + '\u20b9' + fmt(Math.abs(mtm))
-      : '\u2014';
+    const txt = (displayMtm >= 0 ? '+' : '\u2212') + '\u20b9' + fmt(Math.abs(displayMtm));
     if (valEl) valEl.textContent = txt;
-    if (pctEl) pctEl.innerHTML = (mtm != null && premInfo) ? pnlBracketHtml(mtm, premInfo, el) : '';
-    else if (valEl && mtm != null && premInfo) {
-      valEl.insertAdjacentHTML('afterend', pnlBracketHtml(mtm, premInfo, el));
+    if (pctEl) pctEl.innerHTML = premInfo ? pnlBracketHtml(displayMtm, premInfo, el) : '';
+    else if (valEl && premInfo) {
+      valEl.insertAdjacentHTML('afterend', pnlBracketHtml(displayMtm, premInfo, el));
     }
-    el.classList.toggle('mtm-pos', mtm > 0);
-    el.classList.toggle('mtm-neg', mtm < 0);
+    el.classList.toggle('mtm-pos', displayMtm > 0);
+    el.classList.toggle('mtm-neg', displayMtm < 0);
     const feed = _liveFeedInfo(tradeId);
     const premTip = premInfo
       ? ` · ${premInfo.kind === 'received' ? 'Premium received' : 'Premium paid'} \u20b9${fmt(premInfo.rs)}`
@@ -1412,7 +1462,7 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
   _syncCardSignal(tradeId);
   _refreshPnlSignalRail();
   try {
-    document.dispatchEvent(new CustomEvent('trade-mtm-updated', { detail: { tradeId, mtm } }));
+    document.dispatchEvent(new CustomEvent('trade-mtm-updated', { detail: { tradeId, mtm: displayMtm } }));
   } catch (_) { /* ignore */ }
 }
 
@@ -2778,11 +2828,17 @@ async function loadSuggestion() {
 }
 
 // ── Live leg prices on suggestion cards ──────────────────────────────────
-// Shows the current LTP next to each leg so you can see how far the market
-// has moved from the suggested mid before placing anything. Read-only: the
-// endpoint never touches the order path.
-const _SUG_LIVE_POLL_MS = 6000;
+// Prefer WebSocket snapshot (same ticks as PERFECT_ENTRY) — no Kite REST.
+// REST is a rare fallback when WS has no quote yet / is down.
+const _SUG_LIVE_POLL_MS = 2000;          // local file read via dashboard API
+const _SUG_REST_FALLBACK_MS = 30000;     // min gap between REST fallbacks
 let _sugLivePriceTimer = null;
+let _sugLastRestAt = 0;
+
+function _sugPayloadHasLtp(payload) {
+  return !!(payload && payload.available !== false
+    && (payload.legs || []).some(l => l && l.ltp != null));
+}
 
 // Rebuild the credit-breakdown equation at the prices the trade would
 // actually execute at: your typed price on any leg you overrode, live LTP on
@@ -2904,15 +2960,38 @@ function _applySuggestionLivePrices(card, payload) {
   });
 }
 
-async function _refreshSuggestionLivePrices() {
+async function _refreshSuggestionLivePrices({ allowRest = false } = {}) {
   const cards = $$('.card[data-sug-id] .leg-live-row');
   if (!cards.length) return;
+
+  let snapById = {};
+  try {
+    const snap = await API('/api/suggestion/live-ltp/snapshot');
+    snapById = (snap && snap.suggestions) || {};
+  } catch (_) { /* WS file may be absent before first tick */ }
+
+  const needRest = [];
   const seen = new Set();
   for (const row of cards) {
     const card = row.closest('.card[data-sug-id]');
     const sid = card?.dataset.sugId;
     if (!sid || seen.has(sid)) continue;
     seen.add(sid);
+    const ws = snapById[sid];
+    if (_sugPayloadHasLtp(ws)) {
+      _applySuggestionLivePrices(card, { ...ws, available: true, source: 'ws' });
+    } else {
+      needRest.push({ card, sid });
+    }
+  }
+
+  if (!allowRest || !needRest.length) return;
+  // Throttle REST so a missing WS quote never becomes a 2s Kite loop.
+  if (_sugLastRestAt > 0 && (Date.now() - _sugLastRestAt) < _SUG_REST_FALLBACK_MS) {
+    return;
+  }
+  _sugLastRestAt = Date.now();
+  for (const { card, sid } of needRest) {
     try {
       const payload = await API(`/api/suggestion/${encodeURIComponent(sid)}/live-prices`);
       _applySuggestionLivePrices(card, payload);
@@ -2928,20 +3007,18 @@ function _startSuggestionLivePrices() {
     _sugLivePriceTimer = null;
   }
   if (!$$('.card[data-sug-id] .leg-live-row').length) return;
-  // One fetch regardless of market state, so an after-hours visit still shows
-  // last-traded prices. Only the repeat polling is gated.
-  _refreshSuggestionLivePrices();
+  // First paint: allow REST if WS file is empty (cold start / after hours).
+  _refreshSuggestionLivePrices({ allowRest: true });
   _sugLivePriceTimer = setInterval(() => {
     if (!$$('.card[data-sug-id] .leg-live-row').length) {
       clearInterval(_sugLivePriceTimer);
       _sugLivePriceTimer = null;
       return;
     }
-    // Switching tabs only hides the container — the cards stay in the DOM, so
-    // without these guards this would keep hitting Kite's quote API all day
-    // for a card nobody is looking at.
-    if (document.hidden || !_isSuggestionTabActive() || !_inMarketHours()) return;
-    _refreshSuggestionLivePrices();
+    if (document.hidden || !_isSuggestionTabActive()) return;
+    if (!_inMarketHours()) return; // keep last paint; no idle REST off-hours
+    // Normal path is WS snapshot only; REST at most every 30s for gaps.
+    _refreshSuggestionLivePrices({ allowRest: true });
   }, _SUG_LIVE_POLL_MS);
 }
 
@@ -6195,6 +6272,7 @@ function bindSuggestionActions() {
         }),
       });
       toast(r.trade_id ? `Trade created at suggested prices: ${r.trade_id}` : 'Suggestion ignored', 'info');
+      loadZerodhaStatus(true);
       loadSuggestion(); loadTrades();
     } catch (err) { toast(err.message, 'err'); }
   }));
@@ -6407,6 +6485,7 @@ function bindSuggestionActions() {
         }),
       });
       toast(r.trade_id ? `Trade created: ${r.trade_id}` : 'Suggestion ignored', 'info');
+      loadZerodhaStatus(true);
       loadSuggestion(); loadTrades();
     } catch (err) { toast(err.message, 'err'); }
   }));
@@ -7063,6 +7142,7 @@ async function submitClose(tradeId, panel) {
       body: JSON.stringify({exits}),
     });
     toast('Trade closed \u2014 P&L recorded', 'info');
+    loadZerodhaStatus(true);
     loadTrades();
   } catch (err) { toast(err.message, 'err'); }
 }
@@ -7383,6 +7463,14 @@ function renderTrade(t, expanded = false) {
   const _premAttrs = _tradePremium
     ? ` data-premium-rs="${_tradePremium.rs}" data-premium-kind="${_tradePremium.kind}"`
     : '';
+  const _headerMtm = _resolveTradeMtm(t, null);
+  const _headerMtmTxt = _headerMtm != null
+    ? ((_headerMtm >= 0 ? '+' : '\u2212') + '\u20b9' + fmt(Math.abs(_headerMtm)))
+    : '\u2014';
+  const _headerMtmCls = _headerMtm > 0 ? ' mtm-pos' : (_headerMtm < 0 ? ' mtm-neg' : '');
+  const _headerMtmPct = (_headerMtm != null && _tradePremium)
+    ? pnlPctBracketCompact(_headerMtm, _tradePremium)
+    : '';
   const summaryHtml = `
     <div class="card-head collapsible-card-head">
       <div class="card-head-title">
@@ -7439,9 +7527,9 @@ function renderTrade(t, expanded = false) {
         ${_entryQualBadge}
         </div>
         <div class="card-head-pnl-row">
-        <span class="tag tag-current-pnl live-mtm" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs} title="Current profit/loss">
+        <span class="tag tag-current-pnl live-mtm${_headerMtmCls}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs} title="Current profit/loss">
           <span class="cpnl-label">${labelWithHelp('Current P&amp;L', 'mtm')}</span>
-          <span class="cpnl-metrics"><strong class="cpnl-val">\u2014</strong><span class="cpnl-pct-bracket muted"></span></span>
+          <span class="cpnl-metrics"><strong class="cpnl-val">${_headerMtmTxt}</strong><span class="cpnl-pct-bracket muted">${_headerMtmPct}</span></span>
         </span>
         </div>
         <button type="button" class="btn btn-danger btn-void-trade card-head-btn" data-trade-id="${escapeHtml(t.trade_id)}">
@@ -8772,8 +8860,8 @@ let _liveMTMSource = null;
 
 function _applyMtmEvent(m) {
   if (m && m.closed && m.trade_id) {
+    // Trade left the live book — keep last known header P&L (do not wipe).
     if (_lastMtmByTrade[m.trade_id]) {
-      delete _lastMtmByTrade[m.trade_id];
       _refreshPnlSignalRail();
     }
     return;
@@ -8784,11 +8872,19 @@ function _applyMtmEvent(m) {
       trade_name: m.trade_name,
     };
   }
+  const eventMtm = (m.mtm != null && !isNaN(parseFloat(m.mtm)))
+    ? parseFloat(m.mtm)
+    : ((m.close_now_ev != null && !isNaN(parseFloat(m.close_now_ev)))
+      ? parseFloat(m.close_now_ev)
+      : null);
   const payload = {
     ...m,
-    close_now_ev: m.mtm != null ? m.mtm : m.close_now_ev,
+    mtm: eventMtm != null ? eventMtm : m.mtm,
+    close_now_ev: eventMtm != null ? eventMtm : m.close_now_ev,
   };
-  _updateCurrentPnlBadge(m.trade_id, m.mtm, m.as_of, true);
+  if (eventMtm != null) {
+    _updateCurrentPnlBadge(m.trade_id, eventMtm, m.as_of, true);
+  }
   _updateLiveProfitLevels(m.trade_id, payload);
   _updateLiveOutlook(m.trade_id, payload);
 
@@ -9497,10 +9593,9 @@ async function loadZerodhaStatus(refreshAccount = false) {
     }
     _refreshAllFeedTags();
     _refreshZerodhaExecButtons();
-    // Suggestions often paint before /api/zerodha/status returns; retry Final/Peak
-    // hydrate now that session flags are known (place-orders toggle not required).
-    if (!_zerodhaMarginQuoteDisabledReason()
-        && typeof _hydrateSuggestionZerodhaMargins === 'function') {
+    // One-shot Final/Peak hydrate after session flags are known. Already tried
+    // cards (success or fail) are skipped — no Kite re-quote on the 60s poll.
+    if (typeof _hydrateSuggestionZerodhaMargins === 'function') {
       _hydrateSuggestionZerodhaMargins(document);
     }
     // Update header pill (always present)
@@ -9817,7 +9912,9 @@ refreshIndexSpotStrip();
 ensureIndexSpotStream();
 
 loadZerodhaStatus();
-setInterval(loadZerodhaStatus, 60000);
+// Soft refresh every 10 min (session pill / readiness). Kite profile+margins
+// stay cached 30 min unless open/close/login/manual Refresh forces a fetch.
+setInterval(loadZerodhaStatus, 10 * 60 * 1000);
 
 document.getElementById('zerodha-margin-refresh')?.addEventListener('click', (e) => {
   e.preventDefault();

@@ -10,6 +10,9 @@ Subscribes to ``TOPIC_TICK`` and fires one notification type via ``Notifier``:
   LTP within its ``suggested_price_low / suggested_price_high`` band. One
   alert per suggestion per IST day.
 
+Also writes ``data/suggestion_ltp_state.json`` so the dashboard can show
+suggestion-card LTPs from the same WS ticks (no REST quote loop).
+
 Open-trade risk (loss limit, target, spot SL, short-leg stress) is handled
 exclusively by ``lifecycle/live_risk_monitor.py``.
 
@@ -23,11 +26,13 @@ Design rules
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from providers.base import LiveQuote
 from providers.event_bus import EventBus, TOPIC_TICK_OPTIONS, get_event_bus
@@ -36,6 +41,9 @@ from utils import now_ist
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_LTP_STATE_PATH = "data/suggestion_ltp_state.json"
+# Cap disk writes so a hot tape does not thrash the shared volume.
+_LTP_FLUSH_INTERVAL_SEC = 1.0
 
 LegKey = Tuple[str, Optional[date], Optional[float], Optional[str]]
 
@@ -121,6 +129,21 @@ def _to_leg_key(*, symbol, expiry, strike, option_type) -> LegKey:
     )
 
 
+def read_suggestion_ltp_state(
+    path: str = DEFAULT_LTP_STATE_PATH,
+) -> Dict[str, Any]:
+    """Fail-open read of the WS-backed suggestion LTP snapshot."""
+    try:
+        if not path or not os.path.exists(path):
+            return {}
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        logger.debug("suggestion LTP state read failed", exc_info=True)
+        return {}
+
+
 class IntradayMonitor:
     """Subscribes to TOPIC_TICK; dispatches PERFECT_ENTRY via Notifier."""
 
@@ -132,18 +155,24 @@ class IntradayMonitor:
         event_bus: Optional[EventBus] = None,
         reload_interval_seconds: float = 60.0,
         clock: Callable[[], datetime] = now_ist,
+        ltp_state_path: str = DEFAULT_LTP_STATE_PATH,
+        ltp_flush_interval_sec: float = _LTP_FLUSH_INTERVAL_SEC,
     ) -> None:
         self._notifier = notifier
         self._loader = snapshot_loader
         self._bus = event_bus or get_event_bus()
         self._reload_interval = float(reload_interval_seconds)
         self._clock = clock
+        self._ltp_state_path = ltp_state_path
+        self._ltp_flush_interval = float(ltp_flush_interval_sec)
 
         self._snap: _Snapshot = _Snapshot()
         self._last_reload_at: Optional[datetime] = None
         self._latest: Dict[LegKey, float] = {}
         self._dedup_date: date = self._clock().date()
         self._entry_alerted: Set[str] = set()
+        self._ltp_dirty = False
+        self._last_ltp_flush_at: Optional[datetime] = None
 
         self._lock = threading.RLock()
         self._unsub: Optional[Callable[[], None]] = None
@@ -154,12 +183,16 @@ class IntradayMonitor:
                 return
             self._reload_locked()
             self._unsub = self._bus.subscribe(TOPIC_TICK_OPTIONS, self.on_tick)
-        logger.info("IntradayMonitor: started (entry-band only)")
+        logger.info("IntradayMonitor: started (entry-band + suggestion LTP file)")
 
     def stop(self) -> None:
         with self._lock:
             if self._unsub is None:
                 return
+            try:
+                self._flush_ltp_state_locked(force=True)
+            except Exception:
+                logger.debug("IntradayMonitor: final LTP flush failed", exc_info=True)
             try:
                 self._unsub()
             finally:
@@ -185,6 +218,9 @@ class IntradayMonitor:
                 self._latest[key] = ltp
                 self._maybe_reload_locked()
                 self._reset_dedup_if_new_day_locked()
+                if key in self._snap.suggestion_index:
+                    self._ltp_dirty = True
+                    self._flush_ltp_state_locked(force=False)
                 self._evaluate_pending_suggestions_locked(key)
         except Exception:
             logger.exception("IntradayMonitor.on_tick failed for %r", quote)
@@ -203,6 +239,13 @@ class IntradayMonitor:
         except Exception:
             logger.exception("IntradayMonitor: snapshot reload failed; keeping previous")
         self._last_reload_at = self._clock()
+        # Drop LTPs for instruments no longer watched; refresh file for dashboard.
+        live_keys = set(self._snap.suggestion_index)
+        for key in list(self._latest):
+            if key not in live_keys:
+                self._latest.pop(key, None)
+        self._ltp_dirty = True
+        self._flush_ltp_state_locked(force=True)
 
     def _reset_dedup_if_new_day_locked(self) -> None:
         today = self._clock().date()
@@ -252,3 +295,63 @@ class IntradayMonitor:
             )
         except Exception:
             logger.exception("IntradayMonitor: PERFECT_ENTRY dispatch failed")
+
+    def _build_ltp_payload_locked(self) -> Dict[str, Any]:
+        as_of = self._clock().isoformat(timespec="seconds")
+        suggestions: Dict[str, Any] = {}
+        for sid, refs in self._snap.suggestions.items():
+            legs_out: List[dict] = []
+            any_ltp = False
+            for ref in refs:
+                ltp = self._latest.get(ref.key)
+                if ltp is not None:
+                    any_ltp = True
+                in_band = None
+                if ltp is not None:
+                    lo = ref.suggested_price_low
+                    hi = ref.suggested_price_high
+                    in_band = True
+                    if lo > 0 and ltp < lo:
+                        in_band = False
+                    if hi > 0 and ltp > hi:
+                        in_band = False
+                legs_out.append({
+                    "leg_order": ref.leg_order,
+                    "ltp": round(float(ltp), 2) if ltp is not None else None,
+                    "suggested_price": ref.suggested_price,
+                    "band_lo": ref.suggested_price_low,
+                    "band_hi": ref.suggested_price_high,
+                    "in_band": in_band,
+                })
+            suggestions[sid] = {
+                "available": any_ltp,
+                "source": "ws",
+                "as_of": as_of,
+                "legs": legs_out,
+            }
+        return {"as_of": as_of, "source": "ws", "suggestions": suggestions}
+
+    def _flush_ltp_state_locked(self, *, force: bool = False) -> None:
+        if not self._ltp_state_path:
+            return
+        if not self._ltp_dirty and not force:
+            return
+        now = self._clock()
+        if (
+            not force
+            and self._last_ltp_flush_at is not None
+            and (now - self._last_ltp_flush_at).total_seconds() < self._ltp_flush_interval
+        ):
+            return
+        payload = self._build_ltp_payload_locked()
+        try:
+            path = self._ltp_state_path
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            os.replace(tmp, path)
+            self._ltp_dirty = False
+            self._last_ltp_flush_at = now
+        except Exception:
+            logger.debug("IntradayMonitor: LTP state write failed", exc_info=True)

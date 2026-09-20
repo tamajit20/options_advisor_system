@@ -1662,16 +1662,44 @@ def create_app() -> Flask:
             "max_lots_cap": int(STRATEGY_CONFIG.get("max_lots_cap") or 0),
         })
 
+    @app.route("/api/suggestion/live-ltp/snapshot")
+    def api_suggestion_live_ltp_snapshot():
+        """WS-backed LTPs for all pending suggestion cards (no Kite REST)."""
+        from lifecycle.intraday_monitor import read_suggestion_ltp_state
+
+        state = read_suggestion_ltp_state()
+        return jsonify({
+            "as_of": state.get("as_of"),
+            "source": state.get("source") or "ws",
+            "suggestions": state.get("suggestions") or {},
+        })
+
     @app.route("/api/suggestion/<sid>/live-prices")
     @_with_db
     def api_suggestion_live_prices(db: SQLServerConnection, sid: str):
-        """Live LTP per leg for a pending suggestion card. Fail-soft."""
+        """Live LTP per leg: prefer WS snapshot, REST fallback. Fail-soft."""
+        from lifecycle.intraday_monitor import read_suggestion_ltp_state
         from providers.zerodha.leg_quotes import fetch_leg_live_prices
 
         legs = SuggestionRepo(db).legs(sid)
         if not legs:
             return jsonify({"available": False, "reason": "no_legs"})
-        return jsonify(fetch_leg_live_prices([_row(l) for l in legs]))
+
+        ws_row = (read_suggestion_ltp_state().get("suggestions") or {}).get(str(sid))
+        if isinstance(ws_row, dict) and ws_row.get("available") and ws_row.get("legs"):
+            has_ltp = any(l.get("ltp") is not None for l in (ws_row.get("legs") or []))
+            if has_ltp:
+                return jsonify({
+                    "available": True,
+                    "source": "ws",
+                    "as_of": ws_row.get("as_of"),
+                    "legs": ws_row.get("legs") or [],
+                })
+
+        payload = fetch_leg_live_prices([_row(l) for l in legs])
+        if isinstance(payload, dict):
+            payload.setdefault("source", "rest")
+        return jsonify(payload)
 
     @app.route("/api/suggestion/<sid>/mark-executed", methods=["POST"])
     @_with_db
@@ -1859,7 +1887,12 @@ def create_app() -> Flask:
             r_out["legs"] = [_row(l) for l in trd.legs_with_suggestion_info(r["trade_id"])]
             snap = stored_mtm.get(str(r["trade_id"])) or {}
             mtm_live = live_snap.get(str(r["trade_id"])) or {}
-            merged_snap = {**snap, **mtm_live}
+            # Live file wins only when it carries a real MTM. Outlook-only
+            # seed payloads (off-market reload) must not wipe the DB snapshot.
+            if isinstance(mtm_live, dict) and mtm_live.get("mtm") is not None:
+                merged_snap = {**snap, **mtm_live}
+            else:
+                merged_snap = dict(snap)
             r_out["last_mtm"] = merged_snap.get("mtm")
             r_out["last_mtm_at"] = merged_snap.get("as_of")
             # Live risk alert (TARGET_HIT / LOSS_LIMIT_HIT / PROFIT_FLOOR_HIT /
