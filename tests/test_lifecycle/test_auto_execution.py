@@ -114,6 +114,33 @@ def test_already_closed_is_noop(mocker):
     assert CloseOnLossMilestone().run(db, ctx) == "already_closed"
 
 
+def test_refuses_non_positive_exit_prices(mocker):
+    """Invented ₹0 marks must never flatten (looked like −100% on debits)."""
+    db = MagicMock()
+    mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.TradeRepo.get",
+        return_value={"trade_id": "T-1", "status": "ACTIVE"},
+    )
+    kite = mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.close_trade_in_zerodha_async"
+    )
+    close = mocker.patch(
+        "lifecycle.auto_execution.close_on_milestone.close_trade_with_fills"
+    )
+    ctx = AutoExecContext(
+        notif_type="LOSS_MILESTONE_HIT",
+        trade_id="T-1",
+        exits=[
+            {"leg_order": 1, "exit_price": 0.0},
+            {"leg_order": 2, "exit_price": 80.0},
+        ],
+    )
+    with pytest.raises(ValueError, match="non-positive exit"):
+        CloseOnLossMilestone().run(db, ctx)
+    kite.assert_not_called()
+    close.assert_not_called()
+
+
 def test_manual_books_live_exits(mocker):
     db = MagicMock()
     mocker.patch(

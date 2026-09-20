@@ -90,3 +90,70 @@ class TokenBucket:
         with self._lock:
             self._refill_locked(time.monotonic())
             return self._tokens
+
+
+class SlidingWindowCap:
+    """Cap events to ``max_per_window`` inside any rolling ``window_sec``.
+
+    Used for Kite order placement (broker limit 10 orders/sec). When the cap
+    is full, ``acquire()`` sleeps until the oldest event leaves the window,
+    then records the new event.
+    """
+
+    def __init__(self, max_per_window: int, window_sec: float = 1.0):
+        if max_per_window < 1:
+            raise ValueError("max_per_window must be >= 1")
+        if window_sec <= 0:
+            raise ValueError("window_sec must be positive")
+        self._max = int(max_per_window)
+        self._window = float(window_sec)
+        self._times: list[float] = []
+        self._lock = threading.Lock()
+
+    def set_max(self, max_per_window: int) -> None:
+        if max_per_window < 1:
+            raise ValueError("max_per_window must be >= 1")
+        with self._lock:
+            self._max = int(max_per_window)
+
+    @property
+    def max_per_window(self) -> int:
+        with self._lock:
+            return self._max
+
+    def _prune_locked(self, now: float) -> None:
+        cutoff = now - self._window
+        # Drop timestamps that have left the rolling window.
+        i = 0
+        n = len(self._times)
+        while i < n and self._times[i] <= cutoff:
+            i += 1
+        if i:
+            del self._times[:i]
+
+    def try_acquire(self) -> bool:
+        with self._lock:
+            now = time.monotonic()
+            self._prune_locked(now)
+            if len(self._times) >= self._max:
+                return False
+            self._times.append(now)
+            return True
+
+    def acquire(self) -> None:
+        """Block until a slot is free in the current window, then take it."""
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                self._prune_locked(now)
+                if len(self._times) < self._max:
+                    self._times.append(now)
+                    return
+                wait = self._times[0] + self._window - now
+            time.sleep(max(wait, 0.001))
+
+    @property
+    def used(self) -> int:
+        with self._lock:
+            self._prune_locked(time.monotonic())
+            return len(self._times)

@@ -48,7 +48,7 @@ if ($LASTEXITCODE -ne 0) { throw "setup-laptop.ps1 failed" }
 # --- Step 2: VM install ---
 if (-not $SkipVmInstall) {
     Write-Host ""
-    Write-Host "==> [2/5] VM install (Docker + app + port 5001)"
+    Write-Host "==> [2/5] VM install (Docker + app + self-signed HTTPS)"
     $vmArgs = @{}
     if ($EnvFile) { $vmArgs.EnvFile = $EnvFile }
     elseif (Test-Path (Join-Path $RepoRoot ".env.docker")) { $vmArgs.EnvFile = (Join-Path $RepoRoot ".env.docker") }
@@ -111,6 +111,9 @@ Write-Host " Setup finished."
 Write-Host ""
 Write-Host " Next (manual, each trading morning on VM):"
 Write-Host "   Zerodha login via dashboard or: python main.py --zerodha-login"
+Write-Host ""
+Write-Host " Dashboard: https://$($script:VmHost)/  (self-signed — accept browser warning once)"
+Write-Host "            (public HTTP :5001 closed — HTTPS only)"
 Write-Host ""
 Write-Host " Automated weekly:"
 Write-Host "   VM Fri: archive + export | Laptop Mon-Fri 09:15: pull until ACK, then wait"

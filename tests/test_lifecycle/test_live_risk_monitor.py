@@ -11,6 +11,7 @@ import pytest
 from lifecycle.live_risk_monitor import (
     LiveRiskMonitor,
     _LegRef,
+    _PendingAlert,
     _Snapshot,
     _TradeState,
 )
@@ -1746,3 +1747,128 @@ def test_jade_spot_stop_uses_one_structure_qty():
     # stop = 22700 − 110 = 22590
     assert LiveRiskMonitor._spot_breached(state, 22620.0) is False
     assert LiveRiskMonitor._spot_breached(state, 22580.0) is True
+
+
+def test_off_market_seed_does_not_invent_full_debit_loss():
+    """Missing LTPs default to 0 in _current_pnl → −premium. Seed must not publish that."""
+    expiry = date(2026, 5, 28)
+    legs = [
+        _LegRef(
+            leg_order=1, action="BUY", strike=23000.0, option_type="CE",
+            fill_price=100.0, lots=1, lot_size=50,
+            key=("NIFTY", expiry, 23000.0, "CE"),
+        ),
+        _LegRef(
+            leg_order=2, action="BUY", strike=23000.0, option_type="PE",
+            fill_price=100.0, lots=1, lot_size=50,
+            key=("NIFTY", expiry, 23000.0, "PE"),
+        ),
+    ]
+    state = _TradeState(
+        trade_id="T-DEB", trade_name="Debit Straddle",
+        strategy="LONG_STRADDLE", underlying="NIFTY", expiry=expiry,
+        entry_net_credit=-10000.0, max_profit=50000.0, max_loss=10000.0,
+        sl_level=None, legs=legs,
+    )
+    state.fallback_spot = 23000.0
+    state.fallback_iv = 0.15
+    state.market_data_source = "eod"
+    state.market_as_of = "2026-05-05"
+    snap = _Snapshot()
+    snap.trades[state.trade_id] = state
+    for leg in state.legs:
+        snap.index.setdefault(leg.key, []).append(state.trade_id)
+    bus = EventBus()
+    captured = []
+    bus.subscribe("trade_mtm", lambda p: captured.append(dict(p)))
+    monitor = LiveRiskMonitor(
+        notifier=MagicMock(),
+        snapshot_loader=lambda: snap,
+        event_bus=bus,
+        config={
+            "enabled": True,
+            "reload_interval_sec": 9999,
+            "session_start": "09:15",
+            "session_end": "15:30",
+            "trailing_sl_steps": [],
+            "pre_breach_fraction": 0.99,
+        },
+        clock=lambda: datetime(2026, 5, 5, 20, 0),
+    )
+    monitor._snapshot = snap
+    # Prior poison: invented −100% of premium with no leg marks.
+    monitor._mtm_state[state.trade_id] = {
+        "mtm": -10000.0,
+        "close_now_ev": -10000.0,
+        "as_of": "2026-05-05T20:00:00",
+    }
+    assert monitor._current_pnl_or_none(state) is None
+    assert monitor._has_complete_leg_ltps(state) is False
+    with pytest.raises(ValueError, match="incomplete leg LTPs"):
+        monitor._current_pnl(state)
+    monitor._seed_outlook_on_reload()
+    assert captured, "outlook seed should still publish spot/outlook fields"
+    last = captured[-1]
+    assert last.get("mtm") is None
+    assert last.get("close_now_ev") is None
+    stored = monitor._mtm_state[state.trade_id]
+    assert "mtm" not in stored or stored.get("mtm") is None
+    assert "close_now_ev" not in stored or stored.get("close_now_ev") is None
+
+
+def test_current_pnl_refuses_missing_ltps():
+    """Missing marks must not become ₹0 (−100% debit) for any caller."""
+    expiry = date(2026, 5, 28)
+    legs = [
+        _LegRef(
+            leg_order=1, action="BUY", strike=23000.0, option_type="CE",
+            fill_price=100.0, lots=1, lot_size=50,
+            key=("NIFTY", expiry, 23000.0, "CE"),
+        ),
+    ]
+    state = _TradeState(
+        trade_id="T-INC", trade_name="Incomplete",
+        strategy="LONG_CALL", underlying="NIFTY", expiry=expiry,
+        entry_net_credit=-5000.0, max_profit=20000.0, max_loss=5000.0,
+        sl_level=None, legs=legs,
+    )
+    monitor, _, _ = _build_monitor(state)
+    with pytest.raises(ValueError, match="incomplete leg LTPs"):
+        monitor._current_pnl(state)
+    assert monitor._current_pnl_or_none(state) is None
+
+
+def test_auto_exec_blocked_without_fresh_leg_marks():
+    """Invented −100% / off-hours / incomplete marks must never dispatch flatten."""
+    state = _make_state(credit=10000.0, max_loss=10000.0)
+    # Off-hours clock — even with LTPs present, auto-exec must refuse.
+    monitor, _, _ = _build_monitor(
+        state, clock_at=datetime(2026, 5, 5, 20, 0),
+    )
+    hook = MagicMock()
+    monitor._auto_exec = hook
+    now = datetime(2026, 5, 5, 20, 0)
+    for leg in state.legs:
+        state.leg_ltps[leg.key] = 1.0
+        state.leg_last_tick[leg.key] = now
+    alert = _PendingAlert(
+        state=state,
+        notif_type="LOSS_MILESTONE_HIT",
+        severity="WARNING",
+        title="t",
+        body="b",
+        breach_key="LOSS_MILESTONE",
+    )
+    monitor._maybe_auto_exec(alert)
+    hook.assert_not_called()
+    assert monitor.stats().get("auto_exec_guard_skips", 0) >= 1
+
+    # In-session but incomplete LTPs — also blocked.
+    monitor2, _, _ = _build_monitor(state, clock_at=datetime(2026, 5, 5, 11, 0))
+    hook2 = MagicMock()
+    monitor2._auto_exec = hook2
+    state.leg_ltps.clear()
+    state.leg_last_tick.clear()
+    monitor2._maybe_auto_exec(alert)
+    hook2.assert_not_called()
+    assert monitor2.stats().get("auto_exec_guard_skips", 0) >= 1

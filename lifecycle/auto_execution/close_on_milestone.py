@@ -35,6 +35,20 @@ def flatten_open_trade(db: SQLServerConnection, ctx: AutoExecContext) -> str:
     if status in ("CLOSED", "VOID", "EXPIRED"):
         return "already_closed"
 
+    # Belt: never flatten on invented/zero marks (missing LTP → ₹0 looked like
+    # −100% debit loss). Require positive exit prices when exits are supplied.
+    if ctx.exits:
+        bad = [
+            int(e.get("leg_order") or 0)
+            for e in ctx.exits
+            if e.get("exit_price") is None or float(e["exit_price"]) <= 0
+        ]
+        if bad:
+            raise ValueError(
+                f"Refusing auto-close of {ctx.trade_id}: non-positive exit "
+                f"price on leg(s) {bad} (incomplete marks must not flatten)"
+            )
+
     channel = trade_execution_channel(db, trade)
     if channel == EXECUTION_CHANNEL_ZERODHA:
         # Extra belt: never place EXIT orders for a trade that never ENTRY-filled

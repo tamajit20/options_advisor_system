@@ -15,18 +15,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-export COMPOSE_PROFILES=bundled
+# shellcheck disable=SC1091
+source "$(dirname "$0")/load-compose-profiles.sh"
 BRANCH="${REPO_BRANCH:-master}"
 
 if [[ ! -f .env.docker ]]; then
   echo "ERROR: .env.docker missing. Run ./deploy/setup.sh for first-time install."
   exit 1
 fi
-
-set -a
-# shellcheck disable=SC1091
-source .env.docker
-set +a
 
 echo "==> Pulling latest code (${BRANCH})..."
 git fetch origin "${BRANCH}"

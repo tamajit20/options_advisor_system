@@ -137,6 +137,23 @@ foreach ($section in $manifest.sections) {
                     }
                 }
             }
+            "vm_https" {
+                $vmHost = Get-ConfigValue "VmHost"
+                if (-not $vmHost -or $vmHost -eq "YOUR_VM_PUBLIC_IP") { $ok = $false; $detail = "VmHost not set" }
+                else {
+                    $port = if ($item.port) { $item.port } else { 443 }
+                    $url = if ($port -eq 443) { "https://${vmHost}/health" } else { "https://${vmHost}:$port/health" }
+                    try {
+                        # Self-signed cert — curl -k (Windows PowerShell 5 may lack -SkipCertificateCheck)
+                        $body = & curl.exe -sk --http1.1 --max-time 15 $url 2>$null
+                        $ok = ($LASTEXITCODE -eq 0) -and ($body -match '"status"\s*:\s*"ok"' -or $body -match "ok")
+                        $detail = if ($ok) { "HTTPS ok" } else { "HTTPS failed (exit $LASTEXITCODE)" }
+                    } catch {
+                        $ok = $false
+                        $detail = $_.Exception.Message
+                    }
+                }
+            }
             "vm_compose" {
                 $target = Get-SshTarget
                 $dir = Get-ConfigValue "VmProjectDir"

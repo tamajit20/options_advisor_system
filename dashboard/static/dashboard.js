@@ -1112,7 +1112,10 @@ function _updateFeedTag(tradeId, opts = {}) {
 function _resolveTradeMtm(trade, snapTrade) {
   const st = snapTrade || {};
   const lo = (trade && trade.live_outlook) || {};
-  const candidates = [st.mtm, trade && trade.last_mtm, lo.close_now_ev, lo.mtm];
+  // Off-market: prefer DB last_mtm — live/outlook can invent −100% when LTPs are missing.
+  const candidates = _inMarketHours()
+    ? [st.mtm, trade && trade.last_mtm, lo.close_now_ev, lo.mtm]
+    : [trade && trade.last_mtm, st.mtm, lo.close_now_ev, lo.mtm];
   for (const v of candidates) {
     if (v == null || v === '') continue;
     const n = typeof v === 'number' ? v : parseFloat(v);
@@ -8872,9 +8875,13 @@ function _applyMtmEvent(m) {
       trade_name: m.trade_name,
     };
   }
+  const hasLegMarks = m.leg_ltps && typeof m.leg_ltps === 'object'
+    && Object.values(m.leg_ltps).some(v => parseFloat(v) > 0);
+  // Never promote close_now_ev to header MTM without leg marks (off-market
+  // seed used to invent −100% of premium when LTPs were missing).
   const eventMtm = (m.mtm != null && !isNaN(parseFloat(m.mtm)))
     ? parseFloat(m.mtm)
-    : ((m.close_now_ev != null && !isNaN(parseFloat(m.close_now_ev)))
+    : ((hasLegMarks && m.close_now_ev != null && !isNaN(parseFloat(m.close_now_ev)))
       ? parseFloat(m.close_now_ev)
       : null);
   const payload = {

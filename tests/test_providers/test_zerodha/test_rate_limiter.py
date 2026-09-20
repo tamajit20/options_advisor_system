@@ -85,3 +85,52 @@ def test_acquire_with_timeout_returns_false(monkeypatch):
     b = TokenBucket(rate_per_sec=0.1, capacity=1.0)
     b.try_acquire(1)  # drain
     assert b.acquire(1, timeout=1.0) is False  # need 10s, only allow 1s
+
+
+# ---- SlidingWindowCap (order place/modify/cancel) ----
+
+from providers.zerodha.rate_limiter import SlidingWindowCap
+
+
+def test_sliding_window_allows_up_to_max():
+    cap = SlidingWindowCap(3, window_sec=1.0)
+    assert cap.try_acquire() is True
+    assert cap.try_acquire() is True
+    assert cap.try_acquire() is True
+    assert cap.try_acquire() is False
+    assert cap.used == 3
+
+
+def test_sliding_window_frees_after_window(monkeypatch):
+    fake = {"t": 0.0}
+    monkeypatch.setattr(time, "monotonic", lambda: fake["t"])
+    cap = SlidingWindowCap(2, window_sec=1.0)
+    assert cap.try_acquire() is True
+    assert cap.try_acquire() is True
+    assert cap.try_acquire() is False
+    fake["t"] = 1.01
+    assert cap.try_acquire() is True
+
+
+def test_sliding_window_acquire_waits(monkeypatch):
+    fake = {"t": 0.0}
+    sleeps: list = []
+    monkeypatch.setattr(time, "monotonic", lambda: fake["t"])
+
+    def fake_sleep(d):
+        sleeps.append(d)
+        fake["t"] += d
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+    cap = SlidingWindowCap(1, window_sec=1.0)
+    cap.try_acquire()
+    cap.acquire()  # must wait ~1s for the first slot to age out
+    assert sum(sleeps) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_sliding_window_set_max():
+    cap = SlidingWindowCap(1, window_sec=1.0)
+    cap.try_acquire()
+    assert cap.try_acquire() is False
+    cap.set_max(2)
+    assert cap.try_acquire() is True

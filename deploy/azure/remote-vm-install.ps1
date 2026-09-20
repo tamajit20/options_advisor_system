@@ -78,22 +78,27 @@ if ($EnvFile) {
     }
 }
 
-Write-Host "==> [2/3] Running vm-install-deploy.sh on VM (Docker + app + port 5001 attempt)..."
-$remoteCmd = "cd '$VmProjectDir' 2>/dev/null || true; if [ ! -f deploy/vm-install-deploy.sh ]; then git clone -b master https://github.com/tamajit20/options_advisor_system.git '$VmProjectDir' && cd '$VmProjectDir'; fi; chmod +x deploy/vm-install-deploy.sh deploy/azure/open-port-5001.sh 2>/dev/null; ./deploy/vm-install-deploy.sh $installFlagStr"
+Write-Host "==> [2/4] Running vm-install-deploy.sh on VM (Docker + app + HTTPS)..."
+$remoteCmd = "cd '$VmProjectDir' 2>/dev/null || true; if [ ! -f deploy/vm-install-deploy.sh ]; then git clone -b master https://github.com/tamajit20/options_advisor_system.git '$VmProjectDir' && cd '$VmProjectDir'; fi; chmod +x deploy/vm-install-deploy.sh deploy/azure/open-port-5001.sh deploy/azure/open-port-https.sh deploy/azure/enable-https.sh 2>/dev/null; ./deploy/vm-install-deploy.sh $installFlagStr"
 & ssh @sshArgs $sshTarget $remoteCmd
 
 if (-not $SkipPortOpen) {
-    Write-Host "==> [3/3] Opening Azure NSG port 5001 from laptop..."
+    Write-Host "==> [3/4] Opening Azure NSG ports 80/443 (HTTPS only; :5001 stays closed)..."
     $portArgs = @{ VmHost = $VmHost }
     if ($SourceIp) { $portArgs.SourceIp = $SourceIp }
-    & (Join-Path $DeployDir "open-port-5001.ps1") @portArgs
+    & (Join-Path $DeployDir "open-port-https.ps1") @portArgs
+    & (Join-Path $DeployDir "close-port-5001.ps1") @portArgs
 } else {
-    Write-Host "==> [3/3] Skipped NSG port open (-SkipPortOpen)."
+    Write-Host "==> [3/4] Skipped NSG port open (-SkipPortOpen)."
 }
 
+Write-Host "==> [4/4] Ensuring self-signed HTTPS on VM..."
+& (Join-Path $DeployDir "enable-https-remote.ps1") -VmHost $VmHost -SkipPortOpen -Mode selfsigned
+
 Write-Host ""
-Write-Host "Done. Dashboard: http://${VmHost}:5001"
+Write-Host "Done. Dashboard HTTPS: https://${VmHost}/  (accept browser warning once)"
+Write-Host "Public HTTP :5001 is closed — use HTTPS only."
 Write-Host "Zerodha login (each trading morning):"
 Write-Host "  ssh -i `"$SshKeyPath`" ${sshTarget}"
-Write-Host "  cd $VmProjectDir && set -a && source .env.docker && set +a && export COMPOSE_PROFILES=bundled"
+Write-Host "  cd $VmProjectDir && set -a && source .env.docker && set +a && export COMPOSE_PROFILES=`"`${COMPOSE_PROFILES:-bundled,https}`""
 Write-Host "  sg docker -c 'docker compose exec options_advisor python main.py --zerodha-login'"

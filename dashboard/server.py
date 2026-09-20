@@ -1043,6 +1043,80 @@ def _stored_mtm_payloads(db: Optional[SQLServerConnection] = None) -> Dict[str, 
                 pass
 
 
+def _live_mtm_is_priced(payload: Any) -> bool:
+    """True when a live MTM payload includes positive per-leg marks.
+
+    Off-market outlook seeds used to invent MTM with missing LTPs treated as
+    ₹0 (debit → −100% of premium). Those payloads must not overwrite the DB
+    snapshot. Require at least one positive leg LTP as a priced-book signal.
+    """
+    if not isinstance(payload, dict) or payload.get("mtm") is None:
+        return False
+    legs = payload.get("leg_ltps") or {}
+    if not isinstance(legs, dict) or not legs:
+        return False
+    try:
+        return any(float(v) > 0 for v in legs.values())
+    except (TypeError, ValueError):
+        return False
+
+
+def _merge_live_over_stored_mtm(
+    stored: Dict[str, Dict[str, Any]],
+    live: Dict[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    """Merge live file over DB snapshots; ignore unpriced live MTM values."""
+    merged: Dict[str, Dict[str, Any]] = {
+        str(k): dict(v) for k, v in (stored or {}).items() if isinstance(v, dict)
+    }
+    for tid, payload in (live or {}).items():
+        if not isinstance(payload, dict):
+            continue
+        key = str(tid)
+        base = dict(merged.get(key) or {})
+        if _live_mtm_is_priced(payload):
+            merged[key] = {**base, **payload}
+            continue
+        # Outlook-only / unpriced: keep DB mtm; still refresh non-MTM fields.
+        kept_mtm = base.get("mtm")
+        kept_as_of = base.get("as_of")
+        kept_legs = base.get("leg_ltps")
+        base.update(payload)
+        if kept_mtm is not None:
+            base["mtm"] = kept_mtm
+            if kept_as_of is not None:
+                base["as_of"] = kept_as_of
+        else:
+            base.pop("mtm", None)
+        if kept_legs and not payload.get("leg_ltps"):
+            base["leg_ltps"] = kept_legs
+        if base:
+            merged[key] = base
+    return merged
+
+
+def _strip_unpriced_live_mtm(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop invented MTM from an SSE payload so the UI keeps last real mark."""
+    out = dict(payload)
+    if _live_mtm_is_priced(out):
+        return out
+    out.pop("mtm", None)
+    # close_now_ev mirrors current_mtm; without leg marks it is not a real mark.
+    legs = out.get("leg_ltps") or {}
+    if not isinstance(legs, dict) or not any(
+        _safe_pos_float(v) for v in legs.values()
+    ):
+        out.pop("close_now_ev", None)
+    return out
+
+
+def _safe_pos_float(v: Any) -> bool:
+    try:
+        return float(v) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _trade_live_outlook(db: SQLServerConnection, trade: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Compute live outlook for an open trade (live tick or last EOD/intraday data)."""
     sug = trade.get("suggestion") or {}
@@ -1068,7 +1142,8 @@ def _trade_live_outlook(db: SQLServerConnection, trade: Dict[str, Any]) -> Optio
                 live_iv = float(mtm_row["atm_iv"])
         if mtm_row.get("leg_ltps"):
             leg_ltps = mtm_row["leg_ltps"]
-        if mtm_row.get("mtm") is not None:
+        # Only trust live-file MTM when legs are marked; else DB last_mtm.
+        if _live_mtm_is_priced(mtm_row):
             current_mtm = float(mtm_row["mtm"])
         elif trade.get("last_mtm") is not None:
             current_mtm = float(trade["last_mtm"])
@@ -1887,12 +1962,13 @@ def create_app() -> Flask:
             r_out["legs"] = [_row(l) for l in trd.legs_with_suggestion_info(r["trade_id"])]
             snap = stored_mtm.get(str(r["trade_id"])) or {}
             mtm_live = live_snap.get(str(r["trade_id"])) or {}
-            # Live file wins only when it carries a real MTM. Outlook-only
-            # seed payloads (off-market reload) must not wipe the DB snapshot.
-            if isinstance(mtm_live, dict) and mtm_live.get("mtm") is not None:
-                merged_snap = {**snap, **mtm_live}
-            else:
-                merged_snap = dict(snap)
+            # Live file wins only when it carries priced leg marks. Outlook-only
+            # / zero-LTP seed payloads must not wipe the DB snapshot.
+            merged_map = _merge_live_over_stored_mtm(
+                {str(r["trade_id"]): snap} if snap else {},
+                {str(r["trade_id"]): mtm_live} if mtm_live else {},
+            )
+            merged_snap = merged_map.get(str(r["trade_id"])) or dict(snap)
             r_out["last_mtm"] = merged_snap.get("mtm")
             r_out["last_mtm_at"] = merged_snap.get("as_of")
             # Live risk alert (TARGET_HIT / LOSS_LIMIT_HIT / PROFIT_FLOOR_HIT /
@@ -3748,16 +3824,13 @@ def create_app() -> Flask:
     @app.route("/api/live/mtm/snapshot")
     @_with_db
     def api_live_mtm_snapshot(db: SQLServerConnection):
-        """Return current per-trade MTM: live file wins, else last DB snapshot."""
+        """Return current per-trade MTM: priced live file wins, else last DB snapshot."""
         state = _read_live_mtm_state()
         live = state.get("trades") or {}
         if not isinstance(live, dict):
             live = {}
         stored = _stored_mtm_payloads(db)
-        merged = dict(stored)
-        for tid, payload in live.items():
-            if isinstance(payload, dict) and payload.get("mtm") is not None:
-                merged[str(tid)] = payload
+        merged = _merge_live_over_stored_mtm(stored, live)
         return jsonify({"as_of": state.get("as_of"), "trades": merged})
 
     @app.route("/api/live/mtm")
@@ -3795,6 +3868,9 @@ def create_app() -> Flask:
                                     + "\n\n"
                                 )
                         for tid, payload in live.items():
+                            if not isinstance(payload, dict):
+                                continue
+                            payload = _strip_unpriced_live_mtm(payload)
                             cur_key = (
                                 payload.get("mtm"),
                                 payload.get("live_pop"),

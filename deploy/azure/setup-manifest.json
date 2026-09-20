@@ -36,7 +36,7 @@
       "title": "VM connectivity",
       "items": [
         {"id": "vm_ssh", "label": "SSH to VM", "critical": true, "check": "vm_ssh"},
-        {"id": "vm_dashboard", "label": "Dashboard HTTP :5001", "critical": true, "check": "vm_http", "port": 5001},
+        {"id": "vm_dashboard", "label": "Dashboard HTTPS :443", "critical": true, "check": "vm_https", "port": 443},
         {"id": "vm_compose", "label": "Docker stack running on VM", "critical": true, "check": "vm_compose"}
       ]
     },

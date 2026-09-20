@@ -1110,6 +1110,9 @@ ZERODHA_EXECUTION_CONFIG = {
     "order_poll_interval_sec": float(_env("OPT_ZERODHA_ORDER_POLL_SEC", "2")),
     "order_max_wait_sec": float(_env("OPT_ZERODHA_ORDER_MAX_WAIT_SEC", "45")),
     "order_max_retries": _env_int("OPT_ZERODHA_ORDER_MAX_RETRIES", 3),
+    # Kite allows 10 orders/sec (place/modify/cancel). Stay under with a
+    # process-wide sliding 1s window; waits when the cap is full.
+    "orders_per_sec": _env_int("OPT_ZERODHA_ORDERS_PER_SEC", 9),
     # LIMIT price offset from LTP: BUY pays up, SELL accepts less (better fill odds).
     "limit_slippage_pct": float(_env("OPT_ZERODHA_LIMIT_SLIPPAGE_PCT", "0.5")),
     "limit_slip_walk_per_retry": float(_env("OPT_ZERODHA_SLIP_WALK", "0.25")),

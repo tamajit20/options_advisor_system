@@ -1,0 +1,14 @@
+# Trusted Let's Encrypt cert — needs a DNS name (your domain, DuckDNS, or free
+# sslip.io e.g. 52.230.104.81.sslip.io → that IP, no registrar purchase).
+#
+# Env: HTTPS_DOMAIN, CADDY_ACME_EMAIL
+# Enable: HTTPS_MODE=acme + compose profile https
+
+{
+	email {$CADDY_ACME_EMAIL}
+}
+
+{$HTTPS_DOMAIN} {
+	encode gzip
+	reverse_proxy options_advisor:5001
+}

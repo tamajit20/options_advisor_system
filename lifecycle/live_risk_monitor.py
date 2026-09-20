@@ -536,6 +536,7 @@ class LiveRiskMonitor:
             "incomplete_leg_skips": 0,
             "session_skips":     0,
             "silenced_skips":    0,
+            "auto_exec_guard_skips": 0,
             "reloads":           0,
             "trailing_steps_armed": 0,
             "mtm_published":      0,
@@ -920,12 +921,14 @@ class LiveRiskMonitor:
                     last = state.last_alert_at.get(key)
                     if (not was) or last is None or (now - last) >= self._cooldown:
                         if not was:
-                            self._record_level_transition(
-                                state, key, "ENTER", now,
-                                self._current_pnl(state),
-                                threshold_rs=state.sl_level,
-                                spot=ltp, include_legs=True,
-                            )
+                            mtm_for_event = self._current_pnl_or_none(state)
+                            if mtm_for_event is not None:
+                                self._record_level_transition(
+                                    state, key, "ENTER", now,
+                                    mtm_for_event,
+                                    threshold_rs=state.sl_level,
+                                    spot=ltp, include_legs=True,
+                                )
                         state.in_breach[key] = True
                         state.last_alert_at[key] = now
                         decisions.append(_PendingAlert(
@@ -937,12 +940,14 @@ class LiveRiskMonitor:
                         ))
                 else:
                     if was:
-                        self._record_level_transition(
-                            state, key, "EXIT", now,
-                            self._current_pnl(state),
-                            threshold_rs=state.sl_level,
-                            spot=ltp,
-                        )
+                        mtm_for_event = self._current_pnl_or_none(state)
+                        if mtm_for_event is not None:
+                            self._record_level_transition(
+                                state, key, "EXIT", now,
+                                mtm_for_event,
+                                threshold_rs=state.sl_level,
+                                spot=ltp,
+                            )
                         # Reset cooldown so a new breach alerts immediately.
                         state.in_breach[key] = False
                         state.last_alert_at.pop(key, None)
@@ -1453,12 +1458,14 @@ class LiveRiskMonitor:
             self._counters["alerts_suppressed"] += 1
             return None
         if not was:
-            self._record_level_transition(
-                state, breach_key, "ENTER", now,
-                self._current_pnl(state),
-                threshold_rs=threshold_rs,
-                include_legs=True,
-            )
+            mtm_for_event = self._current_pnl_or_none(state)
+            if mtm_for_event is not None:
+                self._record_level_transition(
+                    state, breach_key, "ENTER", now,
+                    mtm_for_event,
+                    threshold_rs=threshold_rs,
+                    include_legs=True,
+                )
         state.in_breach[breach_key] = True
         state.last_alert_at[breach_key] = now
         return _PendingAlert(
@@ -1483,6 +1490,17 @@ class LiveRiskMonitor:
             for k, v in state.leg_ltps.items()
         }
 
+    @staticmethod
+    def _has_complete_leg_ltps(state: _TradeState) -> bool:
+        """True only when every open leg has a positive mark (never treat missing as 0)."""
+        if not state.legs:
+            return False
+        for leg in state.legs:
+            ltp = state.leg_ltps.get(leg.key)
+            if ltp is None or float(ltp) <= 0:
+                return False
+        return True
+
     def _effective_market(
         self, state: _TradeState, now: datetime,
     ) -> tuple[Optional[float], Optional[float], Optional[str], Optional[str]]:
@@ -1504,9 +1522,14 @@ class LiveRiskMonitor:
         return state.last_spot, state.atm_iv, state.market_data_source, state.market_as_of
 
     def _seed_outlook_on_reload(self) -> None:
-        """Publish outlook from EOD/intraday data when live ticks are unavailable."""
+        """Publish outlook from EOD/intraday data when live ticks are unavailable.
+
+        Never invent MTM from missing LTPs — ``_current_pnl`` treats absent marks
+        as ₹0, which makes debit trades look like −100% of premium. Off-market the
+        dashboard must keep the last real mark (DB snapshot / prior live file).
+        """
         now = self._clock()
-        pending: List[dict] = []
+        pending: List[Tuple[dict, bool]] = []
         with self._lock:
             for state in self._snapshot.trades.values():
                 if self._in_session(now) and state.last_spot is not None:
@@ -1523,21 +1546,26 @@ class LiveRiskMonitor:
                     "as_of": now.isoformat(timespec="seconds"),
                     **outlook,
                 }
-                # Off-market seed often has close_now_ev but no mtm key — surface
-                # it so the dashboard header keeps last P&L instead of blanking.
-                if payload.get("mtm") is None and payload.get("close_now_ev") is not None:
+                priced = self._has_complete_leg_ltps(state)
+                clear_mtm = False
+                if priced and payload.get("mtm") is None and payload.get("close_now_ev") is not None:
                     payload["mtm"] = payload["close_now_ev"]
+                elif not priced:
+                    # Drop invented / stale zero-LTP MTM so the API falls back to DB.
+                    payload.pop("mtm", None)
+                    payload.pop("close_now_ev", None)
+                    clear_mtm = True
                 elif payload.get("mtm") is None:
                     prev = self._mtm_state.get(state.trade_id) or {}
                     if prev.get("mtm") is not None:
                         payload["mtm"] = prev["mtm"]
-                        if not payload.get("as_of") and prev.get("as_of"):
+                        if prev.get("as_of"):
                             payload["as_of"] = prev["as_of"]
-                pending.append(payload)
-        for payload in pending:
+                pending.append((payload, clear_mtm))
+        for payload, clear_mtm in pending:
             try:
                 self._bus.publish(TOPIC_TRADE_MTM, payload)
-                self._write_mtm_state(payload)
+                self._write_mtm_state(payload, clear_mtm=clear_mtm)
             except Exception:
                 logger.debug(
                     "LiveRiskMonitor: outlook seed failed for %s",
@@ -1576,11 +1604,8 @@ class LiveRiskMonitor:
                 data_as_of=as_of,
                 leg_ltps=leg_ltps if leg_ltps else None,
             )
-            current_mtm = None
-            try:
-                current_mtm = self._current_pnl(state)
-            except Exception:
-                pass
+            # Missing LTP must never become MTM (that invents −100% on debits).
+            current_mtm = self._current_pnl_or_none(state)
             return enrich_trade_outlook(
                 base,
                 current_mtm=current_mtm,
@@ -1768,11 +1793,32 @@ class LiveRiskMonitor:
         self._maybe_auto_exec(alert)
 
     def _maybe_auto_exec(self, alert: "_PendingAlert") -> None:
-        """Hand the alert to the auto-execution registry. No orders here."""
+        """Hand the alert to the auto-execution registry. No orders here.
+
+        Hard guards: never flatten on invented MTM (missing LTP treated as ₹0
+        looks like −100% on debits). Require market session + fresh positive
+        marks on every leg before dispatching.
+        """
         if self._auto_exec is None:
             return
         state = alert.state
         now = self._clock()
+        if not self._in_session(now):
+            self._counters["auto_exec_guard_skips"] += 1
+            logger.error(
+                "LiveRiskMonitor: auto-exec blocked for %s/%s — market closed "
+                "(refusing flatten on off-hours / invented marks)",
+                state.trade_id, alert.notif_type,
+            )
+            return
+        if not self._legs_fresh(state, now):
+            self._counters["auto_exec_guard_skips"] += 1
+            logger.error(
+                "LiveRiskMonitor: auto-exec blocked for %s/%s — "
+                "stale or incomplete leg LTPs (refusing flatten)",
+                state.trade_id, alert.notif_type,
+            )
+            return
         exits: List[dict] = []
         missing: List[int] = []
         for leg in state.legs:
@@ -1785,7 +1831,8 @@ class LiveRiskMonitor:
                 "exit_price": float(ltp),
                 "exit_time": now,
             })
-        if missing:
+        if missing or len(exits) != len(state.legs):
+            self._counters["auto_exec_guard_skips"] += 1
             logger.error(
                 "LiveRiskMonitor: auto-exec skipped for %s/%s — "
                 "missing LTP on executed leg(s) %s",
@@ -1810,15 +1857,31 @@ class LiveRiskMonitor:
             )
 
     def _current_pnl(self, state: _TradeState) -> float:
-        # entry_net_credit is signed (positive=credit, negative=debit), so
-        # the same formula works for both credit and debit strategies.
+        """Mark-to-market from leg LTPs.
+
+        Raises if any leg mark is missing or non-positive. Missing marks must
+        never be treated as ₹0 — that invents −100% loss on debit trades and
+        must not drive alerts or auto-close.
+        """
+        if not self._has_complete_leg_ltps(state):
+            raise ValueError(
+                f"incomplete leg LTPs for {state.trade_id} — refusing MTM "
+                "(missing marks must not be treated as 0)"
+            )
         total = state.entry_net_credit
         for leg in state.legs:
-            ltp = state.leg_ltps.get(leg.key, 0.0)
+            ltp = float(state.leg_ltps[leg.key])
             qty = leg.lots * leg.lot_size
             sign = -1.0 if leg.action == "SELL" else 1.0
-            total += sign * float(ltp or 0.0) * qty
+            total += sign * ltp * qty
         return total
+
+    def _current_pnl_or_none(self, state: _TradeState) -> Optional[float]:
+        """Like ``_current_pnl`` but returns None when marks are incomplete."""
+        try:
+            return self._current_pnl(state)
+        except ValueError:
+            return None
 
     def _active_pre_breach_fraction(self, now: datetime, strategy: str = "") -> float:
         """Returns the pre-breach loss fraction to use right now.
@@ -1932,11 +1995,13 @@ class LiveRiskMonitor:
             }, f)
         os.replace(tmp, path)
 
-    def _write_mtm_state(self, payload: dict) -> None:
+    def _write_mtm_state(self, payload: dict, *, clear_mtm: bool = False) -> None:
         """Write per-trade MTM to a shared file so the Flask dashboard
         container (separate process) can poll it for the live MTM SSE stream.
 
         Closed trades are not written; reload prunes leftovers from the file.
+        ``clear_mtm`` drops a previously invented off-market MTM so the
+        dashboard API can fall back to the DB snapshot.
         """
         try:
             tid = payload["trade_id"]
@@ -1945,6 +2010,9 @@ class LiveRiskMonitor:
                     return
                 existing = self._mtm_state.get(tid) or {}
                 merged = {**existing, **payload}
+                if clear_mtm:
+                    merged.pop("mtm", None)
+                    merged.pop("close_now_ev", None)
                 self._mtm_state[tid] = merged
                 dump = dict(self._mtm_state)
                 as_of = merged.get("as_of") or payload.get("as_of")

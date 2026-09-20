@@ -200,6 +200,9 @@ _DESCRIPTIONS: Dict[str, str] = {
         "Give up polling a single leg after this many seconds (then retry).",
     "zerodha_execution.order_max_retries":
         "Re-place a leg up to this many times before failing the trade.",
+    "zerodha_execution.orders_per_sec":
+        "Max Kite place/modify/cancel calls in any rolling 1s (default 9; "
+        "hard-capped at 10). Extra calls wait for the next free slot.",
     "zerodha_execution.limit_slippage_pct":
         "Auto LIMIT offset from LTP: BUY pays up, SELL accepts less (%).",
     "zerodha_execution.product":

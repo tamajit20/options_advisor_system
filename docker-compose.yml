@@ -53,7 +53,8 @@ services:
     env_file:
       - .env.docker
     ports:
-      - "${OPT_DASHBOARD_PORT:-5001}:5001"
+      # HTTPS sets OPT_DASHBOARD_PUBLISH=127.0.0.1:5001:5001 (not public).
+      - "${OPT_DASHBOARD_PUBLISH:-5001:5001}"
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
@@ -102,5 +103,38 @@ services:
         condition: service_healthy
         required: false
 
+  # HTTPS reverse proxy (Caddy). Optional profile: https
+  #
+  # Default = self-signed on the VM IP (no domain). Browser warns once.
+  # Trusted cert without buying a domain: HTTPS_MODE=acme + *.sslip.io
+  #   HTTPS_MODE=selfsigned|acme
+  #   HTTPS_DOMAIN=52.x.x.x.sslip.io   # acme only
+  #   OPT_PUBLIC_BASE_URL=https://...
+  #   COMPOSE_PROFILES=bundled,https
+  # Then: ./deploy/azure/enable-https.sh
+  # ---------------------------------------------------------------------------
+  caddy:
+    profiles: [https]
+    image: caddy:2-alpine
+    container_name: options_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      HTTPS_DOMAIN: ${HTTPS_DOMAIN:-}
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:-admin@localhost}
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/caddy/certs:/etc/caddy/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      options_advisor:
+        condition: service_started
+
 volumes:
   sqlserver_data:
+  caddy_data:
+  caddy_config:

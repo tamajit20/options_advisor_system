@@ -749,6 +749,39 @@ class TestApiTradesOpen:
         assert trade["last_mtm"] == 420.5
         assert trade["last_mtm_at"] == "2026-08-21 15:29:00"
 
+    def test_invented_zero_ltp_live_mtm_does_not_wipe_stored(self, client, mocker):
+        """Missing LTPs as ₹0 look like −100% debit loss — must not beat DB mark."""
+        trade_row = {
+            "trade_id": "TRD-3",
+            "suggestion_id": None,
+            "trade_name": "DEBIT-TEST",
+            "status": "ACTIVE",
+            "executed_on": datetime(2026, 5, 20, 10, 0),
+        }
+        mocker.patch("dashboard.server.TradeRepo.open_trades", return_value=[trade_row])
+        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info", return_value=[])
+        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alert_for_trade", return_value=None)
+        mocker.patch("dashboard.server._stored_mtm_payloads", return_value={
+            "TRD-3": {"mtm": -1200.0, "as_of": "2026-08-21 15:29:00",
+                      "leg_ltps": {"NIFTY|2026-08-28|25000.0|CE": 80.0}},
+        })
+        mocker.patch("dashboard.server._read_live_mtm_state", return_value={
+            "as_of": "2026-08-22T20:00:00",
+            "trades": {
+                "TRD-3": {
+                    "trade_id": "TRD-3",
+                    "mtm": -18500.0,  # invented: entry debit with LTP=0
+                    "close_now_ev": -18500.0,
+                    "as_of": "2026-08-22T20:00:00",
+                },
+            },
+        })
+        mocker.patch("dashboard.server._trade_live_outlook", return_value=None)
+        mocker.patch("dashboard.server._enrich_trade_execution_channel", return_value=None)
+        trade = client.get("/api/trades/open").get_json()["trades"][0]
+        assert trade["last_mtm"] == -1200.0
+        assert trade["last_mtm_at"] == "2026-08-21 15:29:00"
+
 
 class TestLiveMTMSnapshot:
     def test_empty_when_no_live_or_stored(self, client, mocker):

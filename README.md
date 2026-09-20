@@ -1,6 +1,6 @@
 # Options Advisor - Complete Guide
 
-**Last updated:** 2026-09-13
+**Last updated:** 2026-09-20
 
 **Single document** for install, day-to-day ops, and architecture.  
 Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.
@@ -72,16 +72,17 @@ Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markd
  | Task Scheduler   |              |   DB OptionsAdvisorDB            |
  +------------------+              | stock_options_advisor :5001      |
                                    | stock_ws_runner (Zerodha ticks)  |
+                                   | options_caddy :443 (HTTPS)       |
                                    +----------------------------------+
                                               ^
                                               | browser
-                                     http://<VmHost>:5001
+                                     https://<VmHost>/
 ```
 
 
 | Piece          | Where                                           | Role                               |
 | -------------- | ----------------------------------------------- | ---------------------------------- |
-| Dashboard      | VM **:5001**                                    | UI, jobs, config                   |
+| Dashboard      | `https://<VmHost>/` (Caddy → :5001 localhost)   | UI, jobs, config                   |
 | Hot DB         | Container `options_sqlserver` / `OptionsAdvisorDB` | Live operational data              |
 | Archive DB     | Laptop `OptionsAdvisorDB_Archive`               | Cumulative history                 |
 | Manual forever | You                                             | Zerodha login each trading morning |
@@ -116,10 +117,10 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 | 1    | Copy `deploy/azure/laptop.config.ps1.example` -> `laptop.config.ps1`; fill `VmHost`, `SshKeyPath`, Azure RG/VM, `LocalSqlServer`                         |
 | 2    | Copy `.env.docker.example` -> `.env.docker`; fill `MSSQL_SA_PASSWORD`, `OPT_DB_PASSWORD` (same), Zerodha keys, `OPT_DASHBOARD_API_KEY`. **Never commit** |
 | 3    | `az login` if needed                                                                                                                                     |
-| 4    | `.\deploy\azure\setup-new-environment.ps1` (or `-RestoreFromBackup "PATH\to.bak"`; or `setup-laptop.ps1` only)                                           |
+| 4    | `.\deploy\azure\setup-new-environment.ps1` (or `-RestoreFromBackup "PATH\to.bak"`; or `setup-laptop.ps1` only) — enables **self-signed HTTPS** automatically |
 | 5    | `python scripts/validate_setup_sync.py` then `.\deploy\azure\Test-EnvironmentSetup.ps1` until exit 0                                                     |
 | 6    | On VM: `git pull` + `chmod +x deploy/*.sh ...` + `./deploy/vm-restart.sh`                                                                                |
-| 7    | Report: `http://<VmHost>:5001`, archive DB name, Zerodha login is still manual                                                                           |
+| 7    | Report: `https://<VmHost>/` (accept cert warning once), archive DB name, Zerodha login is still manual                                                   |
 
 
 **VM-only alternative:** `.\deploy\azure\remote-vm-install.ps1`, or SSH + clone + `.env.docker` + `./deploy/vm-install-deploy.sh`.
@@ -136,7 +137,10 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 | `deploy/azure/setup-new-environment.ps1`                                          | Greenfield laptop + VM + uptime     |
 | `deploy/azure/setup-laptop.ps1`                                                   | Laptop folders + archive task       |
 | `deploy/azure/Test-EnvironmentSetup.ps1`                                          | Verification checklist              |
-| `deploy/azure/remote-vm-install.ps1`                                              | VM Docker + app + port 5001         |
+| `deploy/azure/remote-vm-install.ps1`                                              | VM Docker + app + self-signed HTTPS |
+| `deploy/azure/open-port-5001.ps1`                                                 | NSG :5001 (HTTP dashboard)          |
+| `deploy/azure/open-port-https.ps1` / `enable-https.sh` / `enable-https-remote.ps1` | NSG 80/443 + self-signed HTTPS (auto on install) |
+| `deploy/azure/close-port-5001.ps1`                                                | Remove public NSG :5001 (HTTPS-only)            |
 | `deploy/azure/VMUpTimeConfiguration.ps1`                                          | Azure start/stop schedules          |
 | `deploy/azure/backup-database-to-laptop.ps1` / `restore-database-from-laptop.ps1` | Hot DB move                         |
 | `deploy/azure/pull-archive-and-merge.ps1` / `register-laptop-archive-task.ps1`    | Archive pull + ACK (retries every 15m until ACK or ~15:45) |
@@ -227,17 +231,13 @@ Trading knobs: `config.py` + DB `options_config` (Part B4).
 
 ## A7. Code deploy
 
-Keeps DB and trades. **Always** preserve Zerodha session.
+Keeps DB and trades. **Always** preserve Zerodha session. Prefer `./deploy/update.sh` (loads `COMPOSE_PROFILES` from `.env.docker`, including `https`).
 
 ```bash
 cd ~/options_advisor_system
-export COMPOSE_PROFILES=bundled
 cp -a data/zerodha_session.json /tmp/zerodha_session.json.bak 2>/dev/null || true
-set -a && . ./.env.docker && set +a
-git pull origin master
+./deploy/update.sh
 cp -a /tmp/zerodha_session.json.bak data/zerodha_session.json 2>/dev/null || true
-docker compose build options_advisor
-docker compose up -d
 docker compose ps && git log -1 --oneline
 ```
 
@@ -249,7 +249,19 @@ docker compose ps && git log -1 --oneline
 | Preserve `zerodha_session.json` | `git reset --hard` over a live session                   |
 
 
-Dashboard: `http://<VmHost>:5001`
+Dashboard: `https://<VmHost>/` (self-signed; public `:5001` closed)
+
+### HTTPS (free, same VM — no domain required)
+
+**Default for new installs:** self-signed HTTPS is enabled automatically; public **:5001** stays closed (NSG + bind `127.0.0.1`). Use `https://<VmHost>/` only.
+
+**Existing VM (one command from laptop):**
+```powershell
+az login   # if needed
+.\deploy\azure\enable-https-remote.ps1
+.\deploy\azure\close-port-5001.ps1
+```
+Then open `https://<VmHost>/` → Advanced → Proceed (one-time warning).
 
 ---
 
@@ -296,7 +308,8 @@ ACK refuses if `LAST_HOT_BACKUP.json` is missing or older than this export, `PEN
 | --------------------- | --------------------------------------------------------------------- |
 | Setup drift           | `python scripts/validate_setup_sync.py` + `Test-EnvironmentSetup.ps1` |
 | SSH fails             | VM up? `VmHost` + `.pem` in `laptop.config.ps1`?                      |
-| Dashboard down        | Port 5001 NSG, uptime schedule, `docker compose ps`                   |
+| Dashboard down        | Port 443 NSG (HTTPS), uptime schedule, `docker compose ps`            |
+| HTTPS / cert fail     | DNS A→VM? NSG 80+443? `docker logs options_caddy`; see A7 HTTPS       |
 | Archive stuck         | Laptop task; VM `git pull` + `vm-restart`; ACK conditions above       |
 | Zerodha execute fails | `OPT_DASHBOARD_API_KEY` in VM `.env.docker`                           |
 
@@ -575,7 +588,7 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), not raw “cheap IV”. When rank is low but **IV/HV > 1**, the title is “options still rich vs HV” so it does not contradict the expensive-vs-realised soft-fail.
 
-**Paper vs Zerodha:** “Record at suggested / Record my fills” always stamps `execution_provider=manual`. Never copy suggestion `provider` (that is the market-data feed, often `zerodha` in live mode). The Zerodha execution channel requires COMPLETE ENTRY/SUPPLEMENT fills on Kite — the provider stamp alone never authorizes live EXIT. Close / auto-close / flatten-rollback always verify matching Kite net inventory (gate cannot be disabled). Dashboard **Close in Zerodha** is the only close action for broker-channel trades (DB-only “record fills” is hidden and `/api/trades/.../close` returns 409); if Kite is already flat, Close syncs COMPLETE exit fill prices into the DB instead of placing new EXIT orders. Paper/manual trades use record fills only. Zerodha logs label milestone auto-closes as **Profit/Loss milestone hit — system closed** (not “You closed”). Entry margin gate uses the **placement path peak** (prefix basket margins in execution order), not only the final structure total, plus the configured buffer. Suggestion **Amount needed** shows engine capital plus Zerodha Final/Peak whenever the Kite session is valid (place-orders toggle not required; short cash still shows Final/Peak). The Execute confirm popup also shows the live per-unit debit/credit equation and Final vs Max required. Multi-leg place gates pass when **structure net** credit/debit is at or better than the combined band floor even if individual legs sit outside their own bands (missing quotes still block). After any leg fills, mid-loop band drift **continues** remaining legs (warn only) so a one-sided book is not left open; missing LTP still aborts.
+**Paper vs Zerodha:** “Record at suggested / Record my fills” always stamps `execution_provider=manual`. Never copy suggestion `provider` (that is the market-data feed, often `zerodha` in live mode). The Zerodha execution channel requires COMPLETE ENTRY/SUPPLEMENT fills on Kite — the provider stamp alone never authorizes live EXIT. Close / auto-close / flatten-rollback always verify matching Kite net inventory (gate cannot be disabled). Dashboard **Close in Zerodha** is the only close action for broker-channel trades (DB-only “record fills” is hidden and `/api/trades/.../close` returns 409); if Kite is already flat, Close syncs COMPLETE exit fill prices into the DB instead of placing new EXIT orders. Paper/manual trades use record fills only. Zerodha logs label milestone auto-closes as **Profit/Loss milestone hit — system closed** (not “You closed”). Entry margin gate uses the **placement path peak** (prefix basket margins in execution order), not only the final structure total, plus the configured buffer. Suggestion **Amount needed** shows engine capital plus Zerodha Final/Peak whenever the Kite session is valid (place-orders toggle not required; short cash still shows Final/Peak). The Execute confirm popup also shows the live per-unit debit/credit equation and Final vs Max required. Multi-leg place gates pass when **structure net** credit/debit is at or better than the combined band floor even if individual legs sit outside their own bands (missing quotes still block). After any leg fills, mid-loop band drift **continues** remaining legs (warn only) so a one-sided book is not left open; missing LTP still aborts. Kite place/modify/cancel share a process-wide **`orders_per_sec`** cap (default **9**, env `OPT_ZERODHA_ORDERS_PER_SEC`, hard max 10); when the rolling 1s window is full the next call waits for a free slot.
 
 ---
 
@@ -792,6 +805,7 @@ pytest tests/test_database/test_schema.py tests/test_scheduler/test_scheduler.py
 | Table                   | `schema.py` `list_tables()`; archive registry if historical; README B5 / A8 never-archive list |
 | Job                     | `SCHEDULER_CONFIG`, `JOB_FUNCS`, lifecycle `run_*`, dashboard job meta, README A5              |
 | Deploy / archive script | README A4 / A8; `setup-new-environment.ps1` / manifest if greenfield-visible                   |
+| HTTPS on VM             | A7 HTTPS; default self-signed IP; or `HTTPS_MODE=acme` + sslip.io; `enable-https.sh` / open-port-https |
 | New module / boundary   | README B1 / B6 / B12                                                                           |
 | Code-only ship          | [A7](#a7-code-deploy)                                                                          |
 

@@ -23,6 +23,14 @@ REPO_URL="${REPO_URL:-https://github.com/tamajit20/options_advisor_system.git}"
 REPO_BRANCH="${REPO_BRANCH:-master}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/options_advisor_system}"
 
+_public_ip_hint() {
+  curl -sf -H Metadata:true --max-time 2 \
+    "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text" \
+    2>/dev/null \
+    || hostname -I 2>/dev/null | awk '{print $1}' \
+    || echo "<VmHost>"
+}
+
 # Re-exec under docker group if we were just added (avoids "log out and back in").
 if ! docker info &>/dev/null 2>&1; then
   if groups 2>/dev/null | grep -qw docker; then
@@ -67,13 +75,13 @@ else
 fi
 
 cd "${INSTALL_DIR}"
-chmod +x deploy/*.sh deploy/azure/open-port-5001.sh 2>/dev/null || true
+chmod +x deploy/*.sh deploy/azure/open-port-5001.sh deploy/azure/open-port-https.sh deploy/azure/enable-https.sh 2>/dev/null || true
 
-# Persist bundled SQL profile for all future docker compose commands.
-if ! grep -q 'COMPOSE_PROFILES=bundled' "$HOME/.bashrc" 2>/dev/null; then
-  echo 'export COMPOSE_PROFILES=bundled' >> "$HOME/.bashrc"
+# Persist compose profiles for future shells (HTTPS added by enable-https / setup).
+if ! grep -q 'COMPOSE_PROFILES=' "$HOME/.bashrc" 2>/dev/null; then
+  echo 'export COMPOSE_PROFILES=bundled,https' >> "$HOME/.bashrc"
 fi
-export COMPOSE_PROFILES=bundled
+export COMPOSE_PROFILES="${COMPOSE_PROFILES:-bundled}"
 
 echo "==> [3/4] Checking .env.docker..."
 if [[ ! -f .env.docker ]]; then
@@ -106,22 +114,25 @@ echo "    SQL Server is installed via Docker on first run."
 echo "    If a database already exists, you will be prompted: fresh vs keep existing."
 ./deploy/setup.sh "$@"
 
-echo "==> [5/5] Opening dashboard port ${OPT_DASHBOARD_PORT:-5001} (Azure NSG + local firewall)..."
-chmod +x deploy/azure/open-port-5001.sh 2>/dev/null || true
-if ! ./deploy/azure/open-port-5001.sh; then
-  echo ""
-  echo "WARNING: Port ${OPT_DASHBOARD_PORT:-5001} was NOT opened in Azure NSG from the VM."
-  echo "         Run from your Windows laptop (after az login):"
-  echo "           .\\deploy\\azure\\open-port-5001.ps1"
-  echo "         Or use the all-in-one laptop installer:"
-  echo "           .\\deploy\\azure\\remote-vm-install.ps1"
-  echo ""
+echo "==> [5/5] Opening HTTPS ports 80/443 (public :5001 not opened)..."
+chmod +x deploy/azure/open-port-https.sh 2>/dev/null || true
+./deploy/azure/open-port-https.sh || {
+  echo "WARNING: Ports 80/443 were NOT opened in Azure NSG from the VM."
+  echo "         Laptop: .\\deploy\\azure\\open-port-https.ps1"
+}
+
+# setup.sh already enables self-signed HTTPS; ensure bashrc matches .env.docker
+if grep -q 'COMPOSE_PROFILES=.*https' .env.docker 2>/dev/null; then
+  if grep -q 'COMPOSE_PROFILES=' "$HOME/.bashrc" 2>/dev/null; then
+    sed -i.bak 's|^export COMPOSE_PROFILES=.*|export COMPOSE_PROFILES=bundled,https|' "$HOME/.bashrc" || true
+  fi
 fi
 
 echo ""
 echo "================================================================="
 echo " Deploy complete."
-echo " Dashboard: http://$(hostname -I 2>/dev/null | awk '{print $1}'):${OPT_DASHBOARD_PORT:-5001}"
+echo " Dashboard HTTPS: https://$(_public_ip_hint)/   (accept browser cert warning once)"
+echo " Public HTTP :5001 is not opened — use HTTPS only."
 echo ""
 echo " Restore database from laptop:"
 echo "   .\\deploy\\azure\\restore-database-from-laptop.ps1"
@@ -137,5 +148,5 @@ echo "   .\\deploy\\azure\\setup-new-environment.ps1"
 echo "   .\\deploy\\azure\\Test-EnvironmentSetup.ps1"
 echo ""
 echo " Routine code deploy (schema auto on restart):"
- echo "   ./deploy/update.sh"
- echo "================================================================="
+echo "   ./deploy/update.sh"
+echo "================================================================="

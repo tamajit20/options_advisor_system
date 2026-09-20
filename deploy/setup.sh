@@ -15,8 +15,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-export COMPOSE_PROFILES=bundled
-
 if [[ ! -f .env.docker ]]; then
   echo "ERROR: .env.docker missing. Run:  cp .env.docker.example .env.docker"
   echo "       Edit MSSQL_SA_PASSWORD, OPT_DB_PASSWORD (must match), and Zerodha keys."
@@ -24,9 +22,7 @@ if [[ ! -f .env.docker ]]; then
 fi
 
 # shellcheck disable=SC1091
-set -a
-source .env.docker
-set +a
+source "$(dirname "$0")/load-compose-profiles.sh"
 
 if [[ -z "${MSSQL_SA_PASSWORD:-}" || "${MSSQL_SA_PASSWORD}" == "ChangeMe!Str0ng#Pass" ]]; then
   echo "ERROR: Set a real MSSQL_SA_PASSWORD in .env.docker (and matching OPT_DB_PASSWORD)."
@@ -63,10 +59,21 @@ run_db_setup "$@"
 echo "==> Starting full stack..."
 docker compose up -d
 
+# Self-signed HTTPS by default (no domain). Skip with SKIP_HTTPS=1.
+if [[ "${SKIP_HTTPS:-}" != "1" ]]; then
+  echo "==> Enabling self-signed HTTPS (Caddy)..."
+  chmod +x deploy/azure/enable-https.sh 2>/dev/null || true
+  HTTPS_MODE="${HTTPS_MODE:-selfsigned}" ./deploy/azure/enable-https.sh || {
+    echo "WARNING: HTTPS setup failed — dashboard still on :${OPT_DASHBOARD_PORT:-5001}"
+  }
+fi
+
 echo ""
-echo "Done. Dashboard: http://$(hostname -I 2>/dev/null | awk '{print $1}'):${OPT_DASHBOARD_PORT:-5001}"
+echo "Done."
+echo "  HTTPS:  https://$(hostname -I 2>/dev/null | awk '{print $1}')/   (accept browser warning once)"
+echo "  HTTP:   http://$(hostname -I 2>/dev/null | awk '{print $1}'):${OPT_DASHBOARD_PORT:-5001}"
 echo ""
 echo "Next steps:"
-echo "  1. Open port ${OPT_DASHBOARD_PORT:-5001} in your cloud firewall (Azure NSG / Oracle security list)."
+echo "  1. NSG: 80+443 (and optionally 5001) — laptop: .\\deploy\\azure\\open-port-https.ps1"
 echo "  2. Each trading morning: docker compose exec options_advisor python main.py --zerodha-login"
 echo "  3. Check health: docker compose ps && docker compose logs -f options_advisor"
