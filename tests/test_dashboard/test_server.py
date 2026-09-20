@@ -805,7 +805,13 @@ class TestLiveMTMSnapshot:
     def test_live_overrides_stored(self, client, mocker):
         mocker.patch("dashboard.server._read_live_mtm_state", return_value={
             "as_of": "2026-08-22T10:00:00",
-            "trades": {"T-001": {"trade_id": "T-001", "mtm": 1234.0}},
+            "trades": {
+                "T-001": {
+                    "trade_id": "T-001",
+                    "mtm": 1234.0,
+                    "leg_ltps": {"NIFTY|2026-08-28|25000.0|CE": 95.0},
+                },
+            },
         })
         mocker.patch(
             "dashboard.server._stored_mtm_payloads",
@@ -814,6 +820,18 @@ class TestLiveMTMSnapshot:
         data = client.get("/api/live/mtm/snapshot").get_json()
         assert data["trades"]["T-001"]["mtm"] == 1234.0
         assert data["as_of"] == "2026-08-22T10:00:00"
+
+    def test_unpriced_live_does_not_override_stored(self, client, mocker):
+        mocker.patch("dashboard.server._read_live_mtm_state", return_value={
+            "as_of": "2026-08-22T20:00:00",
+            "trades": {"T-001": {"trade_id": "T-001", "mtm": -9999.0}},
+        })
+        mocker.patch(
+            "dashboard.server._stored_mtm_payloads",
+            return_value={"T-001": {"trade_id": "T-001", "mtm": -10.0}},
+        )
+        data = client.get("/api/live/mtm/snapshot").get_json()
+        assert data["trades"]["T-001"]["mtm"] == -10.0
 
 
 class TestSuggestionLiveLtpSnapshot:
