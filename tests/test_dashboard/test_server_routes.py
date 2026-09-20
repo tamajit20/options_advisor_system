@@ -905,7 +905,12 @@ class TestLiveMTMStream:
         with open(path, "w", encoding="utf-8") as fh:
             json.dump({
                 "trades": {
-                    "T-001": {"trade_id": "T-001", "mtm": 1234.0, "dte": 5},
+                    "T-001": {
+                        "trade_id": "T-001",
+                        "mtm": 1234.0,
+                        "dte": 5,
+                        "leg_ltps": {"NIFTY|2026-08-28|25000.0|CE": 95.0},
+                    },
                 },
             }, fh)
         mocker.patch("time.sleep", return_value=None)
@@ -922,7 +927,13 @@ class TestLiveMTMStream:
 
         path = tmp_path / "live_mtm_state.json"
         path.write_text(json.dumps({
-            "trades": {"T-001": {"trade_id": "T-001", "mtm": 10.0}},
+            "trades": {
+                "T-001": {
+                    "trade_id": "T-001",
+                    "mtm": 10.0,
+                    "leg_ltps": {"NIFTY|2026-08-28|25000.0|CE": 80.0},
+                },
+            },
         }), encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         os.makedirs("data", exist_ok=True)
