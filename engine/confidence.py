@@ -35,16 +35,20 @@ _PASS_WARN  = "PASS_WARN"
 _PASS_ERROR = "PASS_ERROR"
 
 
-def _gate(label: str, fn) -> ConfidenceCheck:
-    """Run *fn()* → (status, detail); wrap any exception as PASS_ERROR."""
+def _gate(label: str, fn, *, kind: str = "SOFT") -> ConfidenceCheck:
+    """Run *fn()* → (status, detail); wrap any exception as PASS_ERROR.
+
+    kind: HARD | SOFT | ADVISORY — stored for the suggestion card.
+    """
     try:
         status, detail = fn()
-        return ConfidenceCheck(label=label, status=status, detail=detail)
+        return ConfidenceCheck(label=label, status=status, detail=detail, kind=kind)
     except Exception as exc:  # noqa: BLE001
         return ConfidenceCheck(
             label=label,
             status=_PASS_ERROR,
             detail=f"Error evaluating gate: {exc}",
+            kind=kind,
         )
 
 
@@ -86,7 +90,7 @@ def evaluate(
             f"IV Rank {iv_rank:.1f} (need >{iv_writing_min:.0f} or <{iv_buying_max:.0f})",
         )
 
-    checks.append(_gate("IV Rank in actionable zone", _iv_gate))
+    checks.append(_gate("IV Rank in actionable zone", _iv_gate, kind="SOFT"))
 
     # 2. VIX stable or falling
     def _vix_gate():
@@ -98,7 +102,7 @@ def evaluate(
             f"VIX regime: {indicators.vix_regime} (close {indicators.vix_close:.2f})",
         )
 
-    checks.append(_gate("VIX stable or falling", _vix_gate))
+    checks.append(_gate("VIX stable or falling", _vix_gate, kind="SOFT"))
 
     # 3. PCR in neutral band
     pcr_lo = STRATEGY_CONFIG["pcr_neutral_low"]
@@ -113,7 +117,7 @@ def evaluate(
             f"PCR {indicators.pcr:.2f} (need {pcr_lo:.1f}–{pcr_hi:.1f})",
         )
 
-    checks.append(_gate("PCR in neutral band", _pcr_gate))
+    checks.append(_gate("PCR in neutral band", _pcr_gate, kind="SOFT"))
 
     # 4. OI walls visible (at least 2 each side)
     def _walls_gate():
@@ -130,7 +134,7 @@ def evaluate(
             ),
         )
 
-    checks.append(_gate("OI walls visible", _walls_gate))
+    checks.append(_gate("OI walls visible", _walls_gate, kind="SOFT"))
 
     # 5. Trend identifiable
     def _trend_gate():
@@ -167,7 +171,7 @@ def evaluate(
             f"{diff_str} · {slope_str} · {adx_str}",
         )
 
-    checks.append(_gate("Trend identifiable", _trend_gate))
+    checks.append(_gate("Trend identifiable", _trend_gate, kind="SOFT"))
 
     # 6. IV premium vs realised volatility (HV-20)
     # Writing is only edge-positive when IV > realised vol; buying only when IV < realised vol.
@@ -228,7 +232,7 @@ def evaluate(
         # Mid-IV zone — no strong opinion, pass with info
         return _PASS, f"IV/HV ratio {prem:.2f} (mid-IV zone, no premium constraint)"
 
-    checks.append(_gate("IV premium vs realised vol (HV-20)", _iv_premium_gate))
+    checks.append(_gate("IV premium vs realised vol (HV-20)", _iv_premium_gate, kind="SOFT"))
 
     # 7. FII net futures positioning
     # FII strongly positioned against the market trend is a warning sign.
@@ -251,7 +255,7 @@ def evaluate(
             )
         return _PASS, f"FII net futures: {net:+,.0f} contracts (aligned or neutral)"
 
-    checks.append(_gate("FII positioning aligned with trend", _fii_gate))
+    checks.append(_gate("FII positioning aligned with trend", _fii_gate, kind="SOFT"))
 
     # 8 (new). OI change conviction — EOD mode signal (S6).
     # Measures whether real-money participants are building or shedding positions.
@@ -286,7 +290,7 @@ def evaluate(
             f"OI delta PCR {oi_chg:.2f} — OI change flow aligned with {trend_dir} trend",
         )
 
-    checks.append(_gate("OI change conviction aligned with trend", _oi_change_gate))
+    checks.append(_gate("OI change conviction aligned with trend", _oi_change_gate, kind="SOFT"))
 
     # ══════════════════════════════════════════════════════════════
     # HARD GATES — failure → FAIL (always blocks)
@@ -312,7 +316,7 @@ def evaluate(
         # SOFT_FAIL: visible amber warning in dashboard but never blocks
         return _PASS if event_ok else _SOFT_FAIL, detail
 
-    checks.append(_gate("No high-impact event this week", _event_gate))
+    checks.append(_gate("No high-impact event this week", _event_gate, kind="ADVISORY"))
 
     # 9. DTE in band — always computable, hard block
     dte_min = STRATEGY_CONFIG["dte_min"]
@@ -325,7 +329,7 @@ def evaluate(
             f"DTE {dte} (need {dte_min}–{dte_max})",
         )
 
-    checks.append(_gate("DTE within target band", _dte_gate))
+    checks.append(_gate("DTE within target band", _dte_gate, kind="HARD"))
 
     # ══════════════════════════════════════════════════════════════
     # TRAJECTORY GATES — populated only in live mode (WS history present).
@@ -354,7 +358,7 @@ def evaluate(
             )
         return _PASS, f"ATM IV slope {s:+.2f}%/5min · persistence {p*100:.0f}%"
 
-    checks.append(_gate("ATM IV trajectory benign", _iv_traj_gate))
+    checks.append(_gate("ATM IV trajectory benign", _iv_traj_gate, kind="ADVISORY"))
 
     # 11. OI momentum — sustained directional OI build warns sideways strategies
     oi_slope_warn = STRATEGY_CONFIG.get("oi_pcr_traj_slope_warn_pct", 1.0)
@@ -374,7 +378,7 @@ def evaluate(
             )
         return _PASS, f"OI PCR slope {s:+.2f}%/5min · persistence {p*100:.0f}%"
 
-    checks.append(_gate("OI PCR momentum neutral", _oi_traj_gate))
+    checks.append(_gate("OI PCR momentum neutral", _oi_traj_gate, kind="ADVISORY"))
 
     # 12. Spread quality — wide ATM bid-ask = unfillable suggestion
     spread_max = STRATEGY_CONFIG.get("spread_quality_max_total_bps", 60.0)
@@ -392,7 +396,7 @@ def evaluate(
             f"(call {c:.0f} · put {p:.0f}; max {spread_max:.0f})",
         )
 
-    checks.append(_gate("ATM strikes liquid (spread within budget)", _spread_gate))
+    checks.append(_gate("ATM strikes liquid (spread within budget)", _spread_gate, kind="HARD"))
 
     # 13. IV-Rank vs IV/HV conflict — advisory only (issue #4).
     # When the two regime-classification signals disagree, edge is weak even
@@ -426,7 +430,7 @@ def evaluate(
             )
         return _PASS, "IV Rank and IV/HV signals aligned"
 
-    checks.append(_gate("IV Rank vs IV/HV alignment", _iv_conflict_gate))
+    checks.append(_gate("IV Rank vs IV/HV alignment", _iv_conflict_gate, kind="ADVISORY"))
 
     # ══════════════════════════════════════════════════════════════
     # Score + all_passed

@@ -169,6 +169,9 @@ class ConfidenceCheck:
     label:  str
     status: str    # "PASS" | "FAIL" | "SOFT_FAIL" | "PASS_WARN" | "PASS_ERROR"
     detail: str
+    # HARD = can block suggestion; SOFT = counts toward soft-pass budget;
+    # ADVISORY = warn only (never blocks). None on legacy rows — UI infers.
+    kind: Optional[str] = None
 
     @property
     def passed(self) -> bool:

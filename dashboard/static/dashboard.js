@@ -186,6 +186,8 @@ function _refreshZerodhaExecButtons() {
 }
 
 function _updateZerodhaReadinessHints() {
+  // Hard disable reasons only (session / circuit). Soft live-check warnings
+  // are listed once in the Gates & warnings panel — do not repeat here.
   $$('.zerodha-readiness-hint').forEach(el => {
     const card = el.closest('.card[data-sug-id]');
     const requireLiveGate = card?.dataset?.requireLiveGate === '1';
@@ -194,13 +196,6 @@ function _updateZerodhaReadinessHints() {
       el.hidden = false;
       el.classList.remove('zerodha-readiness-hint--warn');
       el.textContent = hard;
-      return;
-    }
-    const soft = (card?.dataset?.liveGateWarning || '').trim();
-    if (soft) {
-      el.hidden = false;
-      el.classList.add('zerodha-readiness-hint--warn');
-      el.textContent = `Warning — live checks: ${soft}. Place orders stays available; review before confirming.`;
       return;
     }
     el.hidden = true;
@@ -4627,6 +4622,7 @@ function parseConditionsJson(s) {
         label: lbl,
         status: 'PASS',
         detail: '(legacy format — no detail stored)',
+        kind: 'SOFT',
       }));
     }
     return null;
@@ -4635,6 +4631,7 @@ function parseConditionsJson(s) {
     label:  c.label  || '',
     status: c.status || (c.passed === true ? 'PASS' : c.passed === false ? 'FAIL' : 'PASS'),
     detail: c.detail || '',
+    kind:   c.kind || null,
   }));
 }
 
@@ -4661,12 +4658,119 @@ function formatConfidence(s) {
   return c ? `${c.passed}/${c.total}` : '';
 }
 
-function renderConfidenceChecks(s) {
-  const checks = parseConditionsJson(s);
-  if (!checks || !checks.length) return '';
+/** Infer HARD / SOFT / ADVISORY when older rows omit kind. */
+function gateKindOf(c) {
+  const k = (c.kind || '').toUpperCase();
+  if (k === 'HARD' || k === 'SOFT' || k === 'ADVISORY') return k;
+  const st = c.status || '';
+  if (st === 'FAIL') return 'HARD';
+  if (st === 'SOFT_FAIL') return 'SOFT';
+  if (st === 'PASS_WARN' || st === 'PASS_ERROR') return 'ADVISORY';
+  const lbl = (c.label || '').toLowerCase();
+  if (lbl.includes('dte within') || lbl.includes('atm strikes liquid')) return 'HARD';
+  if (lbl.includes('quiet tape') || lbl.includes('session range') || lbl.includes('trajectory')
+      || lbl.includes('momentum') || lbl.includes('alignment') || lbl.includes('high-impact event')
+      || lbl.includes('live execution') || lbl.includes('expected-move') || lbl.includes('calibration')) {
+    return 'ADVISORY';
+  }
+  return 'SOFT';
+}
+
+/** PASS | FAIL | WARN | ERROR for the Result column. */
+function gateResultOf(c) {
+  const st = c.status || 'PASS';
+  if (st === 'PASS') return 'PASS';
+  if (st === 'FAIL' || st === 'SOFT_FAIL') return 'FAIL';
+  if (st === 'PASS_WARN') return 'WARN';
+  if (st === 'PASS_ERROR') return 'ERROR';
+  return st;
+}
+
+/**
+ * Extra warnings that live outside conditions_json — folded into the same panel
+ * so the operator sees one place only (no duplicate chips/banners).
+ */
+function _extraGateWarningRows(s) {
+  const rows = [];
+  const liveWarn = _liveExecutionCheckWarning(s);
+  if (liveWarn) {
+    rows.push({
+      label: 'Live execution checks',
+      status: 'SOFT_FAIL',
+      kind: 'ADVISORY',
+      detail: liveWarn + ' — Place orders stays available; review before confirming',
+    });
+  }
+  // Strategy veto only when not already covered by live execution_gate vetoes
+  const veto = (s.strategy_veto || s.strategy_veto_reason || '').trim();
+  if (veto && !liveWarn) {
+    rows.push({
+      label: 'Strategy / scenario note',
+      status: 'SOFT_FAIL',
+      kind: 'ADVISORY',
+      detail: veto,
+    });
+  }
+  if (s.em_calibration_warning) {
+    rows.push({
+      label: 'Expected-move calibration',
+      status: 'PASS_WARN',
+      kind: 'ADVISORY',
+      detail: String(s.em_calibration_warning),
+    });
+  }
+  const vs = s.validator_status;
+  if (vs === 'STALE_0935' || vs === 'STALE_INTRADAY') {
+    rows.push({
+      label: 'Intraday validator',
+      status: 'FAIL',
+      kind: 'ADVISORY',
+      detail: 'Re-priced after open and was no longer actionable (stale)',
+    });
+  }
+  if (s.is_stale) {
+    rows.push({
+      label: 'Suggestion freshness',
+      status: 'SOFT_FAIL',
+      kind: 'ADVISORY',
+      detail: 'Suggestion marked stale — regenerate or treat as informational only',
+    });
+  }
+  // Lagging secondary feeds (spot/FII/VIX older than FO date)
+  if (s.data_date) {
+    const fo = String(s.data_date).slice(0, 10);
+    const stale = [];
+    const spot = s.spot_data_date ? String(s.spot_data_date).slice(0, 10) : null;
+    const fii = s.fii_data_date ? String(s.fii_data_date).slice(0, 10) : null;
+    const vix = s.vix_data_date ? String(s.vix_data_date).slice(0, 10) : null;
+    if (spot && spot !== fo) stale.push(`Spot ${spot}`);
+    if (fii && fii !== fo) stale.push(`FII ${fii}`);
+    if (vix && vix !== fo) stale.push(`VIX ${vix}`);
+    if (stale.length) {
+      rows.push({
+        label: 'NSE data freshness',
+        status: 'PASS_WARN',
+        kind: 'ADVISORY',
+        detail: `FO/IV ${fo}; older feeds: ${stale.join(', ')}`,
+      });
+    }
+  }
+  return rows;
+}
+
+/** One panel: every gate + warning (Kind · Result · Gate · Detail). */
+function renderGatesAndWarningsPanel(s) {
+  const fromConf = parseConditionsJson(s) || [];
+  const extras = _extraGateWarningRows(s);
+  // Dedupe extras whose label already appears in confidence checks
+  const confLabels = new Set(fromConf.map(c => (c.label || '').toLowerCase()));
+  const mergedExtras = extras.filter(e => !confLabels.has((e.label || '').toLowerCase()));
+  const checks = [...fromConf, ...mergedExtras];
+  if (!checks.length) return '';
 
   const STATUS_CLASS = { PASS: 'conf-pass', FAIL: 'conf-fail', SOFT_FAIL: 'conf-soft-fail', PASS_WARN: 'conf-warn', PASS_ERROR: 'conf-error' };
-  const STATUS_ICON  = { PASS: '\u2713', FAIL: '\u2717', SOFT_FAIL: '\u2717', PASS_WARN: '\u26a0', PASS_ERROR: '\u26a1' };
+  const RESULT_CLASS = { PASS: 'gate-res-pass', FAIL: 'gate-res-fail', WARN: 'gate-res-warn', ERROR: 'gate-res-error' };
+  const KIND_CLASS   = { HARD: 'gate-kind-hard', SOFT: 'gate-kind-soft', ADVISORY: 'gate-kind-adv' };
 
   const nFail     = checks.filter(c => c.status === 'FAIL').length;
   const nSoftFail = checks.filter(c => c.status === 'SOFT_FAIL').length;
@@ -4674,34 +4778,44 @@ function renderConfidenceChecks(s) {
   const nError    = checks.filter(c => c.status === 'PASS_ERROR').length;
   const total     = checks.length;
   const passed    = total - nFail - nSoftFail;
-  const allPass   = nFail === 0 && nSoftFail === 0;
   const sid       = escapeHtml(s.suggestion_id || Math.random().toString(36).slice(2));
 
   let titleSuffix = '';
-  if (nSoftFail > 0) titleSuffix += ` \u00b7 \u26a0 ${nSoftFail} soft gate${nSoftFail > 1 ? 's' : ''} not met — trade proceeds with caution`;
-  if (nWarn  > 0) titleSuffix += ` \u00b7 \u26a0 ${nWarn} with missing data`;
-  if (nError > 0) titleSuffix += ` \u00b7 \u26a1 ${nError} gate error${nError > 1 ? 's' : ''}`;
+  if (nFail > 0) titleSuffix += ` · ${nFail} hard fail`;
+  if (nSoftFail > 0) titleSuffix += ` · ${nSoftFail} soft/advisory fail`;
+  if (nWarn > 0) titleSuffix += ` · ${nWarn} warn`;
+  if (nError > 0) titleSuffix += ` · ${nError} error`;
 
   const rows = checks.map(c => {
-    const rowClass   = STATUS_CLASS[c.status] || 'conf-pass';
-    const icon       = STATUS_ICON[c.status]  || '\u2713';
+    const kind   = gateKindOf(c);
+    const result = gateResultOf(c);
+    const rowClass = STATUS_CLASS[c.status] || 'conf-pass';
     const detailHtml = c.detail
       ? `<span class="conf-detail-text">${escapeHtml(c.detail)}</span>`
-      : '<span class="conf-detail-na">\u2014</span>';
+      : '<span class="conf-detail-na">—</span>';
     return `<tr class="conf-check-row ${rowClass}">
-      <td class="conf-icon">${icon}</td>
-      <td class="conf-label">${escapeHtml(c.label)}</td>
+      <td><span class="gate-kind-badge ${KIND_CLASS[kind]}">${kind}</span></td>
+      <td><span class="gate-res-badge ${RESULT_CLASS[result] || ''}">${result}</span></td>
+      <td class="conf-label">${escapeHtml(c.label || '')}</td>
       <td class="conf-detail">${detailHtml}</td>
     </tr>`;
   }).join('');
 
-  return `<div class="conf-checks-panel" id="conf-${sid}" hidden>
-    <div class="conf-checks-title">${allPass ? 'All' : passed + ' of'} ${total} confidence checks ${allPass ? 'passed \u2713' : 'passed'}${titleSuffix}</div>
+  const hasIssues = nFail > 0 || nSoftFail > 0 || nWarn > 0 || nError > 0;
+  const titleCls = hasIssues ? 'conf-checks-title conf-checks-title--warn' : 'conf-checks-title';
+
+  return `<div class="conf-checks-panel gates-warnings-panel" id="conf-${sid}">
+    <div class="${titleCls}">Gates &amp; warnings — ${passed}/${total} passed${titleSuffix}</div>
     <table class="conf-checks-table">
-      <thead><tr><th></th><th>Check</th><th>What was verified</th></tr></thead>
+      <thead><tr><th>Kind</th><th>Result</th><th>Condition</th><th>Detail</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>`;
+}
+
+/** @deprecated alias — use renderGatesAndWarningsPanel */
+function renderConfidenceChecks(s) {
+  return renderGatesAndWarningsPanel(s);
 }
 
 // Helper: parse plain_english text into structured display
@@ -4745,74 +4859,26 @@ function renderPlainEnglishStructured(s) {
   }
   if (spot)               chips.push(`<span class="ctx-chip">Spot ₹${escapeHtml(spot)}</span>`);
   if (ivRank)             chips.push(`<span class="ctx-chip ctx-iv">IV Rank ${escapeHtml(ivRank)}%</span>`);
-  // IV/HV chip — parsed from confidence gate detail in conditions_json
-  (() => {
-    if (!s.conditions_json) return;
-    let raw = s.conditions_json;
-    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { return; } }
-    if (!Array.isArray(raw)) return;
-    const ivGate = raw.find(c => (c.label || '').toLowerCase().includes('iv premium'));
-    if (!ivGate) return;
-    const m = (ivGate.detail || '').match(/IV\/HV ratio\s+([\d.]+)/i);
-    if (!m) return;
-    const ratio = parseFloat(m[1]);
-    const isStale = ratio < 1.0;
-    const chipClass = isStale ? 'ctx-chip ctx-data-stale' : 'ctx-chip ctx-iv';
-    const tooltip = ratio >= 1.40
-      ? `IV/HV ${ratio.toFixed(2)} \u2014 options overpriced vs realised vol (butterfly eligible)`
-      : ratio >= 1.0
-      ? `IV/HV ${ratio.toFixed(2)} \u2014 options moderately priced (condor preferred)`
-      : `IV/HV ${ratio.toFixed(2)} \u2014 options cheaper than realised vol`;
-    chips.push(`<span class="${chipClass}" title="${escapeHtml(tooltip)}">IV/HV ${ratio.toFixed(2)}</span>`);
-  })();
-  // Data provenance: show which NSE feed dates were used, with a stale warning
-  // when any secondary feed lags the primary FO+IV date.
+  // Data provenance chip (facts only). Freshness warnings live in Gates & warnings.
   if (s.data_date) {
     const foIvDate  = s.data_date.slice(0, 10);
     const spotDate  = s.spot_data_date  ? s.spot_data_date.slice(0, 10)  : null;
     const fiiDate   = s.fii_data_date   ? s.fii_data_date.slice(0, 10)   : null;
     const vixDate   = s.vix_data_date   ? s.vix_data_date.slice(0, 10)   : null;
-
     function fmtShort(d) {
       return new Date(d + 'T00:00:00').toLocaleDateString('en-IN',
         { day:'2-digit', month:'short', year:'2-digit' });
     }
-
     const foIvFmt = fmtShort(foIvDate);
-    const allSame = (!spotDate || spotDate === foIvDate)
-                 && (!fiiDate  || fiiDate  === foIvDate)
-                 && (!vixDate  || vixDate  === foIvDate);
-
-    if (allSame) {
-      // Happy path: every feed is from the same date
-      const tipLines = [
-        `FO chain:    ${foIvFmt}`,
-        `IV history:  ${foIvFmt}`,
-        spotDate ? `Spot EOD:    ${foIvFmt}` : '',
-        fiiDate  ? `FII data:    ${foIvFmt}` : '',
-        vixDate  ? `VIX:         ${foIvFmt}` : '',
-      ].filter(Boolean).join('\n');
-      chips.push(`<span class="ctx-chip ctx-data-date" title="${escapeHtml(tipLines)}"` +
-        ` style="cursor:help">NSE data \u00b7 ${escapeHtml(foIvFmt)}</span>`);
-    } else {
-      // Some feeds lagged — show a warning chip plus a full breakdown
-      const staleFeed = [
-        spotDate && spotDate !== foIvDate ? `Spot (${fmtShort(spotDate)})` : null,
-        fiiDate  && fiiDate  !== foIvDate ? `FII (${fmtShort(fiiDate)})`   : null,
-        vixDate  && vixDate  !== foIvDate ? `VIX (${fmtShort(vixDate)})`   : null,
-      ].filter(Boolean).join(', ');
-      const tipLines = [
-        `FO chain:    ${foIvFmt}`,
-        `IV history:  ${foIvFmt}`,
-        spotDate ? `Spot EOD:    ${fmtShort(spotDate)}${spotDate !== foIvDate ? ' \u26a0' : ''}` : '',
-        fiiDate  ? `FII data:    ${fmtShort(fiiDate)}${fiiDate  !== foIvDate ? ' \u26a0' : ''}` : '',
-        vixDate  ? `VIX:         ${fmtShort(vixDate)}${vixDate  !== foIvDate ? ' \u26a0' : ''}` : '',
-        '',
-        `\u26a0 ${staleFeed} used older data`,
-      ].filter(l => l !== null).join('\n');
-      chips.push(`<span class="ctx-chip ctx-data-date ctx-data-stale" title="${escapeHtml(tipLines)}"` +
-        ` style="cursor:help">NSE data \u00b7 ${escapeHtml(foIvFmt)} \u26a0</span>`);
-    }
+    const tipLines = [
+      `FO chain:    ${foIvFmt}`,
+      `IV history:  ${foIvFmt}`,
+      spotDate ? `Spot EOD:    ${fmtShort(spotDate)}` : '',
+      fiiDate  ? `FII data:    ${fmtShort(fiiDate)}` : '',
+      vixDate  ? `VIX:         ${fmtShort(vixDate)}` : '',
+    ].filter(Boolean).join('\n');
+    chips.push(`<span class="ctx-chip ctx-data-date" title="${escapeHtml(tipLines)}"` +
+      ` style="cursor:help">NSE data \u00b7 ${escapeHtml(foIvFmt)}</span>`);
   }
   if (s.entry_date) {
     const ed = s.entry_date.slice(0, 10);
@@ -4822,21 +4888,6 @@ function renderPlainEnglishStructured(s) {
   }
   if (s.regime_pair_type === 'range' || s.regime_pair_type === 'breakout') {
     chips.push(regimePairChip(s, { withGroup: true }));
-  }
-  // Review item #10: expected-move calibration warning. Server-computed
-  // when realised/expected median for (underlying, dte_band) deviates >25%
-  // from 1.0 over the most recent expiry cohort.
-  if (s.em_calibration_warning) {
-    chips.push(`<span class="ctx-chip ctx-fail" title="Historical realised vs expected move drifted \u2014 short strikes may be miscalibrated">\u26A0 ${escapeHtml(s.em_calibration_warning)}</span>`);
-  }
-  // Phase 2c: validator status (set by 09:35 IST intraday_validator)
-  if (s.validator_status) {
-    const vs = s.validator_status;
-    if (vs === 'STILL_GOOD_0935') {
-      chips.push(`<span class="ctx-chip ctx-pass" title="Validated by 09:35 IST intraday validator">\u2713 Still good 09:35</span>`);
-    } else if (vs === 'STALE_0935' || vs === 'STALE_INTRADAY') {
-      chips.push(`<span class="ctx-chip ctx-fail" title="Re-priced after open and was no longer actionable">\u2717 Stale 09:35</span>`);
-    }
   }
   // Provenance: live suggestions show when they were generated (not a hardcoded job time).
   const genChipFmt = fmtChipDt(s.generated_on);
@@ -4882,29 +4933,7 @@ function renderPlainEnglishStructured(s) {
               + `<0.8 → calls building faster (bullish positioning)`;
     chips.push(`<span class="${cls}" title="${escapeHtml(tip)}">OI\u0394 PCR ${escapeHtml(label)}</span>`);
   }
-  if (s.confidence_score != null) {
-    const cc = confidenceCounts(s);
-    let _warnCount = 0, _errorCount = 0, _failCount = 0, _softFailCount = 0;
-    const checks = parseConditionsJson(s);
-    if (checks) {
-      _warnCount     = checks.filter(c => c.status === 'PASS_WARN').length;
-      _errorCount    = checks.filter(c => c.status === 'PASS_ERROR').length;
-      _failCount     = checks.filter(c => c.status === 'FAIL').length;
-      _softFailCount = checks.filter(c => c.status === 'SOFT_FAIL').length;
-    }
-    const displayScore = cc ? cc.passed : s.confidence_score;
-    const _total = cc ? cc.total : CONFIDENCE_LEGACY_TOTAL;
-    const hasIssues  = _warnCount > 0 || _errorCount > 0 || _softFailCount > 0;
-    const chipClass  = _failCount > 0      ? 'ctx-chip ctx-fail conf-chip'
-                     : _softFailCount > 0  ? 'ctx-chip ctx-warn conf-chip'
-                     : hasIssues           ? 'ctx-chip ctx-warn conf-chip'
-                     :                       'ctx-chip ctx-pass conf-chip';
-    const warnSuffix = _errorCount > 0
-      ? ` \u26a1 ${_errorCount} error${_errorCount > 1 ? 's' : ''}`
-      : _softFailCount > 0 ? ` \u26a0 ${_softFailCount} soft fail${_softFailCount > 1 ? 's' : ''}`
-      : _warnCount > 0 ? ` \u26a0 ${_warnCount} warned` : '';
-    chips.push(`<span class="${chipClass}" data-sug-id="${escapeHtml(s.suggestion_id||'')}" style="cursor:pointer" title="Click to see all checks">${displayScore}/${_total} checks \u2713${warnSuffix} <span style="font-size:.7rem;opacity:.7">\u25bc</span></span><span class="conf-logic-info" tabindex="0" aria-label="Confidence gate logic">\u24d8<span class="conf-logic-popup"><strong>How gating works</strong><br><br><span style="color:#f87171">\u2717 Hard gate</span> &mdash; always blocks:<br>&nbsp;&bull; DTE within target band<br>&nbsp;&bull; ATM strikes liquid (spread within budget)<br><br><span style="color:#fbbf24">\u2717 Soft gates</span> &mdash; need \u22655 of 8:<br>&nbsp;&bull; IV Rank in actionable zone<br>&nbsp;&bull; VIX stable or falling<br>&nbsp;&bull; PCR in neutral band<br>&nbsp;&bull; OI walls visible<br>&nbsp;&bull; Trend identifiable<br>&nbsp;&bull; IV premium vs realised vol (HV-20)<br>&nbsp;&bull; FII positioning aligned with trend<br>&nbsp;&bull; OI change conviction aligned with trend<br><br><span style="color:#fbbf24">\u26a0 Advisory (live mode):</span><br>&nbsp;&bull; ATM IV trajectory<br>&nbsp;&bull; OI PCR momentum<br>&nbsp;&bull; IV Rank vs IV/HV alignment<br><br><span style="opacity:.6;font-size:.72rem">1\u20132 soft gate misses = trade proceeds with caution<br>3+ soft gate misses = blocked</span><br><br><span style="opacity:.5;font-size:.72rem">\u26a0 = data unavailable &nbsp;\u26a1 = gate error</span></span></span>`);
-  }
+  // Confidence / gate summary lives only in Gates & warnings panel (not as a chip).
   // Edge score (0-100) — composite quality blend; display + ranking only.
   if (s.edge_score != null) {
     const es = parseFloat(s.edge_score);
@@ -5070,7 +5099,7 @@ function renderPlainEnglishStructured(s) {
   const timelineHtml = tlRows
     ? `<div class="sug-section"><div class="sug-section-title">Timeline</div><div class="sug-timeline">${tlRows}</div></div>`
     : '';
-  const confHtml = renderConfidenceChecks(s);
+  const confHtml = renderGatesAndWarningsPanel(s);
   return contextHtml + confHtml + introHtml + entryHtml + timelineHtml + renderExitPlan(s);
 }
 
@@ -5789,6 +5818,10 @@ function _suggestionAlreadyExecuted(card) {
   return false;
 }
 
+/**
+ * Status / hard-block banners only. Soft live checks, scenario notes, EM
+ * calibration, etc. are shown once in Gates & warnings — not duplicated here.
+ */
 function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
   const status = (s.status || '').toUpperCase();
   if (status === 'EXECUTED') {
@@ -5808,37 +5841,20 @@ function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
       <p class="suggestion-gate-detail muted">This suggestion was retired (stale or superseded). Run <strong>Live Suggestion Engine</strong> from the Jobs tab for a fresh PENDING suggestion.</p>
     </div>`;
   }
-  const gate = s.execution_gate;
-  if (!gate || gate.ok) return '';
-  const strategyVeto = s.strategy_veto || s.strategy_veto_reason || s.no_suggestion_reason || '';
-  const isStrategyVeto = !!(s.strategy_veto || s.strategy_veto_reason || (gate.details && gate.details.strategy_veto)
-    || (gate.vetoes || []).some(v => String(v).toLowerCase().includes('vetoed')));
-  const isCircuit = suggestionCircuitBlocked(s);
-  const label = isCircuit
-    ? (gate.label || 'Circuit breaker')
-    : (isStrategyVeto ? (gate.label || 'Scenario warning') : (gate.label || 'Live check warning'));
-  const heading = isCircuit
-    ? 'Broker orders blocked'
-    : (isStrategyVeto ? 'Scenario warning — review before placing' : 'Live checks warning — place still available');
+  if (!suggestionCircuitBlocked(s)) return '';
+  const gate = s.execution_gate || {};
+  const label = gate.label || 'Circuit breaker';
   const vetoLines = (gate.vetoes || []).map(v => String(v).trim()).filter(Boolean);
   const detail = vetoLines.length
     ? vetoLines.join(' · ')
-    : (isStrategyVeto
-      ? (strategyVeto || ((gate.reason && gate.reason !== 'OK') ? gate.reason : ''))
-      : ((gate.reason && gate.reason !== 'OK') ? gate.reason : ''));
-  const hint = isCircuit
-    ? 'Clear the daily P&amp;L circuit breaker in Config → Runtime switches before placing Zerodha orders.'
-    : 'Place orders in Zerodha stays on — confirm only if you accept the warning above. You can also record fills manually.';
-  const bannerCls = isCircuit
-    ? 'suggestion-gate-banner suggestion-gate-blocked'
-    : 'suggestion-gate-banner suggestion-gate-warn';
-  return `<div class="${bannerCls}" role="alert">
+    : ((gate.reason && gate.reason !== 'OK') ? gate.reason : '');
+  return `<div class="suggestion-gate-banner suggestion-gate-blocked" role="alert">
     <div class="suggestion-gate-head">
       <span class="tag tag-warn">${escapeHtml(label.toUpperCase())}</span>
-      <strong>${heading}</strong>
+      <strong>Broker orders blocked</strong>
     </div>
     ${detail ? `<p class="suggestion-gate-detail">${escapeHtml(detail)}</p>` : ''}
-    <p class="suggestion-gate-hint muted">${hint}</p>
+    <p class="suggestion-gate-hint muted">Clear the daily P&amp;L circuit breaker in Config → Runtime switches before placing Zerodha orders.</p>
   </div>`;
 }
 
@@ -5959,9 +5975,9 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
   const zExecBtnClass = `btn btn-accent btn-zerodha-exec${zExecSt.ready ? '' : ' is-disabled'}`;
   const zExecAria = zExecSt.ready ? '' : ' aria-disabled="true"';
   const zExecTitle = escapeHtml(zExecSt.title);
-  const gateLabel = s.execution_gate?.label
-    || (s.is_stale ? 'Stale' : null)
-    || (sugStatus === 'IGNORED' ? 'Retired' : null);
+  const gateLabel = suggestionCircuitBlocked(s)
+    ? (s.execution_gate?.label || 'Circuit breaker')
+    : (sugStatus === 'IGNORED' ? 'Retired' : null);
   const gateBanner = (readOnly && sugStatus !== 'IGNORED')
     ? ''
     : renderExecutionGateBanner(s, {
@@ -5976,10 +5992,9 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
         ${regimePairChip(s)}
-        ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn" title="${escapeHtml(liveGateWarn || 'Live checks warning — Place orders still available')}">${escapeHtml(gateLabel)}</span>` : ''}
+        ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn">${escapeHtml(gateLabel)}</span>` : ''}
         ${executionChannelBadge(s.execution_channel)}
         ${sugStatus === 'IGNORED' ? '<span class="tag tag-warn">Retired</span>' : ''}
-        ${s.is_stale && sugStatus === 'PENDING' && !gateLabel ? '<span class="tag tag-warn">Stale</span>' : ''}
         ${_qualityBadge(s.entry_quality_score, '', {
           edge: s.edge_score, conf: s.confidence_score, pop: s.probability_of_profit,
         })}
@@ -6629,26 +6644,7 @@ function bindSuggestionActions() {
     } catch (err) { toast(err.message, 'err'); }
   }));
 
-  // Confidence chip click → toggle breakdown panel
-  bindConfChips();
-}
-
-function bindConfChips() {
-  $$('.conf-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      const sid = chip.dataset.sugId;
-      // Scope lookup to nearest card/details container to avoid duplicate-id
-      // collisions when both the Suggestion tab and Trades tab are in the DOM.
-      const container = chip.closest('.card, .orig-sug-details') || document;
-      const panel = container.querySelector(`[id="conf-${CSS.escape(sid)}"]`)
-                 || document.getElementById(`conf-${sid}`);
-      if (!panel) return;
-      const hidden = panel.hidden;
-      panel.hidden = !hidden;
-      const arrow = chip.querySelector('span');
-      if (arrow) arrow.textContent = hidden ? '\u25b2' : '\u25bc';
-    });
-  });
+  // Gates panel is always visible — no chip toggle needed.
 }
 
 function _isMobileLayout() {
@@ -6716,7 +6712,6 @@ async function loadTrades() {
     // Phase 3 — #3: open SSE stream once after each trades render so live
     // MTM cells (.live-mtm[data-trade-id="..."]) update without polling.
     ensureLiveMTMStream();
-    bindConfChips();
     $$('.btn-complete-trade').forEach(b => b.addEventListener('click', e => {
       openSupplementForm(e.target.dataset.tradeId);
     }));

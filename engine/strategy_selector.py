@@ -27,6 +27,7 @@ from typing import Iterable, List, Mapping, Optional, Sequence
 from config import STRATEGY_CONFIG
 from engine.trend_model import MIXED_TREND, mixed_trend_sitout_reason
 from contracts import (
+    ConfidenceCheck,
     ConfidenceResult,
     MarketIndicators,
     Suggestion,
@@ -53,9 +54,8 @@ def _long_vol_qualified(
     requires a HIGH-impact catalyst. Sideways low IV may use long straddle when
     IV/HV is cheap enough (options not overpriced vs realised vol).
 
-    Live quiet-tape (session range vs 1-day EM) is an *additional* AND — it never
-    picks a strategy by itself. Missing session data skips that check so EOD /
-    incomplete bars still follow IV + trend + catalyst.
+    Live quiet-tape (session range vs 1-day EM) is a *soft warning only* — it
+    never blocks or demotes the pick; see ``build_strategy_entry_gate_checks``.
     """
     gate = STRATEGY_CONFIG.get("long_vol_entry_gate") or {}
     if not gate.get("enabled", True):
@@ -70,8 +70,6 @@ def _long_vol_qualified(
         return False
     if iv_prem > float(iv_prem_max):
         return False
-    if not _session_range_allows_long_vol(indicators, gate):
-        return False
     iv_min = float(gate.get("iv_rank_min_without_catalyst", 15.0))
     return iv_rank >= iv_min
 
@@ -82,8 +80,7 @@ def _session_range_allows_long_vol(
 ) -> bool:
     """True unless live session is too quiet vs same-day EM.
 
-    Returns True when the check is disabled or session data is absent — other
-    gates remain the decision makers.
+    Returns True when the check is disabled or session data is absent.
     """
     min_frac = gate.get("min_session_range_em_fraction")
     if min_frac is None:
@@ -99,6 +96,177 @@ def _session_range_allows_long_vol(
     if sr is None or em_1d is None or float(em_1d) <= 0:
         return True
     return float(sr) / float(em_1d) >= need
+
+
+def _session_range_gate_check(
+    indicators: MarketIndicators,
+    gate: Mapping,
+    *,
+    has_long_vol_catalyst: bool,
+) -> ConfidenceCheck:
+    """Soft session-range vs 1-day EM check (never a hard block)."""
+    label = "Session range vs 1-day EM (quiet tape)"
+    kind = "ADVISORY"
+    min_frac = gate.get("min_session_range_em_fraction")
+    if min_frac is None:
+        return ConfidenceCheck(
+            label=label, status="PASS", detail="Quiet-tape check disabled", kind=kind,
+        )
+    try:
+        need = float(min_frac)
+    except (TypeError, ValueError):
+        return ConfidenceCheck(
+            label=label, status="PASS_WARN", detail="Invalid quiet-tape threshold", kind=kind,
+        )
+    sr = getattr(indicators, "session_range", None)
+    em_1d = getattr(indicators, "expected_move_1d", None)
+    if sr is None or em_1d is None or float(em_1d) <= 0:
+        return ConfidenceCheck(
+            label=label,
+            status="PASS_WARN",
+            detail="No live session range yet — quiet-tape check skipped",
+            kind=kind,
+        )
+    ratio = float(sr) / float(em_1d)
+    detail = (
+        f"Session range {float(sr):.0f} pts = {ratio:.0%} of 1-day EM "
+        f"{float(em_1d):.0f} (soft warn below {need:.0%})"
+    )
+    if has_long_vol_catalyst:
+        return ConfidenceCheck(
+            label=label,
+            status="PASS",
+            detail=detail + " — catalyst present, warning not applied",
+            kind=kind,
+        )
+    if ratio >= need:
+        return ConfidenceCheck(label=label, status="PASS", detail=detail, kind=kind)
+    return ConfidenceCheck(
+        label=label,
+        status="SOFT_FAIL",
+        detail=detail + " — quiet tape; review before taking long vol",
+        kind=kind,
+    )
+
+
+def build_strategy_entry_gate_checks(
+    *,
+    strategy: str,
+    iv_rank: Optional[float],
+    indicators: MarketIndicators,
+    has_long_vol_catalyst: bool = False,
+) -> List[ConfidenceCheck]:
+    """Strategy entry gates appended to confidence for the suggestion card.
+
+    Quiet tape is always advisory (PASS / SOFT_FAIL / PASS_WARN). Long-vol IV
+    gates are shown for visibility; hard vetoes elsewhere may still block.
+    """
+    gate = STRATEGY_CONFIG.get("long_vol_entry_gate") or {}
+    out: List[ConfidenceCheck] = [
+        _session_range_gate_check(
+            indicators, gate, has_long_vol_catalyst=has_long_vol_catalyst,
+        ),
+    ]
+    if strategy not in _LONG_VOL_STRATEGIES:
+        return out
+    soft = "SOFT"
+    if not gate.get("enabled", True):
+        out.append(ConfidenceCheck(
+            label="Long-vol entry gate",
+            status="PASS",
+            detail="Long-vol entry gate disabled",
+            kind=soft,
+        ))
+        return out
+
+    iv_min = float(gate.get("iv_rank_min_without_catalyst", 15.0))
+    if has_long_vol_catalyst:
+        out.append(ConfidenceCheck(
+            label="Long-vol IV rank / catalyst",
+            status="PASS",
+            detail="HIGH-impact catalyst within hold window — IV-rank floor bypassed",
+            kind=soft,
+        ))
+    elif iv_rank is None:
+        out.append(ConfidenceCheck(
+            label="Long-vol IV rank / catalyst",
+            status="PASS_WARN",
+            detail="IV rank unavailable",
+            kind=soft,
+        ))
+    elif float(iv_rank) >= iv_min:
+        out.append(ConfidenceCheck(
+            label="Long-vol IV rank / catalyst",
+            status="PASS",
+            detail=f"IV rank {float(iv_rank):.0f} ≥ floor {iv_min:.0f}",
+            kind=soft,
+        ))
+    else:
+        out.append(ConfidenceCheck(
+            label="Long-vol IV rank / catalyst",
+            status="SOFT_FAIL",
+            detail=(
+                f"IV rank {float(iv_rank):.0f} below floor {iv_min:.0f} "
+                f"with no catalyst — weak long-vol edge"
+            ),
+            kind=soft,
+        ))
+
+    iv_prem_max = gate.get("iv_premium_max")
+    iv_prem = getattr(indicators, "iv_premium", None)
+    if iv_prem_max is None:
+        out.append(ConfidenceCheck(
+            label="Long-vol IV/HV ceiling",
+            status="PASS",
+            detail="IV/HV ceiling not configured",
+            kind=soft,
+        ))
+    elif iv_prem is None:
+        out.append(ConfidenceCheck(
+            label="Long-vol IV/HV ceiling",
+            status="PASS_WARN",
+            detail="IV/HV unavailable",
+            kind=soft,
+        ))
+    elif float(iv_prem) <= float(iv_prem_max):
+        out.append(ConfidenceCheck(
+            label="Long-vol IV/HV ceiling",
+            status="PASS",
+            detail=f"IV/HV {float(iv_prem):.2f}× ≤ ceiling {float(iv_prem_max):.2f}×",
+            kind=soft,
+        ))
+    else:
+        out.append(ConfidenceCheck(
+            label="Long-vol IV/HV ceiling",
+            status="SOFT_FAIL",
+            detail=(
+                f"IV/HV {float(iv_prem):.2f}× exceeds ceiling {float(iv_prem_max):.2f}× "
+                f"— options not cheap vs realised vol"
+            ),
+            kind=soft,
+        ))
+    return out
+
+
+def _merge_confidence_checks(
+    confidence: ConfidenceResult,
+    extra: Sequence[ConfidenceCheck],
+) -> ConfidenceResult:
+    """Append entry-gate checks without changing hard/soft all_passed decision."""
+    if not extra:
+        return confidence
+    checks = list(confidence.checks) + list(extra)
+    score = sum(1 for c in checks if c.passed)
+    failed_reasons = [
+        c.detail for c in checks if c.status in ("FAIL", "SOFT_FAIL")
+    ]
+    return ConfidenceResult(
+        score=score,
+        total=len(checks),
+        all_passed=confidence.all_passed,
+        checks=checks,
+        failed_reasons=failed_reasons,
+    )
 
 
 def effective_iv_rank_for_regime(
@@ -291,17 +459,7 @@ def _enforce_long_vol_entry_gate(
                 f"{strategy} vetoed: IV/HV {iv_prem:.2f}\u00d7 exceeds long-vol "
                 f"ceiling {float(iv_prem_max):.2f}\u00d7 — no real vol-buying edge"
             )
-    # Quiet tape is an extra AND (not a sole picker). Catalyst still bypasses.
-    if not has_long_vol_catalyst and not _session_range_allows_long_vol(indicators, gate):
-        sr = float(getattr(indicators, "session_range", 0) or 0)
-        em_1d = float(getattr(indicators, "expected_move_1d", 0) or 0)
-        need = float(gate.get("min_session_range_em_fraction") or 0)
-        ratio = (sr / em_1d) if em_1d > 0 else 0.0
-        raise StrategyVeto(
-            f"{strategy} vetoed: session range {sr:.0f} pts is only "
-            f"{ratio:.0%} of 1-day EM {em_1d:.0f} (need ≥{need:.0%}) — "
-            f"quiet tape, no vol-expansion yet; other regimes still apply"
-        )
+    # Quiet tape is soft-warn only (build_strategy_entry_gate_checks) — never hard-blocks.
 # Strategies that produce net debit (max_loss = debit, SL = 50% of debit)
 _DEBIT_STRATEGIES = frozenset({
     "LONG_STRADDLE", "LONG_STRANGLE", "LONG_CALL", "LONG_PUT",
@@ -745,6 +903,16 @@ def assemble_suggestion(
 
     plain_english = _explain(strategy, underlying, indicators, iv_rank, dte, economics,
                              execution_window)
+
+    confidence = _merge_confidence_checks(
+        confidence,
+        build_strategy_entry_gate_checks(
+            strategy=strategy,
+            iv_rank=iv_rank,
+            indicators=indicators,
+            has_long_vol_catalyst=has_long_vol_catalyst,
+        ),
+    )
 
     return Suggestion(
         suggestion_id=suggestion_id,

@@ -2520,6 +2520,11 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   margin-bottom: 6px;
   letter-spacing: .02em;
 }
+.conf-checks-title--warn { color: var(--warn, #fbbf24); }
+.gates-warnings-panel {
+  margin-top: 12px;
+  margin-bottom: 4px;
+}
 .conf-checks-table {
   width: 100%;
   border-collapse: collapse;
@@ -2557,10 +2562,28 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .ctx-chip.ctx-error { color: #f97316;     border-color: rgba(249,115,22,.35); }
 .ctx-chip.ctx-expiry-monthly { color: #a78bfa; border-color: rgba(167,139,250,.35); font-weight: 600; }
 .ctx-chip.ctx-expiry-weekly  { color: #22d3ee; border-color: rgba(34,211,238,.35);  font-weight: 600; }
-.conf-label { font-weight: 500; white-space: nowrap; padding-right: 10px; }
+.conf-label { font-weight: 500; padding-right: 10px; }
 .conf-detail { opacity: .85; }
 .conf-detail-text { font-style: italic; opacity: .8; }
 .conf-detail-na { opacity: .3; }
+
+.gate-kind-badge,
+.gate-res-badge {
+  display: inline-block;
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .03em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.gate-kind-hard { background: rgba(248,113,113,.18); color: #f87171; }
+.gate-kind-soft { background: rgba(251,191,36,.16); color: #fbbf24; }
+.gate-kind-adv  { background: rgba(148,163,184,.16); color: #94a3b8; }
+.gate-res-pass  { background: rgba(52,211,153,.16); color: #34d399; }
+.gate-res-fail  { background: rgba(248,113,113,.18); color: #f87171; }
+.gate-res-warn  { background: rgba(251,191,36,.16); color: #fbbf24; }
+.gate-res-error { background: rgba(249,115,22,.18); color: #f97316; }
 
 /* ── Confidence gate logic info icon + popup ────────────────────── */
 .conf-logic-info,

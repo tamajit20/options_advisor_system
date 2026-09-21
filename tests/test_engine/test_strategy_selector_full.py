@@ -805,12 +805,12 @@ class TestLongVolEntryGate:
                 has_long_vol_catalyst=True,
             )
 
-    def test_quiet_session_routes_sideways_to_calendar(self):
-        """Session range is an AND — alone it does not pick; cheap IV still needed."""
+    def test_quiet_session_still_allows_straddle_with_soft_gate(self):
+        """Quiet tape warns only — does not demote long vol to calendar."""
         ind = _make_indicators(trend="SIDEWAYS", iv_premium=0.85)
         ind.session_range = 20.0
-        ind.expected_move_1d = 120.0  # 20/120 = 0.17 < 0.35 default
-        assert ss.select_strategy(iv_rank=15.0, trend="SIDEWAYS", indicators=ind) == "CALENDAR_SPREAD"
+        ind.expected_move_1d = 120.0  # 20/120 = 0.17 < 0.35
+        assert ss.select_strategy(iv_rank=15.0, trend="SIDEWAYS", indicators=ind) == "LONG_STRADDLE"
 
     def test_quiet_session_missing_data_still_allows_straddle(self):
         """No session_range → quiet check skipped; IV/trend still decide."""
@@ -827,16 +827,37 @@ class TestLongVolEntryGate:
             has_long_vol_catalyst=True,
         ) == "LONG_STRADDLE"
 
-    def test_assemble_vetoes_quiet_session_without_catalyst(self, sample_chain):
+    def test_assemble_records_quiet_tape_soft_fail_not_veto(self, sample_chain, mocker):
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})
         ind = _make_indicators(trend="SIDEWAYS", iv_premium=0.90)
         ind.session_range = 15.0
         ind.expected_move_1d = 150.0
-        with pytest.raises(StrategyVeto, match="quiet tape"):
-            ss.assemble_suggestion(
-                **self._assemble_kw(sample_chain, ind, iv_rank=25.0),
-                strategy_override="LONG_STRADDLE",
-                has_long_vol_catalyst=False,
-            )
+        sug = ss.assemble_suggestion(
+            **self._assemble_kw(sample_chain, ind, iv_rank=25.0),
+            strategy_override="LONG_STRADDLE",
+            has_long_vol_catalyst=False,
+        )
+        assert sug.strategy == "LONG_STRADDLE"
+        quiet = [c for c in sug.confidence.checks if "quiet tape" in (c.label or "").lower()
+                 or "Session range" in (c.label or "")]
+        assert quiet, "expected session-range gate on suggestion"
+        assert quiet[0].status == "SOFT_FAIL"
+        assert "quiet" in (quiet[0].detail or "").lower()
+
+    def test_assemble_includes_long_vol_gates_on_card(self, sample_chain, mocker):
+        from config import STRATEGY_CONFIG
+        mocker.patch.dict(STRATEGY_CONFIG, {"min_credit_to_width_ratio": 0.0})
+        ind = _make_indicators(trend="SIDEWAYS", iv_premium=0.90)
+        sug = ss.assemble_suggestion(
+            **self._assemble_kw(sample_chain, ind, iv_rank=25.0),
+            strategy_override="LONG_STRADDLE",
+            has_long_vol_catalyst=False,
+        )
+        labels = [c.label for c in sug.confidence.checks]
+        assert any("Session range" in lb for lb in labels)
+        assert any("Long-vol IV rank" in lb for lb in labels)
+        assert any("Long-vol IV/HV" in lb for lb in labels)
 
 
 # ---------------------------------------------------------------------------
