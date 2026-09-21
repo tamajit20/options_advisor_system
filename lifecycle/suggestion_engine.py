@@ -389,8 +389,8 @@ def _resolve_calendar_legs(
     live_today: Optional[date] = None,
 ) -> Optional[dict]:
     """Near/far expiries and chains for CALENDAR_SPREAD (P4 config bands)."""
-    near_dte_max = int(STRATEGY_CONFIG.get("calendar_near_dte_max", 14))
-    far_dte_min = int(STRATEGY_CONFIG.get("calendar_far_dte_min", 14))
+    near_dte_max = int(STRATEGY_CONFIG.get("calendar_near_dte_max", 10))
+    far_dte_min = int(STRATEGY_CONFIG.get("calendar_far_dte_min", 15))
     dte_min = int(STRATEGY_CONFIG["dte_min"])
 
     expiries = sorted(fo.expiries_for(symbol, trade_date))
@@ -811,8 +811,8 @@ def _evaluate_underlying(
                         reason=(
                             f"[{expiry_type} {expiry}] Strategy veto: no suitable "
                             f"calendar expiries (near ≤ "
-                            f"{STRATEGY_CONFIG.get('calendar_near_dte_max', 14)} DTE, "
-                            f"far ≥ {STRATEGY_CONFIG.get('calendar_far_dte_min', 14)} DTE)"
+                            f"{STRATEGY_CONFIG.get('calendar_near_dte_max', 10)} DTE, "
+                            f"far ≥ {STRATEGY_CONFIG.get('calendar_far_dte_min', 15)} DTE)"
                         ),
                     ))
                     continue

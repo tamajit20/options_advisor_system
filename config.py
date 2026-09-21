@@ -497,13 +497,12 @@ STRATEGY_CONFIG = {
     "max_loss_pct_of_capital": 0.10,
 
     # ---------------------------------------------------------------
-    # Calendar Spread (P4) — mid-IV / low-IV sideways (no long-vol catalyst).
-    # NEAR = short leg (theta); FAR = next listed expiry beyond far_dte_min.
-    # Near band is intentionally a bit wide so a monthly ~11–14 DTE can still
-    # be the short leg when weeklies are missing or thin.
+    # Calendar Spread (P4) — mid-IV + sideways regime.
+    # DTE band for the NEAR (short) leg of a calendar spread.
+    # FAR leg is the next available expiry beyond calendar_far_dte_min.
     # ---------------------------------------------------------------
-    "calendar_near_dte_max": 14,   # near expiry must be ≤ 14 DTE
-    "calendar_far_dte_min":  14,   # far expiry must be ≥ 14 DTE (and after near)
+    "calendar_near_dte_max": 10,   # near expiry must be ≤ 10 DTE
+    "calendar_far_dte_min":  15,   # far expiry must be ≥ 15 DTE
 
     # Net credit must be at least this fraction of spread width to be viable.
     # Used as default fallback when a strategy is not in the per-strategy override.
