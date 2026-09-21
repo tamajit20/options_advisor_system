@@ -1426,8 +1426,13 @@ class TestJsRegimePairContracts:
         assert "TWO SCENARIOS" in js
         assert "renderSuggestion(s, false, items" in js
         assert "isPairMember && !hasLegs" in js
-        assert "This scenario is blocked" in js
-        assert "Mark Executed at suggested prices" in js
+        # Soft-warn: live checks warn but Place stays on; CB still hard-blocks.
+        assert "this scenario is blocked" in js
+        assert "Scenario warning — review before placing" in js
+        assert "Live checks warning — place still available" in js
+        assert "suggestion-gate-warn" in js
+        assert "Record at suggested prices" in js
+        assert "Place orders in Zerodha" in js
         assert "parts.length === 4" in js
         assert "matches.length === 1" in js
         assert "_lookupLegLtp" in js
@@ -1436,3 +1441,7 @@ class TestJsRegimePairContracts:
         assert "_chartAllTime" in js
         assert "_perfAllTime" in js
         assert "_dateRangeQuery" in js
+        # My Trades: Close in header, Void at end, both confirm.
+        assert "btn-close-trade card-head-btn" in js
+        assert "btn-void-trade" in js
+        assert "trade-void-row" in js
