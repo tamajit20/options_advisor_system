@@ -310,7 +310,7 @@ ACK refuses if `LAST_HOT_BACKUP.json` is missing or older than this export, `PEN
 | SSH fails             | VM up? `VmHost` + `.pem` in `laptop.config.ps1`?                      |
 | Dashboard down        | Port 443 NSG (HTTPS), uptime schedule, `docker compose ps`            |
 | HTTPS / cert fail     | DNS A→VM? NSG 80+443? `docker logs options_caddy`; see A7 HTTPS       |
-| Archive stuck         | Laptop task; VM `git pull` + `vm-restart`; ACK conditions above       |
+| Archive stuck         | Laptop task; VM `git pull` + `vm-restart`; ACK conditions above. If merge fails with `\var\opt\mssql\...` paths, update `scripts/merge_archive_into_local.py` (RESTORE must WITH MOVE to local SQL data dir) |
 | Zerodha execute fails | `OPT_DASHBOARD_API_KEY` in VM `.env.docker`                           |
 
 
@@ -589,6 +589,8 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 **Suggestion leg LTPs:** prefer WebSocket ticks already subscribed for today-PENDING suggestions (`data/suggestion_ltp_state.json`); REST `ltp` is a throttled fallback only when WS has no quote yet.
 
 Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), not raw “cheap IV”. When rank is low but **IV/HV > 1**, the title is “options still rich vs HV” so it does not contradict the expensive-vs-realised soft-fail.
+
+**Live execution checks:** stale chain / strike buffer / scenario vetoes show as a **warning** with the exact reasons on the suggestion card; **Place orders in Zerodha** stays enabled (operator confirms). Only the daily P&L **circuit breaker** still hard-blocks broker place.
 
 **Paper vs Zerodha:** “Record at suggested / Record my fills” always stamps `execution_provider=manual`. Never copy suggestion `provider` (that is the market-data feed, often `zerodha` in live mode). The Zerodha execution channel requires COMPLETE ENTRY/SUPPLEMENT fills on Kite — the provider stamp alone never authorizes live EXIT. Close / auto-close / flatten-rollback always verify matching Kite net inventory (gate cannot be disabled). Dashboard **Close in Zerodha** is the only close action for broker-channel trades (DB-only “record fills” is hidden and `/api/trades/.../close` returns 409); if Kite is already flat, Close syncs COMPLETE exit fill prices into the DB instead of placing new EXIT orders. Paper/manual trades use record fills only. Zerodha logs label milestone auto-closes as **Profit/Loss milestone hit — system closed** (not “You closed”). Entry margin gate uses the **placement path peak** (prefix basket margins in execution order), not only the final structure total, plus the configured buffer. Suggestion **Amount needed** shows engine capital plus Zerodha Final/Peak whenever the Kite session is valid (place-orders toggle not required; short cash still shows Final/Peak). The Execute confirm popup also shows the live per-unit debit/credit equation and Final vs Max required. Multi-leg place gates pass when **structure net** credit/debit is at or better than the combined band floor even if individual legs sit outside their own bands (missing quotes still block). After any leg fills, mid-loop band drift **continues** remaining legs (warn only) so a one-sided book is not left open; missing LTP still aborts. Kite place/modify/cancel share a process-wide **`orders_per_sec`** cap (default **9**, env `OPT_ZERODHA_ORDERS_PER_SEC`, hard max 10); when the rolling 1s window is full the next call waits for a free slot.
 

@@ -223,7 +223,7 @@ def test_validate_execution_receives_circuit_breaker_flag(
     mocker.patch("lifecycle.zerodha_executor._run_pre_trade_checks")
     validate = mocker.patch(
         "lifecycle.zerodha_executor.validate_execution",
-        return_value=MagicMock(ok=True, reason=lambda: "OK"),
+        return_value=MagicMock(ok=True, reason=lambda: "OK", details={}, vetoes=[]),
     )
     mocker.patch(
         "lifecycle.zerodha_executor.validate_live_prices",
@@ -238,6 +238,68 @@ def test_validate_execution_receives_circuit_breaker_flag(
 
     _entry_context(db_conn, "SUG-1", None)
     assert validate.call_args.kwargs["circuit_breaker_active"] is True
+
+
+def test_entry_context_soft_allows_non_circuit_gate_failure(
+    db_conn, mocker, sample_leg, sample_suggestion, mock_instrument,
+):
+    """Stale / strike live checks warn but still allow Zerodha place."""
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
+    mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
+    mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
+    mocker.patch("lifecycle.zerodha_executor._circuit_breaker_on", return_value=False)
+    mocker.patch(
+        "lifecycle.zerodha_executor.validate_execution",
+        return_value=MagicMock(
+            ok=False,
+            reason=lambda: "LIVE data is 300 min old",
+            details={},
+            vetoes=["LIVE data is 300 min old"],
+        ),
+    )
+    mocker.patch(
+        "lifecycle.zerodha_executor.validate_live_prices",
+        return_value=MagicMock(ok=True, reason=lambda: "OK"),
+    )
+    mocker.patch("lifecycle.zerodha_executor._build_client", return_value=(MagicMock(), MagicMock()))
+    mocker.patch(
+        "lifecycle.zerodha_executor._live_ltp_map",
+        return_value=({1: 100.0}, {1: mock_instrument}),
+    )
+    mocker.patch("lifecycle.zerodha_executor._run_pre_trade_checks")
+    from lifecycle.zerodha_executor import _entry_context
+
+    suggestion, legs, *_rest = _entry_context(db_conn, "SUG-1", None)
+    assert suggestion["suggestion_id"] == "SUG-1"
+    assert legs
+
+
+def test_entry_context_still_blocks_circuit_breaker_gate(
+    db_conn, mocker, sample_leg, sample_suggestion, mock_instrument,
+):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
+    mocker.patch("database.models.SuggestionRepo.get", return_value=sample_suggestion)
+    mocker.patch("database.models.SuggestionRepo.legs", return_value=[sample_leg])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
+    mocker.patch("lifecycle.zerodha_executor._circuit_breaker_on", return_value=True)
+    mocker.patch(
+        "lifecycle.zerodha_executor.validate_execution",
+        return_value=MagicMock(
+            ok=False,
+            reason=lambda: "daily P&L circuit breaker is active",
+            details={"circuit_breaker_active": True},
+            vetoes=["daily P&L circuit breaker is active"],
+        ),
+    )
+    from lifecycle.zerodha_executor import ZerodhaExecutionError, _entry_context
+
+    with pytest.raises(ZerodhaExecutionError, match="circuit breaker"):
+        _entry_context(db_conn, "SUG-1", None)
 
 
 def test_execution_disabled_without_config(db_conn, mocker):

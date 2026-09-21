@@ -1614,7 +1614,18 @@ def _entry_context(
         cb_active = _circuit_breaker_on(db)
         gate = validate_execution(suggestion, legs, circuit_breaker_active=cb_active)
         if not gate.ok:
-            raise ZerodhaExecutionError(f"Execution blocked: {gate.reason()}")
+            cb_veto = bool((gate.details or {}).get("circuit_breaker_active")) or any(
+                "circuit breaker" in str(v).lower() for v in (gate.vetoes or [])
+            )
+            if cb_veto or cb_active:
+                raise ZerodhaExecutionError(f"Execution blocked: {gate.reason()}")
+            # Stale / strike / freshness / scenario vetoes: warn and continue —
+            # dashboard shows the reasons; operator confirms on the place modal.
+            logger.warning(
+                "soft-allowing Zerodha entry despite live checks for %s: %s",
+                suggestion_id,
+                gate.reason(),
+            )
     facade, master = _build_client()
     live_map, inst_map = _live_ltp_map(facade, master, legs)
     price_gate = validate_live_prices(legs, live_map)

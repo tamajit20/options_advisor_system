@@ -421,6 +421,14 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
   background: rgba(245, 158, 11, .1);
   border: 1px solid rgba(245, 158, 11, .35);
 }
+.suggestion-gate-warn {
+  background: rgba(245, 158, 11, .08);
+  border: 1px solid rgba(245, 158, 11, .28);
+}
+.zerodha-readiness-hint--warn {
+  border-left: 3px solid rgba(245, 158, 11, .85);
+  background: rgba(245, 158, 11, .08);
+}
 .suggestion-gate-retired {
   background: rgba(148, 163, 184, .08);
   border: 1px solid rgba(148, 163, 184, .25);

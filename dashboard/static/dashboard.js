@@ -119,10 +119,23 @@ function _zerodhaExecuteDisabledReason(requireLiveGate) {
   if (!_zerodhaExecutionReady) {
     return 'Zerodha execution is not ready — verify API key in Config and refresh after login';
   }
+  // Live execution-check failures are warnings on the card — not a button lock.
+  // Circuit breaker is the only gate that still hard-blocks (requireLiveGate).
   if (requireLiveGate) {
-    return 'Suggestion failed live execution checks — cannot place broker orders until checks pass';
+    return 'Daily P&L circuit breaker is active — clear it in Config → Runtime switches to resume broker orders';
   }
   return '';
+}
+
+/** Soft live-check warning text for a suggestion (empty when gate is OK). */
+function _liveExecutionCheckWarning(s) {
+  const gate = s?.execution_gate;
+  if (!gate || gate.ok) return '';
+  if (suggestionCircuitBlocked(s)) return '';
+  const vetoes = (gate.vetoes || []).map(v => String(v).trim()).filter(Boolean);
+  if (vetoes.length) return vetoes.join(' · ');
+  if (gate.reason && gate.reason !== 'OK') return String(gate.reason);
+  return gate.label ? `Live checks: ${gate.label}` : 'Live execution checks failed';
 }
 
 /** Final/Peak under Amount needed only needs a valid session — not place-orders. */
@@ -176,14 +189,23 @@ function _updateZerodhaReadinessHints() {
   $$('.zerodha-readiness-hint').forEach(el => {
     const card = el.closest('.card[data-sug-id]');
     const requireLiveGate = card?.dataset?.requireLiveGate === '1';
-    const reason = _zerodhaExecuteDisabledReason(requireLiveGate);
-    if (reason) {
+    const hard = _zerodhaExecuteDisabledReason(requireLiveGate);
+    if (hard) {
       el.hidden = false;
-      el.textContent = reason;
-    } else {
-      el.hidden = true;
-      el.textContent = '';
+      el.classList.remove('zerodha-readiness-hint--warn');
+      el.textContent = hard;
+      return;
     }
+    const soft = (card?.dataset?.liveGateWarning || '').trim();
+    if (soft) {
+      el.hidden = false;
+      el.classList.add('zerodha-readiness-hint--warn');
+      el.textContent = `Warning — live checks: ${soft}. Place orders stays available; review before confirming.`;
+      return;
+    }
+    el.hidden = true;
+    el.classList.remove('zerodha-readiness-hint--warn');
+    el.textContent = '';
   });
 }
 
@@ -2804,7 +2826,7 @@ async function loadSuggestion() {
       parts.push(mainHtml.join(''));
     }
     if (blockedHtml.length) {
-      parts.push(`<div class="suggestion-blocked-intro muted">These suggestions failed live execution checks (stale data, strike distance, etc.) — use <strong>Mark Executed at suggested prices</strong> on each card to record the trade as originally suggested.</div>`);
+      parts.push(`<div class="suggestion-blocked-intro muted">These suggestions have live-check warnings (stale data, strike distance, etc.). <strong>Place orders in Zerodha</strong> stays available — review the warning on each card before confirming. You can also record fills manually.</div>`);
       parts.push(blockedHtml.join(''));
     }
     if (sitOut.length) {
@@ -5658,14 +5680,16 @@ function suggestionCircuitBlocked(s) {
 function suggestionCanExecute(s) {
   const status = (s.status || '').toUpperCase();
   if (status !== 'PENDING') return false;
+  // Circuit breaker remains a hard block; other live-check vetoes are warnings.
   if (suggestionCircuitBlocked(s)) return false;
-  return suggestionGateOk(s);
+  return true;
 }
 
 function suggestionCanExecuteAtSuggested(s) {
   const status = (s.status || '').toUpperCase();
   if (status !== 'PENDING') return false;
   if (suggestionCircuitBlocked(s)) return false;
+  // Keep "record at suggested" handy when live checks failed.
   return !suggestionGateOk(s);
 }
 
@@ -5705,15 +5729,26 @@ function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
   const strategyVeto = s.strategy_veto || s.strategy_veto_reason || s.no_suggestion_reason || '';
   const isStrategyVeto = !!(s.strategy_veto || s.strategy_veto_reason || (gate.details && gate.details.strategy_veto)
     || (gate.vetoes || []).some(v => String(v).toLowerCase().includes('vetoed')));
-  const label = isStrategyVeto ? (gate.label || 'Scenario blocked') : (gate.label || 'Cannot execute');
-  const heading = isStrategyVeto ? 'This scenario is blocked' : 'Live checks failed';
-  const detail = isStrategyVeto
-    ? (strategyVeto || ((gate.reason && gate.reason !== 'OK') ? gate.reason : ''))
-    : ((gate.reason && gate.reason !== 'OK') ? gate.reason : '');
-  const hint = isStrategyVeto
-    ? 'Inspect the structure below. Record the trade as suggested, or enter fill prices and click Execute \u2014 this is not a live-gate-OK signal.'
-    : 'Record the trade as suggested, or enter your fill prices below and click <strong>Execute</strong>.';
-  return `<div class="suggestion-gate-banner suggestion-gate-blocked" role="alert">
+  const isCircuit = suggestionCircuitBlocked(s);
+  const label = isCircuit
+    ? (gate.label || 'Circuit breaker')
+    : (isStrategyVeto ? (gate.label || 'Scenario warning') : (gate.label || 'Live check warning'));
+  const heading = isCircuit
+    ? 'Broker orders blocked'
+    : (isStrategyVeto ? 'Scenario warning — review before placing' : 'Live checks warning — place still available');
+  const vetoLines = (gate.vetoes || []).map(v => String(v).trim()).filter(Boolean);
+  const detail = vetoLines.length
+    ? vetoLines.join(' · ')
+    : (isStrategyVeto
+      ? (strategyVeto || ((gate.reason && gate.reason !== 'OK') ? gate.reason : ''))
+      : ((gate.reason && gate.reason !== 'OK') ? gate.reason : ''));
+  const hint = isCircuit
+    ? 'Clear the daily P&amp;L circuit breaker in Config → Runtime switches before placing Zerodha orders.'
+    : 'Place orders in Zerodha stays on — confirm only if you accept the warning above. You can also record fills manually.';
+  const bannerCls = isCircuit
+    ? 'suggestion-gate-banner suggestion-gate-blocked'
+    : 'suggestion-gate-banner suggestion-gate-warn';
+  return `<div class="${bannerCls}" role="alert">
     <div class="suggestion-gate-head">
       <span class="tag tag-warn">${escapeHtml(label.toUpperCase())}</span>
       <strong>${heading}</strong>
@@ -5828,10 +5863,14 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
   const canExecute = !readOnly && suggestionCanExecute(s);
   const canExecuteAtSuggested = !readOnly && suggestionCanExecuteAtSuggested(s);
   const showExecActions = canExecute || canExecuteAtSuggested;
-  const zExecRequireGate = !canExecute;
+  // Only circuit breaker hard-locks Zerodha; other live-check failures warn.
+  const zExecRequireGate = suggestionCircuitBlocked(s);
+  const liveGateWarn = _liveExecutionCheckWarning(s);
   const zExecSt = _zerodhaExecButtonState(
     zExecRequireGate,
-    'Place entry orders in Zerodha (monitored until filled)',
+    liveGateWarn
+      ? `Place entry orders in Zerodha (warning: ${liveGateWarn})`
+      : 'Place entry orders in Zerodha (monitored until filled)',
   );
   const zExecBtnClass = `btn btn-accent btn-zerodha-exec${zExecSt.ready ? '' : ' is-disabled'}`;
   const zExecAria = zExecSt.ready ? '' : ' aria-disabled="true"';
@@ -5853,7 +5892,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
         ${regimePairChip(s)}
-        ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn" title="Live checks failed — use Mark Executed at suggested prices">${escapeHtml(gateLabel)}</span>` : ''}
+        ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn" title="${escapeHtml(liveGateWarn || 'Live checks warning — Place orders still available')}">${escapeHtml(gateLabel)}</span>` : ''}
         ${executionChannelBadge(s.execution_channel)}
         ${sugStatus === 'IGNORED' ? '<span class="tag tag-warn">Retired</span>' : ''}
         ${s.is_stale && sugStatus === 'PENDING' && !gateLabel ? '<span class="tag tag-warn">Stale</span>' : ''}
@@ -6023,7 +6062,8 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     data-spot-at-gen="${s.spot_at_generation || 0}"
     data-sug-range-lo="${sugRangeLo}"
     data-sug-range-hi="${sugRangeHi}"
-    data-require-live-gate="${canExecute ? '0' : '1'}"
+    data-require-live-gate="${zExecRequireGate ? '1' : '0'}"
+    data-live-gate-warning="${escapeHtml(liveGateWarn)}"
     data-short-call-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='CE')||{}).strike||''}"
     data-short-put-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='PE')||{}).strike||''}"`;
   return wrapCollapsibleCard(summaryHtml, bodyHtml, {

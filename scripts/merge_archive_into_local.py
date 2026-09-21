@@ -19,7 +19,8 @@ from database.archive_repo import merge_chunk_insert_sql
 
 
 def _sqlcmd(server: str, query: str, *, db: str | None = None) -> subprocess.CompletedProcess:
-    args = ["sqlcmd", "-S", server, "-E", "-b", "-s", "|", "-W"]
+    # -I: QUOTED_IDENTIFIER ON (required for filtered indexes / some archive tables)
+    args = ["sqlcmd", "-S", server, "-E", "-b", "-I", "-s", "|", "-W"]
     if db:
         args.extend(["-d", db])
     args.extend(["-Q", query])
@@ -34,11 +35,113 @@ def _run_step(server: str, label: str, query: str, *, db: str | None = None) -> 
         print(r.stdout.strip())
 
 
+def _sql_literal(path: Path | str) -> str:
+    return str(path).replace("'", "''")
+
+
+def _parse_filelistonly(stdout: str) -> list[tuple[str, str, str]]:
+    """Return [(logical_name, physical_name, type)] from RESTORE FILELISTONLY."""
+    rows: list[tuple[str, str, str]] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line or line.startswith("LogicalName") or line.startswith("-"):
+            continue
+        parts = [p.strip() for p in line.split("|") if p.strip()]
+        if len(parts) >= 3:
+            rows.append((parts[0], parts[1], parts[2].upper()))
+    return rows
+
+
+def _first_sqlcmd_value(stdout: str) -> str:
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line or set(line) <= {"-", "|", " "}:
+            continue
+        if line.lower().startswith("----") or "rows affected" in line.lower():
+            continue
+        # Prefer first column when pipe-separated.
+        return line.split("|", 1)[0].strip()
+    return ""
+
+
+def local_sql_data_dirs(server: str) -> tuple[Path, Path]:
+    """Windows (or local) data/log dirs — never reuse Linux paths from a VM .bak."""
+    r = _sqlcmd(
+        server,
+        "SET NOCOUNT ON; "
+        "SELECT "
+        "  ISNULL(CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS nvarchar(512)), N''), "
+        "  ISNULL(CAST(SERVERPROPERTY('InstanceDefaultLogPath') AS nvarchar(512)), N'');",
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"default data path query failed:\n{r.stderr or r.stdout}")
+
+    data_s = log_s = ""
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line or set(line) <= {"-", "|", " "} or line.lower().startswith("----"):
+            continue
+        if "rows affected" in line.lower():
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 2:
+            data_s, log_s = parts[0], parts[1]
+            break
+        if parts and parts[0]:
+            data_s = parts[0]
+
+    if not data_s:
+        # Fall back to master.mdf directory on this instance.
+        r2 = _sqlcmd(
+            server,
+            "SET NOCOUNT ON; "
+            "SELECT TOP 1 physical_name FROM sys.master_files "
+            "WHERE database_id = 1 AND type = 0;",
+        )
+        if r2.returncode != 0:
+            raise RuntimeError(f"master data path query failed:\n{r2.stderr or r2.stdout}")
+        data_s = _first_sqlcmd_value(r2.stdout)
+
+    if not data_s:
+        raise RuntimeError(
+            "Could not resolve a local SQL Server data directory for RESTORE WITH MOVE"
+        )
+
+    data_dir = Path(data_s)
+    log_dir = Path(log_s) if log_s else data_dir
+    # Guard: never write into a Linux container path that only exists inside the VM bak.
+    for label, p in (("data", data_dir), ("log", log_dir)):
+        posixish = str(p).replace("\\", "/").lower()
+        if "/var/opt/mssql/" in posixish or posixish.startswith("/var/"):
+            raise RuntimeError(
+                f"Refusing to restore into non-local {label} path {p} "
+                "(looks like a Docker/Linux path from the VM .bak)"
+            )
+    return data_dir, log_dir
+
+
+def build_restore_move_clauses(
+    filelist: list[tuple[str, str, str]],
+    staging_db: str,
+    data_dir: Path,
+    log_dir: Path,
+) -> list[str]:
+    """Map each logical file to a fresh local mdf/ldf under the instance dirs."""
+    move_sql: list[str] = []
+    for idx, (logical, _phys, typ) in enumerate(filelist):
+        is_log = typ.startswith("L")
+        ext = "ldf" if is_log else "mdf"
+        dest_dir = log_dir if is_log else data_dir
+        dest = dest_dir / f"{staging_db}_{idx}.{ext}"
+        move_sql.append(f"MOVE N'{_sql_literal(logical)}' TO N'{_sql_literal(dest)}'")
+    return move_sql
+
+
 def restore_staging(server: str, staging_db: str, bak_path: str) -> None:
     bak = Path(bak_path).resolve()
     if not bak.is_file():
         raise FileNotFoundError(bak)
-    bak_sql = str(bak).replace("'", "''")
+    bak_sql = _sql_literal(bak)
 
     _run_step(
         server,
@@ -59,24 +162,13 @@ def restore_staging(server: str, staging_db: str, bak_path: str) -> None:
     if fl.returncode != 0:
         raise RuntimeError(f"FILELISTONLY failed:\n{fl.stderr or fl.stdout}")
 
-    rows: list[tuple[str, str, str]] = []
-    for line in fl.stdout.splitlines():
-        line = line.strip()
-        if not line or line.startswith("LogicalName") or line.startswith("-"):
-            continue
-        parts = [p.strip() for p in line.split("|") if p.strip()]
-        if len(parts) >= 3:
-            rows.append((parts[0], parts[1], parts[2].upper()))
-
+    rows = _parse_filelistonly(fl.stdout)
     if not rows:
         raise RuntimeError(f"Could not parse FILELISTONLY for {bak}")
 
-    data_dir = Path(rows[0][1]).parent
-    move_sql = []
-    for idx, (logical, _phys, typ) in enumerate(rows):
-        ext = "mdf" if typ == "D" or idx == 0 else "ldf"
-        dest = data_dir / f"{staging_db}_{idx}.{ext}"
-        move_sql.append(f"MOVE N'{logical}' TO N'{dest}'")
+    data_dir, log_dir = local_sql_data_dirs(server)
+    move_sql = build_restore_move_clauses(rows, staging_db, data_dir, log_dir)
+    print(f"  RESTORE WITH MOVE -> data={data_dir} log={log_dir}")
 
     _run_step(
         server,
