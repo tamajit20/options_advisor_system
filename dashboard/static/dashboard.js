@@ -241,6 +241,22 @@ function _collectZerodhaLegLimits(root, inputSelector) {
 
 // STRATEGY_CONFIG.max_lots_cap, from /api/suggestion/today. 0 = uncapped.
 let _maxLotsCap = 0;
+// Soft/hard gate legend from /api/suggestion/today (matches config.py).
+let _gateRules = {
+  soft_gate_min_pass: 5,
+  soft_gate_total: 8,
+  strategy_min_soft_pass: {},
+};
+
+function softMinForStrategy(strategy) {
+  const map = _gateRules.strategy_min_soft_pass || {};
+  if (strategy && map[strategy] != null) return parseInt(map[strategy], 10);
+  return parseInt(_gateRules.soft_gate_min_pass, 10) || 5;
+}
+
+function softTotalGates() {
+  return parseInt(_gateRules.soft_gate_total, 10) || 8;
+}
 
 /** Shared order size (lots) for a suggestion card — governs both exec paths.
  *  Returns the lot count, `null` when the box is empty (both paths then fall
@@ -2871,6 +2887,13 @@ async function loadSuggestion() {
   try {
     const data = await API('/api/suggestion/today');
     _maxLotsCap = parseInt(data.max_lots_cap, 10) || 0;
+    if (data.gate_rules && typeof data.gate_rules === 'object') {
+      _gateRules = {
+        soft_gate_min_pass: parseInt(data.gate_rules.soft_gate_min_pass, 10) || 5,
+        soft_gate_total: parseInt(data.gate_rules.soft_gate_total, 10) || 8,
+        strategy_min_soft_pass: data.gate_rules.strategy_min_soft_pass || {},
+      };
+    }
     const list = data.suggestions || [];
     const sitOut = data.sit_out || [];
     const grouped = groupRegimePairSuggestions(list);
@@ -4844,12 +4867,26 @@ function renderGatesAndWarningsPanel(s) {
   const total     = checks.length;
   const passed    = total - nFail - nSoftFail;
   const sid       = escapeHtml(s.suggestion_id || Math.random().toString(36).slice(2));
+  const strategy  = s.strategy || '';
+  const softTotal = softTotalGates();
+  const softMin   = softMinForStrategy(strategy);
+  const softMaxFail = Math.max(0, softTotal - softMin);
 
   let titleSuffix = '';
   if (nFail > 0) titleSuffix += ` · ${nFail} hard fail`;
   if (nSoftFail > 0) titleSuffix += ` · ${nSoftFail} soft/advisory fail`;
   if (nWarn > 0) titleSuffix += ` · ${nWarn} warn`;
   if (nError > 0) titleSuffix += ` · ${nError} error`;
+
+  const rulesHtml = `<div class="gates-rules-box">
+    <div class="gates-rules-title">How gating works on this card</div>
+    <ul class="gates-rules-list">
+      <li><strong>HARD</strong> — must pass (DTE band, ATM liquidity). A fail blocks the suggestion.</li>
+      <li><strong>SOFT</strong> — need ≥${softMin} of ${softTotal} for ${escapeHtml(strategy || 'this strategy')}. Up to ${softMaxFail} soft miss${softMaxFail === 1 ? '' : 'es'} allowed; more blocks.</li>
+      <li><strong>ADVISORY</strong> — warn and review only (quiet tape, IV traj, EM calibration, freshness). Never the sole blocker.</li>
+      <li><strong>Quiet tape</strong> (session range vs 1-day EM) is advisory for long vol — soft-warn, does not veto alone.</li>
+    </ul>
+  </div>`;
 
   const rows = checks.map(c => {
     const kind   = gateKindOf(c);
@@ -4861,25 +4898,36 @@ function renderGatesAndWarningsPanel(s) {
     const kindTip = GATE_KIND_TIP[kind] || '';
     const resTip  = GATE_RESULT_TIP[result] || '';
     const condTip = gateConditionTip(c.label);
+    const helpPopup =
+      `<strong>${escapeHtml(c.label || 'Gate')}</strong><br>` +
+      `<span style="opacity:.85">${escapeHtml(condTip)}</span><br><br>` +
+      `<span style="color:#94a3b8">Kind:</span> ${escapeHtml(kind)} — ${escapeHtml(kindTip)}<br>` +
+      `<span style="color:#94a3b8">Result:</span> ${escapeHtml(result)} — ${escapeHtml(resTip)}`;
+    const helpIcon =
+      `<span class="term-help" tabindex="0" role="button" aria-label="Explain: ${escapeHtml(c.label || 'gate')}">` +
+      `\u24d8<span class="term-help-popup">${helpPopup}</span></span>`;
     return `<tr class="conf-check-row ${rowClass}">
-      <td><span class="gate-kind-badge ${KIND_CLASS[kind]}" title="${escapeHtml(kindTip)}" style="cursor:help">${kind}</span></td>
-      <td><span class="gate-res-badge ${RESULT_CLASS[result] || ''}" title="${escapeHtml(resTip)}" style="cursor:help">${result}</span></td>
-      <td class="conf-label"><span class="gate-cond-label" title="${escapeHtml(condTip)}" style="cursor:help">${escapeHtml(c.label || '')}</span></td>
+      <td><span class="gate-kind-badge ${KIND_CLASS[kind]}">${kind}</span></td>
+      <td><span class="gate-res-badge ${RESULT_CLASS[result] || ''}">${result}</span></td>
+      <td class="conf-label">
+        <div class="gate-cond-head">${escapeHtml(c.label || '')}${helpIcon}</div>
+        <div class="gate-cond-tip">${escapeHtml(condTip)}</div>
+      </td>
       <td class="conf-detail">${detailHtml}</td>
     </tr>`;
   }).join('');
 
   const hasIssues = nFail > 0 || nSoftFail > 0 || nWarn > 0 || nError > 0;
   const titleCls = hasIssues ? 'conf-checks-title conf-checks-title--warn' : 'conf-checks-title';
-  const legendTip = 'Ordered HARD → SOFT → ADVISORY. Hover Kind, Result, or Condition for what each means.';
 
   return `<div class="conf-checks-panel gates-warnings-panel" id="conf-${sid}">
-    <div class="${titleCls}" title="${escapeHtml(legendTip)}">Gates &amp; warnings — ${passed}/${total} passed${titleSuffix}</div>
+    <div class="${titleCls}">Gates &amp; warnings — ${passed}/${total} passed${titleSuffix}</div>
+    ${rulesHtml}
     <table class="conf-checks-table">
       <thead><tr>
-        <th title="${escapeHtml('HARD blocks · SOFT scored · ADVISORY warn-only')}">Kind</th>
-        <th title="${escapeHtml('PASS cleared · FAIL missed · WARN caveat · ERROR unevaluable')}">Result</th>
-        <th title="${escapeHtml('Hover each condition for a short explanation')}">Condition</th>
+        <th>Kind</th>
+        <th>Result</th>
+        <th>Condition</th>
         <th>Detail</th>
       </tr></thead>
       <tbody>${rows}</tbody>

@@ -538,7 +538,7 @@ sequenceDiagram
 | SIDEWAYS (true chop)         | Condor / calendar / regime pair   |
 | MIXED (SMA vs tape disagree) | Sit out                           |
 
-**Long vol (straddle/strangle):** IV/catalyst gates in `long_vol_entry_gate` still apply at assembly. Live session range vs 1-day EM is a **soft warning only** (never demotes the pick). Suggestion cards show one **Gates & warnings** panel ordered HARD → SOFT → ADVISORY (Kind · Result · Condition · Detail, with hover tips) for confidence/entry gates plus live-check, EM calibration, freshness, and validator notes.
+**Long vol (straddle/strangle):** IV/catalyst gates in `long_vol_entry_gate` still apply at assembly. Live session range vs 1-day EM is a **soft warning only** (never demotes the pick). Suggestion cards show one **Gates & warnings** panel ordered HARD → SOFT → ADVISORY, with a visible scoring legend (soft min from `soft_gate_min_pass` / `strategy_min_soft_pass`) and a one-line tip under each condition.
 
 Jobs: EOD data via [A5](#a5-clock-and-jobs); cards via `live_suggestion_engine`. Downloader writes raw shapes only; lifecycle persists.  
 **Which files:** [B12](#b12-code-flows).

@@ -2563,7 +2563,54 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .ctx-chip.ctx-expiry-monthly { color: #a78bfa; border-color: rgba(167,139,250,.35); font-weight: 600; }
 .ctx-chip.ctx-expiry-weekly  { color: #22d3ee; border-color: rgba(34,211,238,.35);  font-weight: 600; }
 .conf-label { font-weight: 500; padding-right: 10px; }
-.gate-cond-label { border-bottom: 1px dotted rgba(148,163,184,.45); }
+.gate-cond-head {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.gate-cond-tip {
+  margin-top: 2px;
+  font-size: .7rem;
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--text-dim, #94a3b8);
+  opacity: .92;
+  max-width: 36rem;
+}
+.gates-rules-box {
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(148,163,184,.18);
+  border-radius: 6px;
+  background: rgba(148,163,184,.06);
+  font-size: .74rem;
+  line-height: 1.45;
+  color: var(--text-dim, #94a3b8);
+}
+.gates-rules-title {
+  font-weight: 600;
+  color: var(--text, #e2e8f0);
+  margin-bottom: 4px;
+  font-size: .76rem;
+}
+.gates-rules-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.gates-rules-list li { margin: 2px 0; }
+.gates-rules-list strong { color: var(--text, #e2e8f0); }
+/* Gate ⓘ popups open downward inside the wide condition column */
+.conf-checks-table .term-help-popup {
+  left: 0;
+  transform: none;
+  width: min(320px, 70vw);
+  pointer-events: auto;
+}
+.conf-checks-table .term-help-popup::after {
+  left: 12px;
+  transform: none;
+}
 .conf-detail { opacity: .85; }
 .conf-detail-text { font-style: italic; opacity: .8; }
 .conf-detail-na { opacity: .3; }

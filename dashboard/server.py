@@ -1891,6 +1891,16 @@ def create_app() -> Flask:
             # Lets the order-size box cap itself to the same limit the
             # execution paths enforce, instead of failing on submit.
             "max_lots_cap": int(STRATEGY_CONFIG.get("max_lots_cap") or 0),
+            # Soft/hard gate legend for the suggestion card Gates panel.
+            "gate_rules": {
+                "soft_gate_min_pass": int(
+                    STRATEGY_CONFIG.get("soft_gate_min_pass") or 5
+                ),
+                "soft_gate_total": 8,
+                "strategy_min_soft_pass": dict(
+                    STRATEGY_CONFIG.get("strategy_min_soft_pass") or {}
+                ),
+            },
         })
 
     @app.route("/api/suggestion/live-ltp/snapshot")
