@@ -633,6 +633,10 @@ STRATEGY_CONFIG = {
         "iv_rank_min_without_catalyst": 15.0,
         "iv_premium_max": 1.00,
         "catalyst_lookahead_days": 14,
+        # Extra AND for live quiet tape — never the sole decider:
+        # missing session_range → skip this check; IV/catalyst/trend still rule.
+        # Need today's high−low ≥ this fraction of 1-day EM before long vol qualifies.
+        "min_session_range_em_fraction": 0.35,
     },
 
     # Long-premium thesis exit: near expiry, still losing with no payoff — exit

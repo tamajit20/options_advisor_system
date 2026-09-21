@@ -52,6 +52,10 @@ def _long_vol_qualified(
     Directional low-IV grinds route to debit spreads by default; long vol there
     requires a HIGH-impact catalyst. Sideways low IV may use long straddle when
     IV/HV is cheap enough (options not overpriced vs realised vol).
+
+    Live quiet-tape (session range vs 1-day EM) is an *additional* AND — it never
+    picks a strategy by itself. Missing session data skips that check so EOD /
+    incomplete bars still follow IV + trend + catalyst.
     """
     gate = STRATEGY_CONFIG.get("long_vol_entry_gate") or {}
     if not gate.get("enabled", True):
@@ -66,8 +70,35 @@ def _long_vol_qualified(
         return False
     if iv_prem > float(iv_prem_max):
         return False
+    if not _session_range_allows_long_vol(indicators, gate):
+        return False
     iv_min = float(gate.get("iv_rank_min_without_catalyst", 15.0))
     return iv_rank >= iv_min
+
+
+def _session_range_allows_long_vol(
+    indicators: MarketIndicators,
+    gate: Mapping,
+) -> bool:
+    """True unless live session is too quiet vs same-day EM.
+
+    Returns True when the check is disabled or session data is absent — other
+    gates remain the decision makers.
+    """
+    min_frac = gate.get("min_session_range_em_fraction")
+    if min_frac is None:
+        return True
+    try:
+        need = float(min_frac)
+    except (TypeError, ValueError):
+        return True
+    if need <= 0:
+        return True
+    sr = getattr(indicators, "session_range", None)
+    em_1d = getattr(indicators, "expected_move_1d", None)
+    if sr is None or em_1d is None or float(em_1d) <= 0:
+        return True
+    return float(sr) / float(em_1d) >= need
 
 
 def effective_iv_rank_for_regime(
@@ -260,6 +291,17 @@ def _enforce_long_vol_entry_gate(
                 f"{strategy} vetoed: IV/HV {iv_prem:.2f}\u00d7 exceeds long-vol "
                 f"ceiling {float(iv_prem_max):.2f}\u00d7 — no real vol-buying edge"
             )
+    # Quiet tape is an extra AND (not a sole picker). Catalyst still bypasses.
+    if not has_long_vol_catalyst and not _session_range_allows_long_vol(indicators, gate):
+        sr = float(getattr(indicators, "session_range", 0) or 0)
+        em_1d = float(getattr(indicators, "expected_move_1d", 0) or 0)
+        need = float(gate.get("min_session_range_em_fraction") or 0)
+        ratio = (sr / em_1d) if em_1d > 0 else 0.0
+        raise StrategyVeto(
+            f"{strategy} vetoed: session range {sr:.0f} pts is only "
+            f"{ratio:.0%} of 1-day EM {em_1d:.0f} (need ≥{need:.0%}) — "
+            f"quiet tape, no vol-expansion yet; other regimes still apply"
+        )
 # Strategies that produce net debit (max_loss = debit, SL = 50% of debit)
 _DEBIT_STRATEGIES = frozenset({
     "LONG_STRADDLE", "LONG_STRANGLE", "LONG_CALL", "LONG_PUT",

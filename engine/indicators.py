@@ -448,6 +448,17 @@ def build_indicators(
                 vol_burst = (last - mean) / std
 
     _vix_n = int(STRATEGY_CONFIG.get("vix_spike_lookback_days", 3))
+    session_range = None
+    if session_bar is not None:
+        try:
+            hi = float(session_bar.get("high_price") or 0)
+            lo = float(session_bar.get("low_price") or 0)
+            if hi > 0 and lo > 0 and hi >= lo:
+                session_range = hi - lo
+        except (TypeError, ValueError):
+            session_range = None
+    em_full = expected_move(spot, atm_iv, dte)
+    em_1d = expected_move(spot, atm_iv, 1) if atm_iv and spot else None
     return MarketIndicators(
         symbol           = symbol,
         as_of            = as_of,
@@ -464,7 +475,7 @@ def build_indicators(
         vix_regime       = vix_regime(vix_history),
         oi_walls_call    = cw,
         oi_walls_put     = pw,
-        expected_move    = expected_move(spot, atm_iv, dte),
+        expected_move    = em_full,
         hv_20            = hv,
         iv_premium       = iv_prem,
         fii_net_futures  = fii_net_futures,
@@ -480,4 +491,6 @@ def build_indicators(
         atm_put_spread_bps  = put_spr_bps,
         volume_burst_z      = vol_burst,
         vix_nd_change_pct   = vix_nd_change_pct(vix_history, _vix_n),
+        session_range       = session_range,
+        expected_move_1d    = em_1d if em_1d and em_1d > 0 else None,
     )

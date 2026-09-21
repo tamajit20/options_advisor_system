@@ -140,6 +140,10 @@ class MarketIndicators:
     atm_put_spread_bps:   Optional[float] = None  # current ATM put bid-ask spread (bps of mid)
     volume_burst_z:       Optional[float] = None  # z-score of last-bucket volume vs trailing window mean
     vix_nd_change_pct:    Optional[float] = None  # VIX % change over last N trading days (S4 spike veto)
+    # Live session range (high−low). None in EOD / when no session bar — long-vol
+    # quiet-tape gate must not fire on missing data (other parameters still decide).
+    session_range:        Optional[float] = None
+    expected_move_1d:     Optional[float] = None  # spot × IV × √(1/365); quiet-tape vs same-day EM
 
 
 @dataclass

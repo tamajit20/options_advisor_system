@@ -805,6 +805,39 @@ class TestLongVolEntryGate:
                 has_long_vol_catalyst=True,
             )
 
+    def test_quiet_session_routes_sideways_to_calendar(self):
+        """Session range is an AND — alone it does not pick; cheap IV still needed."""
+        ind = _make_indicators(trend="SIDEWAYS", iv_premium=0.85)
+        ind.session_range = 20.0
+        ind.expected_move_1d = 120.0  # 20/120 = 0.17 < 0.35 default
+        assert ss.select_strategy(iv_rank=15.0, trend="SIDEWAYS", indicators=ind) == "CALENDAR_SPREAD"
+
+    def test_quiet_session_missing_data_still_allows_straddle(self):
+        """No session_range → quiet check skipped; IV/trend still decide."""
+        ind = _make_indicators(trend="SIDEWAYS", iv_premium=0.85)
+        assert ind.session_range is None
+        assert ss.select_strategy(iv_rank=15.0, trend="SIDEWAYS", indicators=ind) == "LONG_STRADDLE"
+
+    def test_quiet_session_does_not_block_with_catalyst(self):
+        ind = _make_indicators(trend="SIDEWAYS", iv_premium=0.85)
+        ind.session_range = 10.0
+        ind.expected_move_1d = 200.0
+        assert ss.select_strategy(
+            iv_rank=15.0, trend="SIDEWAYS", indicators=ind,
+            has_long_vol_catalyst=True,
+        ) == "LONG_STRADDLE"
+
+    def test_assemble_vetoes_quiet_session_without_catalyst(self, sample_chain):
+        ind = _make_indicators(trend="SIDEWAYS", iv_premium=0.90)
+        ind.session_range = 15.0
+        ind.expected_move_1d = 150.0
+        with pytest.raises(StrategyVeto, match="quiet tape"):
+            ss.assemble_suggestion(
+                **self._assemble_kw(sample_chain, ind, iv_rank=25.0),
+                strategy_override="LONG_STRADDLE",
+                has_long_vol_catalyst=False,
+            )
+
 
 # ---------------------------------------------------------------------------
 class TestComputeStopLoss:
