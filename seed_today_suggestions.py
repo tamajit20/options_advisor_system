@@ -42,9 +42,9 @@ FN_SPOT      = 23_400.0
 EXPIRY       = date(2026, 5, 28)   # last Thursday of May 2026 (monthly)
 DTE          = (EXPIRY - TODAY).days
 
-NIFTY_LOT = 75
-BNF_LOT   = 35
-FN_LOT    = 65
+NIFTY_LOT = 65
+BNF_LOT   = 30
+FN_LOT    = 60
 
 
 # ---------------------------------------------------------------------------

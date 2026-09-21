@@ -149,6 +149,7 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 | `deploy/archive-truncate-vm.sh`                                                   | VM ACK truncate after laptop merge  |
 | `scripts/validate_setup_sync.py`                                                  | Repo setup sync check               |
 | `scripts/merge_archive_into_local.py`                                             | Merge archive `.bak` into laptop DB |
+| `scripts/migrate_nse_lot_sizes.py`                                                | NSE lot revision → DB + closed P&L  |
 
 
 ---
@@ -413,6 +414,8 @@ Nested JSON overlays: **file default as base**, DB keys win, missing keys filled
 
 Major dicts: `DATABASE_CONFIG`, `SCHEDULER_CONFIG`, `STRATEGY_CONFIG`, charges, `DASHBOARD_CONFIG`, `ALERTS_CONFIG`, `RETENTION_CONFIG`, …  
 Runtime kill-switches: `options_runtime_flags`.
+
+**Index lot sizes (Jan 2026+ NSE revision):** `options_lot_sizes` wins over `STRATEGY_CONFIG.default_lot_sizes` — NIFTY **65**, BANKNIFTY **30**, FINNIFTY **60**. After a revision, re-stamp legs / recalc closed P&L with `scripts/migrate_nse_lot_sizes.py` (close path uses stamped `lot_size`, not live Zerodha qty).
 
 Trend knobs (high traffic): `trend_sma_*`, `trend_adx_min`, `trend_return_*`, `trend_session_*`. Opposing SMA vs tape -> `MIXED` sit-out; chop SMA is **not** lifted to BEARISH by a 5-10 day dump alone.
 
@@ -814,6 +817,7 @@ pytest tests/test_database/test_schema.py tests/test_scheduler/test_scheduler.py
 | Job                     | `SCHEDULER_CONFIG`, `JOB_FUNCS`, lifecycle `run_*`, dashboard job meta, README A5              |
 | Deploy / archive script | README A4 / A8; `setup-new-environment.ps1` / manifest if greenfield-visible                   |
 | HTTPS on VM             | A7 HTTPS; default self-signed IP; or `HTTPS_MODE=acme` + sslip.io; `enable-https.sh` / open-port-https |
+| Index lot-size revision | `options_lot_sizes`, `config.py` `default_lot_sizes`, `scripts/migrate_nse_lot_sizes.py`, README B4 |
 | New module / boundary   | README B1 / B6 / B12                                                                           |
 | Code-only ship          | [A7](#a7-code-deploy)                                                                          |
 

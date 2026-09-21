@@ -49,8 +49,8 @@ NIFTY_SPOT   = 24200.0
 BNF_SPOT     = 51800.0
 EXPIRY_NEAR  = date(2026, 5, 29)   # monthly
 EXPIRY_PAST  = date(2026, 5, 1)    # already expired (for closed trade)
-NIFTY_LOT    = 75
-BNF_LOT      = 35
+NIFTY_LOT    = 65
+BNF_LOT      = 30
 
 
 # ---------------------------------------------------------------------------

@@ -476,10 +476,11 @@ STRATEGY_CONFIG = {
     "underlyings": ["NIFTY", "BANKNIFTY", "FINNIFTY"],
 
     # Lot sizes — overridden by data/lot_sizes.csv if present
+    # NSE revised lots (Jan 2026+ contracts): NIFTY 75→65, BN 35→30, FN 65→60.
     "default_lot_sizes": {
-        "NIFTY":      75,
-        "BANKNIFTY":  35,
-        "FINNIFTY":   65,
+        "NIFTY":      65,
+        "BANKNIFTY":  30,
+        "FINNIFTY":   60,
     },
 
     # ---------------------------------------------------------------
