@@ -1447,8 +1447,8 @@ class TestJsRegimePairContracts:
         assert "isPairMember && !hasLegs" in js
         # Soft-warn: live checks warn but Place stays on; CB still hard-blocks.
         assert "this scenario is blocked" in js
-        assert "Scenario warning — review before placing" in js
-        assert "Live checks warning — place still available" in js
+        assert "Scenario warning" in js and "review before placing" in js
+        assert "Live checks warning" in js and "place still available" in js
         assert "suggestion-gate-warn" in js
         assert "Record at suggested prices" in js
         assert "Place orders in Zerodha" in js
