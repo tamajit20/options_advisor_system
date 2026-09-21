@@ -1001,7 +1001,7 @@ input:focus, select:focus, textarea:focus {
 .index-spot-strip {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   flex: 1 1 auto;
   min-width: 0;
   max-width: none;
@@ -1017,11 +1017,11 @@ input:focus, select:focus, textarea:focus {
 .idx-chip {
   display: inline-flex;
   align-items: baseline;
-  gap: 5px;
+  gap: 4px;
   flex: 0 0 auto;
-  padding: 5px 9px;
+  padding: 4px 7px;
   border-radius: 999px;
-  font-size: .78rem;
+  font-size: .74rem;
   line-height: 1.1;
   white-space: nowrap;
   background: rgba(255,255,255,.12);
@@ -1031,10 +1031,10 @@ input:focus, select:focus, textarea:focus {
 .idx-chip-label { font-weight: 600; opacity: .92; }
 .idx-chip-price { font-weight: 700; font-variant-numeric: tabular-nums; }
 .idx-chip-chg {
-  font-size: .68rem;
+  font-size: .66rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  letter-spacing: .01em;
+  letter-spacing: 0;
 }
 .idx-chip-chg-up { color: #86efac; }
 .idx-chip-chg-dn { color: #fca5a5; }
@@ -1046,12 +1046,25 @@ input:focus, select:focus, textarea:focus {
   text-transform: uppercase;
   opacity: .85;
 }
+/* Index strip: hide Live/EOD words — live = green dot only (saves width for VIX). */
+.index-spot-strip .idx-chip-src {
+  font-size: 0;
+  letter-spacing: 0;
+  width: auto;
+  padding: 0;
+  margin: 0;
+  opacity: 1;
+}
+.index-spot-strip .idx-chip-eod .idx-chip-src,
+.index-spot-strip .idx-chip-unavailable .idx-chip-src {
+  display: none;
+}
 .idx-chip-live .idx-chip-src { color: #86efac; }
 .idx-chip-live .idx-chip-src::before {
   content: '';
   display: inline-block;
   width: 6px; height: 6px;
-  margin-right: 3px;
+  margin-right: 0;
   border-radius: 50%;
   background: #4ade80;
   box-shadow: 0 0 6px rgba(74,222,128,.8);
@@ -1120,15 +1133,21 @@ input:focus, select:focus, textarea:focus {
 }
 .sys-banner-warn .btn:hover { background: rgba(0,0,0,.32); color: #fff; }
 
-/* On narrower viewports the banners wrap to a second line under the brand.
-   We can't usefully cram three banners into the same row on a phone, so
-   the global container becomes a wrap-row spanning the full header width. */
+/* Keep index strip on the same header row (no second row). Banners may scroll. */
 @media (max-width: 900px) {
-  .app-header { flex-wrap: wrap; row-gap: 6px; overflow: visible; }
+  .app-header { flex-wrap: nowrap; overflow: hidden; }
   .signal-rail { order: -1; }
-  .header-center { order: 3; flex-basis: 100%; margin: 4px 0 0 0; flex-wrap: nowrap; overflow: hidden; }
-  .index-spot-strip { max-width: 100%; flex: 1 1 100%; }
-  .global-banners { flex: 1 1 100%; margin: 0; }
+  .header-center {
+    order: 0;
+    flex: 1 1 auto;
+    flex-basis: auto;
+    margin: 0 6px;
+    flex-wrap: nowrap;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .index-spot-strip { max-width: none; flex: 1 1 auto; min-width: 0; }
+  .global-banners { flex: 0 1 auto; max-width: 28%; margin: 0; min-width: 0; }
 }
 
 /* Compact header on phones — single row, minimal vertical space */
@@ -1136,60 +1155,43 @@ input:focus, select:focus, textarea:focus {
   .app-header {
     flex-wrap: nowrap;
     align-items: center;
-    padding: 6px 10px;
-    gap: 6px;
+    padding: 6px 8px;
+    gap: 4px;
     row-gap: 0;
   }
   .brand { gap: 6px; min-width: 0; flex-shrink: 0; }
-  .signal-rail { order: -1; flex-shrink: 0; margin-right: 4px; }
+  .signal-rail { order: -1; flex-shrink: 0; margin-right: 2px; }
   .brand-dot { width: 9px; height: 9px; }
   .brand-name { display: none; }
   .header-center {
     order: 0;
     flex: 1 1 auto;
     flex-basis: auto;
-    margin: 0 4px;
+    margin: 0 2px;
     flex-direction: row;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     min-width: 0;
     overflow: hidden;
   }
   .index-spot-strip {
     flex: 1 1 auto;
     max-width: none;
-    font-size: .68rem;
+    font-size: .62rem;
     padding: 0;
-    gap: 4px;
+    gap: 3px;
     -webkit-overflow-scrolling: touch;
   }
   .idx-chip {
-    padding: 3px 7px;
-    font-size: .68rem;
-    gap: 3px;
-  }
-  .idx-chip-chg { font-size: .6rem; }
-  .idx-chip-src { font-size: .58rem; }
-  .global-banners {
-    flex: 0 0 auto;
-    max-width: 42%;
-    margin: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    max-height: 28px;
-    -webkit-overflow-scrolling: touch;
-  }
-  .sys-banner {
-    font-size: .68rem;
-    padding: 3px 7px;
-    white-space: nowrap;
-  }
-  .sys-banner .btn {
+    padding: 2px 5px;
     font-size: .62rem;
-    padding: 2px 6px;
-    min-height: 0;
+    gap: 2px;
   }
-  .header-actions { gap: 4px; flex-shrink: 0; margin-left: auto; }
+  .idx-chip-chg { font-size: .56rem; }
+  .global-banners {
+    display: none; /* phones: banners live in Alerts — keep VIX on the strip */
+  }
+  .header-actions { gap: 3px; flex-shrink: 0; margin-left: auto; }
   .zerodha-funds-chip .idx-chip-label { display: none; }
   .zerodha-margin-refresh-btn {
     padding: 0 5px;

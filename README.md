@@ -584,7 +584,7 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 **My Trades Current P&L:** header badge shows live MTM in session; **off-market** it keeps the last live/DB MTM (same figure as expanded Live P&L / Close now), not a blank dash.
 
-**Header index strip:** Nifty / Bank Nifty / Fin Nifty / VIX chips show ▲/▼ day change and % vs prior EOD close (green up / red down).
+**Header index strip:** Nifty / BN / FN / VIX on one row — compact ▲/▼ % vs prior EOD (full change in tooltip). No second header row; phones hide header banners so VIX stays visible.
 
 **My Trades Close / Void:** **Close Trade** is in the card header (opens the close form after confirm); **Void Trade** is at the bottom of the card (confirm before void). Recording fills also confirms before finalize.
 

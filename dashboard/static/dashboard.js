@@ -2146,13 +2146,31 @@ async function refreshNotifBadge() {
 function _fmtIndexPrice(sym, price) {
   if (price == null || isNaN(price)) return '—';
   if (sym === 'VIX') return Number(price).toFixed(2);
-  return Number(price).toLocaleString('en-IN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+  // Whole points — keeps 4 chips (incl. VIX) on one header row.
+  return Math.round(Number(price)).toLocaleString('en-IN');
 }
 
+function _indexChipLabel(item) {
+  const sym = String(item?.symbol || '').toUpperCase();
+  if (sym === 'BANKNIFTY') return 'BN';
+  if (sym === 'FINNIFTY') return 'FN';
+  if (sym === 'VIX') return 'VIX';
+  if (sym === 'NIFTY') return 'Nifty';
+  return item?.label || item?.symbol || '';
+}
+
+/** Compact ticker change: ▲0.13% (full abs+pct stays in title tooltip). */
 function _fmtIndexChange(change, changePct) {
+  if (change == null || isNaN(change)) return '';
+  const arrow = change > 0 ? '\u25b2' : change < 0 ? '\u25bc' : '\u25cf';
+  if (changePct != null && !isNaN(changePct)) {
+    return `${arrow}${Math.abs(Number(changePct)).toFixed(2)}%`;
+  }
+  const abs = Math.abs(Number(change));
+  return `${arrow}${abs.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+}
+
+function _fmtIndexChangeDetail(change, changePct) {
   if (change == null || isNaN(change)) return '';
   const abs = Math.abs(Number(change));
   const chgTxt = abs.toLocaleString('en-IN', {
@@ -2160,10 +2178,10 @@ function _fmtIndexChange(change, changePct) {
     maximumFractionDigits: 2,
   });
   const arrow = change > 0 ? '\u25b2' : change < 0 ? '\u25bc' : '\u25cf';
+  const signed = change > 0 ? `+${chgTxt}` : change < 0 ? `\u2212${chgTxt}` : chgTxt;
   const pctBit = (changePct != null && !isNaN(changePct))
     ? ` (${changePct > 0 ? '+' : ''}${Number(changePct).toFixed(2)}%)`
     : '';
-  const signed = change > 0 ? `+${chgTxt}` : change < 0 ? `\u2212${chgTxt}` : chgTxt;
   return `${arrow} ${signed}${pctBit}`;
 }
 
@@ -2174,15 +2192,16 @@ function _indexChangeClass(change) {
 
 function _indexSpotTitle(item) {
   if (!item) return '';
-  const chg = _fmtIndexChange(item.change, item.change_pct);
+  const chg = _fmtIndexChangeDetail(item.change, item.change_pct);
   const chgBit = chg ? ` · ${chg}` : '';
+  const name = item.label || item.symbol || '';
   if (item.source === 'live') {
-    return `${item.label} live${item.as_of ? ` · ${item.as_of} IST` : ''}${chgBit}`;
+    return `${name} live${item.as_of ? ` · ${item.as_of} IST` : ''}${chgBit}`;
   }
   if (item.source === 'eod' && item.trade_date) {
-    return `${item.label} EOD close · ${item.trade_date}${chgBit}`;
+    return `${name} EOD close · ${item.trade_date}${chgBit}`;
   }
-  return `${item.label} — no price data`;
+  return `${name} — no price data`;
 }
 
 function _indexChangeHtml(item) {
@@ -2213,9 +2232,8 @@ function _renderIndexSpotStrip(host, data) {
       const cls = src === 'live' ? 'idx-chip-live'
         : src === 'eod' ? 'idx-chip-eod'
         : 'idx-chip-unavailable';
-      const srcLabel = src === 'live' ? 'Live'
-        : src === 'eod' ? 'EOD'
-        : '—';
+      // Live/EOD text hidden in CSS — keep a live dot via ::before on .idx-chip-src.
+      const srcLabel = src === 'live' ? 'Live' : src === 'eod' ? 'EOD' : '';
       const tip = _indexSpotTitle(item);
       const refClose = item.ref_close != null && !isNaN(item.ref_close)
         ? String(item.ref_close)
@@ -2223,10 +2241,12 @@ function _renderIndexSpotStrip(host, data) {
     return `<div class="idx-chip ${cls}" data-symbol="${escapeHtml(item.symbol || '')}"`
         + (refClose ? ` data-ref-close="${escapeHtml(refClose)}"` : '')
         + ` title="${escapeHtml(tip)}">`
-        + `<span class="idx-chip-label">${escapeHtml(item.label || item.symbol || '')}</span>`
+        + `<span class="idx-chip-label">${escapeHtml(_indexChipLabel(item))}</span>`
         + `<span class="idx-chip-price">${escapeHtml(_fmtIndexPrice(item.symbol, item.price))}</span>`
         + _indexChangeHtml(item)
-        + `<span class="idx-chip-src">${srcLabel}</span>`
+        + (srcLabel
+          ? `<span class="idx-chip-src" aria-hidden="true">${srcLabel}</span>`
+          : '')
         + `</div>`;
     }).join('');
 }
@@ -2264,7 +2284,9 @@ function _applyIndexSpotLiveUpdate(data) {
       if (!chgEl) {
         chgEl = document.createElement('span');
         chgEl.className = 'idx-chip-chg';
-        srcEl?.parentNode?.insertBefore(chgEl, srcEl);
+        const anchor = srcEl || null;
+        if (anchor) chip.insertBefore(chgEl, anchor);
+        else chip.appendChild(chgEl);
       }
       chgEl.className = `idx-chip-chg ${_indexChangeClass(change)}`;
       chgEl.textContent = chgTxt;
