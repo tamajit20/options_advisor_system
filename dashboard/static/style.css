@@ -2419,6 +2419,17 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   font-weight: 600;
 }
 .btn-close-trade:hover { background: rgba(239,68,68,.22); }
+.card-head-btn.btn-close-trade {
+  min-height: 0;
+  padding: 4px 10px;
+  font-size: .72rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.trade-void-row {
+  padding-top: 8px;
+  border-top: 1px solid #2a3744;
+}
 @media (min-width: 640px) {
   .legs-grid { grid-template-columns: 1fr 1fr; }
   .kv-grid   { grid-template-columns: repeat(3, 1fr); }

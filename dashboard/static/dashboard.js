@@ -6643,9 +6643,24 @@ async function loadTrades() {
         openCloseForm(t.trade_id, parseFloat(t.net_credit_actual) || 0);
       }
     });
+    $$('.btn-close-trade').forEach(b => b.addEventListener('click', e => {
+      const id = e.currentTarget.dataset.tradeId;
+      const card = e.currentTarget.closest('.card');
+      const name = card?.querySelector('h3')?.textContent?.trim() || id;
+      if (!confirm(
+        `Close trade "${name}"?\n\nThis opens the close form so you can record exit fills (or place Zerodha close orders). The trade will leave My Trades once closed.`
+      )) return;
+      if (card && !card.open) card.open = true;
+      const netCr = parseFloat(card?.dataset?.netCreditActual || '0') || 0;
+      _loadTradeCloseForm(id, netCr);
+      const section = document.getElementById(`close-${id}`);
+      section?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      section?.classList.add('close-trade-highlight');
+      setTimeout(() => section?.classList.remove('close-trade-highlight'), 1600);
+    }));
     $$('.btn-void-trade').forEach(b => b.addEventListener('click', async e => {
-      const id = e.target.dataset.tradeId;
-      const card = e.target.closest('.card');
+      const id = e.currentTarget.dataset.tradeId;
+      const card = e.currentTarget.closest('.card');
       const name = card?.querySelector('h3')?.textContent?.trim() || id;
       if (!confirm(`Void trade "${name}"?\n\nThis marks the trade as VOID and removes it from your active trades. The record is kept for audit purposes.`)) return;
       try {
@@ -7182,35 +7197,16 @@ async function submitClose(tradeId, panel) {
     return;
   }
 
-  // ── 2-step confirm ────────────────────────────────────────────────────────
-  const btn = panel.querySelector('.btn-close-submit');
-  if (!btn.dataset.confirmed) {
-    const fillPreview = panel.querySelector('.fill-pnl-preview');
-    const pnlEl = fillPreview?.querySelector('.fill-pnl-value');
-    const pctEl = fillPreview?.querySelector('.fill-pnl-pct');
-    const pnlText = pnlEl && pnlEl.textContent !== '\u2014'
-      ? ` \u00b7 Net P&L ${pnlEl.textContent}${pctEl ? pctEl.textContent : ''}`
-      : '';
-    btn.dataset.confirmed = '1';
-    btn.textContent = `Really close${pnlText}?`;
-    btn.classList.add('btn-confirm-pending');
-    const cancelBtn = document.createElement('button');
-    cancelBtn.className = 'btn btn-ghost btn-confirm-cancel';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', () => {
-      btn.dataset.confirmed = '';
-      btn.textContent = 'Confirm close & record fills';
-      btn.classList.remove('btn-confirm-pending');
-      cancelBtn.remove();
-    });
-    btn.insertAdjacentElement('afterend', cancelBtn);
-    return;
-  }
-  // Clear confirm state before submitting
-  btn.dataset.confirmed = '';
-  btn.textContent = 'Confirm close & record fills';
-  btn.classList.remove('btn-confirm-pending');
-  btn.nextElementSibling?.classList.contains('btn-confirm-cancel') && btn.nextElementSibling.remove();
+  // ── Confirm before recording fills ────────────────────────────────────────
+  const fillPreview = panel.querySelector('.fill-pnl-preview');
+  const pnlEl = fillPreview?.querySelector('.fill-pnl-value');
+  const pctEl = fillPreview?.querySelector('.fill-pnl-pct');
+  const pnlText = pnlEl && pnlEl.textContent !== '\u2014'
+    ? ` Net P&L ${pnlEl.textContent}${pctEl ? pctEl.textContent : ''}.`
+    : '';
+  if (!confirm(
+    `Close this trade and record exit fills?${pnlText}\n\nThis finalizes the trade and removes it from My Trades.`
+  )) return;
 
   try {
     await API(`/api/trades/${tradeId}/close`, {
@@ -7609,8 +7605,8 @@ function renderTrade(t, expanded = false) {
           <span class="cpnl-metrics"><strong class="cpnl-val">${_headerMtmTxt}</strong><span class="cpnl-pct-bracket muted">${_headerMtmPct}</span></span>
         </span>
         </div>
-        <button type="button" class="btn btn-danger btn-void-trade card-head-btn" data-trade-id="${escapeHtml(t.trade_id)}">
-          Void Trade</button>
+        ${hasExecutedLegs ? `<button type="button" class="btn btn-danger btn-close-trade card-head-btn" data-trade-id="${escapeHtml(t.trade_id)}">
+          Close Trade</button>` : ''}
       </div>
       <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
@@ -7712,6 +7708,10 @@ function renderTrade(t, expanded = false) {
       <div class="close-trade-header sl-monitor-label">Close Trade</div>
       <div class="close-trade-content"><div class="muted">Loading…</div></div>
     </section>` : ''}
+    <div class="btn-row trade-void-row" style="margin-top:12px">
+      <button type="button" class="btn btn-danger btn-void-trade" data-trade-id="${escapeHtml(t.trade_id)}">
+        Void Trade</button>
+    </div>
     ${isPartial ? `<div class="supplement-panel" id="supp-${escapeHtml(t.trade_id)}" hidden></div>` : ''}`;
   return wrapCollapsibleCard(summaryHtml, bodyHtml, {
     open: expanded,
