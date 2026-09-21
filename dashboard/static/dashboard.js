@@ -8398,10 +8398,15 @@ function renderHistoryTrade(t) {
     const sugRange = l.suggested_price_low != null
       ? `₹${fmt(l.suggested_price_low)}–${fmt(l.suggested_price_high)}`
       : (l.suggested_price != null ? '₹'+fmt(l.suggested_price) : '—');
+    // formatLegInstrument includes per-leg expiry (calendars: same strike, different month).
+    const exp = l.expiry_date || l.expiry;
+    const contract = exp
+      ? `${escapeHtml(l.symbol || '')} <span class="muted">${escapeHtml(fmtDate(exp))}</span> <strong>${l.strike ?? ''}</strong> ${escapeHtml(l.option_type || '')}`
+      : formatLegInstrument(l);
     return `<tr>
       <td class="num">${l.leg_order}</td>
       <td><span class="tag tag-${l.action==='SELL'?'err':'ok'} tag-sm">${escapeHtml(l.action||'')}</span></td>
-      <td>${escapeHtml(l.symbol||'')} <strong>${l.strike||''}</strong> ${escapeHtml(l.option_type||'')}</td>
+      <td>${contract}</td>
       <td class="muted">${escapeHtml(fmtDt(l.fill_time))}</td>
       <td class="muted">${escapeHtml(fmtDt(l.exit_time))}</td>
       <td class="muted">${escapeHtml(legRoleNote(s.strategy, l))}</td>
@@ -8411,6 +8416,13 @@ function renderHistoryTrade(t) {
       <td class="num ${lpc}">${l.leg_pnl != null ? formatPnlWithPct(l.leg_pnl, legPremiumFromLeg(l)) : '—'}</td>
     </tr>`;
   }).join('');
+
+  const legExpiries = [...new Set(
+    (t.legs || []).map(l => _normExpiry(l.expiry_date || l.expiry)).filter(Boolean)
+  )];
+  const expiryMeta = legExpiries.length > 1
+    ? '&nbsp;·&nbsp;Expiries: ' + legExpiries.map(e => escapeHtml(fmtDate(e))).join(' / ')
+    : (s.expiry ? '&nbsp;·&nbsp;Expiry: '+escapeHtml(fmtDate(s.expiry))+(s.dte != null ? ' ('+s.dte+'d)' : '') : '');
 
   return wrapCollapsibleCard(`
     <div class="hist-card-head collapsible-card-head">
@@ -8434,7 +8446,7 @@ function renderHistoryTrade(t) {
     <div class="hist-card-meta muted">
       ${t.trade_name ? escapeHtml(t.trade_name) + ' &nbsp;·&nbsp; ' : ''}Executed: ${fmtDt(t.executed_on)}
       ${t.closed_on ? '&nbsp;·&nbsp;Closed: '+fmtDt(t.closed_on) : ''}
-      ${s.expiry ? '&nbsp;·&nbsp;Expiry: '+fmtDt(s.expiry)+(s.dte != null ? ' ('+s.dte+'d)' : '') : ''}
+      ${expiryMeta}
     </div>
 
     <div class="hcmp-grid">
