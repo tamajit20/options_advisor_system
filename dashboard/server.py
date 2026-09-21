@@ -578,6 +578,89 @@ def _latest_live_index_quotes(
     return out
 
 
+def _index_change_fields(
+    price: Optional[float],
+    ref_close: Optional[float],
+) -> dict[str, Any]:
+    """Day change vs reference close (usually prior EOD)."""
+    empty = {"change": None, "change_pct": None, "ref_close": None}
+    if price is None or ref_close is None:
+        return empty
+    try:
+        px = float(price)
+        ref = float(ref_close)
+    except (TypeError, ValueError):
+        return empty
+    if ref <= 0:
+        return empty
+    chg = round(px - ref, 2)
+    pct = round((chg / ref) * 100.0, 2)
+    return {"change": chg, "change_pct": pct, "ref_close": round(ref, 2)}
+
+
+def _prior_eod_close(
+    db: SQLServerConnection,
+    symbol: str,
+    *,
+    exclude_trade_date: Any = None,
+) -> Optional[float]:
+    """Most recent EOD close for *symbol*, optionally skipping one trade_date."""
+    sym = str(symbol or "").upper()
+    if sym == "VIX":
+        if exclude_trade_date is not None:
+            row = db.fetch_one(
+                "SELECT TOP 1 close_price FROM options_vix_history "
+                "WHERE trade_date < ? ORDER BY trade_date DESC",
+                [exclude_trade_date],
+            )
+        else:
+            row = db.fetch_one(
+                "SELECT TOP 1 close_price FROM options_vix_history "
+                "ORDER BY trade_date DESC",
+            )
+    else:
+        if exclude_trade_date is not None:
+            row = db.fetch_one(
+                "SELECT TOP 1 close_price FROM options_spot_eod "
+                "WHERE symbol = ? AND trade_date < ? ORDER BY trade_date DESC",
+                [sym, exclude_trade_date],
+            )
+        else:
+            row = db.fetch_one(
+                "SELECT TOP 1 close_price FROM options_spot_eod "
+                "WHERE symbol = ? ORDER BY trade_date DESC",
+                [sym],
+            )
+    if not row or row.get("close_price") is None:
+        return None
+    try:
+        return float(row["close_price"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _enrich_index_item_change(
+    db: SQLServerConnection,
+    item: dict[str, Any],
+    *,
+    eod_row: Optional[dict] = None,
+) -> dict[str, Any]:
+    """Attach change / change_pct / ref_close onto an indices strip item."""
+    sym = str(item.get("symbol") or "").upper()
+    price = item.get("price")
+    if item.get("source") == "live":
+        ref = _prior_eod_close(db, sym)
+        item.update(_index_change_fields(price, ref))
+        return item
+    if item.get("source") == "eod" and eod_row is not None:
+        td = eod_row.get("trade_date")
+        ref = _prior_eod_close(db, sym, exclude_trade_date=td)
+        item.update(_index_change_fields(price, ref))
+        return item
+    item.update(_index_change_fields(None, None))
+    return item
+
+
 def _ws_tick_age_seconds(snap: dict, now: datetime) -> Optional[float]:
     last_tick = snap.get("last_tick_at")
     if not last_tick:
@@ -3664,57 +3747,57 @@ def create_app() -> Flask:
                         live_as_of = dt.strftime("%Y-%m-%d %H:%M:%S")
                     except ValueError:
                         live_as_of = str(raw_ts)
-                indices.append({
+                indices.append(_enrich_index_item_change(db, {
                     "symbol": sym,
                     "label": label,
                     "price": round(float(live["price"]), 2),
                     "source": "live",
                     "as_of": live_as_of,
                     "trade_date": None,
-                })
+                }))
                 continue
 
             if sym == "VIX":
                 row = vix_repo.latest()
                 if row:
-                    indices.append({
+                    indices.append(_enrich_index_item_change(db, {
                         "symbol": sym,
                         "label": label,
                         "price": round(float(row["close_price"]), 2),
                         "source": "eod",
                         "as_of": None,
                         "trade_date": _ist_iso(row.get("trade_date")),
-                    })
+                    }, eod_row=row))
                 else:
-                    indices.append({
+                    indices.append(_enrich_index_item_change(db, {
                         "symbol": sym,
                         "label": label,
                         "price": None,
                         "source": "unavailable",
                         "as_of": None,
                         "trade_date": None,
-                    })
+                    }))
                 continue
 
             row = spot_repo.latest(sym)
             if row:
-                indices.append({
+                indices.append(_enrich_index_item_change(db, {
                     "symbol": sym,
                     "label": label,
                     "price": round(float(row["close_price"]), 2),
                     "source": "eod",
                     "as_of": None,
                     "trade_date": _ist_iso(row.get("trade_date")),
-                })
+                }, eod_row=row))
             else:
-                indices.append({
+                indices.append(_enrich_index_item_change(db, {
                     "symbol": sym,
                     "label": label,
                     "price": None,
                     "source": "unavailable",
                     "as_of": None,
                     "trade_date": None,
-                })
+                }))
 
         any_live = any(i.get("source") == "live" for i in indices)
         return jsonify({

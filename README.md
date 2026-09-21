@@ -584,6 +584,8 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 **My Trades Current P&L:** header badge shows live MTM in session; **off-market** it keeps the last live/DB MTM (same figure as expanded Live P&L / Close now), not a blank dash.
 
+**Header index strip:** Nifty / Bank Nifty / Fin Nifty / VIX chips show ▲/▼ day change and % vs prior EOD close (green up / red down).
+
 **My Trades Close / Void:** **Close Trade** is in the card header (opens the close form after confirm); **Void Trade** is at the bottom of the card (confirm before void). Recording fills also confirms before finalize.
 
 **Amount needed Final/Peak:** suggestion cards hydrate Kite Final / Peak / Avail under Amount needed whenever a Zerodha session is valid (`zerodha_execution.enabled` + login) — place-orders toggle not required. Same figures appear in the Execute confirm popup.

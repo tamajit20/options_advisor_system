@@ -172,6 +172,15 @@ class TestApiIndicesSpot:
                 {"symbol": "VIX", "last_price": 16.7, "ts": "2026-05-25T11:00:00"},
             ],
         })
+        mocker.patch(
+            "dashboard.server._prior_eod_close",
+            side_effect=lambda db, sym, exclude_trade_date=None: {
+                "NIFTY": 24000.0,
+                "BANKNIFTY": 55000.0,
+                "FINNIFTY": 26000.0,
+                "VIX": 16.0,
+            }.get(str(sym).upper()),
+        )
         resp = client.get("/api/indices/spot")
         assert resp.status_code == 200
         data = resp.get_json()
@@ -179,7 +188,11 @@ class TestApiIndicesSpot:
         syms = {i["symbol"]: i for i in data["indices"]}
         assert syms["NIFTY"]["source"] == "live"
         assert syms["NIFTY"]["price"] == 24031.7
+        assert syms["NIFTY"]["change"] == 31.7
+        assert syms["NIFTY"]["change_pct"] == 0.13
+        assert syms["NIFTY"]["ref_close"] == 24000.0
         assert syms["VIX"]["price"] == 16.7
+        assert syms["VIX"]["change"] == 0.7
 
     def test_falls_back_to_eod_when_ws_missing(self, client, mocker):
         mocker.patch("dashboard.server._load_ws_status_snapshot", return_value=None)
@@ -195,6 +208,10 @@ class TestApiIndicesSpot:
             "dashboard.server.VixRepo.latest",
             return_value={"close_price": 15.5, "trade_date": date(2026, 5, 23)},
         )
+        mocker.patch(
+            "dashboard.server._prior_eod_close",
+            side_effect=lambda db, sym, exclude_trade_date=None: 23900.0,
+        )
         resp = client.get("/api/indices/spot")
         assert resp.status_code == 200
         data = resp.get_json()
@@ -203,6 +220,8 @@ class TestApiIndicesSpot:
         assert nifty["source"] == "eod"
         assert nifty["price"] == 24000.0
         assert nifty["trade_date"] == "2026-05-23"
+        assert nifty["change"] == 100.0
+        assert nifty["change_pct"] == 0.42
 
 
 class TestApiSuggestionToday:

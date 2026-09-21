@@ -2152,15 +2152,43 @@ function _fmtIndexPrice(sym, price) {
   });
 }
 
+function _fmtIndexChange(change, changePct) {
+  if (change == null || isNaN(change)) return '';
+  const abs = Math.abs(Number(change));
+  const chgTxt = abs.toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const arrow = change > 0 ? '\u25b2' : change < 0 ? '\u25bc' : '\u25cf';
+  const pctBit = (changePct != null && !isNaN(changePct))
+    ? ` (${changePct > 0 ? '+' : ''}${Number(changePct).toFixed(2)}%)`
+    : '';
+  const signed = change > 0 ? `+${chgTxt}` : change < 0 ? `\u2212${chgTxt}` : chgTxt;
+  return `${arrow} ${signed}${pctBit}`;
+}
+
+function _indexChangeClass(change) {
+  if (change == null || isNaN(change) || change === 0) return 'idx-chip-chg-flat';
+  return change > 0 ? 'idx-chip-chg-up' : 'idx-chip-chg-dn';
+}
+
 function _indexSpotTitle(item) {
   if (!item) return '';
+  const chg = _fmtIndexChange(item.change, item.change_pct);
+  const chgBit = chg ? ` · ${chg}` : '';
   if (item.source === 'live') {
-    return `${item.label} live${item.as_of ? ` · ${item.as_of} IST` : ''}`;
+    return `${item.label} live${item.as_of ? ` · ${item.as_of} IST` : ''}${chgBit}`;
   }
   if (item.source === 'eod' && item.trade_date) {
-    return `${item.label} EOD close · ${item.trade_date}`;
+    return `${item.label} EOD close · ${item.trade_date}${chgBit}`;
   }
   return `${item.label} — no price data`;
+}
+
+function _indexChangeHtml(item) {
+  const txt = _fmtIndexChange(item.change, item.change_pct);
+  if (!txt) return '';
+  return `<span class="idx-chip-chg ${_indexChangeClass(item.change)}">${escapeHtml(txt)}</span>`;
 }
 
 async function refreshIndexSpotStrip() {
@@ -2189,9 +2217,15 @@ function _renderIndexSpotStrip(host, data) {
         : src === 'eod' ? 'EOD'
         : '—';
       const tip = _indexSpotTitle(item);
-    return `<div class="idx-chip ${cls}" data-symbol="${escapeHtml(item.symbol || '')}" title="${escapeHtml(tip)}">`
+      const refClose = item.ref_close != null && !isNaN(item.ref_close)
+        ? String(item.ref_close)
+        : '';
+    return `<div class="idx-chip ${cls}" data-symbol="${escapeHtml(item.symbol || '')}"`
+        + (refClose ? ` data-ref-close="${escapeHtml(refClose)}"` : '')
+        + ` title="${escapeHtml(tip)}">`
         + `<span class="idx-chip-label">${escapeHtml(item.label || item.symbol || '')}</span>`
         + `<span class="idx-chip-price">${escapeHtml(_fmtIndexPrice(item.symbol, item.price))}</span>`
+        + _indexChangeHtml(item)
         + `<span class="idx-chip-src">${srcLabel}</span>`
         + `</div>`;
     }).join('');
@@ -2208,11 +2242,39 @@ function _applyIndexSpotLiveUpdate(data) {
     if (!chip) return;
     chip.classList.remove('idx-chip-eod', 'idx-chip-unavailable');
     chip.classList.add('idx-chip-live');
-    chip.title = _indexSpotTitle(item);
     const priceEl = chip.querySelector('.idx-chip-price');
     const srcEl = chip.querySelector('.idx-chip-src');
     if (priceEl) priceEl.textContent = _fmtIndexPrice(item.symbol, item.price);
     if (srcEl) srcEl.textContent = 'Live';
+    // Recompute day change from stashed prior close (SSE payload has no DB).
+    let change = item.change;
+    let changePct = item.change_pct;
+    const refRaw = chip.dataset.refClose;
+    if ((change == null || isNaN(change)) && refRaw && item.price != null) {
+      const ref = parseFloat(refRaw);
+      const px = parseFloat(item.price);
+      if (!isNaN(ref) && ref > 0 && !isNaN(px)) {
+        change = Math.round((px - ref) * 100) / 100;
+        changePct = Math.round((change / ref) * 10000) / 100;
+      }
+    }
+    let chgEl = chip.querySelector('.idx-chip-chg');
+    const chgTxt = _fmtIndexChange(change, changePct);
+    if (chgTxt) {
+      if (!chgEl) {
+        chgEl = document.createElement('span');
+        chgEl.className = 'idx-chip-chg';
+        srcEl?.parentNode?.insertBefore(chgEl, srcEl);
+      }
+      chgEl.className = `idx-chip-chg ${_indexChangeClass(change)}`;
+      chgEl.textContent = chgTxt;
+    }
+    chip.title = _indexSpotTitle({
+      ...item,
+      change,
+      change_pct: changePct,
+      label: item.label || chip.querySelector('.idx-chip-label')?.textContent || sym,
+    });
   });
 }
 

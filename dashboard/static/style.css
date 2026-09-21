@@ -1030,6 +1030,15 @@ input:focus, select:focus, textarea:focus {
 }
 .idx-chip-label { font-weight: 600; opacity: .92; }
 .idx-chip-price { font-weight: 700; font-variant-numeric: tabular-nums; }
+.idx-chip-chg {
+  font-size: .68rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .01em;
+}
+.idx-chip-chg-up { color: #86efac; }
+.idx-chip-chg-dn { color: #fca5a5; }
+.idx-chip-chg-flat { color: rgba(255,255,255,.72); }
 .idx-chip-src {
   font-size: .62rem;
   font-weight: 700;
@@ -1159,6 +1168,7 @@ input:focus, select:focus, textarea:focus {
     font-size: .68rem;
     gap: 3px;
   }
+  .idx-chip-chg { font-size: .6rem; }
   .idx-chip-src { font-size: .58rem; }
   .global-banners {
     flex: 0 0 auto;
