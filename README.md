@@ -1,6 +1,6 @@
 # Options Advisor - Complete Guide
 
-**Last updated:** 2026-09-20
+**Last updated:** 2026-09-21
 
 **Single document** for install, day-to-day ops, and architecture.  
 Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.
@@ -166,8 +166,8 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
  09:15  Laptop archive task (retry every 15m until ACK or ~15:45; needs readable VM ``*-latest.bak``)
  09:30  Fri: weekly_archive
  09:35  Fri: weekly_log_cleanup | daily: intraday_validator
- 09:45 / 11:00 / 13:00 / 14:30  live_suggestion_engine
- 14:30  event_eve_review
+  10:00–14:30 every 30m  live_suggestion_engine
+  14:30  event_eve_review
  15:35  intraday_close_snapshot
  15:36  Fri: archive_export
  15:38  Fri: db_backup
@@ -788,7 +788,7 @@ flowchart LR
        --> iv_orchestrator
        --> drift_verifier, simulation_update, exit_engine, trade_greeks_update
        --> suggestion_engine step SKIPPED (live windows own cards)
-  09:45+ live_suggestion_engine windows
+  10:00+ live_suggestion_engine every 30m through 14:30
 ```
 
 Full wall-clock: [A5](#a5-clock-and-jobs).

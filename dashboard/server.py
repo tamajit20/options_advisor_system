@@ -866,7 +866,7 @@ _JOB_META: Dict[str, Dict[str, str]] = {
     "suggestion_engine":  {"icon": "💡", "name": "Suggestion Engine",
                             "description": "Generates today's options trade suggestion across all enabled strategies."},
     "live_suggestion_engine": {"icon": "💡", "name": "Live Suggestion Engine",
-                            "description": "Re-runs the suggestion engine against the live Zerodha chain at 09:45, 11:00, 13:00, and 14:30 IST (Mon–Fri)."},
+                            "description": "Re-runs the suggestion engine against the live Zerodha chain every 30 minutes from 10:00–14:30 IST (Mon–Fri)."},
     "simulation_update":  {"icon": "🎯", "name": "Simulation Update",
                             "description": "Updates daily P/L simulation for past suggestions."},
     "exit_engine":        {"icon": "🚪", "name": "Exit Engine",

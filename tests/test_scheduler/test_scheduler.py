@@ -153,11 +153,17 @@ def test_live_suggestion_single_job_multi_triggers():
     assert "live_suggestion_engine_0945" not in sched.JOB_FUNCS
     sch = sched.build_scheduler()
     live = [j for j in sch.get_jobs() if (j.id or "").startswith("live_suggestion_engine")]
-    assert len(live) == 4
+    assert len(live) == 10
     assert {j.id for j in live} == {
-        "live_suggestion_engine@0945",
+        "live_suggestion_engine@1000",
+        "live_suggestion_engine@1030",
         "live_suggestion_engine@1100",
+        "live_suggestion_engine@1130",
+        "live_suggestion_engine@1200",
+        "live_suggestion_engine@1230",
         "live_suggestion_engine@1300",
+        "live_suggestion_engine@1330",
+        "live_suggestion_engine@1400",
         "live_suggestion_engine@1430",
     }
 

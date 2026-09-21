@@ -118,15 +118,21 @@ SCHEDULER_CONFIG = {
             "enabled": True,
         },
         # Live suggestion: re-evaluate with live Zerodha chain during market hours.
-        # Requires OPT_PROVIDERS=zerodha. Multiple intraday windows (one dashboard
-        # job tile; each window logs job_id suffix HHMM under job_name
-        # live_suggestion_engine). No-op when Zerodha is unavailable.
+        # Requires OPT_PROVIDERS=zerodha. Every 30 minutes from 10:00–14:30 IST
+        # (one dashboard job tile; each window logs job_id suffix HHMM under
+        # job_name live_suggestion_engine). No-op when Zerodha is unavailable.
         "live_suggestion_engine": {
             "enabled": True,
             "schedules": [
-                {"day_of_week": "mon-fri", "hour": 9,  "minute": 45},
+                {"day_of_week": "mon-fri", "hour": 10, "minute":  0},
+                {"day_of_week": "mon-fri", "hour": 10, "minute": 30},
                 {"day_of_week": "mon-fri", "hour": 11, "minute":  0},
+                {"day_of_week": "mon-fri", "hour": 11, "minute": 30},
+                {"day_of_week": "mon-fri", "hour": 12, "minute":  0},
+                {"day_of_week": "mon-fri", "hour": 12, "minute": 30},
                 {"day_of_week": "mon-fri", "hour": 13, "minute":  0},
+                {"day_of_week": "mon-fri", "hour": 13, "minute": 30},
+                {"day_of_week": "mon-fri", "hour": 14, "minute":  0},
                 {"day_of_week": "mon-fri", "hour": 14, "minute": 30},
             ],
         },
