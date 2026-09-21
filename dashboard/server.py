@@ -214,6 +214,32 @@ def _enrich_trade_execution_channel(db: SQLServerConnection, row: dict) -> dict:
     return row
 
 
+def _normalize_execution_channel_filter(raw: Any) -> Optional[str]:
+    """``all``/empty → None; ``zerodha`` / ``manual`` → lowercase channel."""
+    from lifecycle.zerodha_executor import (
+        EXECUTION_CHANNEL_MANUAL,
+        EXECUTION_CHANNEL_ZERODHA,
+    )
+
+    val = str(raw or "").strip().lower()
+    if not val or val in ("all", "any", "*"):
+        return None
+    if val in (EXECUTION_CHANNEL_ZERODHA, "kite", "broker"):
+        return EXECUTION_CHANNEL_ZERODHA
+    if val in (EXECUTION_CHANNEL_MANUAL, "paper", "recorded"):
+        return EXECUTION_CHANNEL_MANUAL
+    return None
+
+
+def _filter_trades_by_execution_channel(
+    trades: list,
+    channel: Optional[str],
+) -> list:
+    if not channel:
+        return trades
+    return [t for t in trades if (t or {}).get("execution_channel") == channel]
+
+
 # ---------------------------------------------------------------------------
 # Connection helper — each request gets its own short-lived DB connection
 # ---------------------------------------------------------------------------
@@ -1953,6 +1979,9 @@ def create_app() -> Flask:
         trd = TradeRepo(db)
         sug = SuggestionRepo(db)
         notif = NotificationRepo(db)
+        channel_f = _normalize_execution_channel_filter(
+            request.args.get("channel") or request.args.get("execution_channel"),
+        )
         rows = trd.open_trades()
         stored_mtm = _stored_mtm_payloads(db)
         live_snap = _read_live_mtm_state().get("trades") or {}
@@ -1997,7 +2026,8 @@ def create_app() -> Flask:
             if r_out.get("suggestion"):
                 r_out["suggestion"]["execution_channel"] = r_out["execution_channel"]
             out.append(r_out)
-        return jsonify({"trades": out})
+        out = _filter_trades_by_execution_channel(out, channel_f)
+        return jsonify({"trades": out, "channel": channel_f or "all", "count": len(out)})
 
     @app.route("/api/trades/<trade_id>")
     @_with_db
@@ -2842,6 +2872,9 @@ def create_app() -> Flask:
             request.args.get("quality_band", ""),
             request.args.get("quality_min", ""),
         )
+        channel_f = _normalize_execution_channel_filter(
+            request.args.get("channel") or request.args.get("execution_channel"),
+        )
 
         sql = (
             "SELECT t.trade_id, t.suggestion_id, t.trade_name, t.executed_on, t.closed_on, "
@@ -2936,6 +2969,8 @@ def create_app() -> Flask:
             _enrich_trade_execution_channel(db, item)
             out.append(item)
 
+        out = _filter_trades_by_execution_channel(out, channel_f)
+
         # Distinct underlyings / strategies for filter dropdowns (date window only)
         facet_sql = (
             "SELECT DISTINCT s.underlying, s.strategy FROM options_trades t "
@@ -2948,7 +2983,13 @@ def create_app() -> Flask:
         facet_rows = db.fetch_all(facet_sql, [from_date_str, to_date_str])
         underlyings = sorted({u["underlying"] for u in facet_rows if u.get("underlying")})
         strategies = sorted({u["strategy"] for u in facet_rows if u.get("strategy")})
-        return jsonify({"trades": out, "underlyings": underlyings, "strategies": strategies, "count": len(out)})
+        return jsonify({
+            "trades": out,
+            "underlyings": underlyings,
+            "strategies": strategies,
+            "count": len(out),
+            "channel": channel_f or "all",
+        })
 
     @app.route("/api/history/simulation/<sid>")
     @_with_db

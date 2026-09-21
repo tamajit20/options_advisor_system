@@ -114,6 +114,15 @@
 
     <article class="panel" id="panel-trades" aria-hidden="true">
       <h2 class="panel-title">My Trades</h2>
+      <div class="filter-row hist-filter-bar">
+        <select id="trades-channel" title="Zerodha broker vs manual/paper fills">
+          <option value="">All channels</option>
+          <option value="zerodha">Zerodha only</option>
+          <option value="manual">Manual only</option>
+        </select>
+        <button class="btn" id="trades-refresh" type="button">Refresh</button>
+      </div>
+      <div id="trades-summary" class="hist-summary muted"></div>
       <div id="trades-container" class="loading">Loading…</div>
     </article>
 
@@ -153,6 +162,11 @@
             <option value="profit">Profit</option>
             <option value="loss">Loss</option>
             <option value="breakeven">Breakeven</option>
+          </select>
+          <select id="hist-channel" title="Zerodha broker vs manual/paper fills">
+            <option value="">All channels</option>
+            <option value="zerodha">Zerodha only</option>
+            <option value="manual">Manual only</option>
           </select>
           <select id="hist-quality" title="Entry quality tier">
             <option value="">Any quality</option>

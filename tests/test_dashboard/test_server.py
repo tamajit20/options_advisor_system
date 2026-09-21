@@ -684,6 +684,32 @@ class TestApiTradesOpen:
         # may return {"trades": []} or similar
         data = resp.get_json()
         assert data is not None
+        assert data.get("channel") == "all"
+
+    def test_filters_by_execution_channel(self, client, mocker):
+        rows = [
+            {"trade_id": "TRD-Z", "suggestion_id": None, "trade_name": "Z", "status": "ACTIVE"},
+            {"trade_id": "TRD-M", "suggestion_id": None, "trade_name": "M", "status": "ACTIVE"},
+        ]
+        mocker.patch("dashboard.server.TradeRepo.open_trades", return_value=rows)
+        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info", return_value=[])
+        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alert_for_trade", return_value=None)
+        mocker.patch("dashboard.server._stored_mtm_payloads", return_value={})
+        mocker.patch("dashboard.server._read_live_mtm_state", return_value={})
+        mocker.patch("dashboard.server._trade_live_outlook", return_value=None)
+
+        def _enrich(_db, row):
+            row["execution_channel"] = "zerodha" if row["trade_id"] == "TRD-Z" else "manual"
+            return row
+
+        mocker.patch("dashboard.server._enrich_trade_execution_channel", side_effect=_enrich)
+        z = client.get("/api/trades/open?channel=zerodha").get_json()
+        assert [t["trade_id"] for t in z["trades"]] == ["TRD-Z"]
+        assert z["channel"] == "zerodha"
+        m = client.get("/api/trades/open?channel=manual").get_json()
+        assert [t["trade_id"] for t in m["trades"]] == ["TRD-M"]
+        all_t = client.get("/api/trades/open").get_json()
+        assert len(all_t["trades"]) == 2
 
     def test_surfaces_entry_quality_score_from_suggestion(self, client, mocker):
         trade_row = {

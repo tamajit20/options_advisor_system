@@ -447,6 +447,69 @@ class TestHistoryRoutes:
         resp = c.get("/api/history/closed-trades?from_date=BAD&to_date=BAD")
         assert resp.status_code == 200
 
+    def test_history_closed_trades_channel_filter(self, client, mocker):
+        closed = {
+            "trade_id": "TRD-1",
+            "suggestion_id": None,
+            "trade_name": "T",
+            "executed_on": "2026-04-01",
+            "closed_on": "2026-04-02",
+            "status": "CLOSED",
+            "position_type": "CREDIT",
+            "net_credit_actual": 100.0,
+            "gross_pnl": 50.0,
+            "total_charges": 5.0,
+            "net_pnl": 45.0,
+            "spot_at_execution": 22000,
+            "exit_instruction": None,
+            "execution_provider": "manual",
+            "actual_max_profit": None,
+            "actual_max_loss": None,
+            "actual_upper_breakeven": None,
+            "actual_lower_breakeven": None,
+            "actual_stop_loss_level": None,
+            "underlying": "NIFTY",
+            "strategy": "BULL_PUT_SPREAD",
+            "sug_generated_on": None,
+            "sug_net_credit": None,
+            "sug_confidence": None,
+            "sug_spot": None,
+            "sug_trade_name": None,
+            "upper_breakeven": None,
+            "lower_breakeven": None,
+            "stop_loss_level": None,
+            "sug_max_profit": None,
+            "sug_max_loss": None,
+            "sug_pop": None,
+            "sug_est_charges": None,
+            "sug_est_net_pnl": None,
+            "sug_expiry": None,
+            "sug_dte": None,
+            "sug_entry_quality": None,
+        }
+        fake = MagicMock()
+        fake.connect = MagicMock()
+        fake.close = MagicMock()
+        fake.fetch_all = MagicMock(side_effect=[[closed], []])
+        mocker.patch("dashboard.server.SQLServerConnection", return_value=fake)
+        mocker.patch("dashboard.server.TradeRepo").return_value.legs_with_suggestion_info.return_value = []
+        mocker.patch("dashboard.server.SuggestionRepo")
+        mocker.patch(
+            "dashboard.server._enrich_trade_execution_channel",
+            side_effect=lambda _db, row: row.__setitem__("execution_channel", "manual") or row,
+        )
+        new_app = server.create_app()
+        new_app.config["TESTING"] = True
+        c = new_app.test_client()
+        keep = c.get("/api/history/closed-trades?from_date=2026-04-01&to_date=2026-04-30&channel=manual")
+        assert keep.status_code == 200
+        assert keep.get_json()["count"] == 1
+        assert keep.get_json()["channel"] == "manual"
+        fake.fetch_all = MagicMock(side_effect=[[closed], []])
+        drop = c.get("/api/history/closed-trades?from_date=2026-04-01&to_date=2026-04-30&channel=zerodha")
+        assert drop.get_json()["count"] == 0
+        assert drop.get_json()["channel"] == "zerodha"
+
     def test_history_simulation(self, client, mocker):
         mocker.patch("dashboard.server.SimulationRepo.get_summary", return_value=None)
         mocker.patch("dashboard.server.SimulationRepo.get_legs", return_value=[])

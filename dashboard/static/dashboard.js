@@ -6559,13 +6559,27 @@ function bindMobileCloseOnExpand(root) {
 // ---------------- Tab 2: My Trades ----------------
 async function loadTrades() {
   const c = $('#trades-container');
+  const summaryEl = $('#trades-summary');
+  const channelEl = $('#trades-channel');
   c.className = 'loading'; c.textContent = 'Loading…';
   try {
-    const data = await API('/api/trades/open');
+    const params = new URLSearchParams();
+    if (channelEl?.value) params.set('channel', channelEl.value);
+    const qs = params.toString();
+    const data = await API('/api/trades/open' + (qs ? '?' + qs : ''));
     if (!data.trades.length) {
-      c.className=''; c.innerHTML = '<div class="empty">No open trades.</div>';
+      if (summaryEl) {
+        summaryEl.textContent = channelEl?.value
+          ? `No open ${_channelFilterLabel(channelEl.value)} trades.`
+          : 'No open trades.';
+      }
+      c.className=''; c.innerHTML = '<div class="empty">No open trades match the selected filter.</div>';
       _pruneMtmCache([]);
       return;
+    }
+    if (summaryEl) {
+      const label = channelEl?.value ? ` · ${_channelFilterLabel(channelEl.value)}` : '';
+      summaryEl.textContent = _histFilterSummary(data.count ?? data.trades.length, 'open trade') + label;
     }
     c.className=''; c.innerHTML = data.trades.map(t => renderTrade(t, false)).join('');
     try {
@@ -6615,8 +6629,15 @@ async function loadTrades() {
       }
     });
   } catch (e) {
+    if (summaryEl) summaryEl.textContent = '';
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+function _channelFilterLabel(channel) {
+  if (channel === 'zerodha') return 'Zerodha';
+  if (channel === 'manual') return 'manual';
+  return 'all';
 }
 
 async function openSupplementForm(tradeId) {
@@ -7707,6 +7728,7 @@ function loadHistory() {
   // Default dates: today and 30 days ago
   const fromEl = $('#hist-from'), toEl = $('#hist-to'), instrEl = $('#hist-instrument');
   const stratEl = $('#hist-strategy'), pnlEl = $('#hist-pnl'), qualEl = $('#hist-quality');
+  const channelEl = $('#hist-channel');
   const summaryEl = $('#hist-summary');
   if (!fromEl.value) { const d = new Date(); d.setDate(d.getDate()-30); fromEl.value = _localDateStr(d); }
   if (!toEl.value)   { toEl.value = _localDateStr(); }
@@ -7718,6 +7740,7 @@ function loadHistory() {
   if (stratEl.value) params.set('strategy', stratEl.value);
   if (pnlEl.value)   params.set('pnl', pnlEl.value);
   if (qualEl.value)  params.set('quality_band', qualEl.value);
+  if (channelEl?.value) params.set('channel', channelEl.value);
 
   API('/api/history/closed-trades?' + params).then(data => {
     _fillHistSelect(instrEl, data.underlyings, instrEl.value, 'All instruments');
@@ -7727,7 +7750,10 @@ function loadHistory() {
       if (summaryEl) summaryEl.textContent = _histFilterSummary(0, 'trade');
       c.className=''; c.innerHTML='<div class="empty">No closed trades match the selected filters.</div>'; return;
     }
-    if (summaryEl) summaryEl.textContent = _histFilterSummary(data.count, 'trade');
+    if (summaryEl) {
+      const ch = channelEl?.value ? ` · ${_channelFilterLabel(channelEl.value)}` : '';
+      summaryEl.textContent = _histFilterSummary(data.count, 'trade') + ch;
+    }
     c.className='';
     c.innerHTML = data.trades.map(renderHistoryTrade).join('');
     bindCollapsibleCardInteractions(c);
@@ -8488,6 +8514,14 @@ $('#hist-pnl').addEventListener('change', loadHistory);
 $('#hist-quality').addEventListener('change', loadHistory);
 $('#hist-from').addEventListener('change', loadHistory);
 $('#hist-to').addEventListener('change', loadHistory);
+const _histChannel = $('#hist-channel');
+if (_histChannel) _histChannel.addEventListener('change', loadHistory);
+
+// My Trades channel filter
+const _tradesChannel = $('#trades-channel');
+if (_tradesChannel) _tradesChannel.addEventListener('change', loadTrades);
+const _tradesRefresh = $('#trades-refresh');
+if (_tradesRefresh) _tradesRefresh.addEventListener('click', loadTrades);
 
 // History filter bindings — Suggestions sub-tab
 $('#hsug-refresh').addEventListener('click', loadHistorySuggestions);
