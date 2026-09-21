@@ -2611,9 +2611,45 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   left: 12px;
   transform: none;
 }
-.conf-detail { opacity: .85; }
+.conf-detail { opacity: .95; }
 .conf-detail-text { font-style: italic; opacity: .8; }
 .conf-detail-na { opacity: .3; }
+.gate-plain-headline {
+  font-weight: 700;
+  font-size: .78rem;
+  margin-bottom: 2px;
+  letter-spacing: .01em;
+}
+.conf-pass .gate-plain-headline { color: var(--ok, #34d399); }
+.conf-soft-fail .gate-plain-headline,
+.conf-fail .gate-plain-headline { color: #f87171; }
+.conf-warn .gate-plain-headline,
+.conf-error .gate-plain-headline { color: #fbbf24; }
+.gate-plain-body {
+  font-size: .76rem;
+  line-height: 1.4;
+  color: var(--text, #e2e8f0);
+  font-style: normal;
+  opacity: .95;
+  max-width: 28rem;
+}
+.gate-tech-details {
+  margin-top: 4px;
+  font-size: .68rem;
+  color: var(--text-dim, #94a3b8);
+}
+.gate-tech-details summary {
+  cursor: pointer;
+  opacity: .75;
+  user-select: none;
+}
+.gate-tech-details summary:hover { opacity: 1; }
+.gate-tech-text {
+  margin-top: 3px;
+  font-style: italic;
+  opacity: .8;
+  line-height: 1.35;
+}
 
 .gate-kind-badge,
 .gate-res-badge {

@@ -4762,6 +4762,239 @@ function gateConditionTip(label) {
   return 'Market or execution condition evaluated for this suggestion.';
 }
 
+/**
+ * Turn engine detail strings into layman "what this means" copy.
+ * Returns { headline, body, tech } — tech is the original for optional expand.
+ */
+function gateDetailPlainEnglish(c) {
+  const label = (c.label || '').toLowerCase();
+  const detail = String(c.detail || '').trim();
+  const result = gateResultOf(c);
+  const headline = result === 'PASS' ? 'Looks fine'
+                 : result === 'WARN' ? 'Caution'
+                 : result === 'ERROR' ? "Couldn't check"
+                 : 'Needs attention';
+
+  const n = (re) => {
+    const m = detail.match(re);
+    return m ? m[1] : null;
+  };
+  const f = (re) => {
+    const v = n(re);
+    return v != null ? parseFloat(v) : null;
+  };
+
+  let body = '';
+
+  if (!detail) {
+    body = result === 'PASS' ? 'This check cleared.'
+         : result === 'WARN' ? 'Cleared with a caveat — see the condition tip.'
+         : "This check didn't clear.";
+  } else if (label.includes('dte within')) {
+    const dte = n(/DTE\s+(\d+)/i);
+    const band = n(/need\s+(\d+\s*[–\-]\s*\d+)/i);
+    if (result === 'PASS') {
+      body = dte
+        ? `Expiry timing is OK — about ${dte} day${dte === '1' ? '' : 's'} left` +
+          (band ? ` (preferred window ${band.replace(/\s+/g, '')}).` : '.')
+        : 'Expiry timing is inside the preferred window.';
+    } else {
+      body = dte
+        ? `Wrong expiry window — ${dte} day${dte === '1' ? '' : 's'} left is outside what we allow` +
+          (band ? ` (${band.replace(/\s+/g, '')}).` : '.')
+        : 'This expiry is outside the allowed days-to-expiry window.';
+    }
+  } else if (label.includes('atm strikes liquid') || label.includes('spread within')) {
+    if (result === 'PASS') {
+      body = 'Near-the-money options look liquid enough to enter without a painful bid–ask gap.';
+    } else if (result === 'WARN' || /unavailable|no live/i.test(detail)) {
+      body = "We couldn't verify how tight the bid–ask is right now — check live quotes before placing.";
+    } else {
+      body = 'Near-the-money options look expensive to enter (wide bid–ask). You may overpay on fill.';
+    }
+  } else if (label.includes('iv rank in actionable')) {
+    const rank = n(/IV Rank\s+([\d.]+)/i);
+    if (/not yet loaded|cannot evaluate/i.test(detail)) {
+      body = "We don't have enough IV history yet to judge whether options are cheap or expensive.";
+    } else if (result === 'PASS') {
+      body = rank
+        ? `Options look in a usable zone vs recent history (IV Rank ${Math.round(+rank)}).`
+        : 'Options look in a usable cheap/expensive zone vs recent history.';
+    } else {
+      body = rank
+        ? `Options sit in a mushy middle vs recent history (IV Rank ${Math.round(+rank)}) — weaker edge for both buying and selling.`
+        : 'Options are neither clearly cheap nor clearly expensive vs recent history.';
+    }
+  } else if (label.includes('vix stable')) {
+    const vix = n(/VIX[^\d]*([\d.]+)/i) || n(/\b([\d.]+)\b/);
+    if (/not available|cannot evaluate/i.test(detail)) {
+      body = "India VIX isn't available today — we couldn't check fear/calm.";
+    } else if (result === 'PASS') {
+      body = vix
+        ? `Market fear gauge looks calm or easing (VIX around ${vix}).`
+        : 'Market fear gauge looks calm or easing.';
+    } else {
+      body = 'Market fear gauge is elevated or rising — premium behaviour can get jumpy.';
+    }
+  } else if (label.includes('pcr in neutral')) {
+    const pcr = n(/PCR\s+([\d.]+)/i);
+    if (/absent|cannot compute/i.test(detail)) {
+      body = "We couldn't read put vs call positioning (missing open-interest data).";
+    } else if (result === 'PASS') {
+      body = pcr
+        ? `Put vs call positioning looks balanced (ratio ${pcr}).`
+        : 'Put vs call positioning looks balanced.';
+    } else {
+      body = pcr
+        ? `Put vs call positioning looks one-sided (ratio ${pcr}) — crowd may already be crowded.`
+        : 'Put vs call positioning looks extreme — crowd risk.';
+    }
+  } else if (label.includes('oi walls')) {
+    if (/absent|cannot/i.test(detail)) {
+      body = "We couldn't find clear open-interest support/resistance walls.";
+    } else if (result === 'PASS') {
+      body = 'There are visible open-interest walls that can act like soft support/resistance.';
+    } else {
+      body = 'No clear open-interest walls — less help from "pin" levels.';
+    }
+  } else if (label.includes('trend identifiable')) {
+    if (/insufficient|unverifiable/i.test(detail)) {
+      body = "Not enough price history to call the trend reliably.";
+    } else if (result === 'PASS') {
+      const trend = (detail.match(/\b(BULLISH|BEARISH|SIDEWAYS|MIXED)\b/i) || [])[1];
+      body = trend
+        ? `Trend is readable (${trend.toLowerCase()}).`
+        : 'Trend is readable enough to pick a side or a range trade.';
+    } else {
+      body = 'Trend is unclear or conflicted — easier to get whipsawed.';
+    }
+  } else if (label.includes('iv premium vs realised') || label.includes('iv/hv ceiling') || label.includes('long-vol iv/hv')) {
+    const ratio = f(/IV\/HV(?:\s+ratio)?\s+([\d.]+)/i) ?? f(/IV\/HV\s+([\d.]+)/i);
+    const ratioTxt = ratio != null ? ` (about ${ratio.toFixed(2)}× realised move)` : '';
+    if (/unavailable|unverifiable/i.test(detail)) {
+      body = "We couldn't compare option prices to how much the index has actually been moving.";
+    } else if (/cheaper|below realised|buying edge|≤|<=/i.test(detail) && result === 'PASS') {
+      body = `Options look fairly priced or cheap vs recent real moves${ratioTxt} — better backdrop for buying premium.`;
+    } else if (/expensive|overpaying|overpriced|elevated/i.test(detail) || (ratio != null && ratio > 1.2 && result === 'FAIL')) {
+      body = `Options look rich vs recent real moves${ratioTxt} — sellers get paid more; buyers pay up.`;
+    } else if (result === 'FAIL') {
+      body = `Option price vs real moves is unfavourable for this idea${ratioTxt}.`;
+    } else {
+      body = `Option price vs real moves looks usable${ratioTxt}.`;
+    }
+  } else if (label.includes('fii positioning')) {
+    if (/not available|unknown/i.test(detail)) {
+      body = "We don't have FII futures data — institutional lean unknown.";
+    } else if (result === 'PASS') {
+      body = 'Big-institution futures positioning is not fighting this trade hard.';
+    } else {
+      body = 'Big-institution futures lean against this trade thesis — higher fight risk.';
+    }
+  } else if (label.includes('oi change conviction')) {
+    const oip = n(/OI delta PCR\s+([\d.]+)/i) || n(/OI\u0394 PCR\s+([\d.]+)/i);
+    if (/not available|unknown/i.test(detail)) {
+      body = "We couldn't see whether fresh open interest is building more in puts or calls.";
+    } else if (result === 'PASS') {
+      body = oip
+        ? `Fresh positioning flow agrees with the idea (OI-change ratio ${oip}).`
+        : 'Fresh put/call positioning flow agrees with the idea.';
+    } else {
+      body = oip
+        ? `Fresh positioning flow fights the idea (OI-change ratio ${oip}).`
+        : 'Fresh put/call positioning flow fights the idea.';
+    }
+  } else if (label.includes('high-impact event')) {
+    if (result === 'PASS') {
+      body = 'No major scheduled shock sits inside the planned hold window.';
+    } else {
+      body = 'A high-impact event sits inside the hold window — gaps can skip past your strikes.';
+    }
+  } else if (label.includes('atm iv trajectory') || label.includes('iv trajectory')) {
+    if (/unavailable|no live/i.test(detail)) {
+      body = "No live IV path yet — we couldn't see if option prices are heating or cooling.";
+    } else if (result === 'FAIL' || /rising/i.test(detail)) {
+      body = 'Near-the-money option prices are heating up intraday — tougher for short premium; can help long vol.';
+    } else {
+      body = 'Near-the-money option prices are not spiking in a worrying way right now.';
+    }
+  } else if (label.includes('oi pcr momentum') || label.includes('oi pcr')) {
+    if (/unavailable|no live/i.test(detail)) {
+      body = "No live open-interest momentum yet.";
+    } else if (result === 'FAIL') {
+      body = 'Open-interest flow is shifting hard one way — possible squeeze / directional pressure.';
+    } else {
+      body = 'Open-interest flow looks steady enough (not a sharp one-sided build).';
+    }
+  } else if (label.includes('iv rank vs iv/hv') || label.includes('alignment')) {
+    if (/unavailable|cannot detect/i.test(detail)) {
+      body = "We couldn't cross-check 'cheap/expensive history' vs 'cheap/expensive vs moves'.";
+    } else if (/conflict/i.test(detail) || result === 'WARN' || result === 'FAIL') {
+      body = 'Mixed signals: recent IV level and price-vs-move ratio disagree — edge is less clear.';
+    } else {
+      body = 'Cheap/expensive signals agree with each other — clearer story.';
+    }
+  } else if (label.includes('quiet tape') || label.includes('session range')) {
+    const pct = n(/=\s*([\d.]+)%\s*of/i);
+    const sr = n(/Session range\s+([\d.]+)/i);
+    const em = n(/1-day EM\s*\(?\s*([\d.]+)/i) || n(/of 1-day EM\s*\(?\s*([\d.]+)/i);
+    if (/disabled|skipped|no live session/i.test(detail)) {
+      body = "Quiet-day check wasn't run (no live range yet or check off).";
+    } else if (/catalyst present/i.test(detail)) {
+      body = 'Tape is quiet, but a catalyst is on the calendar — warning softened.';
+    } else if (result === 'FAIL' || /quiet tape/i.test(detail)) {
+      body = pct
+        ? `Today's move is only about ${pct}% of a normal day's expected range` +
+          (sr && em ? ` (${Math.round(+sr)} pts moved vs ~${Math.round(+em)} expected)` : '') +
+          '. Buying a straddle/strangle can struggle if it stays this calm.'
+        : "Today's market is quiet vs a normal day — long volatility can struggle if it stays calm.";
+    } else {
+      body = pct
+        ? `Today's move is about ${pct}% of a normal day's expected range — enough activity for now.`
+        : "Today's range looks active enough vs a normal day.";
+    }
+  } else if (label.includes('long-vol iv rank') || label.includes('long-vol entry')) {
+    if (/catalyst/i.test(detail) && result === 'PASS') {
+      body = 'A high-impact catalyst is in play — long-vol idea is allowed even if IV looks low.';
+    } else if (result === 'PASS') {
+      const rank = n(/IV rank\s+([\d.]+)/i);
+      body = rank
+        ? `IV level looks high enough for a long-vol bet (IV Rank ${Math.round(+rank)}).`
+        : 'IV level looks high enough for a long-vol bet.';
+    } else {
+      body = 'IV looks too sleepy for a long-vol bet without a catalyst — expansion edge is weak.';
+    }
+  } else if (label.includes('live execution')) {
+    body = result === 'PASS'
+      ? 'Live pre-trade checks look clear.'
+      : `Live pre-trade check needs a look before you confirm: ${detail.replace(/\s*—\s*Place orders.*$/i, '').trim()}`;
+  } else if (label.includes('strategy / scenario')) {
+    body = `Strategy note: ${detail}`;
+  } else if (label.includes('expected-move') || label.includes('calibration')) {
+    body = 'Lately the index has been moving differently than the model expected — strike distances may be a bit off. Size carefully.';
+  } else if (label.includes('intraday validator')) {
+    body = /stale|no longer/i.test(detail)
+      ? 'After the open re-check, this idea no longer looked actionable.'
+      : 'Still looked fine at the morning re-check.';
+  } else if (label.includes('suggestion freshness')) {
+    body = 'This card is older than the freshness window — treat as informational or regenerate.';
+  } else if (label.includes('nse data freshness')) {
+    body = 'Some supporting feeds (spot / FII / VIX) are older than the options chain date — double-check context.';
+  } else {
+    // Generic soften: strip jargon tokens lightly
+    body = detail
+      .replace(/\bIV\/HV\b/gi, 'option-price vs real-move')
+      .replace(/\bIV Rank\b/gi, 'options cheap/expensive score')
+      .replace(/\bDTE\b/g, 'days to expiry')
+      .replace(/\bPCR\b/g, 'put/call ratio')
+      .replace(/\bATM\b/g, 'near-the-money')
+      .replace(/\bEM\b/g, 'expected daily move')
+      .replace(/\bOI\b/g, 'open interest')
+      .replace(/\bHV-?20\b/gi, '20-day real volatility');
+  }
+
+  return { headline, body, tech: detail };
+}
+
 function sortGatesForDisplay(checks) {
   return checks.slice().sort((a, b) => {
     const ka = GATE_KIND_ORDER[gateKindOf(a)] ?? 9;
@@ -4892,9 +5125,14 @@ function renderGatesAndWarningsPanel(s) {
     const kind   = gateKindOf(c);
     const result = gateResultOf(c);
     const rowClass = STATUS_CLASS[c.status] || 'conf-pass';
-    const detailHtml = c.detail
-      ? `<span class="conf-detail-text">${escapeHtml(c.detail)}</span>`
-      : '<span class="conf-detail-na">—</span>';
+    const plain = gateDetailPlainEnglish(c);
+    const detailHtml = `
+      <div class="gate-plain-headline">${escapeHtml(plain.headline)}</div>
+      <div class="gate-plain-body">${escapeHtml(plain.body)}</div>
+      ${plain.tech
+        ? `<details class="gate-tech-details"><summary>Technical detail</summary>` +
+          `<div class="gate-tech-text">${escapeHtml(plain.tech)}</div></details>`
+        : ''}`;
     const kindTip = GATE_KIND_TIP[kind] || '';
     const resTip  = GATE_RESULT_TIP[result] || '';
     const condTip = gateConditionTip(c.label);
@@ -4902,7 +5140,8 @@ function renderGatesAndWarningsPanel(s) {
       `<strong>${escapeHtml(c.label || 'Gate')}</strong><br>` +
       `<span style="opacity:.85">${escapeHtml(condTip)}</span><br><br>` +
       `<span style="color:#94a3b8">Kind:</span> ${escapeHtml(kind)} — ${escapeHtml(kindTip)}<br>` +
-      `<span style="color:#94a3b8">Result:</span> ${escapeHtml(result)} — ${escapeHtml(resTip)}`;
+      `<span style="color:#94a3b8">Result:</span> ${escapeHtml(result)} — ${escapeHtml(resTip)}<br><br>` +
+      `<span style="opacity:.9">${escapeHtml(plain.body)}</span>`;
     const helpIcon =
       `<span class="term-help" tabindex="0" role="button" aria-label="Explain: ${escapeHtml(c.label || 'gate')}">` +
       `\u24d8<span class="term-help-popup">${helpPopup}</span></span>`;
@@ -4928,7 +5167,7 @@ function renderGatesAndWarningsPanel(s) {
         <th>Kind</th>
         <th>Result</th>
         <th>Condition</th>
-        <th>Detail</th>
+        <th>What this means</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
