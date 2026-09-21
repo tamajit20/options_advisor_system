@@ -76,6 +76,45 @@ class TestHistoryAndStatsRoutes:
         assert "CONVERT(date, COALESCE(t.closed_on, t.executed_on)) >= ?" in sql
         assert params == ["2026-07-01", "2026-07-31"]
 
+    def test_pnl_timeline_channel_filter_drops_manual(self, client_with_db, mocker):
+        client, conn = client_with_db
+        trade = {
+            "trade_id": "TRD-M",
+            "trade_name": "Manual",
+            "closed_on": datetime(2026, 8, 10),
+            "executed_on": datetime(2026, 8, 1),
+            "net_pnl": 10.0,
+            "gross_pnl": 12.0,
+            "total_charges": 2.0,
+            "net_credit_actual": 100.0,
+            "strategy": "BULL_PUT_SPREAD",
+            "underlying": "NIFTY",
+        }
+        # First fetch_all = trades; later calls may be premium / broker batch.
+        conn.fetch_all.side_effect = [[trade], [], []]
+        mocker.patch("dashboard.server._zerodha_trade_id_set", return_value=set())
+        mocker.patch("dashboard.server._trade_premium_from_legs", return_value=(100.0, "paid"))
+        mocker.patch(
+            "database.execution_reversal_repo.ExecutionReversalRepo",
+            return_value=MagicMock(list_between=MagicMock(return_value=[])),
+        )
+        resp = client.get("/api/stats/pnl-timeline?channel=zerodha")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["trades"] == []
+        assert body["channel"] == "zerodha"
+
+    def test_strategy_performance_channel_in_response(self, client_with_db, mocker):
+        client, conn = client_with_db
+        conn.fetch_all.return_value = []
+        mocker.patch(
+            "database.execution_reversal_repo.ExecutionReversalRepo",
+            return_value=MagicMock(list_between=MagicMock(return_value=[])),
+        )
+        resp = client.get("/api/stats/strategy-performance?channel=manual")
+        assert resp.status_code == 200
+        assert resp.get_json()["channel"] == "manual"
+
 
 class TestRuntimeFlagsRoutes:
     def test_runtime_flags_list(self, client_with_db, mocker):

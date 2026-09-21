@@ -240,6 +240,53 @@ def _filter_trades_by_execution_channel(
     return [t for t in trades if (t or {}).get("execution_channel") == channel]
 
 
+def _zerodha_trade_id_set(db: SQLServerConnection, trade_ids: list) -> set:
+    """Trade IDs that have COMPLETE ENTRY/SUPPLEMENT Kite fills (batch)."""
+    ids = sorted({
+        str(tid) for tid in trade_ids
+        if tid and not str(tid).startswith("REV-")
+    })
+    if not ids:
+        return set()
+    out: set = set()
+    # Keep IN-lists bounded for SQL Server parameter limits.
+    chunk = 200
+    for i in range(0, len(ids), chunk):
+        part = ids[i:i + chunk]
+        ph = ",".join("?" * len(part))
+        rows = db.fetch_all(
+            "SELECT DISTINCT trade_id FROM options_broker_orders "
+            f"WHERE trade_id IN ({ph}) "
+            "AND operation IN ('ENTRY', 'SUPPLEMENT') "
+            "AND kite_order_id IS NOT NULL "
+            "AND UPPER(ISNULL(status, '')) = 'COMPLETE'",
+            part,
+        ) or []
+        for r in rows:
+            tid = r.get("trade_id") if isinstance(r, dict) else None
+            if tid is None and not isinstance(r, dict):
+                try:
+                    tid = r["trade_id"]
+                except Exception:
+                    tid = None
+            if tid is not None:
+                out.add(str(tid))
+    return out
+
+
+def _channel_for_trade_id(trade_id: Any, zerodha_ids: set) -> str:
+    from lifecycle.zerodha_executor import (
+        EXECUTION_CHANNEL_MANUAL,
+        EXECUTION_CHANNEL_ZERODHA,
+    )
+
+    tid = str(trade_id or "")
+    if not tid or tid.startswith("REV-"):
+        # Execution reversals are Zerodha-broker artifacts.
+        return EXECUTION_CHANNEL_ZERODHA if tid.startswith("REV-") else EXECUTION_CHANNEL_MANUAL
+    return EXECUTION_CHANNEL_ZERODHA if tid in zerodha_ids else EXECUTION_CHANNEL_MANUAL
+
+
 # ---------------------------------------------------------------------------
 # Connection helper — each request gets its own short-lived DB connection
 # ---------------------------------------------------------------------------
@@ -2452,6 +2499,9 @@ def create_app() -> Flask:
             request.args.get("quality_band", ""),
             request.args.get("quality_min", ""),
         )
+        channel_f = _normalize_execution_channel_filter(
+            request.args.get("channel") or request.args.get("execution_channel"),
+        )
         where = " AND ".join(filters)
         sql = f"SELECT TOP 300 * FROM options_suggestions WHERE {where} "
         qparams = list(params)
@@ -2481,6 +2531,29 @@ def create_app() -> Flask:
                 tid = by_sug.get(s.get("suggestion_id"))
                 if tid:
                     s["trade_id"] = tid
+        if channel_f:
+            zids = _zerodha_trade_id_set(
+                db, [s.get("trade_id") for s in suggestions if s.get("trade_id")],
+            )
+            filtered = []
+            for s in suggestions:
+                tid = s.get("trade_id")
+                if not tid:
+                    continue  # no trade → no channel; hide when filtering
+                ch = _channel_for_trade_id(tid, zids)
+                s["execution_channel"] = ch
+                if ch == channel_f:
+                    filtered.append(s)
+            suggestions = filtered
+        else:
+            # Still stamp channel when a trade exists (badge / future use).
+            zids = _zerodha_trade_id_set(
+                db, [s.get("trade_id") for s in suggestions if s.get("trade_id")],
+            )
+            for s in suggestions:
+                tid = s.get("trade_id")
+                if tid:
+                    s["execution_channel"] = _channel_for_trade_id(tid, zids)
         # Facet lists for the date window (ignore outcome/quality filters)
         facet_filters: list[str] = [
             "CONVERT(date, generated_on) >= ?",
@@ -2504,6 +2577,7 @@ def create_app() -> Flask:
             "underlyings": underlyings,
             "strategies": strategies,
             "count": len(suggestions),
+            "channel": channel_f or "all",
         })
 
     @app.route("/api/history/trades")
@@ -2530,6 +2604,9 @@ def create_app() -> Flask:
         """
         from_date = request.args.get("from_date") or None
         to_date   = request.args.get("to_date")   or None
+        channel_f = _normalize_execution_channel_filter(
+            request.args.get("channel") or request.args.get("execution_channel"),
+        )
 
         filters = ["t.status IN ('CLOSED', 'EXPIRED')", "t.net_pnl IS NOT NULL",
                    "t.closed_on IS NOT NULL"]
@@ -2563,8 +2640,12 @@ def create_app() -> Flask:
             params,
         )
 
+        zids = _zerodha_trade_id_set(db, [r["trade_id"] for r in rows]) if channel_f else set()
+
         events = []
         for r in rows:
+            if channel_f and _channel_for_trade_id(r["trade_id"], zids) != channel_f:
+                continue
             events.append({
                 "trade_id":          r["trade_id"],
                 "trade_name":        r["trade_name"],
@@ -2578,20 +2659,22 @@ def create_app() -> Flask:
                 "net_credit_actual": float(r["net_credit_actual"] or 0),
                 "is_reversal":       False,
             })
-        for r in rev_rows:
-            events.append({
-                "trade_id":          f"REV-{r.get('id')}",
-                "trade_name":        "Execution revert",
-                "closed_on":         r.get("created_at"),
-                "executed_on":       r.get("created_at"),
-                "strategy":          "EXECUTION_REVERT",
-                "underlying":        "",
-                "net_pnl":           float(r.get("net_pnl") or 0),
-                "gross_pnl":         float(r.get("gross_pnl") or 0),
-                "total_charges":     float(r.get("total_charges") or 0),
-                "net_credit_actual": 0.0,
-                "is_reversal":       True,
-            })
+        # Reversals are Zerodha-broker artifacts — include only for all/zerodha.
+        if not channel_f or channel_f == "zerodha":
+            for r in rev_rows:
+                events.append({
+                    "trade_id":          f"REV-{r.get('id')}",
+                    "trade_name":        "Execution revert",
+                    "closed_on":         r.get("created_at"),
+                    "executed_on":       r.get("created_at"),
+                    "strategy":          "EXECUTION_REVERT",
+                    "underlying":        "",
+                    "net_pnl":           float(r.get("net_pnl") or 0),
+                    "gross_pnl":         float(r.get("gross_pnl") or 0),
+                    "total_charges":     float(r.get("total_charges") or 0),
+                    "net_credit_actual": 0.0,
+                    "is_reversal":       True,
+                })
         events.sort(key=lambda e: e["closed_on"] or "")
 
         trades = []
@@ -2642,6 +2725,7 @@ def create_app() -> Flask:
             "total_pnl":       round(cum_overall, 2),
             "total_invested":  round(total_invested, 2),
             "total_charges":   round(total_charges, 2),
+            "channel":         channel_f or "all",
         })
 
     @app.route("/api/stats/strategy-performance")
@@ -2656,6 +2740,9 @@ def create_app() -> Flask:
         date_filters, params = _optional_closed_date_filters(
             request.args.get("from_date"),
             request.args.get("to_date"),
+        )
+        channel_f = _normalize_execution_channel_filter(
+            request.args.get("channel") or request.args.get("execution_channel"),
         )
         where = "t.status IN ('CLOSED', 'EXPIRED') AND t.net_pnl IS NOT NULL"
         if date_filters:
@@ -2685,6 +2772,15 @@ def create_app() -> Flask:
             "ORDER BY t.executed_on DESC",
             params,
         )
+
+        if channel_f:
+            zids = _zerodha_trade_id_set(db, [r["trade_id"] for r in rows])
+            rows = [
+                r for r in rows
+                if _channel_for_trade_id(r["trade_id"], zids) == channel_f
+            ]
+            if channel_f != "zerodha":
+                rev_rows = []
 
         from collections import defaultdict
         buckets: dict = defaultdict(list)
@@ -2799,7 +2895,11 @@ def create_app() -> Flask:
             "profit_factor": round(sum(overall_wins) / abs(sum(overall_losses)), 2)
                              if overall_losses and sum(overall_losses) != 0 else None,
         }
-        return jsonify({"strategies": strategy_stats, "overall": overall})
+        return jsonify({
+            "strategies": strategy_stats,
+            "overall": overall,
+            "channel": channel_f or "all",
+        })
 
     @app.route("/api/history/paired")
     @_with_db

@@ -6640,6 +6640,19 @@ function _channelFilterLabel(channel) {
   return 'all';
 }
 
+function _histChannelParam(params) {
+  const channelEl = $('#hist-channel');
+  if (channelEl?.value) params.set('channel', channelEl.value);
+  return channelEl?.value || '';
+}
+
+function _reloadActiveHistoryTab() {
+  if (_histActiveSubtab === 'trades')       loadHistory();
+  else if (_histActiveSubtab === 'suggestions')  loadHistorySuggestions();
+  else if (_histActiveSubtab === 'performance')  loadStrategyPerformance();
+  else if (_histActiveSubtab === 'charts')       loadPnlCharts();
+}
+
 async function openSupplementForm(tradeId) {
   const panel = document.getElementById(`supp-${tradeId}`);
   if (!panel) return;
@@ -7728,7 +7741,6 @@ function loadHistory() {
   // Default dates: today and 30 days ago
   const fromEl = $('#hist-from'), toEl = $('#hist-to'), instrEl = $('#hist-instrument');
   const stratEl = $('#hist-strategy'), pnlEl = $('#hist-pnl'), qualEl = $('#hist-quality');
-  const channelEl = $('#hist-channel');
   const summaryEl = $('#hist-summary');
   if (!fromEl.value) { const d = new Date(); d.setDate(d.getDate()-30); fromEl.value = _localDateStr(d); }
   if (!toEl.value)   { toEl.value = _localDateStr(); }
@@ -7740,7 +7752,7 @@ function loadHistory() {
   if (stratEl.value) params.set('strategy', stratEl.value);
   if (pnlEl.value)   params.set('pnl', pnlEl.value);
   if (qualEl.value)  params.set('quality_band', qualEl.value);
-  if (channelEl?.value) params.set('channel', channelEl.value);
+  const channelVal = _histChannelParam(params);
 
   API('/api/history/closed-trades?' + params).then(data => {
     _fillHistSelect(instrEl, data.underlyings, instrEl.value, 'All instruments');
@@ -7751,7 +7763,7 @@ function loadHistory() {
       c.className=''; c.innerHTML='<div class="empty">No closed trades match the selected filters.</div>'; return;
     }
     if (summaryEl) {
-      const ch = channelEl?.value ? ` · ${_channelFilterLabel(channelEl.value)}` : '';
+      const ch = channelVal ? ` · ${_channelFilterLabel(channelVal)}` : '';
       summaryEl.textContent = _histFilterSummary(data.count, 'trade') + ch;
     }
     c.className='';
@@ -7782,6 +7794,7 @@ async function loadHistorySuggestions() {
   if (statusEl.value) params.set('status',     statusEl.value);
   if (stratEl.value)  params.set('strategy',   stratEl.value);
   if (qualEl.value)   params.set('quality_band', qualEl.value);
+  const channelVal = _histChannelParam(params);
 
   try {
     const data = await API('/api/history/suggestions?' + params);
@@ -7793,7 +7806,10 @@ async function loadHistorySuggestions() {
       if (summaryEl) summaryEl.textContent = _histFilterSummary(0, 'suggestion');
       c.className=''; c.innerHTML='<div class="empty">No suggestions match the selected filters.</div>'; return;
     }
-    if (summaryEl) summaryEl.textContent = _histFilterSummary(data.count, 'suggestion');
+    if (summaryEl) {
+      const ch = channelVal ? ` · ${_channelFilterLabel(channelVal)}` : '';
+      summaryEl.textContent = _histFilterSummary(data.count, 'suggestion') + ch;
+    }
     c.className='';
     c.innerHTML = data.suggestions.map(renderHistorySuggestion).join('');
     wireTermHelpToggle(c);
@@ -8024,6 +8040,7 @@ async function loadPnlCharts() {
 
   const fromEl = $('#chart-from'), toEl = $('#chart-to');
   const qs = _dateRangeQuery(fromEl, toEl, { allTime: _chartAllTime, defaultDays: 30 });
+  _histChannelParam(qs);
 
   try {
     const data = await API('/api/stats/pnl-timeline?' + qs);
@@ -8084,6 +8101,7 @@ async function loadStrategyPerformance() {
   if (!c) return;
   c.className = 'loading'; c.textContent = 'Loading…';
   const qs = _dateRangeQuery($('#perf-from'), $('#perf-to'), { allTime: _perfAllTime, defaultDays: 30 });
+  _histChannelParam(qs);
   try {
     const data = await API('/api/stats/strategy-performance?' + qs);
     if (!data.strategies.length) {
@@ -8515,7 +8533,7 @@ $('#hist-quality').addEventListener('change', loadHistory);
 $('#hist-from').addEventListener('change', loadHistory);
 $('#hist-to').addEventListener('change', loadHistory);
 const _histChannel = $('#hist-channel');
-if (_histChannel) _histChannel.addEventListener('change', loadHistory);
+if (_histChannel) _histChannel.addEventListener('change', _reloadActiveHistoryTab);
 
 // My Trades channel filter
 const _tradesChannel = $('#trades-channel');

@@ -141,6 +141,13 @@
         <button class="hist-subtab" data-htab="performance">📊 Performance</button>
         <button class="hist-subtab" data-htab="charts">📈 Charts</button>
       </div>
+      <div class="filter-row hist-filter-bar">
+        <select id="hist-channel" title="Zerodha broker vs manual/paper fills (applies to all History tabs)">
+          <option value="">All channels</option>
+          <option value="zerodha">Zerodha only</option>
+          <option value="manual">Manual only</option>
+        </select>
+      </div>
 
       <!-- Trades sub-tab -->
       <div id="hist-pane-trades">
@@ -162,11 +169,6 @@
             <option value="profit">Profit</option>
             <option value="loss">Loss</option>
             <option value="breakeven">Breakeven</option>
-          </select>
-          <select id="hist-channel" title="Zerodha broker vs manual/paper fills">
-            <option value="">All channels</option>
-            <option value="zerodha">Zerodha only</option>
-            <option value="manual">Manual only</option>
           </select>
           <select id="hist-quality" title="Entry quality tier">
             <option value="">Any quality</option>

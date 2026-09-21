@@ -580,7 +580,7 @@ Leg **pricing provenance** (`LIVE` | `EOD` | `MIXED`) is unrelated to trend labe
 Flask on **:5001** (`dashboard/server.py`). Reads DB; execution calls lifecycle.  
 Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-outs must show a clear reason.
 
-**My Trades / History channel filter:** All / Zerodha only / Manual only (`?channel=` on `/api/trades/open` and `/api/history/closed-trades`). Channel follows opening Kite ENTRY/SUPPLEMENT fills, not the `execution_provider` stamp alone.
+**My Trades / History channel filter:** shared All / Zerodha only / Manual only on My Trades and across all History tabs (Trades, Suggestions, Performance, Charts). `?channel=` on `/api/trades/open`, `/api/history/closed-trades`, `/api/history/suggestions`, `/api/stats/pnl-timeline`, `/api/stats/strategy-performance`. Channel follows opening Kite ENTRY/SUPPLEMENT fills (execution reversals count as Zerodha). Suggestions without a linked trade are hidden when a channel filter is active.
 
 **My Trades Current P&L:** header badge shows live MTM in session; **off-market** it keeps the last live/DB MTM (same figure as expanded Live P&L / Close now), not a blank dash.
 
