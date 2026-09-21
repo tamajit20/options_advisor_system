@@ -32,24 +32,26 @@ def test_build_restore_move_uses_local_dirs_not_bak_paths():
         ("OptionsAdvisorDB_ArchiveExport", r"\var\opt\mssql\data\x.mdf", "D"),
         ("OptionsAdvisorDB_ArchiveExport_log", r"\var\opt\mssql\data\x.ldf", "L"),
     ]
-    data = Path(r"C:\SQLData")
-    log = Path(r"C:\SQLLog")
+    data = Path("sql_data")
+    log = Path("sql_log")
     moves = build_restore_move_clauses(
         filelist, "OptionsAdvisorDB_Archive_Staging", data, log,
     )
     assert len(moves) == 2
-    assert r"C:\SQLData\OptionsAdvisorDB_Archive_Staging_0.mdf" in moves[0]
-    assert r"C:\SQLLog\OptionsAdvisorDB_Archive_Staging_1.ldf" in moves[1]
+    assert str(data / "OptionsAdvisorDB_Archive_Staging_0.mdf") in moves[0]
+    assert str(log / "OptionsAdvisorDB_Archive_Staging_1.ldf") in moves[1]
     assert "var" not in moves[0].lower()
     assert "var" not in moves[1].lower()
 
 
 def test_build_restore_move_rejects_nothing_when_dirs_local():
     # Sanity: single data file typed D goes to data_dir.
+    data = Path("mssql_data")
     moves = build_restore_move_clauses(
         [("db", "/var/opt/mssql/data/x.mdf", "D")],
         "Staging",
-        Path(r"D:\MSSQL\DATA"),
-        Path(r"D:\MSSQL\DATA"),
+        data,
+        data,
     )
-    assert moves[0].endswith(r"Staging_0.mdf'")
+    assert str(data / "Staging_0.mdf") in moves[0]
+    assert moves[0].endswith("Staging_0.mdf'")
