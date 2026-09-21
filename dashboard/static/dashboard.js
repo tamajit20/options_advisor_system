@@ -4686,6 +4686,71 @@ function gateResultOf(c) {
   return st;
 }
 
+const GATE_KIND_ORDER = { HARD: 0, SOFT: 1, ADVISORY: 2 };
+const GATE_RESULT_ORDER = { FAIL: 0, ERROR: 1, WARN: 2, PASS: 3 };
+
+const GATE_KIND_TIP = {
+  HARD: 'Hard gate — must pass. A fail blocks or retires the suggestion.',
+  SOFT: 'Soft gate — scored with other softs. A fail still shows the card; several soft fails can block.',
+  ADVISORY: 'Advisory only — warn and review. Never the sole reason to block a pick.',
+};
+
+const GATE_RESULT_TIP = {
+  PASS: 'Condition cleared.',
+  FAIL: 'Condition missed (hard fail, soft fail, or advisory miss).',
+  WARN: 'Passed with a caveat — read the detail.',
+  ERROR: 'Could not evaluate (missing data or runtime error).',
+};
+
+/** Hover help for each condition label (substring match, first wins). */
+const GATE_CONDITION_TIPS = [
+  ['dte within', 'Days to expiry must sit in the configured target band for this strategy.'],
+  ['atm strikes liquid', 'ATM option bid-ask must be tight enough to enter without paying a wide spread.'],
+  ['iv rank in actionable', 'IV Rank must be in a writing zone (high) or buying zone (low) — mid-rank is weak edge.'],
+  ['vix stable', 'India VIX should be stable or falling so premium decay is not fighting a vol spike.'],
+  ['pcr in neutral', 'Put-call ratio in a neutral band — extreme PCR often means crowded positioning.'],
+  ['oi walls', 'Visible open-interest walls give a rough range pin / support-resistance context.'],
+  ['trend identifiable', 'SMA / tape trend must be readable (bullish, bearish, or sideways) — MIXED sits out.'],
+  ['iv premium vs realised', 'Implied vol vs 20-day realised (HV). High IV/HV favours selling; low favours buying.'],
+  ['fii positioning', 'FII index futures positioning should not fight the effective trend hard.'],
+  ['oi change conviction', 'Day-over-day (or since-open) OI change PCR should agree with the trade thesis.'],
+  ['high-impact event', 'Flags a HIGH-impact catalyst inside the hold window — events can gap through strikes.'],
+  ['atm iv trajectory', 'Intraday ATM IV path — rising IV can hurt shorts; falling IV can hurt long vol.'],
+  ['oi pcr momentum', 'Short-term OI PCR momentum — sharp one-sided build can signal a directional squeeze.'],
+  ['iv rank vs iv/hv', 'IV Rank and IV/HV should agree (both write-friendly or both buy-friendly).'],
+  ['quiet tape', 'Live session range vs 1-day expected move. Quiet tape soft-warns long vol — never sole veto.'],
+  ['session range', 'Live session range vs 1-day expected move. Quiet tape soft-warns long vol — never sole veto.'],
+  ['long-vol iv rank', 'Long straddle/strangle needs enough IV rank (or a HIGH catalyst) for vol expansion edge.'],
+  ['long-vol iv/hv', 'Long vol prefers cheaper options vs realised vol — rich IV/HV weakens the long-vol thesis.'],
+  ['long-vol entry', 'Combined long-vol entry checks (IV, catalyst, session range).'],
+  ['live execution', 'Live broker/pre-trade checks (liquidity, capital, circuit, etc.). Soft miss keeps Place available.'],
+  ['strategy / scenario', 'Strategy or scenario note from selection — review before placing.'],
+  ['expected-move calibration', 'Historical realised vs expected move drifted — strike distances may be miscalibrated.'],
+  ['intraday validator', '09:35 IST re-price: still good, or marked stale after open.'],
+  ['suggestion freshness', 'Card age exceeded freshness window — regenerate for live decisioning.'],
+  ['nse data freshness', 'FO/IV date vs older Spot/FII/VIX feeds — secondary feeds may lag the chain.'],
+];
+
+function gateConditionTip(label) {
+  const lbl = (label || '').toLowerCase();
+  for (const [needle, tip] of GATE_CONDITION_TIPS) {
+    if (lbl.includes(needle)) return tip;
+  }
+  return 'Market or execution condition evaluated for this suggestion.';
+}
+
+function sortGatesForDisplay(checks) {
+  return checks.slice().sort((a, b) => {
+    const ka = GATE_KIND_ORDER[gateKindOf(a)] ?? 9;
+    const kb = GATE_KIND_ORDER[gateKindOf(b)] ?? 9;
+    if (ka !== kb) return ka - kb;
+    const ra = GATE_RESULT_ORDER[gateResultOf(a)] ?? 9;
+    const rb = GATE_RESULT_ORDER[gateResultOf(b)] ?? 9;
+    if (ra !== rb) return ra - rb;
+    return String(a.label || '').localeCompare(String(b.label || ''));
+  });
+}
+
 /**
  * Extra warnings that live outside conditions_json — folded into the same panel
  * so the operator sees one place only (no duplicate chips/banners).
@@ -4765,7 +4830,7 @@ function renderGatesAndWarningsPanel(s) {
   // Dedupe extras whose label already appears in confidence checks
   const confLabels = new Set(fromConf.map(c => (c.label || '').toLowerCase()));
   const mergedExtras = extras.filter(e => !confLabels.has((e.label || '').toLowerCase()));
-  const checks = [...fromConf, ...mergedExtras];
+  const checks = sortGatesForDisplay([...fromConf, ...mergedExtras]);
   if (!checks.length) return '';
 
   const STATUS_CLASS = { PASS: 'conf-pass', FAIL: 'conf-fail', SOFT_FAIL: 'conf-soft-fail', PASS_WARN: 'conf-warn', PASS_ERROR: 'conf-error' };
@@ -4793,21 +4858,30 @@ function renderGatesAndWarningsPanel(s) {
     const detailHtml = c.detail
       ? `<span class="conf-detail-text">${escapeHtml(c.detail)}</span>`
       : '<span class="conf-detail-na">—</span>';
+    const kindTip = GATE_KIND_TIP[kind] || '';
+    const resTip  = GATE_RESULT_TIP[result] || '';
+    const condTip = gateConditionTip(c.label);
     return `<tr class="conf-check-row ${rowClass}">
-      <td><span class="gate-kind-badge ${KIND_CLASS[kind]}">${kind}</span></td>
-      <td><span class="gate-res-badge ${RESULT_CLASS[result] || ''}">${result}</span></td>
-      <td class="conf-label">${escapeHtml(c.label || '')}</td>
+      <td><span class="gate-kind-badge ${KIND_CLASS[kind]}" title="${escapeHtml(kindTip)}" style="cursor:help">${kind}</span></td>
+      <td><span class="gate-res-badge ${RESULT_CLASS[result] || ''}" title="${escapeHtml(resTip)}" style="cursor:help">${result}</span></td>
+      <td class="conf-label"><span class="gate-cond-label" title="${escapeHtml(condTip)}" style="cursor:help">${escapeHtml(c.label || '')}</span></td>
       <td class="conf-detail">${detailHtml}</td>
     </tr>`;
   }).join('');
 
   const hasIssues = nFail > 0 || nSoftFail > 0 || nWarn > 0 || nError > 0;
   const titleCls = hasIssues ? 'conf-checks-title conf-checks-title--warn' : 'conf-checks-title';
+  const legendTip = 'Ordered HARD → SOFT → ADVISORY. Hover Kind, Result, or Condition for what each means.';
 
   return `<div class="conf-checks-panel gates-warnings-panel" id="conf-${sid}">
-    <div class="${titleCls}">Gates &amp; warnings — ${passed}/${total} passed${titleSuffix}</div>
+    <div class="${titleCls}" title="${escapeHtml(legendTip)}">Gates &amp; warnings — ${passed}/${total} passed${titleSuffix}</div>
     <table class="conf-checks-table">
-      <thead><tr><th>Kind</th><th>Result</th><th>Condition</th><th>Detail</th></tr></thead>
+      <thead><tr>
+        <th title="${escapeHtml('HARD blocks · SOFT scored · ADVISORY warn-only')}">Kind</th>
+        <th title="${escapeHtml('PASS cleared · FAIL missed · WARN caveat · ERROR unevaluable')}">Result</th>
+        <th title="${escapeHtml('Hover each condition for a short explanation')}">Condition</th>
+        <th>Detail</th>
+      </tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </div>`;

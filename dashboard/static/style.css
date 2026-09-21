@@ -2563,6 +2563,7 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .ctx-chip.ctx-expiry-monthly { color: #a78bfa; border-color: rgba(167,139,250,.35); font-weight: 600; }
 .ctx-chip.ctx-expiry-weekly  { color: #22d3ee; border-color: rgba(34,211,238,.35);  font-weight: 600; }
 .conf-label { font-weight: 500; padding-right: 10px; }
+.gate-cond-label { border-bottom: 1px dotted rgba(148,163,184,.45); }
 .conf-detail { opacity: .85; }
 .conf-detail-text { font-style: italic; opacity: .8; }
 .conf-detail-na { opacity: .3; }
