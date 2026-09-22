@@ -788,7 +788,8 @@ function _formatZerodhaMarginOnCard(preview) {
     : preview.margin_required;
   if (peak == null && fin == null) return null;
   const blocked = preview.margin_ok === false;
-  let line = `Zerodha Final \u20b9${fmt(fin)} \u00b7 Peak \u20b9${fmt(peak)}`;
+  // Amount needed shows Final; detail line is Peak / Avail only.
+  let line = `Peak \u20b9${fmt(peak)}`;
   if (preview.margin_available != null) {
     line += ` \u00b7 Avail \u20b9${fmt(preview.margin_available)}`;
   }
@@ -796,11 +797,51 @@ function _formatZerodhaMarginOnCard(preview) {
   return { line, blocked, fin, peak };
 }
 
+function _setSuggestionAmountNeeded(card, rs) {
+  if (rs == null || !Number.isFinite(Number(rs))) return;
+  const txt = `\u20b9${fmt(rs)}`;
+  const main = card.querySelector('.econ-cap-req');
+  if (main) main.textContent = txt;
+  const compact = card.querySelector('.econ-cap-req-compact');
+  if (compact) compact.textContent = txt;
+  card.dataset.marginFinal = String(rs);
+}
+
+/** Session cache: one Kite margin quote per suggestion+lots until lots change or Execute. */
+const _zerodhaMarginQuoteCache = new Map();
+
+function _marginQuoteCacheKey(sid, lots) {
+  const lotPart = (lots != null && lots !== 'invalid') ? String(lots) : 'default';
+  return `${sid}|${lotPart}`;
+}
+
+function _invalidateZerodhaMarginQuote(sid) {
+  if (!sid) return;
+  const prefix = `${sid}|`;
+  for (const key of [..._zerodhaMarginQuoteCache.keys()]) {
+    if (key.startsWith(prefix)) _zerodhaMarginQuoteCache.delete(key);
+  }
+}
+
+function _collectCardLotsForMargin(card) {
+  if (typeof _collectExecLots !== 'function') return null;
+  const lots = _collectExecLots(card);
+  if (lots == null || lots === 'invalid') return null;
+  return lots;
+}
+
 function _applyZerodhaMarginToCard(card, preview) {
   const info = _formatZerodhaMarginOnCard(preview);
   if (!info) {
     _setSuggestionMarginStatus(card, 'Zerodha Final / Peak unavailable', { warn: true });
     return;
+  }
+  // Primary Amount needed = Kite Final (full structure) for every strategy.
+  const amountRs = info.fin != null ? info.fin : info.peak;
+  if (amountRs != null) _setSuggestionAmountNeeded(card, amountRs);
+  const hint = card.querySelector('[data-econ-cap-hint]');
+  if (hint) {
+    hint.textContent = 'Zerodha Final (full basket). Peak below is the highest margin while placing legs; orders need Peak + buffer in available cash.';
   }
   _setSuggestionMarginStatus(card, info.line, {
     ok: preview.margin_ok === true,
@@ -810,7 +851,7 @@ function _applyZerodhaMarginToCard(card, preview) {
   if (compact) {
     compact.hidden = false;
     compact.removeAttribute('hidden');
-    compact.innerHTML = ` <span class="muted">(Final \u20b9${fmt(info.fin)} \u00b7 Peak \u20b9${fmt(info.peak)})</span>`;
+    compact.innerHTML = ` <span class="muted">(Peak \u20b9${fmt(info.peak)})</span>`;
   }
 }
 
@@ -819,7 +860,7 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
   if (!sid) return;
   // '1' = success, '0' = failed this render, 'pending' = in flight.
   // Skip all three so status polls / parallel hydrate do not re-hit Kite.
-  // Lots change / suggestion reload clears the flag and quotes again.
+  // Lots change invalidates cache + clears the flag; Execute always fetches live.
   const state = card.dataset.marginHydrated;
   if (state === '1' || state === '0' || state === 'pending') return;
   const blockedReason = typeof _zerodhaMarginQuoteDisabledReason === 'function'
@@ -829,14 +870,19 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
     _setSuggestionMarginStatus(card, blockedReason, { warn: true });
     return;
   }
+  const lots = _collectCardLotsForMargin(card);
+  const cacheKey = _marginQuoteCacheKey(sid, lots);
+  const cached = _zerodhaMarginQuoteCache.get(cacheKey);
+  if (cached) {
+    card.dataset.marginHydrated = '1';
+    _applyZerodhaMarginToCard(card, cached);
+    return;
+  }
   card.dataset.marginHydrated = 'pending';
   _setSuggestionMarginStatus(card, 'Fetching Zerodha Final / Peak\u2026');
   try {
     const body = {};
-    if (typeof _collectExecLots === 'function') {
-      const lots = _collectExecLots(card);
-      if (lots != null && lots !== 'invalid') body.lots = lots;
-    }
+    if (lots != null) body.lots = lots;
     const prev = await API(`/api/suggestion/${sid}/zerodha-preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -847,11 +893,13 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
       || prev.preview.margin_final_required != null
       || prev.preview.margin_required != null
     )) {
+      _zerodhaMarginQuoteCache.set(cacheKey, prev.preview);
       card.dataset.marginHydrated = '1';
       _applyZerodhaMarginToCard(card, prev.preview);
       return;
     }
     card.dataset.marginHydrated = '0';
+    delete card.dataset.marginFinal;
     _setSuggestionMarginStatus(
       card,
       (prev?.preview?.margin_message) || 'Zerodha Final / Peak unavailable',
@@ -859,6 +907,7 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
     );
   } catch (err) {
     card.dataset.marginHydrated = '0';
+    delete card.dataset.marginFinal;
     _setSuggestionMarginStatus(
       card,
       (err && err.message) ? String(err.message) : 'Zerodha Final / Peak unavailable',
@@ -868,7 +917,11 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
 }
 
 async function _hydrateSuggestionZerodhaMargins(root) {
-  const cards = [...(root || document).querySelectorAll('.card[data-sug-id]')];
+  // Only today's suggestion cards — not history / trade embeds.
+  const scope = root
+    || document.getElementById('suggestion-container')
+    || document;
+  const cards = [...scope.querySelectorAll('.card[data-sug-id]')];
   if (!cards.length) return;
   const blockedReason = typeof _zerodhaMarginQuoteDisabledReason === 'function'
     ? _zerodhaMarginQuoteDisabledReason()
@@ -1716,11 +1769,12 @@ function premiumFromSuggestion(s) {
   return null;
 }
 
-/** Upfront capital or broker margin needed to open the suggested position. */
+/** Engine estimate for Amount needed until Zerodha Final hydrates (all strategies). */
 function suggestionCapitalRequired(s, econ, baseQty, baseWidthTotal) {
   const strategy = s.strategy || '';
   const debit = isDebitStrategy(strategy) || (econ.np != null && parseFloat(econ.np) < 0);
   const premium = premiumFromSuggestion(s);
+  const pendingHint = 'Engine estimate — replaced by Zerodha Final when the session quotes';
   if (debit) {
     const rs = premium?.rs
       ?? (econ.ml != null ? parseFloat(econ.ml) : null)
@@ -1729,21 +1783,15 @@ function suggestionCapitalRequired(s, econ, baseQty, baseWidthTotal) {
       label: 'Amount needed',
       key: 'capital_required',
       rs,
-      hint: 'Premium you must have in Zerodha to buy this position',
+      hint: pendingHint,
     };
   }
   const rs = econ.ml != null ? parseFloat(econ.ml) : null;
-  const grossWidth = baseWidthTotal > 0 ? baseWidthTotal : null;
-  const creditRs = premium?.kind === 'received' ? premium.rs : null;
-  let hint = 'Approximate funds Zerodha blocks to open this spread (checked again before orders)';
-  if (grossWidth != null && creditRs != null) {
-    hint = `Spread width ₹${fmt(grossWidth)} − credit ₹${fmt(creditRs)} — funds Zerodha must show as available`;
-  }
   return {
     label: 'Amount needed',
     key: 'margin_required',
     rs,
-    hint,
+    hint: pendingHint,
   };
 }
 
@@ -1888,11 +1936,11 @@ const TERM_HELP = {
   },
   margin_required: {
     label: 'Amount needed',
-    html: '<strong>Amount needed</strong> — Engine estimate of funds to open the structure. When Zerodha is ready, <em>Final</em> (full basket) and <em>Peak</em> (highest margin while placing legs one-by-one) appear underneath, plus available cash. Peak + buffer is what must clear before orders place.',
+    html: '<strong>Amount needed</strong> — Zerodha <em>Final</em> margin for the full basket (all strategies). Until Kite quotes, an engine estimate shows. Underneath: <em>Peak</em> (highest margin while placing legs) and available cash. Orders need Peak + buffer available.',
   },
   capital_required: {
     label: 'Amount needed',
-    html: '<strong>Amount needed</strong> — Premium you pay upfront to buy this position. When Zerodha is ready, Final / Peak margin from Kite also show under this line.',
+    html: '<strong>Amount needed</strong> — Zerodha <em>Final</em> margin for the full basket (all strategies). Until Kite quotes, an engine estimate shows. Underneath: <em>Peak</em> (highest margin while placing legs) and available cash. Orders need Peak + buffer available.',
   },
   est_net_max_profit: {
     label: 'Est. net at max profit',
@@ -6430,7 +6478,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     <div class="collapsible-preview">
       <span>PoP <strong>${fmtPct(econ.pop)}</strong></span>
       <span>Credit <strong>₹${fmt(econ.np)}</strong>/u</span>
-      ${capitalReq.rs != null ? `<span>Amount needed <strong class="econ-cap-req-compact">₹${fmt(capitalReq.rs)}</strong><span class="econ-z-margin-compact" data-econ-z-margin-compact hidden></span></span>` : ''}
+      ${`<span>Amount needed <strong class="econ-cap-req-compact">${capitalReq.rs != null ? `₹${fmt(capitalReq.rs)}` : '—'}</strong><span class="econ-z-margin-compact" data-econ-z-margin-compact hidden></span></span>`}
       <span>Max loss <strong>₹${fmt(econ.ml)}</strong></span>
       ${s.dte != null ? `<span>DTE <strong>${s.dte}</strong></span>` : ''}
     </div>`;
@@ -6448,7 +6496,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       ${s.expiry_date ? `<div>${kvLabel('Options expiry', 'dte')}<br><span class="v">${fmtDate(s.expiry_date)}${s.dte != null ? ` <span class="muted">(${s.dte} DTE)</span>` : ''}</span></div>` : (s.dte != null ? `<div>${kvLabel('DTE', 'dte')}<br><span class="v">${s.dte}</span></div>` : '')}
       <div>${kvLabel('Net credit (per unit)', 'credit_per_unit')}<br><span class="v econ-np">₹${fmt(econ.np)}</span></div>
       <div>${kvLabel('Total credit')}<br><span class="v econ-tot-credit">₹${fmt(baseTotalCredit)}<span class="econ-qty-hint muted" style="font-size:.75rem"> (×${baseQty})</span></span></div>
-      ${capitalReq.rs != null ? `<div>${kvLabel(capitalReq.label, capitalReq.key)}<br><span class="v econ-cap-req">₹${fmt(capitalReq.rs)}</span><span class="econ-z-margin muted" data-econ-z-margin style="font-size:.75rem;display:block;margin-top:2px">Fetching Zerodha Final / Peak…</span>${capitalReq.hint ? `<span class="muted" style="font-size:.75rem;display:block;margin-top:2px">${escapeHtml(capitalReq.hint)}</span>` : ''}</div>` : ''}
+      <div>${kvLabel(capitalReq.label, capitalReq.key)}<br><span class="v econ-cap-req">${capitalReq.rs != null ? `₹${fmt(capitalReq.rs)}` : '—'}</span><span class="econ-z-margin muted" data-econ-z-margin style="font-size:.75rem;display:block;margin-top:2px">Fetching Zerodha Final / Peak…</span><span class="muted" style="font-size:.75rem;display:block;margin-top:2px" data-econ-cap-hint>${escapeHtml(capitalReq.hint || 'Engine estimate — replaced by Zerodha Final when the session quotes')}</span></div>
       <div>${kvLabel('Max profit', 'max_profit')}<br><span class="v econ-mp">₹${fmt(econ.mp)}</span></div>
       <div>${kvLabel('Max loss', 'max_loss')}<br><span class="v econ-ml">₹${fmt(econ.ml)}<span class="econ-ml-hint">${pctHint(econ.ml, econ.np, 'credit')}</span></span></div>
       <div>${kvLabel('PoP', 'pop')}<br><span class="v">${fmtPct(econ.pop)}</span></div>
@@ -6707,11 +6755,23 @@ function bindSuggestionActions() {
       setText('.econ-mp',         `₹${fmt(liveMp)}`);
       if (isCreditStrat) {
         setText('.econ-ml', `₹${fmt(liveMl)}`);
-        setText('.econ-cap-req', `₹${fmt(liveMl)}`);
-      } else {
-        const strategy = card.dataset.strategy || '';
-        if (isDebitStrategy(strategy) && liveTotalCredit < 0) {
-          setText('.econ-cap-req', `₹${fmt(Math.abs(liveTotalCredit))}`);
+      }
+      // Amount needed stays on Zerodha Final once hydrated; only re-estimate
+      // while waiting for / after clearing the Kite quote (e.g. lots change).
+      const marginReady = card.dataset.marginHydrated === '1';
+      if (!marginReady) {
+        if (isCreditStrat) {
+          setText('.econ-cap-req', `₹${fmt(liveMl)}`);
+          const compactCap = card.querySelector('.econ-cap-req-compact');
+          if (compactCap) compactCap.textContent = `₹${fmt(liveMl)}`;
+        } else {
+          const strategy = card.dataset.strategy || '';
+          if (isDebitStrategy(strategy) && liveTotalCredit < 0) {
+            const debitRs = Math.abs(liveTotalCredit);
+            setText('.econ-cap-req', `₹${fmt(debitRs)}`);
+            const compactCap = card.querySelector('.econ-cap-req-compact');
+            if (compactCap) compactCap.textContent = `₹${fmt(debitRs)}`;
+          }
         }
       }
       setText('.econ-chg',        `₹${fmt(liveChg)}`);
@@ -6768,8 +6828,10 @@ function bindSuggestionActions() {
           inp.hasAttribute('data-leg-price')) {
         if (inp.classList.contains('exec-lots-input')) {
           inp.classList.toggle('input-error', _collectExecLots(card) === 'invalid');
-          // Lots change the Kite Final/Peak quote — refresh under Amount needed.
+          // Lots change — drop cached quote and re-fetch once for the new size.
           delete card.dataset.marginHydrated;
+          delete card.dataset.marginFinal;
+          _invalidateZerodhaMarginQuote(card.dataset.sugId);
           _hydrateOneSuggestionZerodhaMargin(card);
         }
         recalc();
@@ -6895,6 +6957,11 @@ function bindSuggestionActions() {
         throw new Error('Preview returned no legs — check Zerodha session and suggestion legs');
       }
       card.dataset.marginHydrated = '1';
+      // Fresh Execute preview also refreshes the session cache for this lots size.
+      {
+        const lots = body.lots != null ? body.lots : _collectCardLotsForMargin(card);
+        _zerodhaMarginQuoteCache.set(_marginQuoteCacheKey(sid, lots), preview);
+      }
       _applyZerodhaMarginToCard(card, preview);
       showZerodhaConfirmModal(preview, {
         title: preview.all_limits_in_band
@@ -10210,10 +10277,12 @@ async function loadZerodhaStatus(refreshAccount = false) {
     }
     _refreshAllFeedTags();
     _refreshZerodhaExecButtons();
-    // One-shot Final/Peak hydrate after session flags are known. Already tried
-    // cards (success or fail) are skipped — no Kite re-quote on the 60s poll.
+    // One-shot Final/Peak hydrate after session flags are known. Cached quotes
+    // and already-tried cards skip Kite — no re-quote on the 10 min status poll.
     if (typeof _hydrateSuggestionZerodhaMargins === 'function') {
-      _hydrateSuggestionZerodhaMargins(document);
+      _hydrateSuggestionZerodhaMargins(
+        document.getElementById('suggestion-container') || document,
+      );
     }
     // Update header pill (always present)
     if (headerBtn && headerIcon && headerLabel) {
