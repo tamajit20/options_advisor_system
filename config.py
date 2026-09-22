@@ -633,9 +633,11 @@ STRATEGY_CONFIG = {
         "iv_rank_min_without_catalyst": 15.0,
         "iv_premium_max": 1.00,
         "catalyst_lookahead_days": 14,
-        # Extra AND for live quiet tape — soft warn only (never blocks the pick).
-        # Shown on the suggestion card with other gates; need today's high−low
-        # ≥ this fraction of 1-day EM or SOFT_FAIL ("quiet tape") is recorded.
+        # Extra AND for live quiet tape — demotes expansion picks in the selector
+        # (LONG_STRADDLE / LONG_STRANGLE / LONG_CALL / LONG_PUT). Need today's
+        # high−low ≥ this fraction of 1-day EM or the pick falls through to
+        # calendar / debit spreads. Catalyst still bypasses. Missing session
+        # data skips the check (does not block).
         "min_session_range_em_fraction": 0.35,
     },
 

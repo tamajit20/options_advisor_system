@@ -591,7 +591,6 @@ class SuggestionRepo:
         self.db = db
 
     def insert(self, s: Suggestion) -> None:
-        from engine.regime_pair import encode_regime_pair_trigger_reason
         self.db.execute(
             """
             INSERT INTO options_suggestions
@@ -623,7 +622,7 @@ class SuggestionRepo:
                 getattr(s.economics, "credit_grade", None),
                 getattr(s, "em_calibration_warning", None),
                 getattr(s, "entry_quality_score", None),
-                encode_regime_pair_trigger_reason(s),
+                None,
                 getattr(s, "strategy_veto_reason", None),
             ],
         ).close()

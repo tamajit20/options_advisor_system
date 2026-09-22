@@ -13,8 +13,9 @@ For each underlying:
     5. Persist (Suggestion + legs OR NoSuggestion)
     6. Emit notification
 
-Generates one or two suggestions per underlying per day when the market is
-sideways (range + breakout pair). Directional trends still get a single pick.
+Generates one suggestion per underlying per day via ``select_strategy``.
+Sideways markets get a single pick (calendar / condor / straddle, etc.) —
+not a range+breakout pair.
 """
 
 from __future__ import annotations
@@ -56,12 +57,6 @@ from engine.market_data_provenance import (
 from engine.iv_calculator import implied_vol
 from engine.iv_rank import iv_rank as compute_iv_rank, pick_atm_iv
 from engine.strategy_selector import assemble_suggestion, select_strategy
-from engine.regime_pair import (
-    complete_regime_pair,
-    encode_regime_pair_trigger_reason,
-    regime_pair_group_id,
-    resolve_regime_pair_strategies,
-)
 from exceptions import StrategyVeto
 from lifecycle.chain_aggregator import load_trajectory
 from lifecycle.session_spot import build_session_bar
@@ -922,196 +917,6 @@ def _evaluate_underlying(
             has_long_vol_catalyst=_has_lv_catalyst,
         )
 
-        if use_indicators.trend == "SIDEWAYS":
-            if iv_rank is None:
-                no_suggestions.append(NoSuggestion(
-                    generated_on=now_ist(),
-                    underlying=symbol,
-                    confidence=use_confidence,
-                    reason=f"[{expiry_type} {use_expiry}] IV rank unavailable "
-                           f"— cannot pick a sideways regime pair",
-                ))
-                continue
-            range_strat, breakout_strat = resolve_regime_pair_strategies(
-                iv_rank=float(iv_rank),
-                has_long_vol_catalyst=_has_lv_catalyst,
-                iv_premium=getattr(use_indicators, "iv_premium", None),
-            )
-            pair_specs: list[tuple[str, str]] = [("range", range_strat)]
-            pairing = breakout_strat is not None
-            if pairing:
-                pair_specs.append(("breakout", breakout_strat))
-
-            built_pair: list[tuple[Suggestion, str]] = []
-            missing_reasons: dict[str, str] = {}
-            for ptype, strat in pair_specs:
-                strat_kw = dict(_assemble_kw)
-                strat_kw["calendar_legs"] = None
-                strat_expiry = use_expiry
-                strat_chain = use_chain
-                strat_dte = use_dte
-                strat_indicators = use_indicators
-                strat_confidence = use_confidence
-                strat_calendar = calendar_legs
-
-                if strat == "CALENDAR_SPREAD":
-                    strat_calendar = _resolve_calendar_legs(
-                        fo, symbol, trade_date, entry_day,
-                        chain_provider=chain_provider,
-                        live_today=live_today,
-                    )
-                    if strat_calendar is None:
-                        missing_reasons[ptype] = (
-                            f"{strat}: near/far calendar legs unavailable"
-                        )
-                        logger.debug(
-                            "Regime pair: calendar legs unavailable for %s %s",
-                            symbol, expiry_type,
-                        )
-                        continue
-                    strat_expiry = strat_calendar["near_expiry"]
-                    strat_chain = strat_calendar["near_chain"]
-                    strat_dte = max(days_between(entry_day, strat_expiry), 0)
-                    if strat_expiry != use_expiry or strat_dte != use_dte:
-                        strat_atm_iv, strat_iv_rank = _resolve_atm_iv_rank_for_chain(
-                            chain=strat_chain,
-                            spot=spot,
-                            entry_dte=strat_dte,
-                            expiry=strat_expiry,
-                            symbol=symbol,
-                            trade_date=trade_date,
-                            live_mode=_live_mode,
-                            live_today=live_today,
-                            iv_repo=iv_repo,
-                            iv_rows=iv_rows,
-                        )
-                        if strat_atm_iv <= 0:
-                            missing_reasons[ptype] = (
-                                f"{strat}: no ATM IV for calendar near expiry"
-                            )
-                            continue
-                        strat_oi_change = oi_change_rows
-                        strat_oi_abs = oi_abs_rows
-                        if _live_mode:
-                            near_eod = fo.get_chain(symbol, trade_date, strat_expiry)
-                            strat_oi_change, strat_oi_abs = _oi_rows_for_live_chain(
-                                strat_chain, near_eod,
-                            )
-                        strat_indicators = build_indicators(
-                            symbol=symbol,
-                            as_of=_trend_as_of,
-                            spot=spot,
-                            chain_rows=strat_chain,
-                            spot_history=spot_history,
-                            vix_history=vix_history,
-                            atm_iv=strat_atm_iv,
-                            dte=strat_dte,
-                            fii_net_futures=fii_net_futures,
-                            oi_chain_rows=strat_oi_abs,
-                            oi_change_rows=strat_oi_change,
-                            trajectory=load_trajectory(
-                                db, symbol=symbol, expiry=strat_expiry,
-                            ) if _live_mode else None,
-                            session_bar=_session_bar,
-                            live_mode=_live_mode,
-                        )
-                        _conf_rank = (
-                            strat_iv_rank if strat_iv_rank is not None else iv_rank
-                        )
-                        strat_confidence = evaluate_confidence(
-                            iv_rank=_conf_rank,
-                            indicators=strat_indicators,
-                            dte=strat_dte,
-                            has_high_impact_event_this_week=has_event,
-                            high_impact_event_description=event_desc,
-                            events_calendar_row_count=events_total,
-                        )
-                        if not strat_confidence.all_passed:
-                            missing_reasons[ptype] = (
-                                f"{strat} confidence "
-                                f"{strat_confidence.score}/{strat_confidence.total}: "
-                                + "; ".join(strat_confidence.failed_reasons)
-                            )
-                            continue
-                        strat_kw.update(
-                            atm_iv=strat_atm_iv,
-                            iv_rank=_conf_rank,
-                        )
-                    strat_kw.update(
-                        expiry=strat_expiry,
-                        chain=strat_chain,
-                        dte=strat_dte,
-                        indicators=strat_indicators,
-                        confidence=strat_confidence,
-                        calendar_legs=strat_calendar,
-                    )
-
-                try:
-                    sid = sug_repo.next_suggestion_id(_id_date)
-                    sug = _assemble_sized_suggestion(
-                        suggestion_id=sid,
-                        assemble_kw=strat_kw,
-                        strategy_override=strat,
-                        defer_entry_vetoes=pairing,
-                    )
-                    sug.pricing_provenance = provenance
-                    _attach_em_calibration_warning(db, sug)
-                    built_pair.append((sug, ptype))
-                    existing_names.append(sug.trade_name)
-                except StrategyVeto as veto:
-                    missing_reasons[ptype] = f"{strat} veto: {veto}"
-                    logger.debug(
-                        "Regime pair %s (%s) veto for %s %s: %s",
-                        ptype, strat, symbol, expiry_type, veto,
-                    )
-
-            if pairing:
-                group = regime_pair_group_id(
-                    underlying=symbol,
-                    expiry_type=use_expiry_type,
-                    entry_date=entry_day,
-                )
-                pair_sugs, pair_ns = complete_regime_pair(
-                    built_pair,
-                    missing_reasons=missing_reasons,
-                    group_id=group,
-                    iv_rank=float(iv_rank or 0.0),
-                    underlying=symbol,
-                    confidence=use_confidence,
-                    generated_on=now_ist(),
-                )
-                suggestions.extend(pair_sugs)
-                no_suggestions.extend(pair_ns)
-                continue
-
-            # High-IV writing-only: no breakout thesis — persist range as a
-            # normal single card (not a lonely "pick the scenario" pair).
-            if built_pair:
-                for sug, _ptype in built_pair:
-                    suggestions.append(sug)
-                    _append_ic_ib_companions(
-                        primary=sug,
-                        suggestions=suggestions,
-                        existing_names=existing_names,
-                        assemble_kw=_assemble_kw,
-                        sug_repo=sug_repo,
-                        id_date=_id_date,
-                        provenance=provenance,
-                        db=db,
-                    )
-                continue
-
-            no_suggestions.append(NoSuggestion(
-                generated_on=now_ist(),
-                underlying=symbol,
-                confidence=use_confidence,
-                reason=(
-                    f"[{expiry_type} {use_expiry}] Sideways regime pair: "
-                    f"neither range nor breakout leg passed strategy gates"
-                ),
-            ))
-            continue
-
         try:
             primary_suggestion = _assemble_sized_suggestion(
                 suggestion_id=suggestion_id,
@@ -1129,9 +934,6 @@ def _evaluate_underlying(
                 reason=f"[{expiry_type} {use_expiry}] Strategy veto: {veto}",
             ))
 
-        # Directional / leftover path. IC/IB companions for high-IV sideways
-        # are generated in the writing-only branch above (that path continues
-        # before we get here).
         if primary_suggestion is not None:
             _append_ic_ib_companions(
                 primary=primary_suggestion,
@@ -1177,18 +979,8 @@ def _persist_and_notify(
     # confidence score; on a tie, fall back to higher edge_score (issue #10).
     # This is strictly within one (expiry_type, strategy) bucket so it cannot
     # bias one strategy class against another (strategy isolation).
-    # Sideways regime-pair members are exempt — dropping one leg would leave
-    # the other underlying with a lonely "pick the scenario" card.
-    unpaired_candidates: list[Suggestion] = []
-    paired_candidates: list[Suggestion] = []
-    for sug in all_candidates:
-        if sug.regime_pair_group:
-            paired_candidates.append(sug)
-        else:
-            unpaired_candidates.append(sug)
-
     best_by_expiry_type: dict[str, Suggestion] = {}
-    for sug in unpaired_candidates:
+    for sug in all_candidates:
         key = f"{sug.expiry_type}:{sug.strategy}"
         existing = best_by_expiry_type.get(key)
         if existing is None:
@@ -1239,7 +1031,7 @@ def _persist_and_notify(
             return "BEARISH"
         return "NEUTRAL"
 
-    survivors: list[Suggestion] = list(best_by_expiry_type.values()) + paired_candidates
+    survivors: list[Suggestion] = list(best_by_expiry_type.values())
     bull_kept: Optional[Suggestion] = None
     bear_kept: Optional[Suggestion] = None
     concentration_dropped: list[Suggestion] = []
@@ -1369,7 +1161,6 @@ def _persist_and_notify(
                 confidence_score=ns.confidence.score,
                 conditions_json=_json.dumps(conditions),
                 reason=ns.reason,
-                trigger_reason=encode_regime_pair_trigger_reason(ns),
             )
         except Exception:
             logger.exception("Failed to persist NoSuggestion for %s", ns.underlying)

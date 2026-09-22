@@ -535,12 +535,12 @@ sequenceDiagram
 | Effective trend              | Outcome                           |
 | ---------------------------- | --------------------------------- |
 | Agreeing BULLISH / BEARISH   | Directional strategies by IV zone |
-| SIDEWAYS (true chop)         | Condor / calendar / regime pair   |
+| SIDEWAYS (true chop)         | Single pick: condor / calendar / straddle by IV |
 | MIXED (SMA vs tape disagree) | Sit out                           |
 
-**Sideways regime pair:** dashboard shows RANGE + BREAKOUT as **PAIR PARTNERS** (pick one thesis only — not both). Cards name each other explicitly; taking both often shares the near ATM strike on Zerodha and mixes inventory.
+**Sideways:** one strategy via `select_strategy` (same as directional) — no range+breakout pair cards.
 
-**Long vol (straddle/strangle):** IV/catalyst gates in `long_vol_entry_gate` still apply at assembly. Live session range vs 1-day EM is a **soft warning only** (never demotes the pick). Suggestion cards show one **Gates & warnings** panel ordered HARD → SOFT → ADVISORY, with a visible scoring legend (soft min from `soft_gate_min_pass` / `strategy_min_soft_pass`) and a one-line tip under each condition.
+**Long vol (straddle/strangle) / naked longs:** IV/catalyst gates in `long_vol_entry_gate` still apply. Live **quiet tape** (session range vs 1-day EM, `min_session_range_em_fraction`) demotes expansion picks in `select_strategy` — calendar or debit spreads instead (catalyst bypasses; missing session data skips). Card gates still show the same check for those strategies.
 
 Jobs: EOD data via [A5](#a5-clock-and-jobs); cards via `live_suggestion_engine`. Downloader writes raw shapes only; lifecycle persists.  
 **Which files:** [B12](#b12-code-flows).

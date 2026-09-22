@@ -1806,7 +1806,6 @@ def create_app() -> Flask:
         except Exception:
             pass
         from engine.market_regime import regime_from_sit_out_row, summarize_market_sit_out
-        from engine.regime_pair import decode_regime_pair_trigger_reason
 
         out = []
         for r in rows:
@@ -1832,9 +1831,6 @@ def create_app() -> Flask:
                 r_out["age_minutes"] = None
                 r_out["is_stale"] = False
 
-            r_out.update(decode_regime_pair_trigger_reason(r.get("trigger_reason")))
-            if r_out.get("strategy_veto") and not r_out.get("no_suggestion_reason"):
-                r_out["no_suggestion_reason"] = r_out["strategy_veto"]
             gate = validate_execution(
                 r, legs_out, now=now, circuit_breaker_active=cb_active,
             )
@@ -1850,14 +1846,6 @@ def create_app() -> Flask:
             }
             out.append(r_out)
 
-        pending_groups = {
-            r.get("regime_pair_group") for r in out if r.get("regime_pair_group")
-        }
-        pending_pair_slots = {
-            (r.get("regime_pair_group"), r.get("regime_pair_type"))
-            for r in out
-            if r.get("regime_pair_group") and r.get("regime_pair_type")
-        }
         pending_underlyings = {
             r.get("underlying") for r in out
             if r.get("underlying") and (r.get("status") or "").upper() == "PENDING"
@@ -1866,15 +1854,6 @@ def create_app() -> Flask:
         sit_out: list = []
         for r in sit_out_raw:
             r_out = _row(r)
-            r_out.update(decode_regime_pair_trigger_reason(r.get("trigger_reason")))
-            gid = r_out.get("regime_pair_group")
-            if gid and gid in pending_groups:
-                if (gid, r_out.get("regime_pair_type")) in pending_pair_slots:
-                    continue
-                r_out["confidence_display"] = _confidence_display(r)
-                r_out["market_regime"] = regime_from_sit_out_row(r_out)
-                out.append(r_out)
-                continue
             if r.get("underlying") in pending_underlyings:
                 continue
             r_out["confidence_display"] = _confidence_display(r)

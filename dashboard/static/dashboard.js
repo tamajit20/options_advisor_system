@@ -2736,140 +2736,21 @@ function renderMarketSitOutSummary(summary) {
   </div>`;
 }
 
-function renderSitOutCard(s, allSuggestions = []) {
+function renderSitOutCard(s) {
   const regime = s.market_regime || {};
-  const pairBlocked = s.regime_pair_type === 'range' || s.regime_pair_type === 'breakout';
-  const regimeTitle = regime.title ? escapeHtml(regime.title) : (pairBlocked ? 'Scenario blocked' : 'Sitting out');
+  const regimeTitle = regime.title ? escapeHtml(regime.title) : 'Sitting out';
   const reason = s.no_suggestion_reason || s.reason || '';
   const confLabel = s.confidence_display || formatConfidence(s) || `${s.confidence_score || '—'} passed`;
-  const heading = pairBlocked
-    ? `${escapeHtml(s.underlying)} — this pair partner is blocked`
-    : `${escapeHtml(s.underlying)} — No trade today`;
-  const tag = pairBlocked ? 'PAIR PARTNER BLOCKED' : 'SITTING OUT';
-  const partner = findRegimePairPartner(s, allSuggestions);
-  const hint = pairBlocked
-    ? (partner
-      ? `This is the ${regimePairRoleLabel(s)} partner of ${partner.strategy || partner.suggestion_id}. Take that partner if you believe its thesis, or sit out — not both.`
-      : 'This is one side of a regime pair. Take the other partner if shown and you believe that thesis, or sit out.')
-    : 'Gates unchanged \u2014 the engine waits for a high-edge setup rather than forcing a marginal trade.';
   return `<div class="card sit-out-card">
     <div class="card-head">
-      <h3>${heading}</h3>
-      <span class="tag tag-warn">${tag}</span>
+      <h3>${escapeHtml(s.underlying)} — No trade today</h3>
+      <span class="tag tag-warn">SITTING OUT</span>
     </div>
-    ${pairBlocked ? regimePairBanner(s, allSuggestions) : ''}
     <p class="sit-out-regime"><strong>${regimeTitle}</strong></p>
     <p class="muted sit-out-reason">${escapeHtml(reason)}</p>
     <p class="muted sit-out-conf" style="font-size:.85rem">Confidence: ${escapeHtml(confLabel)}</p>
-    <p class="muted sit-out-hint" style="font-size:.82rem">${escapeHtml(hint)}</p>
+    <p class="muted sit-out-hint" style="font-size:.82rem">Gates unchanged \u2014 the engine waits for a high-edge setup rather than forcing a marginal trade.</p>
   </div>`;
-}
-
-function regimePairTitle(s) {
-  if (s.regime_pair_type === 'range') {
-    return 'If market stays in range';
-  }
-  if (s.regime_pair_type === 'breakout') {
-    return 'If market moves sharply up or down';
-  }
-  return '';
-}
-
-function findRegimePairPartner(s, allSuggestions) {
-  const gid = s?.regime_pair_group;
-  if (!gid) return null;
-  const sid = s.suggestion_id;
-  return (allSuggestions || []).find(o =>
-    o
-    && o.suggestion_id
-    && o.suggestion_id !== sid
-    && o.regime_pair_group === gid
-  ) || null;
-}
-
-function regimePairRoleLabel(s) {
-  if (s?.regime_pair_type === 'range') return 'RANGE';
-  if (s?.regime_pair_type === 'breakout') return 'BREAKOUT';
-  return '';
-}
-
-/** Always-visible banner: these two cards are partners — take only one. */
-function regimePairBanner(s, allSuggestions) {
-  const role = regimePairRoleLabel(s);
-  if (!role) return '';
-  const partner = findRegimePairPartner(s, allSuggestions);
-  const thesis = regimePairTitle(s);
-  if (partner) {
-    const pRole = regimePairRoleLabel(partner) || 'partner';
-    const pStrat = partner.strategy || partner.trade_name || partner.suggestion_id || 'other card';
-    const pThesis = regimePairTitle(partner);
-    return `<div class="regime-pair-banner" role="note">
-      <div class="regime-pair-banner-title">PAIR PARTNERS — this is the ${escapeHtml(role)} side</div>
-      <p><strong>Opposite partner:</strong> ${escapeHtml(pStrat)}
-        <span class="tag tag-muted">${escapeHtml(pRole)}</span>
-        — ${escapeHtml(pThesis || 'opposite thesis')}</p>
-      <p class="regime-pair-banner-warn"><strong>Take only ONE of these two cards.</strong>
-        They bet on opposite outcomes and often share the same near-month strike on Zerodha — running both mixes inventory.</p>
-      <p class="muted" style="font-size:.82rem;margin:0">This card wins when: ${escapeHtml(thesis || 'its thesis plays out')}.</p>
-    </div>`;
-  }
-  return `<div class="regime-pair-banner regime-pair-banner--solo" role="note">
-    <div class="regime-pair-banner-title">PAIR PARTNER — ${escapeHtml(role)} side</div>
-    <p>This suggestion is half of a <strong>regime pair</strong>
-      ${s.regime_pair_group ? `(${escapeHtml(s.regime_pair_group)})` : ''}.
-      The opposite scenario is not on screen right now (blocked, retired, or not built).</p>
-    <p class="regime-pair-banner-warn"><strong>Do not also take the opposite partner</strong> if it appears later the same day — pick one thesis only.</p>
-  </div>`;
-}
-
-function regimePairChip(s, { withGroup = false } = {}) {
-  const ptype = s?.regime_pair_type;
-  if (ptype !== 'range' && ptype !== 'breakout') return '';
-  const label = ptype === 'range' ? 'Pair · Range' : 'Pair · Breakout';
-  const cls = ptype === 'range' ? 'ctx-chip ctx-regime-range' : 'ctx-chip ctx-regime-breakout';
-  const gid = s.regime_pair_group || '';
-  const tip = ptype === 'range'
-    ? 'Regime PAIR partner (RANGE). Opposite of Breakout. Take only one partner.'
-    : 'Regime PAIR partner (BREAKOUT). Opposite of Range. Take only one partner.';
-  const title = gid ? `${tip} Group ${gid}` : tip;
-  const groupBit = withGroup && gid
-    ? ` · ${escapeHtml(gid)}`
-    : '';
-  return `<span class="${cls}" title="${escapeHtml(title)}">${label}${groupBit}</span>`;
-}
-
-function groupRegimePairSuggestions(list) {
-  const groups = new Map();
-  const singles = [];
-  for (const s of list || []) {
-    const gid = s.regime_pair_group;
-    if (!gid) {
-      singles.push({ type: 'single', item: s });
-      continue;
-    }
-    if (!groups.has(gid)) {
-      groups.set(gid, { type: 'pair', group: gid, items: [] });
-    }
-    groups.get(gid).items.push(s);
-  }
-  const out = [];
-  for (const g of groups.values()) {
-    if ((g.items || []).length >= 2) {
-      out.push(g);
-    } else {
-      // Incomplete pair (legacy loner) — render as a normal card, no pair header.
-      for (const item of g.items || []) {
-        singles.push({ type: 'single', item });
-      }
-    }
-  }
-  out.push(...singles);
-  out.sort((a, b) => {
-    const au = (a.items && a.items[0]?.underlying) || a.item?.underlying || '';
-    const bu = (b.items && b.items[0]?.underlying) || b.item?.underlying || '';
-    return au.localeCompare(bu);
-  });
-  return out;
 }
 
 function _idChipsHtml(tradeId, suggestionId) {
@@ -2909,73 +2790,8 @@ function bindCollapsibleCardInteractions(root) {
   });
 }
 
-function renderRegimePairGroup(group, startCardIdx = 0) {
-  const items = (group.items || []).slice().sort((a, b) => {
-    if (a.regime_pair_type === 'range') return -1;
-    if (b.regime_pair_type === 'range') return 1;
-    return 0;
-  });
-  const preferred = items.find(x => x.regime_pair_preferred);
-  const reason = preferred?.regime_pair_preference_reason
-    || items[0]?.regime_pair_preference_reason
-    || '';
-  const underlying = items[0]?.underlying || '';
-  const groupId = group.group || items[0]?.regime_pair_group || '';
-  const nameBits = items.map(s => {
-    const role = regimePairRoleLabel(s) || '?';
-    const strat = s.strategy || s.trade_name || s.suggestion_id || '—';
-    return `<strong>${escapeHtml(role)}</strong>: ${escapeHtml(strat)}`;
-  });
-  const pairChip = groupId
-    ? `<span class="ctx-chip ctx-regime-pair" title="Shared pair group id">Partners · ${escapeHtml(groupId)}</span>`
-    : '<span class="ctx-chip ctx-regime-pair">Partners</span>';
-  const header = `<div class="regime-pair-header">
-    <div class="regime-pair-headline">
-      <span class="tag tag-accent">PAIR PARTNERS</span>
-      ${pairChip}
-      <strong>${escapeHtml(underlying)} — two opposite theses, pick ONE</strong>
-    </div>
-    <p class="regime-pair-members">${nameBits.join(' &nbsp;↔&nbsp; ')}</p>
-    ${reason ? `<p class="regime-pair-pref muted">${escapeHtml(reason)}</p>` : ''}
-    <p class="regime-pair-hint muted">These cards are <strong>partners of each other</strong>, not two separate tips.
-      Range wins if the market stays quiet; Breakout wins if it moves hard. Taking both shares strikes on Zerodha and mixes inventory — choose one thesis only.</p>
-  </div>`;
-  const cards = items.map((s) => {
-    const prefBadge = s.regime_pair_preferred
-      ? '<span class="tag tag-ok regime-pair-pref-badge">System preferred</span>'
-      : '<span class="tag tag-muted regime-pair-pref-badge">Alternative</span>';
-    const scenario = regimePairTitle(s);
-    const role = regimePairRoleLabel(s);
-    const partner = findRegimePairPartner(s, items);
-    const partnerLine = partner
-      ? `<span class="regime-pair-cross">Partner of <strong>${escapeHtml(partner.strategy || partner.suggestion_id || '')}</strong> (${escapeHtml(regimePairRoleLabel(partner))})</span>`
-      : '';
-    return `<div class="regime-pair-card${s.regime_pair_preferred ? ' regime-pair-preferred' : ''}">
-      <div class="regime-pair-scenario">
-        <span class="tag tag-info">PAIR · ${escapeHtml(role)}</span>
-        ${regimePairChip(s)}
-        <strong>${escapeHtml(scenario)}</strong>
-        ${prefBadge}
-        ${partnerLine}
-      </div>
-      ${renderSuggestion(s, false, items, false, false)}
-    </div>`;
-  }).join('');
-  return `<div class="regime-pair-group">${header}<div class="regime-pair-cards">${cards}</div></div>`;
-}
-
 function renderSuggestionList(list) {
-  let cardIdx = 0;
-  return groupRegimePairSuggestions(list).map(entry => {
-    if (entry.type === 'pair') {
-      const html = renderRegimePairGroup(entry, cardIdx);
-      cardIdx += (entry.items || []).length;
-      return html;
-    }
-    const html = renderSuggestion(entry.item, false, list, false, false);
-    cardIdx += 1;
-    return html;
-  }).join('');
+  return (list || []).map(s => renderSuggestion(s, false, list, false, false)).join('');
 }
 
 function suggestionIsPending(s) {
@@ -3008,29 +2824,13 @@ async function loadSuggestion() {
     }
     const list = data.suggestions || [];
     const sitOut = data.sit_out || [];
-    const allForPartners = [...list, ...sitOut];
-    const grouped = groupRegimePairSuggestions(list);
     const mainHtml = [];
     const blockedHtml = [];
-    let cardIdx = 0;
-    for (const entry of grouped) {
-      if (entry.type === 'pair') {
-        const items = entry.items || [];
-        const anyActionable = items.some(suggestionIsActionable);
-        const anyGateBlocked = items.some(suggestionIsGateBlocked);
-        const html = renderRegimePairGroup(entry, cardIdx);
-        cardIdx += items.length;
-        if (anyActionable) mainHtml.push(html);
-        else if (anyGateBlocked) blockedHtml.push(html);
-        continue;
-      }
-      const s = entry.item;
+    for (const s of list) {
       if (suggestionIsActionable(s)) {
-        mainHtml.push(renderSuggestion(s, false, allForPartners, false, false));
-        cardIdx += 1;
+        mainHtml.push(renderSuggestion(s, false, list, false, false));
       } else if (suggestionIsGateBlocked(s)) {
-        blockedHtml.push(renderSuggestion(s, false, allForPartners, false, false));
-        cardIdx += 1;
+        blockedHtml.push(renderSuggestion(s, false, list, false, false));
       }
     }
     const parts = [];
@@ -3045,7 +2845,7 @@ async function loadSuggestion() {
       parts.push(blockedHtml.join(''));
     }
     if (sitOut.length) {
-      parts.push(sitOut.map(s => renderSitOutCard(s, allForPartners)).join(''));
+      parts.push(sitOut.map(s => renderSitOutCard(s)).join(''));
     }
     if (!parts.length) {
       c.className = '';
@@ -4854,8 +4654,8 @@ const GATE_CONDITION_TIPS = [
   ['atm iv trajectory', 'Intraday ATM IV path — rising IV can hurt shorts; falling IV can hurt long vol.'],
   ['oi pcr momentum', 'Short-term OI PCR momentum — sharp one-sided build can signal a directional squeeze.'],
   ['iv rank vs iv/hv', 'IV Rank and IV/HV should agree (both write-friendly or both buy-friendly).'],
-  ['quiet tape', 'Live session range vs 1-day expected move. Quiet tape soft-warns long vol — never sole veto.'],
-  ['session range', 'Live session range vs 1-day expected move. Quiet tape soft-warns long vol — never sole veto.'],
+  ['quiet tape', 'Live session range vs 1-day expected move. Quiet tape demotes expansion picks (straddle/strangle/naked long) in the selector; catalyst bypasses.'],
+  ['session range', 'Live session range vs 1-day expected move. Quiet tape demotes expansion picks (straddle/strangle/naked long) in the selector; catalyst bypasses.'],
   ['long-vol iv rank', 'Long straddle/strangle needs enough IV rank (or a HIGH catalyst) for vol expansion edge.'],
   ['long-vol iv/hv', 'Long vol prefers cheaper options vs realised vol — rich IV/HV weakens the long-vol thesis.'],
   ['long-vol entry', 'Combined long-vol entry checks (IV, catalyst, session range).'],
@@ -5229,8 +5029,8 @@ function renderGatesAndWarningsPanel(s) {
     <ul class="gates-rules-list">
       <li><strong>HARD</strong> — must pass (DTE band, ATM liquidity). A fail blocks the suggestion.</li>
       <li><strong>SOFT</strong> — need ≥${softMin} of ${softTotal} for ${escapeHtml(strategy || 'this strategy')}. Up to ${softMaxFail} soft miss${softMaxFail === 1 ? '' : 'es'} allowed; more blocks.</li>
-      <li><strong>ADVISORY</strong> — warn and review only (quiet tape, IV traj, EM calibration, freshness). Never the sole blocker.</li>
-      <li><strong>Quiet tape</strong> (session range vs 1-day EM) is advisory for long vol — soft-warn, does not veto alone.</li>
+      <li><strong>ADVISORY</strong> — warn and review only (IV traj, EM calibration, freshness). Never the sole blocker.</li>
+      <li><strong>Quiet tape</strong> (session range vs 1-day EM) demotes expansion picks in the selector; catalyst bypasses. Shown as a SOFT row on long-vol / naked-long cards.</li>
     </ul>
   </div>`;
 
@@ -5359,9 +5159,6 @@ function renderPlainEnglishStructured(s) {
     const eFmt = new Date(ed + 'T00:00:00').toLocaleDateString('en-IN',
       { weekday:'short', day:'2-digit', month:'short', year:'2-digit' });
     chips.push(`<span class="ctx-chip ctx-entry-date" title="Intended execution date">Execute \u2192 ${escapeHtml(eFmt)}</span>`);
-  }
-  if (s.regime_pair_type === 'range' || s.regime_pair_type === 'breakout') {
-    chips.push(regimePairChip(s, { withGroup: true }));
   }
   // Provenance: live suggestions show when they were generated (not a hardcoded job time).
   const genChipFmt = fmtChipDt(s.generated_on);
@@ -6162,9 +5959,7 @@ function renderStrategyRationale(s) {
   const info = lookup[s.strategy];
   if (!info) return '';
 
-  const betterLabel = s.regime_pair_type === 'range'
-    ? 'When this trade wins (range)'
-    : (s.regime_pair_type === 'breakout' ? 'When this trade wins (big move)' : 'What makes it better');
+  const betterLabel = 'What makes it better';
 
   const profit = buildProfitScenario({
     strategy: s.strategy,
@@ -6334,9 +6129,7 @@ function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
 
 function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader = false, expanded = false) {
   const isNoSug = s.strategy === 'NONE' || s.status === 'NO_SUGGESTION';
-  const hasLegs = Array.isArray(s.legs) && s.legs.length > 0;
-  const isPairMember = s.regime_pair_type === 'range' || s.regime_pair_type === 'breakout';
-  if (isNoSug || (isPairMember && !hasLegs)) {
+  if (isNoSug) {
     return renderSitOutCard(s);
   }
   const sugStatus = (s.status || '').toUpperCase();
@@ -6465,7 +6258,6 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
         </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
-        ${regimePairChip(s)}
         ${gateLabel && sugStatus === 'PENDING' ? `<span class="tag tag-warn">${escapeHtml(gateLabel)}</span>` : ''}
         ${executionChannelBadge(s.execution_channel)}
         ${sugStatus === 'IGNORED' ? '<span class="tag tag-warn">Retired</span>' : ''}
@@ -6485,7 +6277,6 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
   // attach live lot-count recalc after DOM insert — see bindSuggestionActions
   const bodyHtml = `
     ${gateBanner}
-    ${regimePairBanner(s, allSuggestions)}
     <div class="card-id-row">
       <span class="id-chip" title="Suggestion ID">${escapeHtml(s.suggestion_id || '—')}</span>
     </div>

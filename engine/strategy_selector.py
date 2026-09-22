@@ -54,8 +54,9 @@ def _long_vol_qualified(
     requires a HIGH-impact catalyst. Sideways low IV may use long straddle when
     IV/HV is cheap enough (options not overpriced vs realised vol).
 
-    Live quiet-tape (session range vs 1-day EM) is a *soft warning only* — it
-    never blocks or demotes the pick; see ``build_strategy_entry_gate_checks``.
+    Live quiet tape (session range vs 1-day EM) demotes the pick when data is
+    present and below threshold — same rule as naked longs via
+    ``_expansion_move_ok``. Catalyst still bypasses.
     """
     gate = STRATEGY_CONFIG.get("long_vol_entry_gate") or {}
     if not gate.get("enabled", True):
@@ -71,7 +72,11 @@ def _long_vol_qualified(
     if iv_prem > float(iv_prem_max):
         return False
     iv_min = float(gate.get("iv_rank_min_without_catalyst", 15.0))
-    return iv_rank >= iv_min
+    if iv_rank < iv_min:
+        return False
+    return _expansion_move_ok(
+        indicators, gate, has_long_vol_catalyst=False,
+    )
 
 
 def _session_range_allows_long_vol(
@@ -98,15 +103,31 @@ def _session_range_allows_long_vol(
     return float(sr) / float(em_1d) >= need
 
 
+def _expansion_move_ok(
+    indicators: MarketIndicators,
+    gate: Mapping,
+    *,
+    has_long_vol_catalyst: bool,
+) -> bool:
+    """True when expansion/long-premium theses may be picked on today's tape.
+
+    Catalyst bypasses quiet-tape. Missing session data does not block (same as
+    the card gate skip).
+    """
+    if has_long_vol_catalyst:
+        return True
+    return _session_range_allows_long_vol(indicators, gate)
+
+
 def _session_range_gate_check(
     indicators: MarketIndicators,
     gate: Mapping,
     *,
     has_long_vol_catalyst: bool,
 ) -> ConfidenceCheck:
-    """Soft session-range vs 1-day EM check (never a hard block)."""
+    """Session-range vs 1-day EM check for expansion strategies (card + picker)."""
     label = "Session range vs 1-day EM (quiet tape)"
-    kind = "ADVISORY"
+    kind = "SOFT"
     min_frac = gate.get("min_session_range_em_fraction")
     if min_frac is None:
         return ConfidenceCheck(
@@ -130,13 +151,13 @@ def _session_range_gate_check(
     ratio = float(sr) / float(em_1d)
     detail = (
         f"Session range {float(sr):.0f} pts = {ratio:.0%} of 1-day EM "
-        f"{float(em_1d):.0f} (soft warn below {need:.0%})"
+        f"{float(em_1d):.0f} (need ≥ {need:.0%} to pick expansion)"
     )
     if has_long_vol_catalyst:
         return ConfidenceCheck(
             label=label,
             status="PASS",
-            detail=detail + " — catalyst present, warning not applied",
+            detail=detail + " — catalyst present, quiet-tape bypassed",
             kind=kind,
         )
     if ratio >= need:
@@ -144,9 +165,15 @@ def _session_range_gate_check(
     return ConfidenceCheck(
         label=label,
         status="SOFT_FAIL",
-        detail=detail + " — quiet tape; review before taking long vol",
+        detail=detail + " — quiet tape; expansion / long-premium demoted",
         kind=kind,
     )
+
+
+# Strategies that need realised expansion (not range/theta theses).
+_EXPANSION_STRATEGIES = frozenset({
+    "LONG_STRADDLE", "LONG_STRANGLE", "LONG_CALL", "LONG_PUT",
+})
 
 
 def build_strategy_entry_gate_checks(
@@ -158,15 +185,15 @@ def build_strategy_entry_gate_checks(
 ) -> List[ConfidenceCheck]:
     """Strategy entry gates appended to confidence for the suggestion card.
 
-    Quiet tape is always advisory (PASS / SOFT_FAIL / PASS_WARN). Long-vol IV
-    gates are shown for visibility; hard vetoes elsewhere may still block.
+    Quiet tape is shown only for expansion strategies (long vol / naked longs).
+    Range/theta picks skip it — quiet tape is favourable for those theses.
     """
     gate = STRATEGY_CONFIG.get("long_vol_entry_gate") or {}
-    out: List[ConfidenceCheck] = [
-        _session_range_gate_check(
+    out: List[ConfidenceCheck] = []
+    if strategy in _EXPANSION_STRATEGIES:
+        out.append(_session_range_gate_check(
             indicators, gate, has_long_vol_catalyst=has_long_vol_catalyst,
-        ),
-    ]
+        ))
     if strategy not in _LONG_VOL_STRATEGIES:
         return out
     soft = "SOFT"
@@ -360,24 +387,29 @@ def select_strategy(
     # trends, or cheap IV/HV on sideways). Jul 2026: 7/7 long strangles lost in
     # a low-IV grind because this block always returned long vol.
     if iv_rank < iv_buying_max:
+        gate = STRATEGY_CONFIG.get("long_vol_entry_gate") or {}
         long_vol = _long_vol_qualified(
             iv_rank=iv_rank,
             trend=trend,
             indicators=indicators,
             has_long_vol_catalyst=has_long_vol_catalyst,
         )
+        tape_ok = _expansion_move_ok(
+            indicators, gate, has_long_vol_catalyst=has_long_vol_catalyst,
+        )
         if trend == "SIDEWAYS":
             if long_vol:
                 return "LONG_STRADDLE"
             return "CALENDAR_SPREAD"
         if trend == "BULLISH":
-            if iv_rank < iv_naked_long_max and strong_bullish:
+            # Naked long needs expansion tape (same quiet-tape rule as long vol).
+            if iv_rank < iv_naked_long_max and strong_bullish and tape_ok:
                 return "LONG_CALL"
             if long_vol:
                 return "LONG_STRANGLE"
             return "BULL_CALL_SPREAD"
         if trend == "BEARISH":
-            if iv_rank < iv_naked_long_max and strong_bearish:
+            if iv_rank < iv_naked_long_max and strong_bearish and tape_ok:
                 return "LONG_PUT"
             if long_vol:
                 return "LONG_STRANGLE"
@@ -434,10 +466,23 @@ def _enforce_long_vol_entry_gate(
     indicators: MarketIndicators,
     has_long_vol_catalyst: bool,
 ) -> None:
-    """Profit-first gate for long straddle/strangle entries."""
+    """Profit-first gate for expansion / long-premium entries."""
     gate = STRATEGY_CONFIG.get("long_vol_entry_gate") or {}
     if not gate.get("enabled", True):
         return
+    # Quiet tape demotes all expansion theses (straddle/strangle/naked long).
+    if strategy in _EXPANSION_STRATEGIES and not _expansion_move_ok(
+        indicators, gate, has_long_vol_catalyst=has_long_vol_catalyst,
+    ):
+        sr = getattr(indicators, "session_range", None)
+        em_1d = getattr(indicators, "expected_move_1d", None)
+        need = float(gate.get("min_session_range_em_fraction") or 0)
+        ratio = (float(sr) / float(em_1d)) if sr is not None and em_1d and float(em_1d) > 0 else None
+        ratio_txt = f"{ratio:.0%}" if ratio is not None else "n/a"
+        raise StrategyVeto(
+            f"{strategy} vetoed: quiet tape (session range {ratio_txt} of 1-day EM, "
+            f"need ≥ {need:.0%}) — no expansion edge without catalyst"
+        )
     gated = frozenset(gate.get("strategies") or list(_LONG_VOL_STRATEGIES))
     if strategy not in gated:
         return
@@ -459,7 +504,8 @@ def _enforce_long_vol_entry_gate(
                 f"{strategy} vetoed: IV/HV {iv_prem:.2f}\u00d7 exceeds long-vol "
                 f"ceiling {float(iv_prem_max):.2f}\u00d7 — no real vol-buying edge"
             )
-    # Quiet tape is soft-warn only (build_strategy_entry_gate_checks) — never hard-blocks.
+
+
 # Strategies that produce net debit (max_loss = debit, SL = 50% of debit)
 _DEBIT_STRATEGIES = frozenset({
     "LONG_STRADDLE", "LONG_STRANGLE", "LONG_CALL", "LONG_PUT",
