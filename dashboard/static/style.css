@@ -1568,7 +1568,7 @@ input:focus, select:focus, textarea:focus {
 .regime-pair-group {
   margin-bottom: 20px;
   padding: 14px;
-  border: 1px solid #2a3744;
+  border: 2px solid rgba(56, 189, 248, .4);
   border-radius: 12px;
   background: #0f1419;
 }
@@ -1579,6 +1579,12 @@ input:focus, select:focus, textarea:focus {
   gap: 10px;
   flex-wrap: wrap;
   margin-bottom: 8px;
+}
+.regime-pair-members {
+  margin: 0 0 8px;
+  font-size: .9rem;
+  line-height: 1.45;
+  color: var(--text);
 }
 .regime-pair-pref { font-size: .9rem; margin: 0 0 6px; line-height: 1.45; }
 .regime-pair-hint { font-size: .82rem; margin: 0; }
@@ -1608,6 +1614,11 @@ input:focus, select:focus, textarea:focus {
   border-bottom: 1px solid #2a3744;
   font-size: .95rem;
 }
+.regime-pair-cross {
+  font-size: .78rem;
+  color: var(--text-dim, #94a3b8);
+  width: 100%;
+}
 .regime-pair-pref-badge { font-size: .72rem; }
 .regime-pair-card .sit-out-card {
   margin: 0;
@@ -1616,6 +1627,28 @@ input:focus, select:focus, textarea:focus {
   background: transparent;
   padding: 4px 0 0;
 }
+.regime-pair-banner {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(56, 189, 248, .45);
+  background: rgba(14, 116, 144, .18);
+  font-size: .84rem;
+  line-height: 1.45;
+}
+.regime-pair-banner--solo {
+  border-color: rgba(251, 191, 36, .45);
+  background: rgba(146, 64, 14, .2);
+}
+.regime-pair-banner-title {
+  font-weight: 700;
+  letter-spacing: .02em;
+  margin-bottom: 4px;
+  color: #7dd3fc;
+}
+.regime-pair-banner--solo .regime-pair-banner-title { color: #fbbf24; }
+.regime-pair-banner p { margin: 4px 0; }
+.regime-pair-banner-warn { color: #fde68a; }
 .ctx-chip.ctx-regime-range {
   color: #22d3ee;
   border-color: rgba(34, 211, 238, .4);
