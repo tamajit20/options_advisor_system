@@ -5059,13 +5059,13 @@ function renderGatesAndWarningsPanel(s) {
       `<span class="term-help" tabindex="0" role="button" aria-label="Explain: ${escapeHtml(c.label || 'gate')}">` +
       `\u24d8<span class="term-help-popup">${helpPopup}</span></span>`;
     return `<tr class="conf-check-row ${rowClass}">
-      <td><span class="gate-kind-badge ${KIND_CLASS[kind]}">${kind}</span></td>
-      <td><span class="gate-res-badge ${RESULT_CLASS[result] || ''}">${result}</span></td>
-      <td class="conf-label">
+      <td class="gate-col-kind"><span class="gate-kind-badge ${KIND_CLASS[kind]}">${kind}</span></td>
+      <td class="gate-col-result"><span class="gate-res-badge ${RESULT_CLASS[result] || ''}">${result}</span></td>
+      <td class="conf-label gate-col-cond">
         <div class="gate-cond-head">${escapeHtml(c.label || '')}${helpIcon}</div>
         <div class="gate-cond-tip">${escapeHtml(condTip)}</div>
       </td>
-      <td class="conf-detail">${detailHtml}</td>
+      <td class="conf-detail gate-col-detail">${detailHtml}</td>
     </tr>`;
   }).join('');
 

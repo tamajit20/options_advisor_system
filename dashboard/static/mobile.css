@@ -205,6 +205,27 @@
   .chart-wrap { overflow-x: auto; }
   .jobs-grid { grid-template-columns: 1fr !important; }
 
+  #suggestion-container .card,
+  #suggestion-container .collapsible-card {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  #suggestion-container .collapsible-preview {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    max-width: 100%;
+  }
+  #suggestion-container .collapsible-preview > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  #suggestion-container .econ-z-margin,
+  #suggestion-container .econ-cap-req {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
   .card-head-tags {
     width: 100%;
     margin-top: 4px;
@@ -261,33 +282,99 @@
   }
 }
 
-/* ---------- Confidence checks: stacked rows ---------- */
+/* ---------- Gates & warnings: card stack (Kind/Result/Condition/Detail) ---------- */
 @media (max-width: 1024px) {
+  .gates-warnings-panel,
+  .conf-checks-panel {
+    max-width: 100%;
+    overflow-x: hidden;
+    box-sizing: border-box;
+  }
+  .gates-rules-box {
+    padding: 8px 10px;
+    font-size: 0.7rem;
+    line-height: 1.4;
+  }
+  .gates-rules-list {
+    padding-left: 1rem;
+  }
+  .conf-checks-title {
+    font-size: 0.72rem;
+    line-height: 1.35;
+    word-break: break-word;
+  }
   .conf-checks-table thead { display: none; }
-  .conf-checks-table,
-  .conf-checks-table tbody,
-  .conf-checks-table tr,
-  .conf-checks-table td { display: block; width: 100%; }
-  .conf-checks-table tr {
-    padding: 10px 0;
+  .conf-checks-table {
+    display: block;
+    width: 100%;
+    border-collapse: separate;
+  }
+  .conf-checks-table tbody { display: block; width: 100%; }
+  .conf-checks-table tr.conf-check-row {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    grid-template-areas:
+      "kind result ."
+      "cond cond cond"
+      "detail detail detail";
+    column-gap: 8px;
+    row-gap: 4px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   }
-  .conf-checks-table tr:last-child { border-bottom: 0; }
-  .conf-checks-table .conf-icon {
-    display: inline-block;
-    margin-right: 6px;
-    font-weight: 700;
+  .conf-checks-table tr.conf-check-row:last-child { border-bottom: 0; }
+  .conf-checks-table td {
+    display: block;
+    width: auto;
+    max-width: 100%;
+    padding: 0;
+    border: none;
+    box-sizing: border-box;
   }
-  .conf-checks-table .conf-label {
-    display: inline;
-    font-weight: 600;
-    font-size: 0.88rem;
-  }
-  .conf-checks-table .conf-detail {
-    margin-top: 4px;
+  .conf-checks-table .gate-col-kind { grid-area: kind; align-self: center; }
+  .conf-checks-table .gate-col-result { grid-area: result; align-self: center; }
+  .conf-checks-table .gate-col-cond { grid-area: cond; }
+  .conf-checks-table .gate-col-detail {
+    grid-area: detail;
+    margin-top: 2px;
+    padding-top: 6px;
+    padding-left: 0;
+    border-top: 1px dashed rgba(255, 255, 255, 0.06);
     font-size: 0.82rem;
     color: var(--text-dim);
-    padding-left: 1.5rem;
+  }
+  .conf-checks-table .conf-label {
+    display: block;
+    font-weight: 600;
+    font-size: 0.84rem;
+    padding-right: 0;
+  }
+  .gate-cond-tip,
+  .gate-plain-body,
+  .gate-plain-headline,
+  .gate-tech-text {
+    max-width: 100% !important;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .gate-plain-headline { font-size: 0.76rem; }
+  .gate-plain-body { font-size: 0.74rem; color: var(--text, #e2e8f0); }
+  .gate-cond-tip { font-size: 0.68rem; }
+  /* Keep ⓘ popup on-screen on narrow viewports */
+  .conf-checks-table .term-help-popup,
+  .gates-warnings-panel .term-help-popup {
+    left: 0;
+    right: auto;
+    transform: none;
+    width: min(300px, calc(100vw - 40px));
+    max-width: calc(100vw - 40px);
+    box-sizing: border-box;
+  }
+  .conf-checks-table .term-help-popup::after {
+    left: 12px;
+    transform: none;
   }
 }
 
