@@ -1248,6 +1248,10 @@ class TestJsDashboardContracts:
         assert "runLiveSuggestionFromTab" in js
         assert "suggestion-run-live" in js
         assert "/api/jobs/${encodeURIComponent(_LIVE_SUG_JOB)}/trigger" in js
+        assert "_applyJobsPayload" in js
+        assert "_syncLiveSuggestionFromJobs" in js
+        assert "_startLiveSugWatch" in js
+        assert "if (!document.getElementById('panel-jobs')" not in js
 
     def test_suggestion_run_live_button_in_html(self):
         from pathlib import Path

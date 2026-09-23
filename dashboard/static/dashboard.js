@@ -2141,8 +2141,7 @@ function switchTab(name) {
   if (name === 'notifications') loadNotifications();
   if (name === 'config')        loadConfig();
   if (TAB_LOADERS[name])        TAB_LOADERS[name]();
-  // Stop jobs auto-refresh when leaving the tab
-  if (name !== 'jobs')  stopJobsAutoRefresh();
+  // Jobs SSE stays up so Suggestions + Jobs both live-update after a trigger.
   if (name !== 'wsmon') stopWsMonitorAutoRefresh();
   try { localStorage.setItem('activeTab', name); } catch (_) {}
   try {
@@ -2874,41 +2873,87 @@ async function loadSuggestion() {
 }
 
 const _LIVE_SUG_JOB = 'live_suggestion_engine';
-const _LIVE_SUG_WAIT_MS = 300000;
-const _LIVE_SUG_POLL_MS = 2000;
+const _LIVE_SUG_WATCH_MS = 2000;
 
-function _parseJobTime(raw) {
-  if (!raw) return NaN;
-  const ms = Date.parse(String(raw).replace(' ', 'T'));
-  return Number.isFinite(ms) ? ms : NaN;
+let _liveSugJobSig = '';
+let _liveSugTriggeredAt = 0;
+let _liveSugWatchTimer = null;
+
+function _setLiveSugRunBtn(running) {
+  const btn = $('#suggestion-run-live');
+  if (!btn) return;
+  btn.disabled = !!running;
+  btn.textContent = running ? 'Running…' : 'Run live engine';
 }
 
-async function _waitForLiveSuggestionJob(startedAtMs) {
-  const deadline = Date.now() + _LIVE_SUG_WAIT_MS;
-  while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, _LIVE_SUG_POLL_MS));
-    try {
-      const data = await API(`/api/jobs/${encodeURIComponent(_LIVE_SUG_JOB)}/history?limit=3`);
-      const fresh = (data.runs || []).find(r => {
-        const t = _parseJobTime(r.started_at);
-        return Number.isFinite(t) && t >= startedAtMs - 3000;
-      });
-      if (!fresh) continue;
-      const st = String(fresh.status || '').toUpperCase();
-      if (st === 'RUNNING') continue;
-      return st;
-    } catch (_) { /* keep polling */ }
+function _stopLiveSugWatch() {
+  if (_liveSugWatchTimer) {
+    clearInterval(_liveSugWatchTimer);
+    _liveSugWatchTimer = null;
   }
-  return 'TIMEOUT';
+}
+
+function _startLiveSugWatch() {
+  if (_liveSugWatchTimer) return;
+  _liveSugWatchTimer = setInterval(async () => {
+    if (!_liveSugTriggeredAt) {
+      _stopLiveSugWatch();
+      return;
+    }
+    try {
+      const data = await API('/api/jobs/list');
+      _applyJobsPayload(data);
+    } catch (_) { /* keep watching */ }
+  }, _LIVE_SUG_WATCH_MS);
+}
+
+function _syncLiveSuggestionFromJobs(data) {
+  const job = (data && data.jobs || []).find(j => j.job_name === _LIVE_SUG_JOB);
+  if (!job) return;
+  const st = String(job.status || '').toUpperCase();
+  const sig = `${job.started_at || ''}|${st}|${job.finished_at || ''}`;
+  const running = st === 'RUNNING';
+  const waiting = _liveSugTriggeredAt > 0;
+
+  if (sig === _liveSugJobSig) {
+    _setLiveSugRunBtn(running || waiting);
+    return;
+  }
+  const prev = _liveSugJobSig;
+  _liveSugJobSig = sig;
+
+  if (!prev) {
+    _setLiveSugRunBtn(running);
+    if (!running) _liveSugTriggeredAt = 0;
+    return;
+  }
+
+  if (running) {
+    _setLiveSugRunBtn(true);
+    return;
+  }
+
+  const prevStatus = prev.split('|')[1] || '';
+  const prevRunning = prevStatus === 'RUNNING';
+  const startedChanged = (prev.split('|')[0] || '') !== (job.started_at || '');
+  if (prevRunning || (waiting && startedChanged)) {
+    if (waiting) {
+      if (st === 'FAILED') toast('Live suggestion engine failed — check Jobs', 'err');
+      else toast('Suggestions updated', 'ok');
+    }
+    loadSuggestion();
+  }
+  _liveSugTriggeredAt = 0;
+  _stopLiveSugWatch();
+  _setLiveSugRunBtn(false);
 }
 
 async function runLiveSuggestionFromTab() {
   const btn = $('#suggestion-run-live');
   if (!btn || btn.disabled) return;
-  const label = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Running…';
-  const startedAtMs = Date.now();
+  ensureJobsStream();
+  _liveSugTriggeredAt = Date.now();
+  _setLiveSugRunBtn(true);
   try {
     try {
       await API(`/api/jobs/${encodeURIComponent(_LIVE_SUG_JOB)}/trigger`, { method: 'POST' });
@@ -2916,20 +2961,13 @@ async function runLiveSuggestionFromTab() {
       if (!/already running/i.test(e.message || '')) throw e;
     }
     toast('Live suggestion engine running…', 'ok');
-    const status = await _waitForLiveSuggestionJob(startedAtMs);
-    if (status === 'FAILED') {
-      toast('Live suggestion engine failed — check Jobs', 'err');
-    } else if (status === 'TIMEOUT') {
-      toast('Engine still running — refresh the tab in a minute', 'err');
-    } else {
-      toast('Suggestions updated', 'ok');
-    }
-    await loadSuggestion();
+    _startLiveSugWatch();
+    await loadJobs(true);
   } catch (e) {
+    _liveSugTriggeredAt = 0;
+    _stopLiveSugWatch();
+    _setLiveSugRunBtn(false);
     toast(e.message || 'Could not run live engine', 'err');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = label;
   }
 }
 
@@ -9485,18 +9523,22 @@ function _renderJobsData(data, silent = false) {
   c.innerHTML = `<div class="jobs-grid">${renderJobsGrid(data.jobs)}</div>`;
 }
 
+function _applyJobsPayload(data) {
+  _renderJobsData(data, true);
+  _syncLiveSuggestionFromJobs(data);
+}
+
 function ensureJobsStream() {
   if (_jobsSource && _jobsSource.readyState !== 2) return;
   try {
     _jobsSource = new EventSource('/api/jobs/stream');
     _jobsSource.onmessage = (ev) => {
-      if (!document.getElementById('panel-jobs')?.classList.contains('active')) return;
-      try { _renderJobsData(JSON.parse(ev.data), true); } catch (_) { /* ignore */ }
+      try { _applyJobsPayload(JSON.parse(ev.data)); } catch (_) { /* ignore */ }
     };
     _jobsSource.onerror = () => {
       if (_jobsSource && _jobsSource.readyState === 2) _jobsSource = null;
     };
-  } catch (_) { /* SSE unsupported — manual refresh only */ }
+  } catch (_) { /* SSE unsupported — list poll after a trigger still updates */ }
 }
 
 function startJobsAutoRefresh() {
@@ -9546,7 +9588,7 @@ async function loadJobs(silent = false) {
   if (!silent) { c.className = 'loading'; c.textContent = 'Loading…'; }
   try {
     const data = await API('/api/jobs/list');
-    _renderJobsData(data, silent);
+    _applyJobsPayload(data);
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
@@ -9617,6 +9659,11 @@ async function triggerJob(jobName) {
   try {
     await API(`/api/jobs/${encodeURIComponent(jobName)}/trigger`, { method: 'POST' });
     toast(`Job queued: ${jobName} (auto backfill)`, 'ok');
+    if (jobName === _LIVE_SUG_JOB) {
+      _liveSugTriggeredAt = Date.now();
+      _setLiveSugRunBtn(true);
+      _startLiveSugWatch();
+    }
     setTimeout(() => loadJobs(true), 600);
   } catch (e) {
     toast(`Trigger failed: ${e.message}`, 'err');
@@ -9958,6 +10005,7 @@ const _sugRunLiveBtn = $('#suggestion-run-live');
 if (_sugRunLiveBtn) _sugRunLiveBtn.addEventListener('click', runLiveSuggestionFromTab);
 refreshGlobalBanners();
 ensureAlertsStream();
+ensureJobsStream();
 
 // ---------------- Zerodha session card ----------------
 function _fmtZerodhaMoney(n) {
