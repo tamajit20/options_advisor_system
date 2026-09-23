@@ -131,6 +131,8 @@ _KEY_GROUP.update({
     "execution_validator_max_data_age_minutes": "monitor",
     "dte_min": "gates",
     "dte_max": "gates",
+    "soft_gate_min_pass": "gates",
+    "soft_gate_total": "gates",
     "calendar_near_dte_max": "gates",
     "calendar_far_dte_min": "gates",
     "short_premium_strategies": "gates",

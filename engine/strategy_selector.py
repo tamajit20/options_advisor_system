@@ -127,7 +127,7 @@ def _session_range_gate_check(
 ) -> ConfidenceCheck:
     """Session-range vs 1-day EM check for expansion strategies (card + picker)."""
     label = "Session range vs 1-day EM (quiet tape)"
-    kind = "SOFT"
+    kind = "ADVISORY"
     min_frac = gate.get("min_session_range_em_fraction")
     if min_frac is None:
         return ConfidenceCheck(
@@ -196,7 +196,7 @@ def build_strategy_entry_gate_checks(
         ))
     if strategy not in _LONG_VOL_STRATEGIES:
         return out
-    soft = "SOFT"
+    soft = "ADVISORY"
     if not gate.get("enabled", True):
         out.append(ConfidenceCheck(
             label="Long-vol entry gate",
@@ -614,12 +614,11 @@ def assemble_suggestion(
 
     # Phase 3: strategy-aware soft-gate threshold.
     # Some strategies (naked longs, jade lizard) carry asymmetric risk and warrant
-    # a stricter confidence bar than the global 5/7 default.
+    # a stricter confidence bar than the global soft_gate_min_pass default.
     strat_overrides = STRATEGY_CONFIG.get("strategy_min_soft_pass", {}) or {}
     required = strat_overrides.get(strategy)
     if required is not None:
-        # Soft gates are checks[:8] in confidence.evaluate (gates 1–8, incl. OI).
-        soft_total = 8
+        soft_total = int(STRATEGY_CONFIG.get("soft_gate_total", 9))
         soft_checks = list(confidence.checks)[:soft_total]
         soft_pass_count = sum(1 for c in soft_checks if c.status == "PASS")
         if soft_pass_count < required:

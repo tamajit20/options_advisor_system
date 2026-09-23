@@ -299,22 +299,21 @@ STRATEGY_CONFIG = {
     "dte_max": 21,
 
     # Confidence — tiered gating
-    # Soft gates (IV Rank, VIX, PCR, OI Walls, Trend, IV premium, FII, OI change):
-    #   SOFT_FAIL if not met; trade proceeds if at least soft_gate_min_pass of 8 pass.
-    # DTE band: SOFT_FAIL when nearest listed expiry is outside 7–21 — shown on
-    #   the card, does not sit out the symbol (not counted in the 8).
-    # Event gate: SOFT_FAIL warning only — not counted in the soft-gate tally.
+    # Soft gates (9): IV Rank, VIX, PCR, OI walls, Trend, IV premium, FII,
+    #   OI change, DTE. Trade proceeds if ≥ soft_gate_min_pass of 9 pass.
+    # Event / traj / IV-alignment: advisory only. ATM spread: hard fail.
     "confidence_min_pass_count": 7,     # legacy — no longer used by engine
-    "soft_gate_min_pass": 5,            # need ≥5 of 8 soft gates to pass
+    "soft_gate_min_pass": 6,            # need ≥6 of 9 soft gates to pass
+    "soft_gate_total":    9,
 
-    # Phase 3: per-strategy soft-gate minimum (8 soft gates in confidence.evaluate).
-    # Naked longs require all 8. Debit / uncapped / jade allow one miss.
+    # Phase 3: per-strategy soft-gate minimum (of soft_gate_total).
+    # Naked longs require all 9. Long-vol / jade allow one miss.
     "strategy_min_soft_pass": {
-        "LONG_CALL":      8,
-        "LONG_PUT":       8,
-        "LONG_STRADDLE":  7,
-        "LONG_STRANGLE":  7,
-        "JADE_LIZARD":    7,
+        "LONG_CALL":      9,
+        "LONG_PUT":       9,
+        "LONG_STRADDLE":  8,
+        "LONG_STRANGLE":  8,
+        "JADE_LIZARD":    8,
     },
 
     # IV premium vs realised volatility (HV-20) thresholds — REGIME-WIDE GATE
@@ -1277,6 +1276,9 @@ EVENTS_CONFIG: list[dict] = [
 # ---------------------------------------------------------------------------
 def _validate() -> None:
     assert STRATEGY_CONFIG["dte_min"] < STRATEGY_CONFIG["dte_max"], "dte_min must be < dte_max"
+    assert (
+        0 < STRATEGY_CONFIG["soft_gate_min_pass"] <= STRATEGY_CONFIG["soft_gate_total"]
+    ), "soft_gate_min_pass must be within soft_gate_total"
     assert 0.0 < STRATEGY_CONFIG["risk_free_rate"] < 1.0, "risk_free_rate out of range"
     assert STRATEGY_CONFIG["iv_rank_buying_max"] < STRATEGY_CONFIG["iv_rank_writing_min"], \
         "iv_rank gates overlap"

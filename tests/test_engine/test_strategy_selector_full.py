@@ -97,8 +97,8 @@ class TestSelectStrategyMidRegime:
 
 # ---------------------------------------------------------------------------
 def _all_pass_confidence():
-    checks = [ConfidenceCheck(label=f"c{i}", status="PASS", detail="") for i in range(8)]
-    return ConfidenceResult(checks=checks, failed_reasons=[], score=8, total=8,
+    checks = [ConfidenceCheck(label=f"c{i}", status="PASS", detail="") for i in range(9)]
+    return ConfidenceResult(checks=checks, failed_reasons=[], score=9, total=9,
                             all_passed=True)
 
 
@@ -109,9 +109,9 @@ def _failing_confidence():
 
 
 def _pass_warn_confidence():
-    checks = [ConfidenceCheck(label=f"c{i}", status="PASS", detail="") for i in range(7)]
-    checks.append(ConfidenceCheck(label="c7", status="PASS_WARN", detail="missing"))
-    return ConfidenceResult(checks=checks, failed_reasons=[], score=7, total=8,
+    checks = [ConfidenceCheck(label=f"c{i}", status="PASS", detail="") for i in range(8)]
+    checks.append(ConfidenceCheck(label="c8", status="PASS_WARN", detail="missing"))
+    return ConfidenceResult(checks=checks, failed_reasons=[], score=8, total=9,
                             all_passed=True)
 
 
@@ -202,7 +202,7 @@ class TestAssembleSuggestion:
 
     def test_long_call_pass_warn_does_not_count_as_soft_pass(self, sample_chain):
         ind = _make_indicators(trend="BULLISH", pcr=0.40, iv_premium=0.85)
-        with pytest.raises(StrategyVeto, match="requires 8/8"):
+        with pytest.raises(StrategyVeto, match="requires 9/9"):
             ss.assemble_suggestion(
                 suggestion_id="S-LC-WARN", underlying="NIFTY",
                 expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
@@ -884,6 +884,10 @@ class TestLongVolEntryGate:
         assert any("Session range" in lb for lb in labels)
         assert any("Long-vol IV rank" in lb for lb in labels)
         assert any("Long-vol IV/HV" in lb for lb in labels)
+        extra = [c for c in sug.confidence.checks if any(
+            x in (c.label or "") for x in ("Session range", "Long-vol")
+        )]
+        assert extra and all(c.kind == "ADVISORY" for c in extra)
 
     def test_calendar_card_skips_quiet_tape_gate(self, sample_chain, mocker):
         from config import STRATEGY_CONFIG

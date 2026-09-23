@@ -20,7 +20,7 @@ class TestEvaluate:
             events_calendar_row_count=10,
         )
         assert result.all_passed is True
-        # 8 soft + event + DTE + 3 trajectory + IV-Rank/IV-HV alignment = 14 total.
+        # 9 soft (incl. DTE) + event + 3 trajectory + IV-Rank/IV-HV alignment = 14 total.
         # Soft gate 8 = OI change conviction (S6).
         # Trajectory gates are PASS_WARN when indicator fields are None
         # (default sample_indicators has no live trajectory).
@@ -70,6 +70,22 @@ class TestEvaluate:
         assert result.all_passed is True
         dte_check = next(c for c in result.checks if c.label == "DTE within target band")
         assert dte_check.status == "SOFT_FAIL"
+
+    def test_four_counted_soft_fails_sits_out(self, sample_indicators):
+        from dataclasses import replace
+        ind = replace(sample_indicators, vix_regime="RISING", pcr=0.4)
+        result = evaluate(
+            iv_rank=40.0,
+            indicators=ind,
+            dte=3,
+            has_high_impact_event_this_week=False,
+            events_calendar_row_count=10,
+        )
+        labels = [c.label for c in result.checks[:9]]
+        assert "DTE within target band" in labels
+        counted_soft_fails = sum(1 for c in result.checks[:9] if c.status == "SOFT_FAIL")
+        assert counted_soft_fails >= 4
+        assert result.all_passed is False
 
     def test_iv_rank_in_dead_zone_soft_fails(self, sample_indicators):
         result = evaluate(

@@ -540,7 +540,7 @@ sequenceDiagram
 
 **Sideways:** one strategy via `select_strategy` (same as directional) — no range+breakout pair cards.
 
-**Sit-out cards:** every configured underlying gets a per-symbol card on a gate veto or true data gap (no spot / empty chain / no future expiry). A listed expiry just outside 7–21 is still evaluated — DTE is a **soft** warning on the nearest expiry, not a sit-out.
+**Sit-out cards:** every configured underlying gets a per-symbol card on a gate veto or true data gap (no spot / empty chain / no future expiry). **SOFT** = 9 counted gates (need ≥6, including DTE). **HARD** = ATM spread. **ADVISORY** = extras (event, traj, quiet tape, long-vol notes) — not in the vote; quiet tape still demotes expansion picks.
 
 **Long vol (straddle/strangle) / naked longs:** IV/catalyst gates in `long_vol_entry_gate` still apply. Live **quiet tape** (session range vs 1-day EM, `min_session_range_em_fraction`) demotes expansion picks in `select_strategy` — calendar or debit spreads instead (catalyst bypasses; missing session data skips). Card gates still show the same check for those strategies.
 

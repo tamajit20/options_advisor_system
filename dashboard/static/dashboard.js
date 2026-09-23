@@ -243,19 +243,19 @@ function _collectZerodhaLegLimits(root, inputSelector) {
 let _maxLotsCap = 0;
 // Soft/hard gate legend from /api/suggestion/today (matches config.py).
 let _gateRules = {
-  soft_gate_min_pass: 5,
-  soft_gate_total: 8,
+  soft_gate_min_pass: 6,
+  soft_gate_total: 9,
   strategy_min_soft_pass: {},
 };
 
 function softMinForStrategy(strategy) {
   const map = _gateRules.strategy_min_soft_pass || {};
   if (strategy && map[strategy] != null) return parseInt(map[strategy], 10);
-  return parseInt(_gateRules.soft_gate_min_pass, 10) || 5;
+  return parseInt(_gateRules.soft_gate_min_pass, 10) || 6;
 }
 
 function softTotalGates() {
-  return parseInt(_gateRules.soft_gate_total, 10) || 8;
+  return parseInt(_gateRules.soft_gate_total, 10) || 9;
 }
 
 /** Shared order size (lots) for a suggestion card — governs both exec paths.
@@ -2823,8 +2823,8 @@ async function loadSuggestion() {
     _maxLotsCap = parseInt(data.max_lots_cap, 10) || 0;
     if (data.gate_rules && typeof data.gate_rules === 'object') {
       _gateRules = {
-        soft_gate_min_pass: parseInt(data.gate_rules.soft_gate_min_pass, 10) || 5,
-        soft_gate_total: parseInt(data.gate_rules.soft_gate_total, 10) || 8,
+        soft_gate_min_pass: parseInt(data.gate_rules.soft_gate_min_pass, 10) || 6,
+        soft_gate_total: parseInt(data.gate_rules.soft_gate_total, 10) || 9,
         strategy_min_soft_pass: data.gate_rules.strategy_min_soft_pass || {},
       };
     }
@@ -4646,7 +4646,7 @@ const GATE_RESULT_TIP = {
 
 /** Hover help for each condition label (substring match, first wins). */
 const GATE_CONDITION_TIPS = [
-  ['dte within', 'Preferred 7–21 DTE. If the nearest listed expiry is outside that band, this is a soft warning — the symbol is still evaluated.'],
+  ['dte within', 'Preferred 7–21 DTE. Outside the band still evaluates the nearest expiry and spends one of the 6-of-9 soft misses.'],
   ['atm strikes liquid', 'ATM option bid-ask must be tight enough to enter without paying a wide spread.'],
   ['iv rank in actionable', 'IV Rank must be in a writing zone (high) or buying zone (low) — mid-rank is weak edge.'],
   ['vix stable', 'India VIX should be stable or falling so premium decay is not fighting a vol spike.'],
@@ -5033,10 +5033,9 @@ function renderGatesAndWarningsPanel(s) {
   const rulesHtml = `<div class="gates-rules-box">
     <div class="gates-rules-title">How gating works on this card</div>
     <ul class="gates-rules-list">
-      <li><strong>HARD</strong> — must pass (DTE band, ATM liquidity). A fail blocks the suggestion.</li>
-      <li><strong>SOFT</strong> — need ≥${softMin} of ${softTotal} for ${escapeHtml(strategy || 'this strategy')}. Up to ${softMaxFail} soft miss${softMaxFail === 1 ? '' : 'es'} allowed; more blocks.</li>
-      <li><strong>ADVISORY</strong> — warn and review only (IV traj, EM calibration, freshness). Never the sole blocker.</li>
-      <li><strong>Quiet tape</strong> (session range vs 1-day EM) demotes expansion picks in the selector; catalyst bypasses. Shown as a SOFT row on long-vol / naked-long cards.</li>
+      <li><strong>HARD</strong> — ATM liquidity (and similar). One fail blocks the card.</li>
+      <li><strong>SOFT</strong> — the ${softTotal} counted gates. Need ≥${softMin} for ${escapeHtml(strategy || 'this strategy')} (up to ${softMaxFail} miss${softMaxFail === 1 ? '' : 'es'}).</li>
+      <li><strong>ADVISORY</strong> — extra rows (event, traj, quiet tape, long-vol notes). Not in the ${softMin}-of-${softTotal} vote. Quiet tape still demotes expansion picks in the selector.</li>
     </ul>
   </div>`;
 

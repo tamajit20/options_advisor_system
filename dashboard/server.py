@@ -1922,9 +1922,11 @@ def create_app() -> Flask:
             # Soft/hard gate legend for the suggestion card Gates panel.
             "gate_rules": {
                 "soft_gate_min_pass": int(
-                    STRATEGY_CONFIG.get("soft_gate_min_pass") or 5
+                    STRATEGY_CONFIG.get("soft_gate_min_pass") or 6
                 ),
-                "soft_gate_total": 8,
+                "soft_gate_total": int(
+                    STRATEGY_CONFIG.get("soft_gate_total") or 9
+                ),
                 "strategy_min_soft_pass": dict(
                     STRATEGY_CONFIG.get("strategy_min_soft_pass") or {}
                 ),
