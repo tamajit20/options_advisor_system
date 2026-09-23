@@ -1871,8 +1871,11 @@ function formatLegPnlHtml(l) {
 
 function _perfPnlHtml(pnl, premiumRs, premiumKind, { aggregate = false } = {}) {
   if (pnl == null) return '—';
+  const prefix = pnl > 0 ? '+' : (pnl < 0 ? '\u2212' : '');
+  const amt = `${prefix}\u20b9${fmt(Math.abs(pnl))}`;
   const prem = premiumRs > 0 ? { rs: premiumRs, kind: premiumKind || 'paid' } : null;
-  return formatPnlWithPct(pnl, prem, { aggregate });
+  const pct = prem ? pnlPctBracket(pnl, prem, { aggregate }) : '';
+  return `<span class="perf-pnl-amt">${amt}</span>${pct}`;
 }
 // "+400 pts, +1.6%" from spot — shows price level relative to spot
 const spotDist = (level, spot) => {

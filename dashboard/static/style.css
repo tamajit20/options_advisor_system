@@ -1627,26 +1627,39 @@ input:focus, select:focus, textarea:focus {
 .perf-toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
 .perf-overall { background:linear-gradient(135deg,rgba(56,189,248,.08),rgba(99,102,241,.08)); border:1px solid rgba(56,189,248,.18); border-radius:10px; padding:14px 18px; margin-bottom:18px; }
 .perf-overall-title { font-size:.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--text-dim); margin-bottom:10px; }
-.perf-overall-grid { display:flex; flex-wrap:wrap; gap:16px 28px; }
-.perf-kv { display:flex; flex-direction:column; gap:2px; }
+.perf-overall-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); gap:12px 16px; }
+.perf-kv { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .perf-kv span { font-size:.72rem; color:var(--text-dim); }
-.perf-kv strong { font-size:1rem; }
-.perf-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
-.perf-card { background:var(--surface-alt); border:1px solid rgba(255,255,255,.06); border-radius:10px; padding:14px; display:flex; flex-direction:column; gap:10px; }
+.perf-kv strong { font-size:1rem; display:flex; flex-direction:column; align-items:flex-start; gap:2px; line-height:1.25; }
+.perf-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; }
+.perf-card { background:var(--surface-alt); border:1px solid rgba(255,255,255,.06); border-radius:10px; padding:14px; display:flex; flex-direction:column; gap:10px; min-width:0; overflow:hidden; }
 .perf-card--pos { border-left:3px solid rgba(34,197,94,.5); }
 .perf-card--neg { border-left:3px solid rgba(239,68,68,.4); }
-.perf-card-head { display:flex; justify-content:space-between; align-items:flex-start; }
-.perf-strategy-name { font-size:.95rem; font-weight:700; }
-.perf-total-pnl { font-size:1.05rem; font-weight:700; }
+.perf-card-head { display:flex; flex-direction:column; align-items:flex-start; gap:4px; min-width:0; }
+.perf-strategy-name { font-size:.95rem; font-weight:700; overflow-wrap:anywhere; }
+.perf-total-pnl { font-size:1.05rem; font-weight:700; display:flex; flex-direction:column; align-items:flex-start; gap:2px; max-width:100%; }
 .win-bar-wrap { height:6px; background:rgba(255,255,255,.08); border-radius:3px; overflow:hidden; }
 .win-bar-fill { height:100%; border-radius:3px; transition:width .4s; }
 .win-bar-high { background:rgba(34,197,94,.7); }
 .win-bar-mid  { background:rgba(245,158,11,.7); }
 .win-bar-low  { background:rgba(239,68,68,.6); }
-.perf-stats-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(72px,1fr)); gap:8px; }
-.perf-stat { display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,.03); border-radius:6px; padding:6px 4px; }
-.perf-stat-val { font-size:.9rem; font-weight:700; }
-.perf-stat-lbl { font-size:.65rem; color:var(--text-dim); margin-top:2px; text-align:center; }
+.perf-stats-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.perf-stat { display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,.03); border-radius:6px; padding:8px 6px; min-width:0; }
+.perf-stat-val { font-size:.9rem; font-weight:700; display:flex; flex-direction:column; align-items:center; text-align:center; line-height:1.25; max-width:100%; }
+.perf-stat-lbl { font-size:.65rem; color:var(--text-dim); margin-top:4px; text-align:center; }
+.perf-pnl-amt { display:block; }
+.perf-overall .pnl-pct-bracket,
+.perf-card .pnl-pct-bracket {
+  white-space: normal;
+  display: block;
+  line-height: 1.3;
+  margin-left: 0;
+}
+@media (min-width: 900px) {
+  .perf-card-head { flex-direction:row; justify-content:space-between; align-items:flex-start; }
+  .perf-total-pnl { align-items:flex-end; text-align:right; }
+  .perf-stats-grid { grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); }
+}
 
 /* ---------- History redesigned cards ---------- */
 .hist-filter-bar { align-items: flex-end; flex-wrap: wrap; gap: 8px 10px; }
