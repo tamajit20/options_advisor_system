@@ -26,6 +26,7 @@ from typing import List, Optional, Sequence
 
 from config import NSE_MARKET_HOLIDAYS, STRATEGY_CONFIG
 from contracts import (
+    ConfidenceCheck,
     ConfidenceResult,
     MarketIndicators,
     NoSuggestion,
@@ -67,6 +68,54 @@ logger = logging.getLogger(__name__)
 # NSE market hours (IST)
 _NSE_OPEN  = time(9, 15)
 _NSE_CLOSE = time(15, 30)
+
+
+def expiry_dte_sit_out_reason(
+    expiries: Sequence[date] | None,
+    entry_day: date,
+    *,
+    dte_min: int | None = None,
+    dte_max: int | None = None,
+) -> Optional[str]:
+    """Reason text when no listed expiry sits in the configured DTE band."""
+    if dte_min is None:
+        dte_min = int(STRATEGY_CONFIG["dte_min"])
+    if dte_max is None:
+        dte_max = int(STRATEGY_CONFIG["dte_max"])
+    if not expiries:
+        return None
+    dated = [e for e in expiries if isinstance(e, date)]
+    if not dated:
+        return None
+    if any(dte_min <= days_between(entry_day, e) <= dte_max for e in dated):
+        return None
+    future = [e for e in sorted(dated) if e >= entry_day][:3]
+    nearest = ""
+    if future:
+        bits = [f"{e} ({days_between(entry_day, e)} DTE)" for e in future]
+        nearest = f"; nearest {', '.join(bits)}"
+    return f"No expiry in the {dte_min}–{dte_max} DTE band{nearest}"
+
+
+def _data_gap_sit_out(symbol: str, reason: str) -> NoSuggestion:
+    """Sit-out row when an underlying never reaches gates (missing data / DTE)."""
+    return NoSuggestion(
+        generated_on=now_ist(),
+        underlying=symbol,
+        confidence=ConfidenceResult(
+            score=0,
+            total=1,
+            all_passed=False,
+            checks=[ConfidenceCheck(
+                label="Data available",
+                status="FAIL",
+                detail=reason,
+                kind="HARD",
+            )],
+            failed_reasons=[reason],
+        ),
+        reason=reason,
+    )
 
 
 def exceeds_max_loss_cap(max_loss_rs: float, capital_rs: float, cap_pct: float) -> bool:
@@ -334,13 +383,15 @@ def _pick_expiries_in_band(
     fo: FoEodRepo, symbol: str, trade_date: date,
     *, entry_day: Optional[date] = None,
 ) -> list[tuple[date, str]]:
-    """Return [(expiry, expiry_type), ...] for the DTE band — at most one Weekly and one Monthly.
+    """Return [(expiry, expiry_type), ...] — at most one Weekly and one Monthly.
 
     Rules:
-    - Collect all expiries within [dte_min, dte_max].
+    - Prefer expiries within [dte_min, dte_max].
     - If monthly and weekly fall on the same date (last expiry of month),
       return only that date tagged as 'Monthly'.
     - Otherwise return nearest monthly + nearest weekly (both, if different dates).
+    - If nothing is in-band, pick the single future expiry closest to the band
+      (DTE is then a soft gate, not a sit-out).
 
     DTE is measured from the ENTRY day (next trading day after generation),
     not the generation day.  Mon-Thu: entry is next calendar day (+1).
@@ -357,7 +408,20 @@ def _pick_expiries_in_band(
     in_band = [e for e in expiries
                if dte_min <= days_between(entry_day, e) <= dte_max]
     if not in_band:
-        return []
+        future = [e for e in expiries if days_between(entry_day, e) >= 1]
+        if not future:
+            return []
+
+        def _band_dist(exp: date) -> int:
+            dte = days_between(entry_day, exp)
+            if dte < dte_min:
+                return dte_min - dte
+            if dte > dte_max:
+                return dte - dte_max
+            return 0
+
+        chosen = min(future, key=_band_dist)
+        return [(chosen, _expiry_type_label(chosen, expiries))]
 
     monthly = sorted(e for e in in_band if _is_monthly_expiry(e, expiries))
     weekly  = sorted(e for e in in_band if not _is_monthly_expiry(e, expiries))
@@ -565,9 +629,11 @@ def _evaluate_underlying(
         if spot_row:
             stamp_eod_rows([spot_row], trade_date)
     if not spot_row:
-        logger.warning("Suggestion: no spot for %s (%s mode)", symbol,
-                       "live" if _live_mode else f"EOD {trade_date}")
-        return [], []
+        mode = "live" if _live_mode else f"EOD {trade_date}"
+        logger.warning("Suggestion: no spot for %s (%s mode)", symbol, mode)
+        return [], [_data_gap_sit_out(
+            symbol, f"No spot price available ({mode})",
+        )]
     spot = float(spot_row["close_price"])
     actual_spot_date: Optional[date] = spot_row.get("trade_date")
 
@@ -576,7 +642,17 @@ def _evaluate_underlying(
         entry_day=entry_day if _live_mode else None,
     )
     if not expiry_candidates:
-        return [], []
+        listed: list[date] = []
+        try:
+            listed = list(fo.expiries_for(symbol, trade_date) or [])
+        except Exception:
+            logger.debug("Could not list expiries for sit-out reason on %s", symbol)
+        reason = expiry_dte_sit_out_reason(listed, entry_day) or (
+            f"No expiry in the {int(STRATEGY_CONFIG['dte_min'])}–"
+            f"{int(STRATEGY_CONFIG['dte_max'])} DTE band"
+        )
+        logger.info("Suggestion: %s — %s", symbol, reason)
+        return [], [_data_gap_sit_out(symbol, reason)]
     all_expiries = fo.expiries_for(symbol, trade_date)
 
     # Shared data fetched once for all expiry candidates
@@ -672,6 +748,10 @@ def _evaluate_underlying(
             oi_change_rows = None
             oi_abs_rows = None
         if not chain:
+            no_suggestions.append(_data_gap_sit_out(
+                symbol,
+                f"[{expiry_type} {expiry}] Option chain empty",
+            ))
             continue
 
         pricing_prov = PricingProvenanceTracker()
@@ -688,11 +768,19 @@ def _evaluate_underlying(
                     "Live suggestion: could not compute ATM IV for %s exp=%s — skipping",
                     symbol, expiry,
                 )
+                no_suggestions.append(_data_gap_sit_out(
+                    symbol,
+                    f"[{expiry_type} {expiry}] Could not compute live ATM IV",
+                ))
                 continue
         else:
             iv_for_expiry = [r for r in iv_rows if r.get("expiry_date") == expiry]
             if not iv_for_expiry:
                 logger.warning("Suggestion: no IV rows for %s exp=%s (%s)", symbol, expiry, expiry_type)
+                no_suggestions.append(_data_gap_sit_out(
+                    symbol,
+                    f"[{expiry_type} {expiry}] No IV history for this expiry",
+                ))
                 continue
             atm_iv = float(iv_for_expiry[0].get("atm_iv") or 0.0)
             if atm_iv <= 0:
@@ -700,6 +788,10 @@ def _evaluate_underlying(
                     "Suggestion: atm_iv<=0 for %s exp=%s (%s) — skipping (avoid fake PoP)",
                     symbol, expiry, expiry_type,
                 )
+                no_suggestions.append(_data_gap_sit_out(
+                    symbol,
+                    f"[{expiry_type} {expiry}] ATM IV missing or zero",
+                ))
                 continue
             _raw_iv_rank = iv_for_expiry[0].get("iv_rank")
             iv_rank: Optional[float] = float(_raw_iv_rank) if _raw_iv_rank is not None else None
@@ -1226,8 +1318,11 @@ def run_suggestion_engine(
     for symbol in STRATEGY_CONFIG["underlyings"]:
         try:
             sugs, nss = _evaluate_underlying(db, symbol, trade_date, entry_day, exec_window)
-        except Exception:
+        except Exception as exc:
             logger.exception("Suggestion eval failed for %s", symbol)
+            no_suggestions.append(_data_gap_sit_out(
+                symbol, f"Evaluation failed: {exc}",
+            ))
             continue
         all_candidates.extend(sugs)
         no_suggestions.extend(nss)
@@ -1301,8 +1396,11 @@ def run_live_suggestion_engine(
                 chain_provider=p,
                 live_today=live_today,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception("Live suggestion eval failed for %s", symbol)
+            no_suggestions.append(_data_gap_sit_out(
+                symbol, f"Evaluation failed: {exc}",
+            ))
             continue
         all_candidates.extend(sugs)
         no_suggestions.extend(nss)

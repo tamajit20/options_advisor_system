@@ -2738,18 +2738,24 @@ function renderMarketSitOutSummary(summary) {
 
 function renderSitOutCard(s) {
   const regime = s.market_regime || {};
-  const regimeTitle = regime.title ? escapeHtml(regime.title) : 'Sitting out';
   const reason = s.no_suggestion_reason || s.reason || '';
+  const dataGap = regime.id === 'no_expiry'
+    || /no expiry in the /i.test(reason)
+    || /no spot price/i.test(reason);
+  const regimeTitle = (!dataGap && regime.title) ? escapeHtml(regime.title) : '';
   const confLabel = s.confidence_display || formatConfidence(s) || `${s.confidence_score || '—'} passed`;
+  const extra = dataGap ? '' : (
+    `<p class="muted sit-out-conf" style="font-size:.85rem">Confidence: ${escapeHtml(confLabel)}</p>` +
+    `<p class="muted sit-out-hint" style="font-size:.82rem">Gates unchanged \u2014 the engine waits for a high-edge setup rather than forcing a marginal trade.</p>`
+  );
   return `<div class="card sit-out-card">
     <div class="card-head">
       <h3>${escapeHtml(s.underlying)} — No trade today</h3>
       <span class="tag tag-warn">SITTING OUT</span>
     </div>
-    <p class="sit-out-regime"><strong>${regimeTitle}</strong></p>
+    ${regimeTitle ? `<p class="sit-out-regime"><strong>${regimeTitle}</strong></p>` : ''}
     <p class="muted sit-out-reason">${escapeHtml(reason)}</p>
-    <p class="muted sit-out-conf" style="font-size:.85rem">Confidence: ${escapeHtml(confLabel)}</p>
-    <p class="muted sit-out-hint" style="font-size:.82rem">Gates unchanged \u2014 the engine waits for a high-edge setup rather than forcing a marginal trade.</p>
+    ${extra}
   </div>`;
 }
 
@@ -4640,7 +4646,7 @@ const GATE_RESULT_TIP = {
 
 /** Hover help for each condition label (substring match, first wins). */
 const GATE_CONDITION_TIPS = [
-  ['dte within', 'Days to expiry must sit in the configured target band for this strategy.'],
+  ['dte within', 'Preferred 7–21 DTE. If the nearest listed expiry is outside that band, this is a soft warning — the symbol is still evaluated.'],
   ['atm strikes liquid', 'ATM option bid-ask must be tight enough to enter without paying a wide spread.'],
   ['iv rank in actionable', 'IV Rank must be in a writing zone (high) or buying zone (low) — mid-rank is weak edge.'],
   ['vix stable', 'India VIX should be stable or falling so premium decay is not fighting a vol spike.'],

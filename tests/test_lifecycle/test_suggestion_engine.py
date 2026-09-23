@@ -180,6 +180,19 @@ class TestPickExpiriesInBand:
         # Only weekly is in band (28 days from May 1 = > 21 dte_max default)
         assert any(t == "Weekly" for _, t in result)
 
+    def test_falls_back_to_nearest_when_none_in_band(self, mocker):
+        fo = MagicMock()
+        td = date(2026, 9, 22)  # Tue → entry Wed Sep 23
+        fo.expiries_for.return_value = [
+            date(2026, 9, 29),   # 6 DTE — just inside-short
+            date(2026, 10, 27),  # 34 DTE — far monthly
+        ]
+        result = se._pick_expiries_in_band(
+            fo, "BANKNIFTY", td, entry_day=date(2026, 9, 23),
+        )
+        assert len(result) == 1
+        assert result[0][0] == date(2026, 9, 29)
+
 
 # ---------------------------------------------------------------------------
 class TestRunSuggestionEngine:
@@ -195,8 +208,13 @@ class TestRunSuggestionEngine:
                      return_value=datetime(2026, 4, 30, 18, 0))
         mocker.patch("lifecycle.suggestion_engine._evaluate_underlying",
                      side_effect=RuntimeError("eval blew up"))
-        # Should not raise; returns 0 persisted
+        persist = mocker.patch("lifecycle.suggestion_engine._persist_and_notify",
+                               return_value=0)
+        # Should not raise; sit-out rows are recorded per symbol
         assert se.run_suggestion_engine(mock_db, trade_date=date(2026, 4, 30)) == 0
+        nss = persist.call_args.args[2]
+        assert {n.underlying for n in nss} == {"NIFTY", "BANKNIFTY", "FINNIFTY"}
+        assert all("Evaluation failed" in n.reason for n in nss)
 
     def test_persists_one_suggestion_when_eval_returns_one(self, mock_db, mocker):
         mocker.patch("lifecycle.suggestion_engine.now_ist",
@@ -281,6 +299,29 @@ class TestRunSuggestionEngine:
         ins.assert_not_called()
 
 
+class TestExpiryDteSitOutReason:
+    def test_none_when_in_band(self):
+        reason = se.expiry_dte_sit_out_reason(
+            [date(2026, 5, 14)], date(2026, 5, 1), dte_min=7, dte_max=21,
+        )
+        assert reason is None
+
+    def test_reason_lists_nearest_when_out_of_band(self):
+        reason = se.expiry_dte_sit_out_reason(
+            [date(2026, 5, 4), date(2026, 5, 28)],
+            date(2026, 5, 1),
+            dte_min=7,
+            dte_max=21,
+        )
+        assert reason is not None
+        assert "7–21 DTE band" in reason
+        assert "2026-05-04 (3 DTE)" in reason
+        assert "2026-05-28 (27 DTE)" in reason
+
+    def test_none_when_no_expiries(self):
+        assert se.expiry_dte_sit_out_reason([], date(2026, 5, 1)) is None
+
+
 # ---------------------------------------------------------------------------
 class TestEvaluateUnderlying:
     def test_returns_empty_when_no_spot(self, mock_db, mocker):
@@ -289,7 +330,10 @@ class TestEvaluateUnderlying:
         sugs, ns = se._evaluate_underlying(
             mock_db, "NIFTY", date(2026, 4, 30), date(2026, 5, 1), "x"
         )
-        assert sugs == [] and ns == []
+        assert sugs == []
+        assert len(ns) == 1
+        assert ns[0].underlying == "NIFTY"
+        assert "No spot price" in ns[0].reason
 
     def test_returns_empty_when_no_expiries(self, mock_db, mocker):
         mocker.patch("lifecycle.suggestion_engine.SpotEodRepo.for_date",
@@ -297,10 +341,16 @@ class TestEvaluateUnderlying:
                                    "trade_date": date(2026, 4, 30)})
         mocker.patch("lifecycle.suggestion_engine._pick_expiries_in_band",
                      return_value=[])
+        mocker.patch("lifecycle.suggestion_engine.FoEodRepo.expiries_for",
+                     return_value=[date(2026, 5, 4), date(2026, 5, 28)])
         sugs, ns = se._evaluate_underlying(
-            mock_db, "NIFTY", date(2026, 4, 30), date(2026, 5, 1), "x"
+            mock_db, "BANKNIFTY", date(2026, 4, 30), date(2026, 5, 1), "x"
         )
-        assert sugs == [] and ns == []
+        assert sugs == []
+        assert len(ns) == 1
+        assert ns[0].underlying == "BANKNIFTY"
+        assert "DTE band" in ns[0].reason
+        assert "2026-05-04" in ns[0].reason
 
     def _patch_eval_to_confidence(self, mocker, *, trend: str):
         from contracts import ConfidenceCheck, ConfidenceResult, MarketIndicators
@@ -411,12 +461,13 @@ class TestPickExpiriesInBandEntryDay:
         fo = MagicMock()
         td = date(2026, 5, 5)
         fo.expiries_for.return_value = [date(2026, 5, 12)]   # 7 DTE from May 5, 6 DTE from May 6
-        # Without override, entry_day = next trading day = May 6 → DTE = 6 (below 7 min)
+        # Without override, entry_day = next trading day = May 6 → DTE = 6 (below 7)
         result_no_override = se._pick_expiries_in_band(fo, "NIFTY", td)
         # With override entry_day=May 5 → DTE = 7 (exactly at min) → in band
         result_with_override = se._pick_expiries_in_band(fo, "NIFTY", td, entry_day=td)
-        assert len(result_no_override) == 0
-        assert len(result_with_override) == 1
+        assert result_with_override[0][0] == date(2026, 5, 12)
+        # Out-of-band is no longer dropped — nearest expiry is still evaluated
+        assert result_no_override[0][0] == date(2026, 5, 12)
 
 
 # ---------------------------------------------------------------------------
@@ -511,8 +562,13 @@ class TestRunLiveSuggestionEngine:
                      return_value=date(2026, 5, 2))
         mocker.patch("lifecycle.suggestion_engine._evaluate_underlying",
                      side_effect=RuntimeError("provider down"))
-        # Should not raise; returns 0
+        persist = mocker.patch("lifecycle.suggestion_engine._persist_and_notify",
+                               return_value=0)
+        # Should not raise; sit-out rows are recorded per symbol
         assert se.run_live_suggestion_engine(mock_db, provider=p) == 0
+        nss = persist.call_args.args[2]
+        assert {n.underlying for n in nss} == {"NIFTY", "BANKNIFTY", "FINNIFTY"}
+        assert all("Evaluation failed" in n.reason for n in nss)
 
 
 class TestIcIbCompanions:

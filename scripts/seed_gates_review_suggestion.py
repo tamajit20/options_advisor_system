@@ -46,7 +46,7 @@ def _expiry(today: date) -> date:
 
 def _conditions() -> list[dict]:
     return [
-        {"label": "DTE within target band", "status": "PASS", "kind": "HARD",
+        {"label": "DTE within target band", "status": "PASS", "kind": "SOFT",
          "detail": "DTE 14 in band 7–45"},
         {"label": "ATM strikes liquid (spread within budget)", "status": "PASS", "kind": "HARD",
          "detail": "ATM mid-spread 0.8% of premium"},

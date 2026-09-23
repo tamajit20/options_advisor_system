@@ -330,6 +330,28 @@ class TestApiSuggestionToday:
         assert data["suggestions"][0]["strategy"] == "CALENDAR_SPREAD"
         assert data["sit_out"] == []
 
+    def test_fills_sit_out_when_underlying_has_no_dte_band_expiry(self, client, mocker):
+        mocker.patch("dashboard.server.SuggestionRepo.active_pending", return_value=[])
+        mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today", return_value=[])
+        fo = MagicMock()
+        fo.latest_trade_date.return_value = date(2026, 9, 22)
+        fo.expiries_for.side_effect = lambda symbol, _td: {
+            "NIFTY": [date(2026, 10, 6)],
+            "BANKNIFTY": [date(2026, 9, 29), date(2026, 10, 27)],
+            "FINNIFTY": [date(2026, 9, 29), date(2026, 10, 27)],
+        }.get(symbol, [])
+        mocker.patch("dashboard.server.FoEodRepo", return_value=fo)
+        mocker.patch("dashboard.server.today_ist", return_value=date(2026, 9, 23))
+        resp = client.get("/api/suggestion/today")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        by_und = {r["underlying"]: r for r in data["sit_out"]}
+        assert "BANKNIFTY" in by_und
+        assert "FINNIFTY" in by_und
+        assert "NIFTY" not in by_und
+        assert "7–21 DTE band" in by_und["BANKNIFTY"]["no_suggestion_reason"]
+        assert "2026-09-29" in by_und["BANKNIFTY"]["no_suggestion_reason"]
+
     def test_includes_blocked_pending_with_execution_gate(self, client, mocker):
         from datetime import timedelta
         from utils import now_ist

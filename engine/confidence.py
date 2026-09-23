@@ -6,9 +6,11 @@ engine/confidence.py
 
 Gate tiers
 ----------
-  HARD gate  (must PASS):        DTE in band
-  SOFT gates (need ≥ soft_gate_min_pass of 5):
-      IV Rank | VIX stable | PCR neutral | OI walls visible | Trend identifiable
+  HARD gate  (must PASS):        ATM spread quality
+  SOFT gates (need ≥ soft_gate_min_pass of 8):
+      IV Rank | VIX | PCR | OI walls | Trend | IV premium | FII | OI change
+  DTE band: SOFT_FAIL when the nearest listed expiry is outside 7–21 — shown
+            on the card, does not sit out the symbol (not in the 8-count).
   WARNING gate (never blocks):   High-impact event this week → SOFT_FAIL shown
                                  but suggestion always proceeds
 
@@ -318,18 +320,19 @@ def evaluate(
 
     checks.append(_gate("No high-impact event this week", _event_gate, kind="ADVISORY"))
 
-    # 9. DTE in band — always computable, hard block
+    # 9. DTE in band — SOFT when the nearest listed expiry sits outside
+    # 7–21 (BANKNIFTY/FINNIFTY monthlies). Does not sit out the symbol.
     dte_min = STRATEGY_CONFIG["dte_min"]
     dte_max = STRATEGY_CONFIG["dte_max"]
 
     def _dte_gate():
         dte_ok = dte_min <= dte <= dte_max
         return (
-            _PASS if dte_ok else _FAIL,
+            _PASS if dte_ok else _SOFT_FAIL,
             f"DTE {dte} (need {dte_min}–{dte_max})",
         )
 
-    checks.append(_gate("DTE within target band", _dte_gate, kind="HARD"))
+    checks.append(_gate("DTE within target band", _dte_gate, kind="SOFT"))
 
     # ══════════════════════════════════════════════════════════════
     # TRAJECTORY GATES — populated only in live mode (WS history present).
@@ -437,13 +440,13 @@ def evaluate(
     # ══════════════════════════════════════════════════════════════
     # Soft gates: checks[0..7] = 8 gates (original 5 + IV premium + FII + OI change)
     # Event warning: checks[8] — SOFT_FAIL but excluded from hard_failed count
-    # Hard gate: checks[9] — DTE
+    # DTE: checks[9] — SOFT_FAIL outside band; excluded from the 8-count
     # Trajectory gates: checks[10..12] — IV traj, OI traj (advisory SOFT_FAIL,
     #   visible but NOT counted in soft_failed), spread quality (hard FAIL).
     soft_min   = STRATEGY_CONFIG["soft_gate_min_pass"]   # default 5 (of 8 now)
     soft_total = 8  # gates 1–8 (added OI change conviction gate)
 
-    # Count any hard FAIL anywhere (DTE + spread quality both qualify).
+    # Count any hard FAIL anywhere (spread quality). DTE is no longer hard.
     hard_failed = sum(1 for c in checks if c.status == _FAIL)
     soft_failed = sum(1 for c in checks[:8] if c.status == _SOFT_FAIL)
 

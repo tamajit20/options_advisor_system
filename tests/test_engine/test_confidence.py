@@ -1,4 +1,4 @@
-"""Unit tests for engine.confidence — 8-soft-gate + DTE hard-gate evaluator."""
+"""Unit tests for engine.confidence — 8-soft-gate + DTE soft-warning evaluator."""
 from __future__ import annotations
 
 from datetime import date
@@ -46,7 +46,7 @@ class TestEvaluate:
         assert trend_check.status == "PASS"
         assert "MIXED" in trend_check.detail
 
-    def test_dte_below_band_hard_fails(self, sample_indicators):
+    def test_dte_below_band_soft_fails_without_sit_out(self, sample_indicators):
         result = evaluate(
             iv_rank=60.0,
             indicators=sample_indicators,
@@ -54,12 +54,12 @@ class TestEvaluate:
             has_high_impact_event_this_week=False,
             events_calendar_row_count=10,
         )
-        assert result.all_passed is False
-        # DTE check is now in the middle (followed by trajectory gates).
+        assert result.all_passed is True
         dte_check = next(c for c in result.checks if c.label == "DTE within target band")
-        assert dte_check.status == "FAIL"
+        assert dte_check.status == "SOFT_FAIL"
+        assert dte_check.kind == "SOFT"
 
-    def test_dte_above_band_hard_fails(self, sample_indicators):
+    def test_dte_above_band_soft_fails_without_sit_out(self, sample_indicators):
         result = evaluate(
             iv_rank=60.0,
             indicators=sample_indicators,
@@ -67,7 +67,9 @@ class TestEvaluate:
             has_high_impact_event_this_week=False,
             events_calendar_row_count=10,
         )
-        assert result.all_passed is False
+        assert result.all_passed is True
+        dte_check = next(c for c in result.checks if c.label == "DTE within target band")
+        assert dte_check.status == "SOFT_FAIL"
 
     def test_iv_rank_in_dead_zone_soft_fails(self, sample_indicators):
         result = evaluate(

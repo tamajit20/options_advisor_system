@@ -390,6 +390,53 @@ def _confidence_display(row: Dict[str, Any]) -> Optional[str]:
     return f"{passed}/{total}"
 
 
+def _dte_band_sit_out_gaps(
+    db: SQLServerConnection,
+    pending_underlyings: set,
+    sit_out: List[dict],
+) -> List[dict]:
+    """Sit-out cards for configured underlyings with no expiry in the DTE band."""
+    from lifecycle.suggestion_engine import expiry_dte_sit_out_reason
+
+    shown = {
+        r.get("underlying") for r in sit_out if r.get("underlying")
+    } | set(pending_underlyings)
+    fo = FoEodRepo(db)
+    try:
+        trade_date = fo.latest_trade_date()
+    except Exception:
+        return []
+    if trade_date is None:
+        return []
+    entry_day = today_ist()
+    extra: List[dict] = []
+    for und in STRATEGY_CONFIG.get("underlyings") or []:
+        if not und or und in shown:
+            continue
+        try:
+            listed = fo.expiries_for(und, trade_date)
+        except Exception:
+            continue
+        if not isinstance(listed, (list, tuple)):
+            continue
+        reason = expiry_dte_sit_out_reason(listed, entry_day)
+        if not reason:
+            continue
+        extra.append({
+            "underlying": und,
+            "status": "NO_SUGGESTION",
+            "no_suggestion_reason": reason,
+            "confidence_display": None,
+            "market_regime": {
+                "id": "no_expiry",
+                "title": "No expiry in DTE band",
+                "summary": reason,
+                "profit_note": "",
+            },
+        })
+    return extra
+
+
 def _execution_gate_label(gate, row: Dict[str, Any]) -> Optional[str]:
     """Short UI badge for a blocked suggestion card."""
     if gate.ok:
@@ -1859,6 +1906,8 @@ def create_app() -> Flask:
             r_out["confidence_display"] = _confidence_display(r)
             r_out["market_regime"] = regime_from_sit_out_row(r_out)
             sit_out.append(r_out)
+
+        sit_out.extend(_dte_band_sit_out_gaps(db, pending_underlyings, sit_out))
 
         market_summary = summarize_market_sit_out(sit_out)
 

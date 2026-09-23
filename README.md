@@ -540,6 +540,8 @@ sequenceDiagram
 
 **Sideways:** one strategy via `select_strategy` (same as directional) — no range+breakout pair cards.
 
+**Sit-out cards:** every configured underlying gets a per-symbol card on a gate veto or true data gap (no spot / empty chain / no future expiry). A listed expiry just outside 7–21 is still evaluated — DTE is a **soft** warning on the nearest expiry, not a sit-out.
+
 **Long vol (straddle/strangle) / naked longs:** IV/catalyst gates in `long_vol_entry_gate` still apply. Live **quiet tape** (session range vs 1-day EM, `min_session_range_em_fraction`) demotes expansion picks in `select_strategy` — calendar or debit spreads instead (catalyst bypasses; missing session data skips). Card gates still show the same check for those strategies.
 
 Jobs: EOD data via [A5](#a5-clock-and-jobs); cards via `live_suggestion_engine`. Downloader writes raw shapes only; lifecycle persists.  

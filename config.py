@@ -299,9 +299,10 @@ STRATEGY_CONFIG = {
     "dte_max": 21,
 
     # Confidence — tiered gating
-    # Hard gate (DTE): any FAIL = no suggestion regardless of score
-    # Soft gates (IV Rank, VIX, PCR, OI Walls, Trend, IV premium, FII): SOFT_FAIL
-    #   if condition not met; trade proceeds if at least soft_gate_min_pass of 8 pass.
+    # Soft gates (IV Rank, VIX, PCR, OI Walls, Trend, IV premium, FII, OI change):
+    #   SOFT_FAIL if not met; trade proceeds if at least soft_gate_min_pass of 8 pass.
+    # DTE band: SOFT_FAIL when nearest listed expiry is outside 7–21 — shown on
+    #   the card, does not sit out the symbol (not counted in the 8).
     # Event gate: SOFT_FAIL warning only — not counted in the soft-gate tally.
     "confidence_min_pass_count": 7,     # legacy — no longer used by engine
     "soft_gate_min_pass": 5,            # need ≥5 of 8 soft gates to pass
