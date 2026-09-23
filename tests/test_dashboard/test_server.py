@@ -1245,3 +1245,14 @@ class TestJsDashboardContracts:
         assert "PAIR PARTNERS" not in js
         assert "regimePairChip" not in js
         assert "groupRegimePairSuggestions" not in js
+        assert "runLiveSuggestionFromTab" in js
+        assert "suggestion-run-live" in js
+        assert "/api/jobs/${encodeURIComponent(_LIVE_SUG_JOB)}/trigger" in js
+
+    def test_suggestion_run_live_button_in_html(self):
+        from pathlib import Path
+        html = Path(server.__file__).resolve().parent.joinpath(
+            "templates", "dashboard.html",
+        ).read_text(encoding="utf-8")
+        assert 'id="suggestion-run-live"' in html
+        assert "Run live engine" in html

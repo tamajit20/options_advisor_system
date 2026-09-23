@@ -602,6 +602,8 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), not raw “cheap IV”. When rank is low but **IV/HV > 1**, the title is “options still rich vs HV” so it does not contradict the expensive-vs-realised soft-fail.
 
+**Suggestions tab — Run live engine:** same `live_suggestion_engine` job as the hourly 10–14 IST scheduler / Jobs tab. POSTs `/api/jobs/live_suggestion_engine/trigger` (no weekday-backfill confirm) and reloads the tab when the run finishes.
+
 **Live execution checks:** stale chain / strike buffer / scenario vetoes show as a **warning** with the exact reasons on the suggestion card; **Place orders in Zerodha** stays enabled (operator confirms). Only the daily P&L **circuit breaker** still hard-blocks broker place.
 
 **Paper vs Zerodha:** “Record at suggested / Record my fills” always stamps `execution_provider=manual`. Never copy suggestion `provider` (that is the market-data feed, often `zerodha` in live mode). The Zerodha execution channel requires COMPLETE ENTRY/SUPPLEMENT fills on Kite — the provider stamp alone never authorizes live EXIT. Close / auto-close / flatten-rollback always verify matching Kite net inventory (gate cannot be disabled). Dashboard **Close in Zerodha** is the only close action for broker-channel trades (DB-only “record fills” is hidden and `/api/trades/.../close` returns 409); if Kite is already flat, Close syncs COMPLETE exit fill prices into the DB instead of placing new EXIT orders. Paper/manual trades use record fills only. Zerodha logs label milestone auto-closes as **Profit/Loss milestone hit — system closed** (not “You closed”). Entry margin gate uses the **placement path peak** (prefix basket margins in execution order), not only the final structure total, plus the configured buffer. Suggestion **Amount needed** shows Zerodha Final (engine estimate only until quoted); Peak/Avail underneath whenever the Kite session is valid (place-orders toggle not required; short cash still shows Final/Peak). The Execute confirm popup also shows the live per-unit debit/credit equation and Final vs Max required. Multi-leg place gates pass when **structure net** credit/debit is at or better than the combined band floor even if individual legs sit outside their own bands (missing quotes still block). After any leg fills, mid-loop band drift **continues** remaining legs (warn only) so a one-sided book is not left open; missing LTP still aborts. Kite place/modify/cancel share a process-wide **`orders_per_sec`** cap (default **9**, env `OPT_ZERODHA_ORDERS_PER_SEC`, hard max 10); when the rolling 1s window is full the next call waits for a free slot.
@@ -657,7 +659,7 @@ Strategies today are **string codes** (e.g. `IRON_CONDOR`), not classes/files. A
 
 ### Flow 1 — Suggestion generation
 
-Scheduler (or Jobs tab) calls the lifecycle entrypoint; engine stays pure (no DB).
+Scheduler, Jobs tab, or Suggestions **Run live engine** calls the lifecycle entrypoint; engine stays pure (no DB).
 
 ```
   scheduler.job_live_suggestion

@@ -239,6 +239,15 @@ a { color: var(--accent); text-decoration: none; }
 .panel { display: none; }
 .panel.active { display: block; }
 .panel-title { margin: 0 0 12px; font-size: 1.1rem; }
+.suggestion-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.suggestion-header .panel-title { margin: 0; }
 .muted { color: var(--text-dim); }
 
 /* ---------- Bottom nav (mobile) ---------- */
@@ -684,6 +693,7 @@ table.dt {
 }
 .btn:hover { background: var(--primary-dim); }
 .btn-accent { background: var(--accent); color: #111; }
+.btn:disabled,
 .btn.is-disabled,
 .btn[aria-disabled="true"] {
   opacity: .55;
@@ -3135,6 +3145,7 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 /* Shell: less wasted space around the panel area */
 .tab-panels { padding: 10px 12px; }
 .panel-title { margin: 0 0 6px; }
+.suggestion-header { margin-bottom: 6px; }
 
 /* Card shell */
 .card { padding: 11px 13px; margin-bottom: 8px; }

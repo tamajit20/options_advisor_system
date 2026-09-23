@@ -2855,7 +2855,7 @@ async function loadSuggestion() {
     }
     if (!parts.length) {
       c.className = '';
-      c.innerHTML = '<div class="empty">No actionable suggestion right now. Run <strong>Live Suggestion Engine</strong> from the Jobs tab during market hours — ignored and expired signals are hidden; blocked cards appear below when the engine generated a setup that failed execution checks.</div>';
+      c.innerHTML = '<div class="empty">No actionable suggestion right now. Use <strong>Run live engine</strong> above during market hours — ignored and expired signals are hidden; blocked cards appear below when the engine generated a setup that failed execution checks.</div>';
       return;
     }
     c.className = '';
@@ -2870,6 +2870,66 @@ async function loadSuggestion() {
     _hydrateSuggestionZerodhaMargins(c);
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+const _LIVE_SUG_JOB = 'live_suggestion_engine';
+const _LIVE_SUG_WAIT_MS = 300000;
+const _LIVE_SUG_POLL_MS = 2000;
+
+function _parseJobTime(raw) {
+  if (!raw) return NaN;
+  const ms = Date.parse(String(raw).replace(' ', 'T'));
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+async function _waitForLiveSuggestionJob(startedAtMs) {
+  const deadline = Date.now() + _LIVE_SUG_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, _LIVE_SUG_POLL_MS));
+    try {
+      const data = await API(`/api/jobs/${encodeURIComponent(_LIVE_SUG_JOB)}/history?limit=3`);
+      const fresh = (data.runs || []).find(r => {
+        const t = _parseJobTime(r.started_at);
+        return Number.isFinite(t) && t >= startedAtMs - 3000;
+      });
+      if (!fresh) continue;
+      const st = String(fresh.status || '').toUpperCase();
+      if (st === 'RUNNING') continue;
+      return st;
+    } catch (_) { /* keep polling */ }
+  }
+  return 'TIMEOUT';
+}
+
+async function runLiveSuggestionFromTab() {
+  const btn = $('#suggestion-run-live');
+  if (!btn || btn.disabled) return;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  const startedAtMs = Date.now();
+  try {
+    try {
+      await API(`/api/jobs/${encodeURIComponent(_LIVE_SUG_JOB)}/trigger`, { method: 'POST' });
+    } catch (e) {
+      if (!/already running/i.test(e.message || '')) throw e;
+    }
+    toast('Live suggestion engine running…', 'ok');
+    const status = await _waitForLiveSuggestionJob(startedAtMs);
+    if (status === 'FAILED') {
+      toast('Live suggestion engine failed — check Jobs', 'err');
+    } else if (status === 'TIMEOUT') {
+      toast('Engine still running — refresh the tab in a minute', 'err');
+    } else {
+      toast('Suggestions updated', 'ok');
+    }
+    await loadSuggestion();
+  } catch (e) {
+    toast(e.message || 'Could not run live engine', 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
   }
 }
 
@@ -9894,6 +9954,8 @@ function _debounce(fn, ms) {
 
 // ---------------- Boot ----------------
 loadSuggestion();
+const _sugRunLiveBtn = $('#suggestion-run-live');
+if (_sugRunLiveBtn) _sugRunLiveBtn.addEventListener('click', runLiveSuggestionFromTab);
 refreshGlobalBanners();
 ensureAlertsStream();
 

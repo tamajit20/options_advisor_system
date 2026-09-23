@@ -108,7 +108,11 @@
     </nav>
 
     <article class="panel active" id="panel-suggestion" aria-hidden="false">
-      <h2 class="panel-title">Today's Suggestion</h2>
+      <div class="suggestion-header">
+        <h2 class="panel-title">Today's Suggestion</h2>
+        <button class="btn" id="suggestion-run-live" type="button"
+                title="Run Live Suggestion Engine now (same as Jobs tab)">Run live engine</button>
+      </div>
       <div id="suggestion-container" class="loading">Loading…</div>
     </article>
 
