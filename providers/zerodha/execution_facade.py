@@ -152,3 +152,22 @@ class KiteExecutionFacade:
 
     def positions(self) -> dict:
         return dict(self._kite.positions())
+
+    def get_virtual_contract_note(self, params: list) -> list:
+        """Order-wise charges for the given fills (Kite virtual contract note).
+
+        ``params`` must be this trade's orders only — the API does not
+        scope by trade id, so the caller is responsible for the allowlist.
+        """
+        fn = getattr(self._kite, "get_virtual_contract_note", None)
+        if fn is None:
+            raise RuntimeError(
+                "kiteconnect client has no get_virtual_contract_note "
+                "(need kiteconnect>=4 with POST /charges/orders)"
+            )
+        data = fn(list(params))
+        if data is None:
+            return []
+        if isinstance(data, dict) and "data" in data:
+            data = data["data"]
+        return list(data)

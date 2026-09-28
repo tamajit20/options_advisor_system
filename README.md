@@ -496,7 +496,7 @@ options_advisor_system/
 
 
 **Engine highlights:** `indicators`, `trend_model`, `confidence`, `strategy_selector`, `leg_builder`, `iv_`*, `charges`, exit/greeks helpers.  
-**Lifecycle highlights:** `download_orchestrator`, `iv_orchestrator`, `suggestion_engine`, `trade_executor` / `zerodha_executor`, `live_risk_monitor`, validators, archive/sql_backup jobs.
+**Lifecycle highlights:** `download_orchestrator`, `iv_orchestrator`, `suggestion_engine`, `trade_executor` / `zerodha_executor` / `zerodha_close_pnl`, `live_risk_monitor`, validators, archive/sql_backup jobs.
 
 ---
 
@@ -608,7 +608,7 @@ Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), no
 
 **Live execution checks:** stale chain / strike buffer / scenario vetoes show as a **warning** with the exact reasons on the suggestion card; **Place orders in Zerodha** stays enabled (operator confirms). Only the daily P&L **circuit breaker** still hard-blocks broker place.
 
-**Paper vs Zerodha:** “Record at suggested / Record my fills” always stamps `execution_provider=manual`. Never copy suggestion `provider` (that is the market-data feed, often `zerodha` in live mode). The Zerodha execution channel requires COMPLETE ENTRY/SUPPLEMENT fills on Kite — the provider stamp alone never authorizes live EXIT. Close / auto-close / flatten-rollback always verify matching Kite net inventory (gate cannot be disabled). Dashboard **Close in Zerodha** is the only close action for broker-channel trades (DB-only “record fills” is hidden and `/api/trades/.../close` returns 409); if Kite is already flat, Close syncs COMPLETE exit fill prices into the DB instead of placing new EXIT orders. Paper/manual trades use record fills only. Zerodha logs label milestone auto-closes as **Profit/Loss milestone hit — system closed** (not “You closed”). Entry margin gate uses the **placement path peak** (prefix basket margins in execution order), not only the final structure total, plus the configured buffer. Suggestion **Amount needed** shows Zerodha Final (engine estimate only until quoted); Peak/Avail underneath whenever the Kite session is valid (place-orders toggle not required; short cash still shows Final/Peak). The Execute confirm popup also shows the live per-unit debit/credit equation and Final vs Max required. Multi-leg place gates pass when **structure net** credit/debit is at or better than the combined band floor even if individual legs sit outside their own bands (missing quotes still block). After any leg fills, mid-loop band drift **continues** remaining legs (warn only) so a one-sided book is not left open; missing LTP still aborts. Kite place/modify/cancel share a process-wide **`orders_per_sec`** cap (default **9**, env `OPT_ZERODHA_ORDERS_PER_SEC`, hard max 10); when the rolling 1s window is full the next call waits for a free slot.
+**Paper vs Zerodha:** “Record at suggested / Record my fills” always stamps `execution_provider=manual`. Never copy suggestion `provider` (that is the market-data feed, often `zerodha` in live mode). The Zerodha execution channel requires COMPLETE ENTRY/SUPPLEMENT fills on Kite — the provider stamp alone never authorizes live EXIT. Close / auto-close / flatten-rollback always verify matching Kite net inventory (gate cannot be disabled). Dashboard **Close in Zerodha** is the only close action for broker-channel trades (DB-only “record fills” is hidden and `/api/trades/.../close` returns 409); if Kite is already flat, Close syncs COMPLETE exit fill prices into the DB instead of placing new EXIT orders. After a Zerodha close, `zerodha_close_pnl` overwrites that trade’s fill/exit/gross/charges/net from **that trade’s** Kite `order_id`s plus Kite’s virtual contract note (`POST /charges/orders`) — paper/manual closes keep the local `engine/charges.py` estimate and are never sent to Kite. Zerodha logs label milestone auto-closes as **Profit/Loss milestone hit — system closed** (not “You closed”). Entry margin gate uses the **placement path peak** (prefix basket margins in execution order), not only the final structure total, plus the configured buffer. Suggestion **Amount needed** shows Zerodha Final (engine estimate only until quoted); Peak/Avail underneath whenever the Kite session is valid (place-orders toggle not required; short cash still shows Final/Peak). The Execute confirm popup also shows the live per-unit debit/credit equation and Final vs Max required. Multi-leg place gates pass when **structure net** credit/debit is at or better than the combined band floor even if individual legs sit outside their own bands (missing quotes still block). After any leg fills, mid-loop band drift **continues** remaining legs (warn only) so a one-sided book is not left open; missing LTP still aborts. Kite place/modify/cancel share a process-wide **`orders_per_sec`** cap (default **9**, env `OPT_ZERODHA_ORDERS_PER_SEC`, hard max 10); when the rolling 1s window is full the next call waits for a free slot.
 
 ---
 
@@ -617,7 +617,8 @@ Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), no
 ## B11. Simulation and scripts
 
 Job `simulation_update`: shadow ignored suggestions -> `options_simulations` / legs.  
-`scripts/`: inspect, validate, analyze — not on the hot scheduler path.
+`scripts/`: inspect, validate, analyze — not on the hot scheduler path.  
+`scripts/reconcile_zerodha_close_pnl.py --date YYYY-MM-DD` overwrites closed Zerodha-trade P&L from each trade’s Kite order ids (paper skipped; `--dry-run` lists ids only).
 
 ---
 
@@ -639,6 +640,7 @@ Quick answers, then the call chains. Preview Mermaid with `Ctrl+Shift+V`.
 | Who wires the job clock? | `scheduler/scheduler.py` + `SCHEDULER_CONFIG` |
 | Manual “mark executed”? | `lifecycle/trade_executor.py` → `mark_executed()` |
 | Real Zerodha orders? | `lifecycle/zerodha_executor.py` → `execute_suggestion_in_zerodha()` |
+| Zerodha close P&L? | `lifecycle/zerodha_close_pnl.py` — that trade’s Kite order ids + virtual contract note |
 | Dashboard API entry? | `dashboard/server.py` (`/api/suggestion/.../zerodha-execute`, `mark-executed`, …) |
 | WS ticks? | `providers/zerodha/ws_runner.py` (container `stock_ws_runner`) |
 | Who acts on ticks for open trades? | `lifecycle/live_risk_monitor.py` (same process as WS runner) |
@@ -748,7 +750,7 @@ flowchart TD
   TE --> DB[(options_trades)]
 ```
 
-Close path mirrors this: `close_trade_with_fills` vs `close_trade_in_zerodha` / `*_async`.
+Close path mirrors this: `close_trade_with_fills` (paper) vs `close_trade_in_zerodha` / `*_async` then `zerodha_close_pnl.reconcile_closed_trade_from_kite` (that trade’s Kite order ids only).
 
 ---
 

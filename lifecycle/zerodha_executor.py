@@ -40,6 +40,7 @@ from lifecycle.trade_executor import (
     supplement_trade,
     _circuit_breaker_on,
 )
+from lifecycle.zerodha_close_pnl import reconcile_closed_trade_from_kite
 from lifecycle.zerodha_execution_job import (
     submit_execution_job,
     update_job_progress,
@@ -189,6 +190,37 @@ def _require_opening_kite_fills(db: SQLServerConnection, trade_id: str) -> None:
         "refusing Close in Zerodha (would open new exposure if broker is flat). "
         "Use Record fills for paper/manual trades."
     )
+
+
+def _try_reconcile_closed_trade_from_kite(
+    db: SQLServerConnection,
+    trade_id: str,
+    facade: KiteExecutionFacade,
+    completed: List[LegFillOutcome],
+) -> None:
+    """Best-effort overwrite of estimated close P&L from this trade's Kite ids.
+
+    Never raises — a failed pull keeps the local charge estimate so the
+    already-filled Kite close is still recorded.
+    """
+    extra = [
+        {
+            "kite_order_id": f.kite_order_id,
+            "leg_order": f.leg_order,
+            "quantity": f.filled_quantity,
+        }
+        for f in completed
+        if f.kite_order_id
+    ]
+    try:
+        reconcile_closed_trade_from_kite(
+            db, trade_id, facade, extra_fills=extra,
+        )
+    except Exception:
+        logger.exception(
+            "Kite close P&L reconcile failed for %s — keeping estimated charges",
+            trade_id,
+        )
 
 
 def _earliest_entry_fill_time(legs: List[dict]) -> Optional[datetime]:
@@ -2166,6 +2198,7 @@ def close_trade_in_zerodha(
             fills = _match_external_exit_fills(facade, ordered, inst_map)
             close_trade_with_fills(db, trade_id, _exits_from_external_fills(fills))
             completed = _leg_fills_from_external(fills)
+            _try_reconcile_closed_trade_from_kite(db, trade_id, facade, completed)
             broker_rows = (
                 BrokerOrderRepo(db).by_job(execution_job_id)
                 if execution_job_id is not None else []
@@ -2248,6 +2281,7 @@ def close_trade_in_zerodha(
             for f in completed
         ]
         close_trade_with_fills(db, trade_id, exits)
+        _try_reconcile_closed_trade_from_kite(db, trade_id, facade, completed)
 
         recon = reconcile_positions_after_fill(
             facade, ordered, inst_map,

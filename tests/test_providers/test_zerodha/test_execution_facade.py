@@ -49,6 +49,16 @@ def test_order_history_proxies(facade, kite_mock):
     assert facade.order_history("12345")[0]["status"] == "COMPLETE"
 
 
+def test_get_virtual_contract_note_proxies_and_unwraps_data(facade, kite_mock):
+    kite_mock.get_virtual_contract_note.return_value = {
+        "data": [{"charges": {"total": 23.5}}],
+    }
+    params = [{"order_id": "111", "average_price": 10}]
+    out = facade.get_virtual_contract_note(params)
+    assert out[0]["charges"]["total"] == 23.5
+    kite_mock.get_virtual_contract_note.assert_called_once_with(params)
+
+
 def test_profile_proxies(facade, kite_mock):
     kite_mock.profile.return_value = {"user_id": "AB1234", "user_name": "Test"}
     out = facade.profile()

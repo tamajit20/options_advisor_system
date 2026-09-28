@@ -162,6 +162,10 @@ def _patch_close_broker_gates(mocker):
         "lifecycle.zerodha_executor.is_structure_flat_on_broker",
         return_value=False,
     )
+    mocker.patch(
+        "lifecycle.zerodha_executor.reconcile_closed_trade_from_kite",
+        return_value=None,
+    )
 
 
 def test_trade_execution_channel_ignores_provider_stamp_alone(db_conn, mocker):
@@ -620,6 +624,43 @@ def test_close_trade_happy_path(db_conn, mocker, mock_instrument):
     close.assert_called_once()
 
 
+def test_close_reconciles_kite_pnl_for_this_trade_only(db_conn, mocker, mock_instrument):
+    mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
+    mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
+    _patch_close_broker_gates(mocker)
+    rec = mocker.patch("lifecycle.zerodha_executor.reconcile_closed_trade_from_kite")
+    leg = {
+        "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
+        "option_type": "CE", "symbol": "NIFTY", "expiry_date": date(2026, 5, 28),
+        "strike": 23000, "lots": 1, "lot_size": 50,
+        "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
+    }
+    mocker.patch("database.models.TradeRepo.get", return_value={
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+    })
+    mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
+    mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_trade", return_value=[])
+    _mock_kite_facade(mocker, mock_instrument)
+    mocker.patch(
+        "lifecycle.zerodha_executor._place_and_monitor_leg",
+        return_value=LegFillOutcome(
+            leg_order=1, fill_price=98.0, fill_time=now_ist(),
+            kite_order_id="OID-CLOSE-1", broker_row_id=1, filled_quantity=50,
+        ),
+    )
+    mocker.patch("lifecycle.zerodha_executor.close_trade_with_fills")
+    mocker.patch(
+        "database.broker_order_repo.BrokerOrderRepo.by_trade",
+        return_value=[{"operation": "EXIT", "status": "COMPLETE"}],
+    )
+
+    close_trade_in_zerodha(db_conn, "TRD-1")
+    rec.assert_called_once()
+    assert rec.call_args.args[1] == "TRD-1"
+    extras = rec.call_args.kwargs["extra_fills"]
+    assert extras == [{"kite_order_id": "OID-CLOSE-1", "leg_order": 1, "quantity": 50}]
+
+
 def test_close_syncs_db_when_kite_already_flat(db_conn, mocker, mock_instrument):
     """Flat on Kite → book exit prices from COMPLETE orders; no new EXIT."""
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
@@ -657,6 +698,7 @@ def test_close_syncs_db_when_kite_already_flat(db_conn, mocker, mock_instrument)
     facade.orders.return_value = kite.orders.return_value
     place = mocker.patch("lifecycle.zerodha_executor._place_and_monitor_leg")
     close = mocker.patch("lifecycle.zerodha_executor.close_trade_with_fills")
+    rec = mocker.patch("lifecycle.zerodha_executor.reconcile_closed_trade_from_kite")
     mocker.patch(
         "database.broker_order_repo.BrokerOrderRepo.by_trade",
         return_value=[],
@@ -667,6 +709,9 @@ def test_close_syncs_db_when_kite_already_flat(db_conn, mocker, mock_instrument)
     assert "already flat" in out.message.lower()
     place.assert_not_called()
     close.assert_called_once()
+    rec.assert_called_once()
+    assert rec.call_args.args[1] == "TRD-1"
+    assert rec.call_args.kwargs["extra_fills"][0]["kite_order_id"] == "EXIT-9"
     exits = close.call_args.args[2]
     assert exits[0]["leg_order"] == 1
     assert exits[0]["exit_price"] == 87.5

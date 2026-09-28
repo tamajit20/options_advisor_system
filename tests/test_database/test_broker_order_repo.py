@@ -54,6 +54,22 @@ def test_has_kite_orders_for_trade_true():
     assert params == ["TRD-1"]
 
 
+def test_by_kite_order_id_filters_exact_id():
+    db = MagicMock()
+    db.fetch_all.return_value = [{"kite_order_id": "OID-1", "trade_id": "TRD-A"}]
+    rows = BrokerOrderRepo(db).by_kite_order_id("OID-1")
+    assert rows[0]["trade_id"] == "TRD-A"
+    sql, params = db.fetch_all.call_args[0]
+    assert "kite_order_id = ?" in sql
+    assert params == ["OID-1"]
+
+
+def test_by_kite_order_id_blank_skips_query():
+    db = MagicMock()
+    assert BrokerOrderRepo(db).by_kite_order_id("  ") == []
+    db.fetch_all.assert_not_called()
+
+
 def test_has_kite_orders_for_trade_false():
     db = MagicMock()
     db.fetch_one.return_value = None

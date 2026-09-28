@@ -267,6 +267,16 @@ class BrokerOrderRepo:
             except_job_id=except_job_id,
         )
 
+    def by_kite_order_id(self, kite_order_id: str) -> List[dict]:
+        oid = str(kite_order_id or "").strip()
+        if not oid:
+            return []
+        return self.db.fetch_all(
+            "SELECT * FROM options_broker_orders WHERE kite_order_id = ? "
+            "ORDER BY id",
+            [oid],
+        ) or []
+
     def has_kite_orders_for_trade(self, trade_id: str) -> bool:
         """True if any Kite order id exists for this trade (entry or exit)."""
         row = self.db.fetch_one(
