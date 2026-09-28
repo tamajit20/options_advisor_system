@@ -551,19 +551,40 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
 .tag-current-pnl .cpnl-metrics {
   display: inline-flex;
   align-items: baseline;
-  gap: 2px;
-  flex-shrink: 0;
+  gap: 0;
+  flex-shrink: 1;
+  min-width: 0;
   font-variant-numeric: tabular-nums;
+}
+.tag-current-pnl .cpnl-pair {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+.tag-current-pnl .cpnl-k {
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.tag-current-pnl .cpnl-sep {
+  margin: 0 6px;
+  color: var(--text-dim);
+  opacity: .55;
 }
 .tag-current-pnl .cpnl-val {
   font-weight: 700;
   display: inline-block;
-  min-width: 9ch;
   text-align: right;
+}
+.tag-current-pnl .cpnl-gross-val {
+  font-weight: 600;
+  font-size: .78rem;
+  opacity: .9;
 }
 .tag-current-pnl .cpnl-pct-bracket {
   display: inline-block;
-  min-width: 4.8ch;
   text-align: left;
 }
 .tag-current-pnl .cpnl-pct-bracket,
@@ -572,6 +593,8 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
 .tag-current-pnl.mtm-neg .cpnl-val { color:var(--err); }
 .tag-current-pnl.mtm-pos .cpnl-pct-bracket { color:var(--ok); opacity:.85; }
 .tag-current-pnl.mtm-neg .cpnl-pct-bracket { color:var(--err); opacity:.85; }
+.tag-current-pnl .cpnl-gross-val.mtm-pos { color:var(--ok); }
+.tag-current-pnl .cpnl-gross-val.mtm-neg { color:var(--err); }
 .hist-card-pnl .pnl-pct-bracket { font-size:.82rem; font-weight:500; margin-left:2px; }
 .live-pnl-preview .pnl-pct-bracket,
 .fill-pnl-preview .pnl-pct-bracket { display:inline; font-size:.78rem; }

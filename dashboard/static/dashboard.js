@@ -1527,13 +1527,41 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
     receivedAt: liveTick ? Date.now() : (_parseMtmAsOf(asOf) || Date.now()),
   };
   document.querySelectorAll(`.live-mtm[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
-    const valEl = el.querySelector('.cpnl-val') || el.querySelector('.lpl-current-val');
-    const pctEl = el.querySelector('.cpnl-pct-bracket') || el.querySelector('.lpl-current-pct');
     const premRs = parseFloat(el.dataset.premiumRs);
     const premInfo = premRs > 0
       ? { rs: premRs, kind: el.dataset.premiumKind || 'paid' }
       : null;
-    const txt = (displayMtm >= 0 ? '+' : '\u2212') + '\u20b9' + fmt(Math.abs(displayMtm));
+    const isHeader = el.classList.contains('tag-current-pnl');
+    if (isHeader) {
+      const charges = parseFloat(el.dataset.chargesRs);
+      const net = (!isNaN(charges) && charges >= 0) ? displayMtm - charges : null;
+      const colorSrc = net != null ? net : displayMtm;
+      const netEl = el.querySelector('.cpnl-net-val');
+      const grossEl = el.querySelector('.cpnl-gross-val');
+      const pctEl = el.querySelector('.cpnl-net-pct');
+      if (netEl) netEl.textContent = _fmtSignedInr(net);
+      if (grossEl) {
+        grossEl.textContent = _fmtSignedInr(displayMtm);
+        grossEl.classList.toggle('mtm-pos', displayMtm > 0);
+        grossEl.classList.toggle('mtm-neg', displayMtm < 0);
+      }
+      if (pctEl) pctEl.textContent = net != null ? pnlPctTextCompact(net, premInfo) : '';
+      el.classList.toggle('mtm-pos', colorSrc > 0);
+      el.classList.toggle('mtm-neg', colorSrc < 0);
+      const feed = _liveFeedInfo(tradeId);
+      const premTip = premInfo
+        ? ` · ${premInfo.kind === 'received' ? 'Premium received' : 'Premium paid'} \u20b9${fmt(premInfo.rs)}`
+        : '';
+      const chTip = (!isNaN(charges) && charges >= 0)
+        ? ` · est. charges \u20b9${fmt(charges)}`
+        : '';
+      el.title = 'Net = live MTM minus estimated round-trip charges. Gross = raw MTM.'
+        + premTip + chTip + (asOf ? ' as of ' + asOf + ' IST' : '') + '. ' + feed.tip;
+      return;
+    }
+    const valEl = el.querySelector('.cpnl-val') || el.querySelector('.lpl-current-val');
+    const pctEl = el.querySelector('.cpnl-pct-bracket') || el.querySelector('.lpl-current-pct');
+    const txt = _fmtSignedInr(displayMtm);
     if (valEl) valEl.textContent = txt;
     if (pctEl) pctEl.innerHTML = premInfo ? pnlBracketHtml(displayMtm, premInfo, el) : '';
     else if (valEl && premInfo) {
@@ -1809,12 +1837,23 @@ function pnlPctBracket(pnl, premiumInfo, { aggregate = false } = {}) {
   return `<span class="pnl-pct-bracket"> (${sign}${pct.toFixed(1)}% · ${kindLabel} \u20b9${fmt(premiumInfo.rs)})</span>`;
 }
 
-/** Compact bracket for tight headers — percentage only (premium is in preview/tooltip). */
-function pnlPctBracketCompact(pnl, premiumInfo) {
+function _fmtSignedInr(n) {
+  if (n == null || isNaN(Number(n))) return '\u2014';
+  const v = Number(n);
+  return (v >= 0 ? '+' : '\u2212') + '\u20b9' + fmt(Math.abs(v));
+}
+
+/** Compact percentage for tight headers — premium stays in the tooltip. */
+function pnlPctTextCompact(pnl, premiumInfo) {
   if (pnl == null || isNaN(pnl) || !premiumInfo || !premiumInfo.rs) return '';
   const pct = (pnl / premiumInfo.rs) * 100;
   const sign = pct >= 0 ? '+' : '';
-  return `<span class="cpnl-pct-bracket"> (${sign}${pct.toFixed(1)}%)</span>`;
+  return ` (${sign}${pct.toFixed(1)}%)`;
+}
+
+function pnlPctBracketCompact(pnl, premiumInfo) {
+  const t = pnlPctTextCompact(pnl, premiumInfo);
+  return t ? `<span class="cpnl-pct-bracket">${t}</span>` : '';
 }
 
 function pnlBracketHtml(pnl, premiumInfo, el) {
@@ -1927,7 +1966,7 @@ const TERM_HELP = {
   },
   mtm: {
     label: 'MTM / P&L',
-    html: '<strong>MTM</strong> (mark-to-market) — Live profit/loss from current option prices vs your entry fills. Changes every tick; not final until you close.',
+    html: '<strong>MTM</strong> (mark-to-market) — Live profit/loss from current option prices vs your entry fills. The trade header shows <em>Net</em> (MTM minus estimated round-trip charges) and <em>Gross</em> (raw MTM the engine uses). Changes every tick; not final until you close.',
   },
   max_profit: {
     label: 'Max profit',
@@ -8030,13 +8069,15 @@ function renderTrade(t, expanded = false) {
     ? ` data-premium-rs="${_tradePremium.rs}" data-premium-kind="${_tradePremium.kind}"`
     : '';
   const _headerMtm = _resolveTradeMtm(t, null);
-  const _headerMtmTxt = _headerMtm != null
-    ? ((_headerMtm >= 0 ? '+' : '\u2212') + '\u20b9' + fmt(Math.abs(_headerMtm)))
-    : '\u2014';
-  const _headerMtmCls = _headerMtm > 0 ? ' mtm-pos' : (_headerMtm < 0 ? ' mtm-neg' : '');
-  const _headerMtmPct = (_headerMtm != null && _tradePremium)
-    ? pnlPctBracketCompact(_headerMtm, _tradePremium)
-    : '';
+  const _headerCharges = estChargesFromLegs(executedLegs);
+  const _headerNet = (_headerMtm != null && _headerCharges != null)
+    ? _headerMtm - _headerCharges : null;
+  const _headerColorN = _headerNet != null ? _headerNet : _headerMtm;
+  const _headerMtmCls = _headerColorN > 0 ? ' mtm-pos' : (_headerColorN < 0 ? ' mtm-neg' : '');
+  const _headerGrossCls = _headerMtm > 0 ? ' mtm-pos' : (_headerMtm < 0 ? ' mtm-neg' : '');
+  const _headerNetPct = (_headerNet != null && _tradePremium)
+    ? pnlPctTextCompact(_headerNet, _tradePremium) : '';
+  const _chargesAttr = _headerCharges != null ? ` data-charges-rs="${_headerCharges}"` : '';
   const summaryHtml = `
     <div class="card-head collapsible-card-head">
       <div class="card-head-title">
@@ -8093,9 +8134,19 @@ function renderTrade(t, expanded = false) {
         ${_entryQualBadge}
         </div>
         <div class="card-head-pnl-row">
-        <span class="tag tag-current-pnl live-mtm${_headerMtmCls}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs} title="Current profit/loss">
-          <span class="cpnl-label">${labelWithHelp('Current P&amp;L', 'mtm')}</span>
-          <span class="cpnl-metrics"><strong class="cpnl-val">${_headerMtmTxt}</strong><span class="cpnl-pct-bracket muted">${_headerMtmPct}</span></span>
+        <span class="tag tag-current-pnl live-mtm${_headerMtmCls}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs}${_chargesAttr} title="Net = live MTM minus estimated round-trip charges. Gross = raw MTM.">
+          <span class="cpnl-label">${labelWithHelp('P&amp;L', 'mtm')}</span>
+          <span class="cpnl-metrics">
+            <span class="cpnl-pair">
+              <span class="cpnl-k">Net</span>
+              <strong class="cpnl-val cpnl-net-val">${_fmtSignedInr(_headerNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct muted">${_headerNetPct}</span>
+            </span>
+            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+            <span class="cpnl-pair">
+              <span class="cpnl-k">Gross</span>
+              <strong class="cpnl-gross-val${_headerGrossCls}">${_fmtSignedInr(_headerMtm)}</strong>
+            </span>
+          </span>
         </span>
         </div>
         ${hasExecutedLegs ? `<button type="button" class="btn btn-danger btn-close-trade card-head-btn" data-trade-id="${escapeHtml(t.trade_id)}">
