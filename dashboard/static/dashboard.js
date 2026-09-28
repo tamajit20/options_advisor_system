@@ -1347,17 +1347,23 @@ function _resolveLiveLevelThresholds(section, payload) {
     peakRs = parseFloat(section.dataset.mtmPeak);
   }
   if (peakRs != null && isNaN(peakRs)) peakRs = null;
+  let chargesRs = payload.est_charges_rs;
+  if (chargesRs == null && section.dataset.estCharges != null && section.dataset.estCharges !== '') {
+    chargesRs = parseFloat(section.dataset.estCharges);
+  }
+  if (chargesRs != null && isNaN(chargesRs)) chargesRs = null;
   let profitLine = payload.profit_milestone_line;
   if (profitLine == null) {
     profitLine = profitMilestoneLineRs(
       peakRs,
       (!isNaN(premiumRs) && premiumRs > 0) ? premiumRs : null,
+      chargesRs,
     );
   }
   if (profitLine != null && isNaN(profitLine)) profitLine = null;
   if (targetRs == null && lossRs == null && milestoneRs == null && profitLine == null
       && !profitMilestoneEnabled()) return null;
-  return { targetRs, lossRs, milestoneRs, profitLine, peakRs };
+  return { targetRs, lossRs, milestoneRs, profitLine, peakRs, chargesRs };
 }
 
 function _setLiveLevelRowStatus(row, statusEl, active, label, variant) {
@@ -1419,24 +1425,30 @@ function _updateLiveProfitLevels(tradeId, payload) {
     if (peakRs != null && !isNaN(peakRs)) {
       section.dataset.mtmPeak = String(peakRs);
     }
+    if (payload.est_charges_rs != null && !isNaN(parseFloat(payload.est_charges_rs))) {
+      section.dataset.estCharges = String(payload.est_charges_rs);
+    }
     if (lineEl && profitMilestoneEnabled()) {
       if (profitLine != null && !isNaN(profitLine)) {
         lineEl.textContent = '\u20b9' + fmt(profitLine);
         lineEl.classList.remove('muted');
         if (lineNote) {
-          const pct = profitMilestonePct();
-          lineNote.textContent = `Auto-closes if MTM gives back ${Math.round(pct || 0)}% of premium from peak \u20b9${fmt(peakRs)}${milestoneConfirmNote(profitMilestoneConfig())}`;
+          const premRs = parseFloat(section.dataset.premiumRs);
+          const chargesRs = thresholds && thresholds.chargesRs;
+          lineNote.textContent = `Auto-closes giveback from peak \u20b9${fmt(peakRs)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}`;
         }
       } else {
         const premRs = parseFloat(section.dataset.premiumRs);
+        const chargesRs = thresholds && thresholds.chargesRs;
         const giveback = profitMilestoneGivebackRs(
           (!isNaN(premRs) && premRs > 0) ? premRs : null,
+          chargesRs,
         );
         lineEl.textContent = 'Not armed';
         lineEl.classList.add('muted');
         if (lineNote) {
           lineNote.textContent = giveback != null
-            ? `Arms after profit \u2265 \u20b9${fmt(giveback)} (${Math.round(profitMilestonePct() || 0)}% of premium)`
+            ? `Arms after profit \u2265 \u20b9${fmt(giveback)}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}`
             : 'Profit-side auto-close from peak MTM';
         }
       }
@@ -1447,7 +1459,7 @@ function _updateLiveProfitLevels(tradeId, payload) {
       return;
     }
 
-    const { targetRs, lossRs, milestoneRs } = thresholds;
+    const { targetRs, lossRs, milestoneRs, chargesRs } = thresholds;
     const targetRow = section.querySelector('.lpl-target-row');
     const profitMsRow = section.querySelector('.lpl-profit-ms-row');
     const lossRow = section.querySelector('.lpl-loss-row');
@@ -2022,7 +2034,7 @@ const TERM_HELP = {
   },
   profit_milestone: {
     label: 'Profit milestone',
-    html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner after the confirm window (default 15s). If profit falls to breakeven or a loss during the wait, it closes immediately. After peak MTM reaches your configured % of entry premium, the sell line is that many rupees below the peak and only moves up. Hard SL stays on the loss side.',
+    html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner after the confirm window (default 15s). If profit falls to breakeven or a loss during the wait, it closes immediately. After peak MTM reaches the giveback (your % of entry premium, or estimated charges plus a buffer if that is larger — same amount at every new peak), the sell line is that many rupees below the peak and only moves up. Hard SL stays on the loss side.',
   },
   profit_pct_auto_close: {
     label: 'Profit % auto-close',
@@ -3239,6 +3251,7 @@ const PNL_RULES = {
     pct_of_premium: 5.0,
     auto_close: true,
     confirm_seconds: 15,
+    charges_buffer_rs: 50,
   },
   profit_pct_auto_close: {
     enabled: false,
@@ -3390,6 +3403,7 @@ function lossMilestonePctHint(premiumKind) {
 function profitMilestoneConfig() {
   return PNL_RULES.profit_milestone_alert || {
     enabled: false, pct_of_premium: 5, auto_close: true, confirm_seconds: 15,
+    charges_buffer_rs: 50,
   };
 }
 
@@ -3402,17 +3416,42 @@ function profitMilestonePct() {
   return (!isNaN(pct) && pct > 0) ? pct : null;
 }
 
-function profitMilestoneGivebackRs(investmentRs) {
+function profitMilestoneChargesBufferRs() {
+  const raw = profitMilestoneConfig().charges_buffer_rs;
+  if (raw == null || raw === '') return 50;
+  const n = parseFloat(raw);
+  if (isNaN(n) || n < 0) return 50;
+  return n;
+}
+
+function profitMilestoneGivebackRs(investmentRs, chargesRs) {
   if (!profitMilestoneEnabled() || investmentRs == null || investmentRs <= 0) return null;
   const pct = profitMilestonePct();
   if (pct == null) return null;
-  return investmentRs * (pct / 100);
+  const configured = investmentRs * (pct / 100);
+  const charges = parseFloat(chargesRs);
+  const buffer = profitMilestoneChargesBufferRs();
+  const floor = (!isNaN(charges) && charges > 0) ? (charges + buffer) : buffer;
+  return Math.max(configured, floor);
 }
 
-function profitMilestoneLineRs(peakRs, investmentRs) {
-  const giveback = profitMilestoneGivebackRs(investmentRs);
+function profitMilestoneLineRs(peakRs, investmentRs, chargesRs) {
+  const giveback = profitMilestoneGivebackRs(investmentRs, chargesRs);
   if (giveback == null || peakRs == null || isNaN(peakRs) || peakRs < giveback) return null;
   return peakRs - giveback;
+}
+
+function profitMilestoneGivebackFloorNote(investmentRs, chargesRs) {
+  const configuredPct = profitMilestonePct();
+  const lock = profitMilestoneGivebackRs(investmentRs, chargesRs);
+  if (lock == null || configuredPct == null) return '';
+  const configured = investmentRs * (configuredPct / 100);
+  const charges = parseFloat(chargesRs);
+  const buffer = profitMilestoneChargesBufferRs();
+  if (!isNaN(charges) && charges > 0 && lock > configured) {
+    return ` \u00b7 giveback \u20b9${fmt(lock)} (est. charges \u20b9${fmt(charges)} + \u20b9${fmt(buffer)} buffer)`;
+  }
+  return '';
 }
 
 function slExitPlanText(strategy, maxLossRs) {
@@ -3547,8 +3586,13 @@ function renderLiveProfitLevels(t) {
   const milestoneRs = lossMilestoneRs(investmentRs);
   const milestoneKind = premium ? premium.kind : 'paid';
   const peakRs = t.mtm_peak_rs != null ? parseFloat(t.mtm_peak_rs) : null;
-  const givebackRs = profitMilestoneGivebackRs(investmentRs);
-  const profitLine = profitMilestoneLineRs(peakRs, investmentRs);
+  const execLegs = (t.legs || []).filter(l => l.executed);
+  const estCharges = estChargesFromLegs(execLegs);
+  const chargesAttr = estCharges != null
+    ? ` data-est-charges="${estCharges}"`
+    : '';
+  const givebackRs = profitMilestoneGivebackRs(investmentRs, estCharges);
+  const profitLine = profitMilestoneLineRs(peakRs, investmentRs, estCharges);
   const profitMsEnabled = profitMilestoneEnabled();
   let profitMsValHtml;
   let profitMsNote;
@@ -3557,11 +3601,11 @@ function renderLiveProfitLevels(t) {
     profitMsNote = 'Enable profit_milestone_alert to auto-close on giveback from peak';
   } else if (profitLine != null) {
     profitMsValHtml = `<span class="lpl-val live-profit-ms-val">\u20b9${fmt(profitLine)}</span>`;
-    profitMsNote = `Auto-closes ${Math.round(profitMilestonePct())}% of premium below peak \u20b9${fmt(peakRs)}${milestoneConfirmNote(profitMilestoneConfig())}`;
+    profitMsNote = `Auto-closes \u20b9${fmt(givebackRs)} below peak \u20b9${fmt(peakRs)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}`;
   } else {
     profitMsValHtml = `<span class="lpl-val muted live-profit-ms-val">Not armed</span>`;
     profitMsNote = givebackRs != null
-      ? `Arms after profit \u2265 \u20b9${fmt(givebackRs)} (${Math.round(profitMilestonePct())}% of premium)`
+      ? `Arms after profit \u2265 \u20b9${fmt(givebackRs)}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}`
       : 'Arms after a real profit vs entry premium';
   }
 
@@ -3584,7 +3628,7 @@ function renderLiveProfitLevels(t) {
          data-max-loss="${ml != null && !isNaN(ml) ? ml : ''}"
          data-strategy="${escapeHtml(strat)}"
          data-expiry="${expiry ? escapeHtml(String(expiry).slice(0, 10)) : ''}"
-         data-mtm-peak="${peakRs != null && !isNaN(peakRs) ? peakRs : ''}"${premData}>
+         data-mtm-peak="${peakRs != null && !isNaN(peakRs) ? peakRs : ''}"${premData}${chargesAttr}>
       <div class="sl-monitor-label">${labelWithHelp('Live profit levels', 'live_profit_levels')}</div>
       <div class="lpl-grid">
         ${currentRow}

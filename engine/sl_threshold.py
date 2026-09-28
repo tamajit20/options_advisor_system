@@ -132,7 +132,9 @@ def profit_milestone_config() -> Dict[str, Any]:
 
     Independent of ``loss_milestone_alert``. Giveback is ``pct_of_premium`` of
     entry premium, measured from the trade's peak MTM once that peak is at
-    least the giveback amount. SL stays on the loss side.
+    least the giveback amount. Giveback is
+    ``max(pct of premium, estimated charges + charges_buffer_rs)`` on every
+    peak (``charges_buffer_rs`` default 50).
     """
     raw = STRATEGY_CONFIG.get("profit_milestone_alert") or {}
     enabled = bool(raw.get("enabled", False))
@@ -161,16 +163,38 @@ def profit_milestone_config() -> Dict[str, Any]:
         "auto_close": auto_close,
         "auto_close_retry_seconds": auto_close_retry_seconds,
         "confirm_seconds": _confirm_seconds(raw, default=15),
+        "charges_buffer_rs": _charges_buffer_rs(raw),
     }
 
 
-def profit_milestone_rs(*, investment_rs: float) -> Tuple[float, float]:
-    """Return (giveback_rs, pct_of_premium) when enabled; else (0.0, pct)."""
+def _charges_buffer_rs(raw: dict, *, default: float = 50.0) -> float:
+    """Extra rupees on estimated charges when flooring profit-milestone giveback."""
+    if "charges_buffer_rs" not in raw:
+        return default
+    try:
+        return max(0.0, float(raw.get("charges_buffer_rs")))
+    except (TypeError, ValueError):
+        return default
+
+
+def profit_milestone_rs(*, investment_rs: float, charges_rs: float = 0.0) -> Tuple[float, float]:
+    """Return (giveback_rs, pct_of_premium) when enabled; else (0.0, pct).
+
+    Giveback is ``pct_of_premium`` of entry premium, but never smaller than
+    estimated round-trip charges + ``charges_buffer_rs``. Same rupee giveback
+    is used at every peak.
+    """
     cfg = profit_milestone_config()
     pct = cfg["pct_of_premium"]
     if not cfg["enabled"] or investment_rs <= 0 or pct <= 0:
         return 0.0, pct
-    return investment_rs * (pct / 100.0), pct
+    configured = investment_rs * (pct / 100.0)
+    try:
+        charges = max(0.0, float(charges_rs or 0.0))
+    except (TypeError, ValueError):
+        charges = 0.0
+    floor = charges + float(cfg.get("charges_buffer_rs") or 0.0)
+    return max(configured, floor), pct
 
 
 def profit_pct_auto_close_config() -> Dict[str, Any]:

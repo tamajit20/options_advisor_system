@@ -113,6 +113,44 @@ class TestProfitMilestoneThreshold:
             assert rs == pytest.approx(800.0)
             assert pct == 10.0
 
+    def test_giveback_floors_at_charges_plus_buffer(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "charges_buffer_rs": 50,
+            }},
+        ):
+            rs, pct = profit_milestone_rs(investment_rs=2000.0, charges_rs=135.0)
+            assert rs == pytest.approx(185.0)
+            assert pct == 5.0
+
+    def test_charges_buffer_defaults_to_50(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {"enabled": True, "pct_of_premium": 5.0}},
+        ):
+            assert profit_milestone_config()["charges_buffer_rs"] == pytest.approx(50.0)
+            rs, _pct = profit_milestone_rs(investment_rs=2000.0, charges_rs=135.0)
+            assert rs == pytest.approx(185.0)
+
+    def test_charges_buffer_can_be_zero(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "charges_buffer_rs": 0,
+            }},
+        ):
+            rs, _pct = profit_milestone_rs(investment_rs=2000.0, charges_rs=135.0)
+            assert rs == pytest.approx(135.0)
+
+    def test_giveback_keeps_pct_when_larger_than_charges(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {"enabled": True, "pct_of_premium": 5.0}},
+        ):
+            rs, _pct = profit_milestone_rs(investment_rs=10000.0, charges_rs=135.0)
+            assert rs == pytest.approx(500.0)
+
     def test_line_none_until_peak_covers_giveback(self):
         assert profit_milestone_line_rs(peak_rs=300.0, giveback_rs=400.0) is None
         assert profit_milestone_line_rs(peak_rs=400.0, giveback_rs=400.0) == pytest.approx(0.0)

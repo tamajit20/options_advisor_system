@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import pytest
 
-from engine.charges import estimate_charges, estimate_charges_per_txn
+from engine.charges import (
+    estimate_charges,
+    estimate_charges_per_txn,
+    estimated_round_trip_charges_rs,
+)
 
 
 class TestEstimateCharges:
@@ -79,3 +83,20 @@ class TestEstimateChargesPerTxn:
         legs = [{"action": "BUY", "price": -1.0, "lots": 1, "lot_size": 75}]
         c = estimate_charges_per_txn(legs)
         assert c.total == 0.0
+
+
+class TestEstimatedRoundTripCharges:
+    def test_matches_entry_plus_exit_txn(self):
+        legs = [{
+            "action": "SELL", "price": 100.0, "lots": 1, "lot_size": 50,
+            "exit_price": 86.0,
+        }]
+        got = estimated_round_trip_charges_rs(legs)
+        txn = [
+            {"action": "SELL", "price": 100.0, "lots": 1, "lot_size": 50},
+            {"action": "BUY", "price": 86.0, "lots": 1, "lot_size": 50},
+        ]
+        assert got == pytest.approx(estimate_charges_per_txn(txn).total)
+
+    def test_empty_is_zero(self):
+        assert estimated_round_trip_charges_rs([]) == 0.0

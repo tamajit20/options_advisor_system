@@ -18,6 +18,8 @@ uses) and emits a notification when:
 * ``PROFIT_MILESTONE_HIT`` — giveback from peak MTM
   (``profit_milestone_alert``). SL is not shifted into profit. Auto-close
   lives in ``lifecycle.auto_execution`` when ``auto_close`` is on.
+  The sell line is that giveback below the peak at every new high
+  (``max(% of premium, estimated charges + charges_buffer_rs)``).
 * ``LOSS_LIMIT_HIT`` — current PnL crosses the strategy effective loss limit
   (``effective_sl_rs``). Alert only — no auto flatten. Loss-side only.
 * ``SL_TRIGGER`` — underlying spot crosses ``actual_stop_loss_level`` (when
@@ -79,6 +81,7 @@ from datetime import date, datetime, time as dtime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
 from config import STRATEGY_CONFIG
+from engine.charges import estimated_round_trip_charges_rs
 from engine.exit_engine import evaluate_exit
 from engine.exit_pricing import format_leg_quote_key
 from engine.live_expectation import enrich_trade_outlook, live_trade_outlook, outlook_horizon
@@ -1092,8 +1095,9 @@ class LiveRiskMonitor:
 
         investment = trade_investment_rs(entry_net_credit_rs=state.entry_net_credit)
         milestone_rs, milestone_pct = loss_milestone_rs(investment_rs=investment)
+        charges_rs = self._estimated_close_charges_rs(state)
         profit_giveback_rs, profit_ms_pct = profit_milestone_rs(
-            investment_rs=investment)
+            investment_rs=investment, charges_rs=charges_rs)
         profit_line = profit_milestone_line_rs(
             peak_rs=state.mtm_peak_rs, giveback_rs=profit_giveback_rs,
         )
@@ -1124,6 +1128,7 @@ class LiveRiskMonitor:
                 "profit_milestone_line": (
                     round(profit_line, 2) if profit_line is not None else None
                 ),
+                "est_charges_rs": round(charges_rs, 2),
                 "profit_milestone_confirming": False,
                 "loss_milestone_confirming": False,
                 "as_of": now.isoformat(timespec="seconds"),
@@ -1248,6 +1253,7 @@ class LiveRiskMonitor:
             )
 
         # 1b. Profit milestone — giveback from peak (independent of loss SL).
+        # Giveback is max(% of premium, estimated charges + buffer) at every peak.
         if profit_in_zone:
             if not profit_ready:
                 return None, mtm_payload, trailing_persist, snapshot_payload
@@ -1886,6 +1892,26 @@ class LiveRiskMonitor:
             sign = -1.0 if leg.action == "SELL" else 1.0
             total += sign * ltp * qty
         return total
+
+    def _estimated_close_charges_rs(self, state: _TradeState) -> float:
+        """Modeled round-trip Zerodha charges if this trade were closed now."""
+        legs = []
+        for leg in state.legs:
+            ltp = state.leg_ltps.get(leg.key)
+            if ltp is None:
+                continue
+            try:
+                mark = float(ltp)
+            except (TypeError, ValueError):
+                continue
+            legs.append({
+                "action": leg.action,
+                "price": leg.fill_price,
+                "lots": leg.lots,
+                "lot_size": leg.lot_size,
+                "exit_price": mark,
+            })
+        return estimated_round_trip_charges_rs(legs)
 
     def _current_pnl_or_none(self, state: _TradeState) -> Optional[float]:
         """Like ``_current_pnl`` but returns None when marks are incomplete."""

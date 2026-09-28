@@ -17,7 +17,7 @@ Returns a `ChargeBreakdown`.
 
 from __future__ import annotations
 
-from typing import List, Mapping
+from typing import List, Mapping, Sequence
 
 from config import ZERODHA_CONFIG
 from contracts import ChargeBreakdown
@@ -128,3 +128,40 @@ def estimate_charges_per_txn(legs: List[Mapping]) -> ChargeBreakdown:
         gst=round(gst, 2),
         total=round(total, 2),
     )
+
+
+def estimated_round_trip_charges_rs(legs: Sequence[Mapping]) -> float:
+    """Modeled Zerodha charges if this open book were flattened now.
+
+    Each mapping needs ``action``, entry ``price`` (or ``fill_price``),
+    ``lots``, ``lot_size``, and ``exit_price`` (live mark). Entry and the
+    reversing exit both count as one order each — same as close-time
+    ``estimate_charges_per_txn``.
+    """
+    txn: List[dict] = []
+    for leg in legs:
+        action = (leg.get("action") or "").upper()
+        if action not in ("BUY", "SELL"):
+            continue
+        try:
+            lots = int(leg.get("lots") or 0)
+            lot_size = int(leg.get("lot_size") or 0)
+            fill_raw = leg.get("price")
+            if fill_raw is None:
+                fill_raw = leg.get("fill_price") or 0.0
+            fill = float(fill_raw)
+            mark = float(leg.get("exit_price") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if lots <= 0 or lot_size <= 0 or fill < 0 or mark < 0:
+            continue
+        txn.append({
+            "action": action, "price": fill, "lots": lots, "lot_size": lot_size,
+        })
+        close_action = "BUY" if action == "SELL" else "SELL"
+        txn.append({
+            "action": close_action, "price": mark, "lots": lots, "lot_size": lot_size,
+        })
+    if not txn:
+        return 0.0
+    return float(estimate_charges_per_txn(txn).total or 0.0)

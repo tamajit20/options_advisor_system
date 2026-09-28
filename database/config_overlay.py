@@ -166,7 +166,10 @@ _DESCRIPTIONS: Dict[str, str] = {
         "(line only ratchets up). SL stays on the loss side. Same JSON shape "
         "as loss_milestone_alert including confirm_seconds. Independent percent. "
         "confirm_seconds (default 15) waits that long at the sell line. If MTM "
-        "hits ₹0 or a loss during confirm, close immediately.",
+        "hits ₹0 or a loss during confirm, close immediately. Giveback is "
+        "max(pct_of_premium of entry premium, estimated charges + "
+        "charges_buffer_rs) at every peak. charges_buffer_rs (default 50) "
+        "covers estimate error vs the real contract note.",
     "profit_pct_auto_close":
         "Hard profit take: {enabled, pct_of_premium}. When MTM profit reaches "
         "that % of entry premium, auto-close immediately (no confirm window). "

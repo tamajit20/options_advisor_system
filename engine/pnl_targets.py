@@ -214,6 +214,7 @@ def pnl_rules_public() -> Dict[str, Any]:
                 "pct_of_premium": 5.0,
                 "auto_close": True,
                 "confirm_seconds": 15,
+                "charges_buffer_rs": 50,
             }
         ),
     }
