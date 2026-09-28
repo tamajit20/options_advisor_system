@@ -128,57 +128,21 @@ class TestProfitMilestoneThreshold:
         ):
             assert profit_milestone_config()["auto_close"] is True
 
-    def test_confirm_seconds_defaults_to_20(self):
+    def test_confirm_seconds_defaults_to_15(self):
         with patch(
             "engine.sl_threshold.STRATEGY_CONFIG",
             {"profit_milestone_alert": {"enabled": True, "pct_of_premium": 5.0}},
         ):
+            assert profit_milestone_config()["confirm_seconds"] == 15
+
+    def test_confirm_seconds_override(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 20,
+            }},
+        ):
             assert profit_milestone_config()["confirm_seconds"] == 20
-            assert profit_milestone_config()["confirm_seconds_first"] == 20
-
-    def test_confirm_seconds_first_independent(self):
-        with patch(
-            "engine.sl_threshold.STRATEGY_CONFIG",
-            {"profit_milestone_alert": {
-                "enabled": True, "pct_of_premium": 5.0,
-                "confirm_seconds_first": 10, "confirm_seconds": 20,
-            }},
-        ):
-            cfg = profit_milestone_config()
-            assert cfg["confirm_seconds_first"] == 10
-            assert cfg["confirm_seconds"] == 20
-            assert cfg["confirm_first_below_peak_rs"] is None
-
-    def test_confirm_seconds_follows_peak_rung_not_bounce(self):
-        from engine.sl_threshold import profit_confirm_seconds
-
-        with patch(
-            "engine.sl_threshold.STRATEGY_CONFIG",
-            {"profit_milestone_alert": {
-                "enabled": True, "pct_of_premium": 5.0,
-                "confirm_seconds_first": 10, "confirm_seconds": 20,
-            }},
-        ):
-            # First lock: peak just covers giveback (₹140), line ~₹0.
-            assert profit_confirm_seconds(peak_rs=140.0, giveback_rs=140.0) == 10
-            # Higher locks have a sell line well above zero.
-            assert profit_confirm_seconds(peak_rs=250.0, giveback_rs=140.0) == 20
-            assert profit_confirm_seconds(peak_rs=450.0, giveback_rs=140.0) == 20
-
-    def test_confirm_first_below_peak_rs_override(self):
-        from engine.sl_threshold import profit_confirm_seconds
-
-        with patch(
-            "engine.sl_threshold.STRATEGY_CONFIG",
-            {"profit_milestone_alert": {
-                "enabled": True, "pct_of_premium": 5.0,
-                "confirm_seconds_first": 10, "confirm_seconds": 20,
-                "confirm_first_below_peak_rs": 200.0,
-            }},
-        ):
-            assert profit_confirm_seconds(peak_rs=140.0, giveback_rs=400.0) == 10
-            assert profit_confirm_seconds(peak_rs=199.0, giveback_rs=400.0) == 10
-            assert profit_confirm_seconds(peak_rs=250.0, giveback_rs=400.0) == 20
 
     def test_independent_of_loss_milestone_pct(self):
         with patch(

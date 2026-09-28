@@ -75,60 +75,12 @@ def trade_investment_rs(*, entry_net_credit_rs: float) -> float:
     return abs(float(entry_net_credit_rs or 0.0))
 
 
-def _confirm_seconds(
-    raw: dict, *, key: str = "confirm_seconds", default: int = 20,
-) -> int:
+def _confirm_seconds(raw: dict, *, default: int = 20) -> int:
     """Seconds MTM must stay past a milestone before auto-close. 0 = first tick."""
     try:
-        return max(0, int(raw.get(key, default)))
+        return max(0, int(raw.get("confirm_seconds", default)))
     except (TypeError, ValueError):
         return default
-
-
-def _optional_positive_rs(raw: dict, key: str) -> Optional[float]:
-    val = raw.get(key)
-    if val is None or val == "":
-        return None
-    try:
-        n = float(val)
-    except (TypeError, ValueError):
-        return None
-    return n if n > 0 else None
-
-
-# First lock = peak still inside this multiple of the giveback band
-# (e.g. giveback ₹140 → first lock while peak < ₹210). Higher peaks
-# (₹250, ₹450, …) use the later confirm window.
-PROFIT_CONFIRM_FIRST_PEAK_MULT = 1.5
-
-
-def profit_confirm_seconds(
-    *,
-    peak_rs: Optional[float],
-    giveback_rs: float,
-    cfg: Optional[Dict[str, Any]] = None,
-) -> int:
-    """Confirm seconds from peak cushion, not bounce count.
-
-    The first armed lock sits near breakeven (peak just covers giveback —
-    e.g. MTM ₹140, sell line ~₹0). That uses ``confirm_seconds_first``.
-    Once peak has reached a higher rung (₹250, ₹450, …) the sell line is
-    well above zero and ``confirm_seconds`` applies.
-    """
-    resolved = cfg if cfg is not None else profit_milestone_config()
-    later = int(resolved.get("confirm_seconds") or 0)
-    first_raw = resolved.get("confirm_seconds_first")
-    first = later if first_raw is None else int(first_raw)
-    cap = resolved.get("confirm_first_below_peak_rs")
-    if cap is None and giveback_rs > 0:
-        cap = PROFIT_CONFIRM_FIRST_PEAK_MULT * float(giveback_rs)
-    try:
-        cap_f = float(cap) if cap is not None else 0.0
-    except (TypeError, ValueError):
-        cap_f = 0.0
-    if peak_rs is not None and cap_f > 0 and float(peak_rs) < cap_f:
-        return first
-    return later
 
 
 def loss_milestone_config() -> Dict[str, Any]:
@@ -202,21 +154,13 @@ def profit_milestone_config() -> Dict[str, Any]:
         auto_close_retry_seconds = max(0, int(retry_raw))
     except (TypeError, ValueError):
         auto_close_retry_seconds = 60
-    later = _confirm_seconds(raw)
-    if raw.get("confirm_seconds_first") is None:
-        first = later
-    else:
-        first = _confirm_seconds(raw, key="confirm_seconds_first", default=10)
-    first_below = _optional_positive_rs(raw, "confirm_first_below_peak_rs")
     return {
         "enabled": enabled,
         "pct_of_premium": pct,
         "cooldown_minutes": cooldown_minutes,
         "auto_close": auto_close,
         "auto_close_retry_seconds": auto_close_retry_seconds,
-        "confirm_seconds": later,
-        "confirm_seconds_first": first,
-        "confirm_first_below_peak_rs": first_below,
+        "confirm_seconds": _confirm_seconds(raw, default=15),
     }
 
 

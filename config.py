@@ -829,20 +829,15 @@ STRATEGY_CONFIG = {
     # loss-side only). After peak MTM ≥ pct_of_premium of entry premium,
     # the sell line is peak − that rupee giveback and only ratchets up.
     # auto_close flattens Zerodha trades on Kite / books manual at live LTP.
-    # confirm_seconds_first = first lock (peak still near the first
-    # giveback band — e.g. MTM ₹140, sell line near ₹0).
-    # confirm_seconds = higher locks (peak ₹250, ₹450, …).
-    # confirm_first_below_peak_rs overrides the default first-lock
-    # cutoff (1.5 × giveback). If MTM hits ₹0 or a loss during either
-    # window, close immediately.
+    # confirm_seconds waits that long at the sell line (wick filter).
+    # If MTM hits ₹0 or a loss during the wait, close immediately.
     "profit_milestone_alert": {
         "enabled": True,
         "pct_of_premium": 5.0,
         "cooldown_minutes": None,
         "auto_close": True,
         "auto_close_retry_seconds": 60,
-        "confirm_seconds_first": 10,
-        "confirm_seconds": 20,
+        "confirm_seconds": 15,
     },
 
     # Hard profit % take — close as soon as MTM ≥ this % of entry premium.

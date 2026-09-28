@@ -108,6 +108,5 @@ def test_pnl_rules_public_has_dashboard_keys():
     assert "profit_milestone_alert" in rules
     assert "enabled" in rules["profit_milestone_alert"]
     assert "pct_of_premium" in rules["profit_milestone_alert"]
-    assert rules["profit_milestone_alert"].get("confirm_seconds") == 20
-    assert rules["profit_milestone_alert"].get("confirm_seconds_first") == 10
+    assert rules["profit_milestone_alert"].get("confirm_seconds") == 15
     assert rules["loss_milestone_alert"].get("confirm_seconds") == 20

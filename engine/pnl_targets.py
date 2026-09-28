@@ -213,8 +213,7 @@ def pnl_rules_public() -> Dict[str, Any]:
                 "enabled": False,
                 "pct_of_premium": 5.0,
                 "auto_close": True,
-                "confirm_seconds_first": 10,
-                "confirm_seconds": 20,
+                "confirm_seconds": 15,
             }
         ),
     }

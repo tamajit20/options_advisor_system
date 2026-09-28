@@ -1053,39 +1053,11 @@ class TestMilestoneConfirmWindow:
         _tick_pair(bus, state, 86.0, 86.0)
         assert notifier.notify.call_args.kwargs["notif_type"] == "PROFIT_MILESTONE_HIT"
 
-    def test_profit_first_lock_uses_shorter_window(self, mocker):
-        # Credit ₹10k, 5% giveback = ₹500. Peak ₹600 < 1.5×500 → first lock (10s).
+    def test_profit_flat_confirm_uses_15s(self, mocker):
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
             {"profit_milestone_alert": {
-                "enabled": True, "pct_of_premium": 5.0,
-                "confirm_seconds_first": 10, "confirm_seconds": 20,
-            }},
-            clear=False,
-        )
-        state = _make_state()
-        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
-        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
-        _tick_pair(bus, state, 94.0, 94.0)  # MTM 600, line 100
-        _tick_pair(bus, state, 99.0, 99.0)  # MTM 100 — in zone, still green
-        assert notifier.notify.call_count == 0
-
-        clock["now"] = datetime(2026, 5, 5, 11, 0, 9)
-        _tick_pair(bus, state, 99.0, 99.0)
-        assert notifier.notify.call_count == 0
-
-        clock["now"] = datetime(2026, 5, 5, 11, 0, 10)
-        _tick_pair(bus, state, 99.0, 99.0)
-        assert notifier.notify.call_count == 1
-        assert notifier.notify.call_args.kwargs["notif_type"] == "PROFIT_MILESTONE_HIT"
-
-    def test_profit_higher_lock_uses_later_window(self, mocker):
-        # Peak ₹2000 > 1.5×₹500 — first tag at this lock still waits 20s.
-        mocker.patch.dict(
-            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
-            {"profit_milestone_alert": {
-                "enabled": True, "pct_of_premium": 5.0,
-                "confirm_seconds_first": 10, "confirm_seconds": 20,
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 15,
             }},
             clear=False,
         )
@@ -1096,13 +1068,13 @@ class TestMilestoneConfirmWindow:
         _tick_pair(bus, state, 86.0, 86.0)
         assert notifier.notify.call_count == 0
 
-        clock["now"] = datetime(2026, 5, 5, 11, 0, 10)
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 14)
         _tick_pair(bus, state, 86.0, 86.0)
-        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
-        assert "PROFIT_MILESTONE_HIT" not in types
+        assert notifier.notify.call_count == 0
 
-        clock["now"] = datetime(2026, 5, 5, 11, 0, 20)
+        clock["now"] = datetime(2026, 5, 5, 11, 0, 15)
         _tick_pair(bus, state, 86.0, 86.0)
+        assert notifier.notify.call_count == 1
         assert notifier.notify.call_args.kwargs["notif_type"] == "PROFIT_MILESTONE_HIT"
 
     def test_profit_confirm_aborts_when_mtm_goes_unprofitable(self, mocker):
