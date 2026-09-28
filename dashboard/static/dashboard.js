@@ -8135,7 +8135,7 @@ function renderTrade(t, expanded = false) {
         </div>
         <div class="card-head-pnl-row">
         <span class="tag tag-current-pnl live-mtm${_headerMtmCls}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs}${_chargesAttr} title="Net = live MTM minus estimated round-trip charges. Gross = raw MTM.">
-          <span class="cpnl-label">${labelWithHelp('P&amp;L', 'mtm')}</span>
+          <span class="cpnl-label">P&amp;L</span>
           <span class="cpnl-metrics">
             <span class="cpnl-pair">
               <span class="cpnl-k">Net</span>
