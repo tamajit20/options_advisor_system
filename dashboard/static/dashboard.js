@@ -4701,6 +4701,22 @@ function formatConfidence(s) {
   return c ? `${c.passed}/${c.total}` : '';
 }
 
+/** Passed/total per HARD · SOFT · ADVISORY (PASS and PASS_WARN count as pass). */
+function gateKindCounts(checks) {
+  const out = {
+    HARD: { passed: 0, total: 0 },
+    SOFT: { passed: 0, total: 0 },
+    ADVISORY: { passed: 0, total: 0 },
+  };
+  for (const c of checks || []) {
+    const kind = gateKindOf(c);
+    const bucket = out[kind] || out.SOFT;
+    bucket.total += 1;
+    if (c.status !== 'FAIL' && c.status !== 'SOFT_FAIL') bucket.passed += 1;
+  }
+  return out;
+}
+
 /** Infer HARD / SOFT / ADVISORY when older rows omit kind. */
 function gateKindOf(c) {
   const k = (c.kind || '').toUpperCase();
@@ -5117,19 +5133,20 @@ function renderGatesAndWarningsPanel(s) {
   const nSoftFail = checks.filter(c => c.status === 'SOFT_FAIL').length;
   const nWarn     = checks.filter(c => c.status === 'PASS_WARN').length;
   const nError    = checks.filter(c => c.status === 'PASS_ERROR').length;
-  const total     = checks.length;
-  const passed    = total - nFail - nSoftFail;
+  const kindCounts = gateKindCounts(checks);
   const sid       = escapeHtml(s.suggestion_id || Math.random().toString(36).slice(2));
   const strategy  = s.strategy || '';
   const softTotal = softTotalGates();
   const softMin   = softMinForStrategy(strategy);
   const softMaxFail = Math.max(0, softTotal - softMin);
 
-  let titleSuffix = '';
-  if (nFail > 0) titleSuffix += ` · ${nFail} hard fail`;
-  if (nSoftFail > 0) titleSuffix += ` · ${nSoftFail} soft/advisory fail`;
-  if (nWarn > 0) titleSuffix += ` · ${nWarn} warn`;
-  if (nError > 0) titleSuffix += ` · ${nError} error`;
+  const countChips = ['HARD', 'SOFT', 'ADVISORY'].map(kind => {
+    const { passed: kp, total: kt } = kindCounts[kind];
+    if (!kt) return '';
+    const cls = KIND_CLASS[kind] || '';
+    const label = kind === 'HARD' ? 'hard' : kind === 'SOFT' ? 'soft' : 'advisory';
+    return `<span class="gate-kind-badge ${cls}">${label} ${kp}/${kt}</span>`;
+  }).join('');
 
   const rulesHtml = `<div class="gates-rules-box">
     <div class="gates-rules-title">How gating works on this card</div>
@@ -5177,9 +5194,14 @@ function renderGatesAndWarningsPanel(s) {
 
   const hasIssues = nFail > 0 || nSoftFail > 0 || nWarn > 0 || nError > 0;
   const titleCls = hasIssues ? 'conf-checks-title conf-checks-title--warn' : 'conf-checks-title';
+  const startOpen = nFail > 0 ? ' open' : '';
 
-  return `<div class="conf-checks-panel gates-warnings-panel" id="conf-${sid}">
-    <div class="${titleCls}">Gates &amp; warnings — ${passed}/${total} passed${titleSuffix}</div>
+  return `<details class="conf-checks-panel gates-warnings-panel" id="conf-${sid}"${startOpen}>
+    <summary class="${titleCls} gates-summary">
+      <span class="gates-summary-label">Gates &amp; warnings</span>
+      <span class="gates-kind-counts">${countChips}</span>
+    </summary>
+    <div class="gates-panel-body">
     ${rulesHtml}
     <table class="conf-checks-table">
       <thead><tr>
@@ -5190,7 +5212,8 @@ function renderGatesAndWarningsPanel(s) {
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
-  </div>`;
+    </div>
+  </details>`;
 }
 
 /** @deprecated alias — use renderGatesAndWarningsPanel */
@@ -7035,7 +7058,7 @@ function bindSuggestionActions() {
     } catch (err) { toast(err.message, 'err'); }
   }));
 
-  // Gates panel is always visible — no chip toggle needed.
+  // Gates panel is a <details> — summary always shows HARD/SOFT/ADVISORY counts.
 }
 
 function _isMobileLayout() {

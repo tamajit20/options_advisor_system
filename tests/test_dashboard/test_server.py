@@ -1247,6 +1247,9 @@ class TestJsDashboardContracts:
         assert "groupRegimePairSuggestions" not in js
         assert "runLiveSuggestionFromTab" in js
         assert "suggestion-run-live" in js
+        assert "gateKindCounts" in js
+        assert "gates-kind-counts" in js
+        assert "gates-summary" in js
         assert "perf-pnl-amt" in js
         assert "/api/jobs/${encodeURIComponent(_LIVE_SUG_JOB)}/trigger" in js
         assert "_applyJobsPayload" in js

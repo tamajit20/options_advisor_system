@@ -2481,6 +2481,34 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   margin-top: 12px;
   margin-bottom: 4px;
 }
+.gates-warnings-panel > summary.gates-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  cursor: pointer;
+  list-style: none;
+  margin-bottom: 0;
+  user-select: none;
+}
+.gates-warnings-panel > summary.gates-summary::-webkit-details-marker { display: none; }
+.gates-warnings-panel > summary.gates-summary::before {
+  content: '▶';
+  font-size: .65rem;
+  opacity: .7;
+  margin-right: 2px;
+}
+.gates-warnings-panel[open] > summary.gates-summary::before { content: '▼'; }
+.gates-warnings-panel[open] > summary.gates-summary { margin-bottom: 6px; }
+.gates-summary-label { font-weight: 600; }
+.gates-kind-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.gates-panel-body { margin-top: 2px; }
 .conf-checks-table {
   width: 100%;
   border-collapse: collapse;

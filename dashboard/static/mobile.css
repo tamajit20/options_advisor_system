@@ -303,6 +303,10 @@
     line-height: 1.35;
     word-break: break-word;
   }
+  .gates-warnings-panel > summary.gates-summary {
+    align-items: flex-start;
+  }
+  .gates-kind-counts { width: 100%; }
   .conf-checks-table thead { display: none; }
   .conf-checks-table {
     display: block;
