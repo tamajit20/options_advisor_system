@@ -164,7 +164,13 @@ _DESCRIPTIONS: Dict[str, str] = {
         "Auto-close to protect a winner: once peak MTM ≥ pct_of_premium % of "
         "entry premium, sell if MTM gives back that amount from the peak "
         "(line only ratchets up). SL stays on the loss side. Same JSON shape "
-        "as loss_milestone_alert including confirm_seconds. Independent percent.",
+        "as loss_milestone_alert including confirm_seconds. Independent percent. "
+        "confirm_seconds_first (default 10) waits at the first lock (peak still "
+        "near the first giveback band, sell line close to ₹0). confirm_seconds "
+        "(default 20) waits at higher locks (peak ₹250, ₹450, …). Optional "
+        "confirm_first_below_peak_rs overrides the first-lock cutoff (default "
+        "1.5 × giveback). If omitted, first uses confirm_seconds. If MTM hits "
+        "₹0 or a loss during confirm, close immediately.",
     "profit_pct_auto_close":
         "Hard profit take: {enabled, pct_of_premium}. When MTM profit reaches "
         "that % of entry premium, auto-close immediately (no confirm window). "

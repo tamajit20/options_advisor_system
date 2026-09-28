@@ -1983,7 +1983,7 @@ const TERM_HELP = {
   },
   profit_milestone: {
     label: 'Profit milestone',
-    html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner after the confirm window (default 20s). After peak MTM reaches your configured % of entry premium, the sell line is that many rupees below the peak and only moves up. Hard SL stays on the loss side.',
+    html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner. The first lock (peak still near the first giveback band, sell line close to breakeven) uses confirm_seconds_first (default 10s). Higher locks (peak has moved up to later rungs) use confirm_seconds (default 20s). Both are configurable. If profit falls to breakeven or a loss during the wait, it closes immediately. After peak MTM reaches your configured % of entry premium, the sell line is that many rupees below the peak and only moves up. Hard SL stays on the loss side.',
   },
   profit_pct_auto_close: {
     label: 'Profit % auto-close',
@@ -3199,6 +3199,7 @@ const PNL_RULES = {
     enabled: true,
     pct_of_premium: 5.0,
     auto_close: true,
+    confirm_seconds_first: 10,
     confirm_seconds: 20,
   },
   profit_pct_auto_close: {
@@ -3310,10 +3311,22 @@ function milestoneConfirmSeconds(cfg) {
   return (!isNaN(n) && n >= 0) ? n : 20;
 }
 
+function milestoneConfirmSecondsFirst(cfg) {
+  if (!cfg || cfg.confirm_seconds_first == null || cfg.confirm_seconds_first === '') {
+    return milestoneConfirmSeconds(cfg);
+  }
+  const n = parseInt(cfg.confirm_seconds_first, 10);
+  return (!isNaN(n) && n >= 0) ? n : milestoneConfirmSeconds(cfg);
+}
+
 function milestoneConfirmNote(cfg) {
-  const s = milestoneConfirmSeconds(cfg);
-  if (s <= 0) return '';
-  return ` after ${s}s at the line`;
+  const later = milestoneConfirmSeconds(cfg);
+  const first = milestoneConfirmSecondsFirst(cfg);
+  if (first <= 0 && later <= 0) return '';
+  if (first === later) {
+    return first > 0 ? ` after ${first}s at the line` : '';
+  }
+  return ` after ${first}s at first lock, ${later}s at higher locks`;
 }
 
 function lossMilestoneEnabled() {
@@ -3350,7 +3363,8 @@ function lossMilestonePctHint(premiumKind) {
 
 function profitMilestoneConfig() {
   return PNL_RULES.profit_milestone_alert || {
-    enabled: false, pct_of_premium: 5, auto_close: true, confirm_seconds: 20,
+    enabled: false, pct_of_premium: 5, auto_close: true,
+    confirm_seconds_first: 10, confirm_seconds: 20,
   };
 }
 
@@ -4076,13 +4090,18 @@ function _computeTradeActionInstruction(opts) {
     };
   }
   if (profitMilestoneConfirming && rn !== 'PROFIT_MILESTONE_HIT') {
-    const sec = milestoneConfirmSeconds(profitMilestoneConfig());
+    const pmc = profitMilestoneConfig();
+    const later = milestoneConfirmSeconds(pmc);
+    const first = milestoneConfirmSecondsFirst(pmc);
+    const waitTxt = first === later
+      ? `${later}s`
+      : `${first}s first lock / ${later}s higher`;
     return {
       tone: 'watch',
       verb: 'CONFIRMING',
       title: 'Profit milestone — waiting to confirm',
-      instruction: sec > 0
-        ? `MTM is through the sell line. Auto-close waits ${sec}s so a one-tick wick does not flatten. Bounce above the line cancels the clock.`
+      instruction: (first > 0 || later > 0)
+        ? `MTM is through the sell line. Auto-close waits ${waitTxt} so a one-tick wick does not flatten. Bounce above the line cancels the clock. If MTM hits \u20b90 or a loss, it closes immediately.`
         : 'MTM is through the sell line. Auto-close is armed.',
       why: liveMtm != null && profitLine != null
         ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · sell line \u20b9${fmt(profitLine)}`

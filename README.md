@@ -566,7 +566,7 @@ stateDiagram-v2
   IGNORED --> SIM: simulation_update
 ```
 
-Monitoring: WS ticks -> `live_risk_monitor` (MTM, profit/loss milestones with confirm, optional hard `profit_pct_auto_close`); fallback job `intraday_sl_fallback`; daily `exit_engine`.  
+Monitoring: WS ticks -> `live_risk_monitor` (MTM, profit/loss milestones with confirm; profit-milestone first lock `confirm_seconds_first` default 10s while peak is still near the first giveback band, higher locks `confirm_seconds` default 20s; aborts and closes if MTM hits ₹0 or a loss; optional hard `profit_pct_auto_close`); fallback job `intraday_sl_fallback`; daily `exit_engine`.  
 **Which files:** [B12](#b12-code-flows).
 
 ---

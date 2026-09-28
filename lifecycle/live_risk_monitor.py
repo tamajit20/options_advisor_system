@@ -87,6 +87,7 @@ from engine.sl_threshold import (
     effective_sl_rs,
     loss_milestone_config,
     loss_milestone_rs,
+    profit_confirm_seconds,
     profit_milestone_config,
     profit_milestone_line_rs,
     profit_milestone_rs,
@@ -690,6 +691,14 @@ class LiveRiskMonitor:
         self._profit_milestone_confirm = timedelta(
             seconds=int(pmc.get("confirm_seconds") or 0)
         )
+        self._profit_milestone_confirm_first = timedelta(
+            seconds=int(pmc.get("confirm_seconds_first")
+                        if pmc.get("confirm_seconds_first") is not None
+                        else pmc.get("confirm_seconds") or 0)
+        )
+        self._profit_confirm_first_below_peak_rs = pmc.get(
+            "confirm_first_below_peak_rs"
+        )
 
     def _bind_profit_pct_auto_close_cfg(self) -> None:
         """Re-read profit_pct_auto_close — hard % take, no confirm."""
@@ -1232,10 +1241,17 @@ class LiveRiskMonitor:
             and profit_line is not None
             and current_pnl <= profit_line
         )
+        profit_confirm = self._profit_confirm_window(state, profit_giveback_rs)
         profit_ready = self._zone_confirmed(
             state, "PROFIT_MILESTONE", now, profit_in_zone,
-            self._profit_milestone_confirm,
+            profit_confirm,
         )
+        # Confirm exists to ignore a wick that kisses the giveback line while
+        # still green. Once MTM is at/below breakeven, waiting out the rest of
+        # the window just lets a winner become a loser.
+        profit_unprofitable = profit_in_zone and current_pnl <= 0
+        if profit_unprofitable:
+            profit_ready = True
         if mtm_payload is not None:
             mtm_payload["profit_milestone_confirming"] = bool(
                 profit_in_zone and not profit_ready
@@ -1254,11 +1270,16 @@ class LiveRiskMonitor:
                 else "Consider booking — hard SL unchanged."
             )
             peak = state.mtm_peak_rs or 0.0
+            held = (
+                "MTM ≤ ₹0 — confirm skipped"
+                if profit_unprofitable
+                else self._held_for_phrase(profit_confirm)
+            )
             reason = (
                 f"Profit milestone ({profit_ms_pct:.0f}% of {prem_label} ₹"
                 f"{investment:,.0f} = ₹{profit_giveback_rs:,.0f} giveback from "
                 f"peak ₹{peak:,.0f}): MTM ₹{current_pnl:,.0f} ≤ ₹{profit_line:,.0f} "
-                f"{self._held_for_phrase(self._profit_milestone_confirm)}. "
+                f"{held}. "
                 f"{close_note}"
             )
             alert = self._maybe_alert(
@@ -1691,6 +1712,27 @@ class LiveRiskMonitor:
         if sec <= 0:
             return "on this print"
         return f"for {sec}s"
+
+    def _profit_confirm_window(
+        self, state: _TradeState, giveback_rs: float,
+    ) -> timedelta:
+        """10s at the first lock (peak still near loss); 20s at higher peaks."""
+        sec = profit_confirm_seconds(
+            peak_rs=state.mtm_peak_rs,
+            giveback_rs=giveback_rs,
+            cfg={
+                "confirm_seconds": int(
+                    self._profit_milestone_confirm.total_seconds()
+                ),
+                "confirm_seconds_first": int(
+                    self._profit_milestone_confirm_first.total_seconds()
+                ),
+                "confirm_first_below_peak_rs": (
+                    self._profit_confirm_first_below_peak_rs
+                ),
+            },
+        )
+        return timedelta(seconds=sec)
 
     def _zone_confirmed(
         self,
