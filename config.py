@@ -834,6 +834,9 @@ STRATEGY_CONFIG = {
     # Giveback is max(pct of premium, estimated charges + charges_buffer_rs).
     # Sell line = max(peak − giveback, charges + charges_buffer_rs) so it
     # never displays/triggers below brokerage. charges_buffer_rs default ₹50.
+    # max_locks: "" / blank / omitted = trail forever (today's behaviour).
+    # Integer e.g. 3 = freeze the sell line after the 3rd upward ratchet
+    # (peak may still rise).
     "profit_milestone_alert": {
         "enabled": True,
         "pct_of_premium": 5.0,
@@ -842,6 +845,7 @@ STRATEGY_CONFIG = {
         "auto_close_retry_seconds": 60,
         "confirm_seconds": 15,
         "charges_buffer_rs": 50,
+        "max_locks": "",
     },
 
     # Hard profit % take — close as soon as MTM ≥ this % of entry premium.

@@ -179,6 +179,73 @@ class TestProfitMilestoneThreshold:
             from engine.sl_threshold import profit_milestone_charges_floor_rs
             assert profit_milestone_charges_floor_rs(charges_rs=135.0) == pytest.approx(185.0)
 
+    def test_max_locks_blank_means_unlimited(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "max_locks": "",
+            }},
+        ):
+            assert profit_milestone_config()["max_locks"] is None
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "max_locks": "  ",
+            }},
+        ):
+            assert profit_milestone_config()["max_locks"] is None
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0,
+            }},
+        ):
+            assert profit_milestone_config()["max_locks"] is None
+
+    def test_max_locks_numeric(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "max_locks": 3,
+            }},
+        ):
+            assert profit_milestone_config()["max_locks"] == 3
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "max_locks": "2",
+            }},
+        ):
+            assert profit_milestone_config()["max_locks"] == 2
+
+    def test_advance_locks_unlimited_tracks_raw_line(self):
+        from engine.sl_threshold import advance_profit_milestone_locks
+        line, count, frozen = advance_profit_milestone_locks(
+            raw_line_rs=1500.0, prev_line_rs=1000.0, lock_count=2, max_locks=None,
+        )
+        assert line == pytest.approx(1500.0)
+        assert count == 2
+        assert frozen is False
+
+    def test_advance_locks_freezes_after_n(self):
+        from engine.sl_threshold import advance_profit_milestone_locks
+        line, count, frozen = advance_profit_milestone_locks(
+            raw_line_rs=1000.0, prev_line_rs=None, lock_count=0, max_locks=3,
+        )
+        assert line == pytest.approx(1000.0) and count == 1 and frozen is False
+        line, count, frozen = advance_profit_milestone_locks(
+            raw_line_rs=1500.0, prev_line_rs=line, lock_count=count, max_locks=3,
+        )
+        assert line == pytest.approx(1500.0) and count == 2 and frozen is False
+        line, count, frozen = advance_profit_milestone_locks(
+            raw_line_rs=2000.0, prev_line_rs=line, lock_count=count, max_locks=3,
+        )
+        assert line == pytest.approx(2000.0) and count == 3 and frozen is True
+        line, count, frozen = advance_profit_milestone_locks(
+            raw_line_rs=2500.0, prev_line_rs=line, lock_count=count, max_locks=3,
+        )
+        assert line == pytest.approx(2000.0) and count == 3 and frozen is True
+
     def test_auto_close_defaults_true(self):
         with patch(
             "engine.sl_threshold.STRATEGY_CONFIG",

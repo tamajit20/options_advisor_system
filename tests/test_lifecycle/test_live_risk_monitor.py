@@ -1180,6 +1180,38 @@ class TestMilestoneConfirmWindow:
         assert notifier.notify.call_count == 1
         assert notifier.notify.call_args.kwargs["notif_type"] == "PROFIT_MILESTONE_HIT"
 
+    def test_max_locks_freezes_sell_line(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 0,
+                "charges_buffer_rs": 0, "max_locks": 2,
+            }},
+            clear=False,
+        )
+        state = _make_state()
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
+        # Peak 2000 → line 1500 = lock 1
+        _tick_pair(bus, state, 80.0, 80.0)
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(1500.0)
+        assert captured[-1].get("profit_ms_lock_count") == 1
+        assert captured[-1].get("profit_ms_frozen") is False
+        # Next higher peak ratchets to lock 2 and freezes (may freeze on the
+        # mid-pair tick when only one leg has moved).
+        _tick_pair(bus, state, 60.0, 60.0)
+        frozen_line = captured[-1].get("profit_milestone_line")
+        assert captured[-1].get("profit_ms_lock_count") == 2
+        assert captured[-1].get("profit_ms_frozen") is True
+        assert frozen_line is not None
+        # Still-higher peak must not raise the frozen sell line
+        _tick_pair(bus, state, 50.0, 50.0)
+        assert state.mtm_peak_rs == pytest.approx(5000.0)
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(frozen_line)
+        assert captured[-1].get("profit_ms_frozen") is True
+        assert captured[-1].get("profit_ms_lock_count") == 2
+
     def test_hard_sl_still_immediate(self, mocker):
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",

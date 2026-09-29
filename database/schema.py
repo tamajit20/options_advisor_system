@@ -763,6 +763,18 @@ _TABLE_DDL: List[str] = [
     ALTER TABLE options_trades ADD mtm_peak_rs DECIMAL(18,4) NULL
     """,
 
+    # Profit-milestone sell-line freeze (max_locks ratchets).
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'profit_ms_line_rs')
+    ALTER TABLE options_trades ADD profit_ms_line_rs DECIMAL(18,4) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'profit_ms_lock_count')
+    ALTER TABLE options_trades ADD profit_ms_lock_count INT NOT NULL DEFAULT 0
+    """,
+
     # Notification provenance — links each alert back to its tick / cycle
     """
     IF NOT EXISTS (SELECT 1 FROM sys.columns

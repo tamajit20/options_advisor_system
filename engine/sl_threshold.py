@@ -133,7 +133,8 @@ def profit_milestone_config() -> Dict[str, Any]:
     Independent of ``loss_milestone_alert``. Giveback is
     ``max(pct of premium, estimated charges + charges_buffer_rs)``.
     Sell line = peak − giveback, floored at charges + buffer so the line
-    never sits below brokerage. Line ratchets up with new peaks.
+    never sits below brokerage. Line ratchets up with new peaks until
+    ``max_locks`` (blank / omitted = unlimited).
     """
     raw = STRATEGY_CONFIG.get("profit_milestone_alert") or {}
     enabled = bool(raw.get("enabled", False))
@@ -163,6 +164,7 @@ def profit_milestone_config() -> Dict[str, Any]:
         "auto_close_retry_seconds": auto_close_retry_seconds,
         "confirm_seconds": _confirm_seconds(raw, default=15),
         "charges_buffer_rs": _charges_buffer_rs(raw),
+        "max_locks": _max_profit_locks(raw),
     }
 
 
@@ -174,6 +176,67 @@ def _charges_buffer_rs(raw: dict, *, default: float = 50.0) -> float:
         return max(0.0, float(raw.get("charges_buffer_rs")))
     except (TypeError, ValueError):
         return default
+
+
+def _max_profit_locks(raw: dict) -> Optional[int]:
+    """How many upward sell-line ratchets before freeze.
+
+    ``None`` means unlimited — config omitted, ``null``, or blank ``\"\"`` /
+    whitespace. A positive int freezes the line after that many locks.
+    """
+    if "max_locks" not in raw or raw.get("max_locks") is None:
+        return None
+    val = raw.get("max_locks")
+    if isinstance(val, str):
+        text = val.strip()
+        if not text:
+            return None
+        try:
+            n = int(text)
+        except ValueError:
+            return None
+    else:
+        try:
+            n = int(val)
+        except (TypeError, ValueError):
+            return None
+    if n <= 0:
+        return None
+    return n
+
+
+def advance_profit_milestone_locks(
+    *,
+    raw_line_rs: Optional[float],
+    prev_line_rs: Optional[float],
+    lock_count: int,
+    max_locks: Optional[int],
+) -> Tuple[Optional[float], int, bool]:
+    """Apply optional freeze after ``max_locks`` upward ratchets.
+
+    Returns ``(line_rs, lock_count, frozen)``.
+    A lock is counted when the sell line first appears or moves strictly up.
+    When ``max_locks`` is ``None``, behaviour matches unlimited trailing.
+    """
+    count = max(0, int(lock_count or 0))
+    if max_locks is None:
+        return raw_line_rs, count, False
+    if raw_line_rs is None:
+        return prev_line_rs, count, bool(count >= max_locks and prev_line_rs is not None)
+
+    raw = float(raw_line_rs)
+    frozen = count >= max_locks and prev_line_rs is not None
+    if frozen:
+        return float(prev_line_rs), count, True
+
+    if prev_line_rs is None:
+        return raw, 1, max_locks <= 1
+
+    prev = float(prev_line_rs)
+    if raw > prev + 1e-9:
+        new_count = count + 1
+        return raw, new_count, new_count >= max_locks
+    return prev, count, False
 
 
 def profit_milestone_rs(*, investment_rs: float, charges_rs: float = 0.0) -> Tuple[float, float]:

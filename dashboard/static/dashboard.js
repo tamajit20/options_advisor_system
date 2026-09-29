@@ -1441,7 +1441,9 @@ function _updateLiveProfitLevels(tradeId, payload) {
         if (lineNote) {
           const premRs = parseFloat(section.dataset.premiumRs);
           const chargesRs = thresholds && thresholds.chargesRs;
-          lineNote.textContent = `Auto-closes if MTM \u2264 sell line \u20b9${fmt(profitLine)} (peak \u20b9${fmt(peakRs)})${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}`;
+          const frozen = !!payload.profit_ms_frozen;
+          const lockCount = payload.profit_ms_lock_count;
+          lineNote.textContent = `Auto-closes if MTM \u2264 sell line \u20b9${fmt(profitLine)} (peak \u20b9${fmt(peakRs)})${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}${profitMilestoneLockNote(lockCount, frozen)}`;
         }
       } else {
         const premRs = parseFloat(section.dataset.premiumRs);
@@ -1454,7 +1456,7 @@ function _updateLiveProfitLevels(tradeId, payload) {
             chargesRs,
           );
           lineNote.textContent = giveback != null
-            ? `Arms after peak profit \u2265 \u20b9${fmt(giveback)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}`
+            ? `Arms after peak profit \u2265 \u20b9${fmt(giveback)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}${profitMilestoneLockNote(0, false)}`
             : 'Profit-side auto-close from peak MTM';
         }
       }
@@ -2040,7 +2042,7 @@ const TERM_HELP = {
   },
   profit_milestone: {
     label: 'Profit milestone',
-    html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner after the confirm window (default 15s). If profit falls to breakeven or a loss during the wait, it closes immediately. Giveback from peak is max(% of entry premium, estimated charges + buffer). Sell line = peak − giveback, but never below charges + buffer. Hard SL stays on the loss side.',
+    html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner after the confirm window (default 15s). If profit falls to breakeven or a loss during the wait, it closes immediately. Giveback from peak is max(% of entry premium, estimated charges + buffer). Sell line = peak − giveback, but never below charges + buffer. Optional <code>max_locks</code>: leave blank to trail forever; a number freezes the sell line after that many upward ratchets. Hard SL stays on the loss side.',
   },
   profit_pct_auto_close: {
     label: 'Profit % auto-close',
@@ -3258,6 +3260,7 @@ const PNL_RULES = {
     auto_close: true,
     confirm_seconds: 15,
     charges_buffer_rs: 50,
+    max_locks: '',
   },
   profit_pct_auto_close: {
     enabled: false,
@@ -3409,12 +3412,34 @@ function lossMilestonePctHint(premiumKind) {
 function profitMilestoneConfig() {
   return PNL_RULES.profit_milestone_alert || {
     enabled: false, pct_of_premium: 5, auto_close: true, confirm_seconds: 15,
-    charges_buffer_rs: 50,
+    charges_buffer_rs: 50, max_locks: '',
   };
 }
 
 function profitMilestoneEnabled() {
   return !!profitMilestoneConfig().enabled;
+}
+
+function profitMilestoneMaxLocks() {
+  const raw = profitMilestoneConfig().max_locks;
+  if (raw == null) return null;
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (!text) return null;
+    const n = parseInt(text, 10);
+    return (!isNaN(n) && n > 0) ? n : null;
+  }
+  const n = parseInt(raw, 10);
+  return (!isNaN(n) && n > 0) ? n : null;
+}
+
+function profitMilestoneLockNote(lockCount, frozen) {
+  const maxLocks = profitMilestoneMaxLocks();
+  if (maxLocks == null) return '';
+  const n = parseInt(lockCount, 10) || 0;
+  if (frozen) return ` \u00b7 sell line frozen after lock ${maxLocks}`;
+  if (n > 0) return ` \u00b7 lock ${n} of ${maxLocks}`;
+  return ` \u00b7 freezes after ${maxLocks} upward lock${maxLocks === 1 ? '' : 's'}`;
 }
 
 function profitMilestonePct() {
@@ -3607,7 +3632,12 @@ function renderLiveProfitLevels(t) {
     ? ` data-est-charges="${estCharges}"`
     : '';
   const givebackRs = profitMilestoneGivebackRs(investmentRs, estCharges);
-  const profitLine = profitMilestoneLineRs(peakRs, investmentRs, estCharges);
+  const persistedLine = t.profit_ms_line_rs != null ? parseFloat(t.profit_ms_line_rs) : null;
+  const lockCount = parseInt(t.profit_ms_lock_count, 10) || 0;
+  const maxLocks = profitMilestoneMaxLocks();
+  const lineFrozen = maxLocks != null && lockCount >= maxLocks && persistedLine != null && !isNaN(persistedLine);
+  const rawProfitLine = profitMilestoneLineRs(peakRs, investmentRs, estCharges);
+  const profitLine = (lineFrozen ? persistedLine : (persistedLine != null && !isNaN(persistedLine) ? persistedLine : rawProfitLine));
   const profitMsEnabled = profitMilestoneEnabled();
   let profitMsValHtml;
   let profitMsNote;
@@ -3616,11 +3646,11 @@ function renderLiveProfitLevels(t) {
     profitMsNote = 'Enable profit_milestone_alert to auto-close on giveback from peak';
   } else if (profitLine != null) {
     profitMsValHtml = `<span class="lpl-val live-profit-ms-val">\u20b9${fmt(profitLine)}</span>`;
-    profitMsNote = `Auto-closes if MTM \u2264 sell line \u20b9${fmt(profitLine)} (peak \u20b9${fmt(peakRs)})${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}`;
+    profitMsNote = `Auto-closes if MTM \u2264 sell line \u20b9${fmt(profitLine)} (peak \u20b9${fmt(peakRs)})${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}${profitMilestoneLockNote(lockCount, lineFrozen)}`;
   } else {
     profitMsValHtml = `<span class="lpl-val muted live-profit-ms-val">Not armed</span>`;
     profitMsNote = givebackRs != null
-      ? `Arms after peak profit \u2265 \u20b9${fmt(givebackRs)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}`
+      ? `Arms after peak profit \u2265 \u20b9${fmt(givebackRs)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}${profitMilestoneLockNote(0, false)}`
       : 'Arms after peak reaches the giveback level';
   }
 

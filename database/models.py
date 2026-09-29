@@ -1062,6 +1062,21 @@ class TradeRepo:
             [mtm_peak_rs, trade_id],
         ).close()
 
+    def update_profit_milestone_state(
+        self,
+        trade_id: str,
+        *,
+        mtm_peak_rs: Optional[float],
+        profit_ms_line_rs: Optional[float],
+        profit_ms_lock_count: int = 0,
+    ) -> None:
+        """Persist peak and sell-line lock freeze fields together."""
+        self.db.execute(
+            "UPDATE options_trades SET mtm_peak_rs = ?, profit_ms_line_rs = ?, "
+            "profit_ms_lock_count = ? WHERE trade_id = ?",
+            [mtm_peak_rs, profit_ms_line_rs, int(profit_ms_lock_count or 0), trade_id],
+        ).close()
+
     def update_status(self, trade_id: str, status: str, daily_status: Optional[str] = None,
                       exit_instruction: Optional[str] = None) -> None:
         self.db.execute(

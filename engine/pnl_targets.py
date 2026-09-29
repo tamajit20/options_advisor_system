@@ -215,6 +215,7 @@ def pnl_rules_public() -> Dict[str, Any]:
                 "auto_close": True,
                 "confirm_seconds": 15,
                 "charges_buffer_rs": 50,
+                "max_locks": "",
             }
         ),
     }

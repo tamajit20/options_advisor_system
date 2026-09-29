@@ -166,6 +166,8 @@ _DESCRIPTIONS: Dict[str, str] = {
         "max(pct_of_premium of entry premium, estimated charges + "
         "charges_buffer_rs). Sell line = max(peak − giveback, charges + "
         "charges_buffer_rs) — trails with peak but never below brokerage. "
+        "max_locks: blank/\"\" = trail forever; integer e.g. 3 freezes the sell "
+        "line after the 3rd upward ratchet (peak may still rise). "
         "If MTM hits ₹0 or a loss during confirm, close immediately. SL stays "
         "on the loss side. charges_buffer_rs (default 50) covers estimate error.",
     "profit_pct_auto_close":

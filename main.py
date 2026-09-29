@@ -319,8 +319,19 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict) -> str:
         TradeLevelEventRepo(db).insert(payload)
         db.commit()
 
-    def _persist_mtm_peak(trade_id: str, peak: float | None) -> None:
-        TradeRepo(db).update_mtm_peak(trade_id, peak)
+    def _persist_mtm_peak(
+        trade_id: str,
+        peak: float | None,
+        *,
+        profit_ms_line_rs: float | None = None,
+        profit_ms_lock_count: int = 0,
+    ) -> None:
+        TradeRepo(db).update_profit_milestone_state(
+            trade_id,
+            mtm_peak_rs=peak,
+            profit_ms_line_rs=profit_ms_line_rs,
+            profit_ms_lock_count=profit_ms_lock_count,
+        )
         db.commit()
 
     from database.config_overlay import apply_strategy_overrides

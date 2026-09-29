@@ -20,7 +20,8 @@ uses) and emits a notification when:
   lives in ``lifecycle.auto_execution`` when ``auto_close`` is on.
   Sell line = peak − giveback, floored at charges + buffer
   (``max(peak − giveback, charges + charges_buffer_rs)``); giveback itself
-  is ``max(% of premium, charges + buffer)``.
+  is ``max(% of premium, charges + buffer)``. Optional ``max_locks`` freezes
+  the sell line after N upward ratchets (blank = unlimited trail).
 * ``LOSS_LIMIT_HIT`` — current PnL crosses the strategy effective loss limit
   (``effective_sl_rs``). Alert only — no auto flatten. Loss-side only.
 * ``SL_TRIGGER`` — underlying spot crosses ``actual_stop_loss_level`` (when
@@ -95,6 +96,7 @@ from engine.sl_threshold import (
     profit_milestone_config,
     profit_milestone_line_rs,
     profit_milestone_rs,
+    advance_profit_milestone_locks,
     profit_pct_auto_close_config,
     profit_pct_auto_close_rs,
     trade_investment_rs,
@@ -214,6 +216,8 @@ class _TradeState:
     last_direction_fit: Optional[str] = None
     trade_greeks: Optional[dict] = None
     mtm_peak_rs: Optional[float] = None
+    profit_ms_line_rs: Optional[float] = None
+    profit_ms_lock_count: int = 0
     milestone_confirm_at: Dict[str, datetime] = field(default_factory=dict)
 
 
@@ -356,6 +360,10 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                 mtm_peak_rs=(float(trade["mtm_peak_rs"])
                              if trade.get("mtm_peak_rs") is not None
                              else None),
+                profit_ms_line_rs=(float(trade["profit_ms_line_rs"])
+                                   if trade.get("profit_ms_line_rs") is not None
+                                   else None),
+                profit_ms_lock_count=int(trade.get("profit_ms_lock_count") or 0),
                 entry_pop=entry_pop,
                 entry_spot=entry_spot,
                 atm_iv=atm_iv,
@@ -695,6 +703,7 @@ class LiveRiskMonitor:
         self._profit_milestone_confirm = timedelta(
             seconds=int(pmc.get("confirm_seconds") or 0)
         )
+        self._profit_milestone_max_locks = pmc.get("max_locks")
 
     def _bind_profit_pct_auto_close_cfg(self) -> None:
         """Re-read profit_pct_auto_close — hard % take, no confirm."""
@@ -756,6 +765,17 @@ class LiveRiskMonitor:
                     if old_peak is not None and (
                             new_peak is None or old_peak > new_peak):
                         new_state.mtm_peak_rs = old_peak
+                    if old.profit_ms_lock_count > new_state.profit_ms_lock_count:
+                        new_state.profit_ms_lock_count = old.profit_ms_lock_count
+                        new_state.profit_ms_line_rs = old.profit_ms_line_rs
+                    elif (
+                        old.profit_ms_line_rs is not None
+                        and (
+                            new_state.profit_ms_line_rs is None
+                            or old.profit_ms_line_rs > new_state.profit_ms_line_rs
+                        )
+                    ):
+                        new_state.profit_ms_line_rs = old.profit_ms_line_rs
             self._snapshot = new_snap
             persist_mtm = self._prune_closed_mtm_locked()
             mtm_dump = dict(self._mtm_state) if persist_mtm else None
@@ -811,7 +831,7 @@ class LiveRiskMonitor:
         decisions: List[_PendingAlert] = []
         pending_mtm: List[dict] = []
         pending_trail: List[Tuple[str, Optional[float], int]] = []
-        pending_peaks: List[Tuple[str, Optional[float]]] = []
+        pending_peaks: List[Tuple[str, Optional[float], Optional[float], int]] = []
         pending_snapshots: List[dict] = []
         with self._lock:
             for tid in self._snapshot.index.get(key, ()):
@@ -821,6 +841,8 @@ class LiveRiskMonitor:
                 state.leg_ltps[key] = ltp
                 state.leg_last_tick[key] = now
                 peak_before = state.mtm_peak_rs
+                line_before = state.profit_ms_line_rs
+                lock_before = state.profit_ms_lock_count
                 alert, mtm, trail, snap = self._evaluate_locked(state, now, tick_key=key)
                 if alert is not None:
                     decisions.append(alert)
@@ -828,9 +850,17 @@ class LiveRiskMonitor:
                     pending_mtm.append(mtm)
                 if trail is not None:
                     pending_trail.append(trail)
-                if (state.mtm_peak_rs is not None
-                        and state.mtm_peak_rs != peak_before):
-                    pending_peaks.append((state.trade_id, state.mtm_peak_rs))
+                if (
+                    state.mtm_peak_rs != peak_before
+                    or state.profit_ms_line_rs != line_before
+                    or state.profit_ms_lock_count != lock_before
+                ):
+                    pending_peaks.append((
+                        state.trade_id,
+                        state.mtm_peak_rs,
+                        state.profit_ms_line_rs,
+                        int(state.profit_ms_lock_count or 0),
+                    ))
                 if snap is not None:
                     pending_snapshots.append(snap)
 
@@ -845,7 +875,7 @@ class LiveRiskMonitor:
         pending_mtm: List[dict],
         pending_trail: List[Tuple[str, Optional[float], int]],
         pending_snapshots: List[dict],
-        pending_peaks: Optional[List[Tuple[str, Optional[float]]]] = None,
+        pending_peaks: Optional[List[Tuple[str, Optional[float], Optional[float], int]]] = None,
     ) -> None:
         for d in decisions:
             self._dispatch(d)
@@ -880,7 +910,7 @@ class LiveRiskMonitor:
         decisions: List[_PendingAlert] = []
         pending_mtm: List[dict] = []
         pending_trail: List[Tuple[str, Optional[float], int]] = []
-        pending_peaks: List[Tuple[str, Optional[float]]] = []
+        pending_peaks: List[Tuple[str, Optional[float], Optional[float], int]] = []
         pending_snapshots: List[dict] = []
         with self._lock:
             tids = list(self._snapshot.spot_index.get(quote.symbol, ()))
@@ -898,6 +928,8 @@ class LiveRiskMonitor:
                         and self._legs_fresh(state, now)
                         and self._mtm_throttle_elapsed(state, now)):
                     peak_before = state.mtm_peak_rs
+                    line_before = state.profit_ms_line_rs
+                    lock_before = state.profit_ms_lock_count
                     alert, mtm, trail, snap = self._evaluate_locked(state, now)
                     if alert is not None:
                         decisions.append(alert)
@@ -905,9 +937,17 @@ class LiveRiskMonitor:
                         pending_mtm.append(mtm)
                     if trail is not None:
                         pending_trail.append(trail)
-                    if (state.mtm_peak_rs is not None
-                            and state.mtm_peak_rs != peak_before):
-                        pending_peaks.append((state.trade_id, state.mtm_peak_rs))
+                    if (
+                        state.mtm_peak_rs != peak_before
+                        or state.profit_ms_line_rs != line_before
+                        or state.profit_ms_lock_count != lock_before
+                    ):
+                        pending_peaks.append((
+                            state.trade_id,
+                            state.mtm_peak_rs,
+                            state.profit_ms_line_rs,
+                            int(state.profit_ms_lock_count or 0),
+                        ))
                     if snap is not None:
                         pending_snapshots.append(snap)
                 if not self._spot_sl_enabled:
@@ -1101,11 +1141,19 @@ class LiveRiskMonitor:
         profit_giveback_rs, profit_ms_pct = profit_milestone_rs(
             investment_rs=investment, charges_rs=charges_rs)
         charges_floor_rs = profit_milestone_charges_floor_rs(charges_rs=charges_rs)
-        profit_line = profit_milestone_line_rs(
+        raw_profit_line = profit_milestone_line_rs(
             peak_rs=state.mtm_peak_rs,
             giveback_rs=profit_giveback_rs,
             min_line_rs=charges_floor_rs,
         )
+        profit_line, lock_count, line_frozen = advance_profit_milestone_locks(
+            raw_line_rs=raw_profit_line,
+            prev_line_rs=state.profit_ms_line_rs,
+            lock_count=state.profit_ms_lock_count,
+            max_locks=self._profit_milestone_max_locks,
+        )
+        state.profit_ms_line_rs = profit_line
+        state.profit_ms_lock_count = lock_count
         profit_pct_rs, profit_pct_val = profit_pct_auto_close_rs(
             investment_rs=investment,
         )
@@ -1133,6 +1181,8 @@ class LiveRiskMonitor:
                 "profit_milestone_line": (
                     round(profit_line, 2) if profit_line is not None else None
                 ),
+                "profit_ms_lock_count": int(lock_count),
+                "profit_ms_frozen": bool(line_frozen),
                 "est_charges_rs": round(charges_rs, 2),
                 "profit_milestone_confirming": False,
                 "loss_milestone_confirming": False,
@@ -1969,11 +2019,30 @@ class LiveRiskMonitor:
             logger.exception(
                 "LiveRiskMonitor: trailing_persister raised for %s", trade_id)
 
-    def _persist_peak(self, trade_id: str, mtm_peak_rs: Optional[float]) -> None:
+    def _persist_peak(
+        self,
+        trade_id: str,
+        mtm_peak_rs: Optional[float],
+        profit_ms_line_rs: Optional[float] = None,
+        profit_ms_lock_count: int = 0,
+    ) -> None:
         if self._peak_persister is None:
             return
         try:
-            self._peak_persister(trade_id, mtm_peak_rs)
+            self._peak_persister(
+                trade_id,
+                mtm_peak_rs,
+                profit_ms_line_rs=profit_ms_line_rs,
+                profit_ms_lock_count=profit_ms_lock_count,
+            )
+        except TypeError:
+            # Older injector that only accepted (trade_id, peak).
+            try:
+                self._peak_persister(trade_id, mtm_peak_rs)
+            except Exception:
+                logger.exception(
+                    "LiveRiskMonitor: peak_persister raised for %s", trade_id,
+                )
         except Exception:
             logger.exception(
                 "LiveRiskMonitor: peak_persister raised for %s", trade_id)
