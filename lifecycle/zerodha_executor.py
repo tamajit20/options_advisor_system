@@ -619,6 +619,21 @@ def _sync_broker_from_kite_row(
     return snap
 
 
+def _fill_status_note(*, attempt: int, last_exc: Optional[Exception]) -> str:
+    """Broker-row note after a fill — keep retry/timeout context when present.
+
+    Empty string clears a prior error. After a retry, records that the order
+    eventually filled COMPLETE and what failed earlier (e.g. 45s timeout).
+    """
+    if last_exc is None and attempt <= 0:
+        return ""
+    earlier = str(last_exc).strip() if last_exc else "repriced/retry"
+    return (
+        f"Filled COMPLETE after retry (attempt {attempt + 1}). "
+        f"Earlier: {earlier}"
+    )[:500]
+
+
 def _wait_for_order_complete(
     facade: KiteExecutionFacade,
     order_id: str,
@@ -833,6 +848,10 @@ def _place_and_monitor_leg(
                     fill_price=fill_px,
                     filled_quantity=filled_qty,
                     pending_quantity=0,
+                    # Clear stale timeout text, or keep retry trail if we recovered.
+                    error_message=_fill_status_note(
+                        attempt=attempt, last_exc=last_exc,
+                    ),
                     updated_at=filled_at,
                 )
                 db.commit()

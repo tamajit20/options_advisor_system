@@ -1106,3 +1106,23 @@ def test_assert_still_blocks_a_different_running_job(db_conn, mocker):
     mocker.patch("lifecycle.zerodha_executor.BrokerOrderRepo", return_value=broker)
     with pytest.raises(ZerodhaExecutionError, match="already running"):
         _assert_execution_not_in_flight(db_conn, suggestion_id="SUG-1", except_job_id=7)
+
+
+def test_fill_status_note_clears_on_first_attempt_success():
+    from lifecycle.zerodha_executor import _fill_status_note
+
+    assert _fill_status_note(attempt=0, last_exc=None) == ""
+
+
+def test_fill_status_note_keeps_timeout_trail_after_retry():
+    from lifecycle.zerodha_executor import _fill_status_note
+
+    note = _fill_status_note(
+        attempt=1,
+        last_exc=ZerodhaExecutionError(
+            "Order 2104828399796543488 timed out after 45s (last status OPEN)"
+        ),
+    )
+    assert note.startswith("Filled COMPLETE after retry (attempt 2).")
+    assert "timed out after 45s" in note
+    assert "last status OPEN" in note
