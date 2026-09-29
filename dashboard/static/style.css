@@ -800,6 +800,17 @@ table.dt {
 .zerodha-inflight-note { font-size: .75rem; margin: 8px 0 0; }
 
 .zerodha-exec-card { margin-bottom: 10px; }
+.zerodha-exec-card--nested {
+  background: var(--surface-2, rgba(0,0,0,.03));
+  border: 1px solid var(--border, #ddd);
+  box-shadow: none;
+}
+.hist-zerodha-log {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #e5e5e5);
+}
+.hist-zerodha-log .zerodha-exec-card { margin-bottom: 8px; }
 .zerodha-exec-summary {
   display: flex;
   flex-wrap: wrap;

@@ -240,6 +240,69 @@ def _filter_trades_by_execution_channel(
     return [t for t in trades if (t or {}).get("execution_channel") == channel]
 
 
+def _attach_history_zerodha_executions(
+    db: SQLServerConnection,
+    trades: list,
+) -> None:
+    """Embed sequenced Zerodha execution groups on each history trade card."""
+    from database.broker_order_repo import BrokerOrderRepo
+    from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
+    from lifecycle.zerodha_execution_log import (
+        attach_zerodha_executions_to_trades,
+        group_broker_orders,
+    )
+
+    if not trades:
+        return
+    tids = [t.get("trade_id") for t in trades if t.get("trade_id")]
+    sids = [t.get("suggestion_id") for t in trades if t.get("suggestion_id")]
+    broker = BrokerOrderRepo(db)
+    rows = broker.list_for_trades_or_suggestions(
+        trade_ids=tids, suggestion_ids=sids,
+    )
+    if not rows:
+        for t in trades:
+            t["zerodha_executions"] = []
+        return
+
+    trade_names = {
+        str(t["trade_id"]): t.get("trade_name")
+        for t in trades
+        if t.get("trade_id") and t.get("trade_name")
+    }
+    row_sids = [r.get("suggestion_id") for r in rows if r.get("suggestion_id")]
+    row_tids = [r.get("trade_id") for r in rows if r.get("trade_id")]
+    job_repo = ZerodhaExecutionJobRepo(db)
+    jobs_by_key: dict = {}
+    for j in job_repo.list_for_suggestions(row_sids):
+        jobs_by_key[j["id"]] = _row(j)
+    for j in job_repo.list_for_trades(row_tids):
+        jobs_by_key[j["id"]] = _row(j)
+
+    close_triggers: dict = {}
+    try:
+        from database.models import NotificationRepo
+        close_triggers = NotificationRepo(db).milestone_close_triggers_for_trades(
+            list({str(t) for t in row_tids if t}),
+        )
+    except Exception:
+        logger.debug("history milestone close triggers skipped", exc_info=True)
+
+    groups = group_broker_orders(
+        [_row(r) for r in rows],
+        trade_names=trade_names,
+        jobs=list(jobs_by_key.values()),
+        close_triggers=close_triggers,
+    )
+    try:
+        from lifecycle.execution_reversal import attach_reversals_to_groups
+        attach_reversals_to_groups(db, groups)
+    except Exception:
+        logger.debug("history attach execution reversals skipped", exc_info=True)
+
+    attach_zerodha_executions_to_trades(trades, groups)
+
+
 def _zerodha_trade_id_set(db: SQLServerConnection, trade_ids: list) -> set:
     """Trade IDs that have COMPLETE ENTRY/SUPPLEMENT Kite fills (batch)."""
     ids = sorted({
@@ -3193,6 +3256,13 @@ def create_app() -> Flask:
             out.append(item)
 
         out = _filter_trades_by_execution_channel(out, channel_f)
+
+        try:
+            _attach_history_zerodha_executions(db, out)
+        except Exception:
+            logger.debug("history zerodha executions attach skipped", exc_info=True)
+            for item in out:
+                item.setdefault("zerodha_executions", [])
 
         # Distinct underlyings / strategies for filter dropdowns (date window only)
         facet_sql = (

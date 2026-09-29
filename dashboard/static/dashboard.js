@@ -9010,6 +9010,12 @@ function renderHistoryTrade(t) {
         </table>
       </div>
     </div>` : ''}
+
+    ${(t.zerodha_executions || []).length ? `
+    <div class="hist-zerodha-log">
+      <div class="hist-legs-title">Zerodha execution log <span class="muted" style="font-weight:500">(in order)</span></div>
+      ${(t.zerodha_executions || []).map(g => renderZerodhaExecGroup(g, { nested: true })).join('')}
+    </div>` : ''}
   `, { open: false, className: 'hist-card' });
 }
 
@@ -9066,62 +9072,69 @@ async function loadZerodhaExecutionLogs() {
       return;
     }
     c.className = '';
-    c.innerHTML = groups.map(g => {
-      const title = g.trade_name
-        ? escapeHtml(g.trade_name)
-        : (g.trade_id ? escapeHtml(g.trade_id) : escapeHtml(g.suggestion_id || g.group_key));
-      const badge = g.badge || g.overall_status || '';
-      const headline = g.headline || '';
-      const detail = g.detail || '';
-      const sub = [
-        g.trade_id ? `Trade ${escapeHtml(g.trade_id)}` : null,
-        g.suggestion_id ? `Suggestion ${escapeHtml(g.suggestion_id)}` : null,
-        g.operations?.length ? g.operations.join(', ') : null,
-      ].filter(Boolean).join(' · ');
-      const stCls = _brokerStatusClass(badge);
-      const orders = (g.orders || []).map(o => `
-        <tr>
-          <td>${escapeHtml(o.created_at || '')}</td>
-          <td><span class="tag tag-sm">${escapeHtml(o.operation || '')}</span></td>
-          <td class="num">${o.leg_order != null ? escapeHtml(String(o.leg_order)) : ''}</td>
-          <td>${escapeHtml(o.tradingsymbol || '')}</td>
-          <td><span class="tag tag-sm ${o.transaction_type === 'BUY' ? 'tag-ok' : 'tag-err'}">${escapeHtml(o.transaction_type || '')}</span></td>
-          <td class="num">${o.quantity != null ? escapeHtml(String(o.quantity)) : ''}</td>
-          <td class="num">${o.limit_price != null ? fmt(o.limit_price) : '—'}</td>
-          <td class="num">${o.fill_price != null ? fmt(o.fill_price) : '—'}</td>
-          <td><span class="tag tag-${_brokerStatusClass(o.status)}">${escapeHtml(o.status || '')}</span></td>
-          <td>${o.retry_count != null && o.retry_count > 0 ? escapeHtml(String(o.retry_count)) : '—'}</td>
-          <td style="font-size:.78rem">${escapeHtml(o.kite_order_id || '—')}</td>
-          <td style="font-size:.78rem;max-width:220px">${escapeHtml(o.error_message || '')}</td>
-        </tr>`).join('');
-      return `<details class="card zerodha-exec-card">
-        <summary class="zerodha-exec-summary">
-          <span class="zerodha-exec-title">${title}</span>
-          <span class="tag tag-${stCls}">${escapeHtml(badge)}</span>
-          <span class="muted zerodha-exec-time">${escapeHtml(g.started_at || '')}${g.last_at && g.last_at !== g.started_at ? ' → ' + escapeHtml(g.last_at) : ''}</span>
-          ${headline ? `<span class="zerodha-exec-headline">${escapeHtml(headline)}</span>` : ''}
-        </summary>
-        <div class="zerodha-exec-body">
-          ${detail ? `<p class="zerodha-exec-detail">${escapeHtml(detail)}</p>` : ''}
-          ${g.reversal ? `<p class="zerodha-exec-detail">Booked revert P&amp;L <strong>${Number(g.reversal.net_pnl) >= 0 ? '+' : ''}₹${Number(g.reversal.net_pnl).toLocaleString('en-IN', {maximumFractionDigits: 2})}</strong> · charges ₹${Number(g.reversal.total_charges).toLocaleString('en-IN', {maximumFractionDigits: 2})}</p>` : ''}
-          ${sub ? `<div class="muted" style="font-size:.82rem;margin-bottom:8px">${sub}</div>` : ''}
-          <div class="hist-legs-scroll">
-            <table class="dt zerodha-exec-tbl">
-              <thead><tr>
-                <th>Time</th><th>Op</th><th class="num">Leg</th><th>Symbol</th><th>Side</th>
-                <th class="num">Qty</th><th class="num">Limit</th><th class="num">Fill</th>
-                <th>Status</th><th class="num">Retries</th><th>Kite order</th><th>Error</th>
-              </tr></thead>
-              <tbody>${orders}</tbody>
-            </table>
-          </div>
-        </div>
-      </details>`;
-    }).join('');
+    c.innerHTML = groups.map(g => renderZerodhaExecGroup(g)).join('');
   } catch (e) {
     c.className = '';
     c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+function renderZerodhaExecGroup(g, { nested = false } = {}) {
+  const title = g.trade_name
+    ? escapeHtml(g.trade_name)
+    : (g.trade_id ? escapeHtml(g.trade_id) : escapeHtml(g.suggestion_id || g.group_key));
+  const badge = g.badge || g.overall_status || '';
+  const headline = g.headline || '';
+  const detail = g.detail || '';
+  const ops = (g.operations || []).join(', ');
+  const subParts = nested
+    ? [ops || null].filter(Boolean)
+    : [
+        g.trade_id ? `Trade ${escapeHtml(g.trade_id)}` : null,
+        g.suggestion_id ? `Suggestion ${escapeHtml(g.suggestion_id)}` : null,
+        ops || null,
+      ].filter(Boolean);
+  const sub = subParts.join(' · ');
+  const stCls = _brokerStatusClass(badge);
+  const orders = (g.orders || []).map(o => `
+    <tr>
+      <td>${escapeHtml(o.created_at || '')}</td>
+      <td><span class="tag tag-sm">${escapeHtml(o.operation || '')}</span></td>
+      <td class="num">${o.leg_order != null ? escapeHtml(String(o.leg_order)) : ''}</td>
+      <td>${escapeHtml(o.tradingsymbol || '')}</td>
+      <td><span class="tag tag-sm ${o.transaction_type === 'BUY' ? 'tag-ok' : 'tag-err'}">${escapeHtml(o.transaction_type || '')}</span></td>
+      <td class="num">${o.quantity != null ? escapeHtml(String(o.quantity)) : ''}</td>
+      <td class="num">${o.limit_price != null ? fmt(o.limit_price) : '—'}</td>
+      <td class="num">${o.fill_price != null ? fmt(o.fill_price) : '—'}</td>
+      <td><span class="tag tag-${_brokerStatusClass(o.status)}">${escapeHtml(o.status || '')}</span></td>
+      <td>${o.retry_count != null && o.retry_count > 0 ? escapeHtml(String(o.retry_count)) : '—'}</td>
+      <td style="font-size:.78rem">${escapeHtml(o.kite_order_id || '—')}</td>
+      <td style="font-size:.78rem;max-width:220px">${escapeHtml(o.error_message || '')}</td>
+    </tr>`).join('');
+  const cls = nested ? 'card zerodha-exec-card zerodha-exec-card--nested' : 'card zerodha-exec-card';
+  return `<details class="${cls}">
+    <summary class="zerodha-exec-summary">
+      <span class="zerodha-exec-title">${title}</span>
+      <span class="tag tag-${stCls}">${escapeHtml(badge)}</span>
+      <span class="muted zerodha-exec-time">${escapeHtml(g.started_at || '')}${g.last_at && g.last_at !== g.started_at ? ' → ' + escapeHtml(g.last_at) : ''}</span>
+      ${headline ? `<span class="zerodha-exec-headline">${escapeHtml(headline)}</span>` : ''}
+    </summary>
+    <div class="zerodha-exec-body">
+      ${detail ? `<p class="zerodha-exec-detail">${escapeHtml(detail)}</p>` : ''}
+      ${g.reversal ? `<p class="zerodha-exec-detail">Booked revert P&amp;L <strong>${Number(g.reversal.net_pnl) >= 0 ? '+' : ''}₹${Number(g.reversal.net_pnl).toLocaleString('en-IN', {maximumFractionDigits: 2})}</strong> · charges ₹${Number(g.reversal.total_charges).toLocaleString('en-IN', {maximumFractionDigits: 2})}</p>` : ''}
+      ${sub ? `<div class="muted" style="font-size:.82rem;margin-bottom:8px">${sub}</div>` : ''}
+      <div class="hist-legs-scroll">
+        <table class="dt zerodha-exec-tbl">
+          <thead><tr>
+            <th>Time</th><th>Op</th><th class="num">Leg</th><th>Symbol</th><th>Side</th>
+            <th class="num">Qty</th><th class="num">Limit</th><th class="num">Fill</th>
+            <th>Status</th><th class="num">Retries</th><th>Kite order</th><th>Error</th>
+          </tr></thead>
+          <tbody>${orders}</tbody>
+        </table>
+      </div>
+    </div>
+  </details>`;
 }
 
 function _brokerStatusClass(status) {

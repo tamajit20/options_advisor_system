@@ -522,3 +522,37 @@ def live_suggestion_order_status(
         "total_orders": total,
         "trade_id": trade_id,
     }
+
+
+def executions_for_trade(
+    trade: dict,
+    groups: Iterable[dict],
+) -> List[dict]:
+    """Pick execution groups that belong to this trade, oldest first.
+
+    Includes rows stamped with ``trade_id``, plus suggestion-only attempts
+    (failed entry / rollback before a trade id was assigned).
+    """
+    tid = str(trade.get("trade_id") or "").strip() or None
+    sid = str(trade.get("suggestion_id") or "").strip() or None
+    matched: List[dict] = []
+    for group in groups:
+        gt = str(group.get("trade_id") or "").strip() or None
+        gs = str(group.get("suggestion_id") or "").strip() or None
+        if tid and gt == tid:
+            matched.append(group)
+        elif not gt and sid and gs == sid:
+            matched.append(group)
+    matched.sort(key=lambda g: _time_key(g.get("started_at")))
+    return matched
+
+
+def attach_zerodha_executions_to_trades(
+    trades: List[dict],
+    groups: Iterable[dict],
+) -> None:
+    """Set ``zerodha_executions`` on each trade (chrono sequence per card)."""
+    group_list = list(groups)
+    for trade in trades:
+        trade["zerodha_executions"] = executions_for_trade(trade, group_list)
+

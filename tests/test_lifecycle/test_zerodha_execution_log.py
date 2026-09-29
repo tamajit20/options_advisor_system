@@ -2,7 +2,11 @@
 
 from datetime import datetime
 
-from lifecycle.zerodha_execution_log import group_broker_orders
+from lifecycle.zerodha_execution_log import (
+    attach_zerodha_executions_to_trades,
+    executions_for_trade,
+    group_broker_orders,
+)
 
 
 def test_groups_by_trade_id():
@@ -296,3 +300,39 @@ def test_exit_profit_pct_from_job_message():
     assert groups[0]["headline"] == "Profit % hit — system closed"
     assert groups[0]["actor"] == "system"
     assert groups[0]["close_trigger"] == "PROFIT_PCT_HIT"
+
+
+def test_executions_for_trade_sequences_trade_and_orphan_suggestion():
+    groups = [
+        {
+            "group_key": "job:1", "trade_id": None, "suggestion_id": "S1",
+            "started_at": "2026-09-29T11:49:00", "operations": ["ENTRY", "ROLLBACK"],
+        },
+        {
+            "group_key": "job:2", "trade_id": "TRD-1", "suggestion_id": "S1",
+            "started_at": "2026-09-29T11:51:00", "operations": ["ENTRY"],
+        },
+        {
+            "group_key": "job:3", "trade_id": "TRD-9", "suggestion_id": "S9",
+            "started_at": "2026-09-29T12:00:00", "operations": ["ENTRY"],
+        },
+        {
+            "group_key": "job:4", "trade_id": "TRD-1", "suggestion_id": "S1",
+            "started_at": "2026-09-29T12:00:50", "operations": ["EXIT"],
+        },
+    ]
+    matched = executions_for_trade(
+        {"trade_id": "TRD-1", "suggestion_id": "S1"}, groups,
+    )
+    assert [g["group_key"] for g in matched] == ["job:1", "job:2", "job:4"]
+
+
+def test_attach_zerodha_executions_to_trades_sets_field():
+    trades = [{"trade_id": "TRD-1", "suggestion_id": "S1"}]
+    groups = [{
+        "group_key": "job:2", "trade_id": "TRD-1", "suggestion_id": "S1",
+        "started_at": "2026-09-29T11:51:00",
+    }]
+    attach_zerodha_executions_to_trades(trades, groups)
+    assert len(trades[0]["zerodha_executions"]) == 1
+    assert trades[0]["zerodha_executions"][0]["group_key"] == "job:2"

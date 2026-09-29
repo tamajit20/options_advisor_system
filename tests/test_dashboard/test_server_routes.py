@@ -490,7 +490,14 @@ class TestHistoryRoutes:
         fake = MagicMock()
         fake.connect = MagicMock()
         fake.close = MagicMock()
-        fake.fetch_all = MagicMock(side_effect=[[closed], []])
+
+        def _fetch_all(sql, params=None):
+            text = str(sql)
+            if "FROM options_trades t" in text and "DISTINCT" not in text:
+                return [closed]
+            return []
+
+        fake.fetch_all = MagicMock(side_effect=_fetch_all)
         mocker.patch("dashboard.server.SQLServerConnection", return_value=fake)
         mocker.patch("dashboard.server.TradeRepo").return_value.legs_with_suggestion_info.return_value = []
         mocker.patch("dashboard.server.SuggestionRepo")
@@ -498,14 +505,19 @@ class TestHistoryRoutes:
             "dashboard.server._enrich_trade_execution_channel",
             side_effect=lambda _db, row: row.__setitem__("execution_channel", "manual") or row,
         )
+        mocker.patch(
+            "database.broker_order_repo.BrokerOrderRepo.list_for_trades_or_suggestions",
+            return_value=[],
+        )
         new_app = server.create_app()
         new_app.config["TESTING"] = True
         c = new_app.test_client()
         keep = c.get("/api/history/closed-trades?from_date=2026-04-01&to_date=2026-04-30&channel=manual")
         assert keep.status_code == 200
-        assert keep.get_json()["count"] == 1
-        assert keep.get_json()["channel"] == "manual"
-        fake.fetch_all = MagicMock(side_effect=[[closed], []])
+        body = keep.get_json()
+        assert body["count"] == 1
+        assert body["channel"] == "manual"
+        assert body["trades"][0].get("zerodha_executions") == []
         drop = c.get("/api/history/closed-trades?from_date=2026-04-01&to_date=2026-04-30&channel=zerodha")
         assert drop.get_json()["count"] == 0
         assert drop.get_json()["channel"] == "zerodha"

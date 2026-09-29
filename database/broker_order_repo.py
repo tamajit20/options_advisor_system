@@ -318,6 +318,42 @@ class BrokerOrderRepo:
             params,
         )
 
+    def list_for_trades_or_suggestions(
+        self,
+        *,
+        trade_ids: Optional[Iterable[str]] = None,
+        suggestion_ids: Optional[Iterable[str]] = None,
+        limit: int = 5000,
+    ) -> List[dict]:
+        """Broker rows for history cards — by trade id and/or suggestion id.
+
+        Suggestion-only rows (failed entry before a trade was stamped) are
+        included so history can show the full attempt sequence.
+        """
+        tids = [str(t).strip() for t in (trade_ids or []) if t and str(t).strip()]
+        sids = [str(s).strip() for s in (suggestion_ids or []) if s and str(s).strip()]
+        # de-dupe while preserving order
+        tids = list(dict.fromkeys(tids))
+        sids = list(dict.fromkeys(sids))
+        if not tids and not sids:
+            return []
+        clauses: list[str] = []
+        params: list = [max(1, int(limit))]
+        if tids:
+            ph = ",".join("?" * len(tids))
+            clauses.append(f"trade_id IN ({ph})")
+            params.extend(tids)
+        if sids:
+            ph = ",".join("?" * len(sids))
+            clauses.append(f"suggestion_id IN ({ph})")
+            params.extend(sids)
+        where = " OR ".join(clauses)
+        return self.db.fetch_all(
+            f"SELECT TOP (?) * FROM options_broker_orders WHERE ({where}) "
+            "ORDER BY created_at ASC, id ASC",
+            params,
+        ) or []
+
     def list_since(
         self,
         since: datetime,
