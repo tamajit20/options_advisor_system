@@ -762,7 +762,8 @@ class TestProfitMilestoneHit:
                            "target_fraction_at_max_dte": 0.99},
         )
         monitor._bind_profit_milestone_cfg()
-        # 80/80 → MTM +2000. Giveback 5% of 10k = 500 → line 1500. Still above.
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
+        # 80/80 → MTM +2000. Giveback 5% of 10k = 500 → line max(1500, 50)=1500.
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 80.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 80.0))
         assert state.mtm_peak_rs == pytest.approx(2000.0)
@@ -786,6 +787,7 @@ class TestProfitMilestoneHit:
                            "target_fraction_at_max_dte": 0.99},
         )
         monitor._bind_profit_milestone_cfg()
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 80.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 80.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 60.0))
@@ -811,11 +813,26 @@ class TestProfitMilestoneHit:
             cfg_overrides={"pre_breach_fraction": 0.99, "stale_leg_seconds": 9999},
         )
         monitor._bind_profit_milestone_cfg()
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
         # 98/98 → MTM +200 < 500 giveback.
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 98.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 98.0))
         types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
         assert "PROFIT_MILESTONE_HIT" not in types
+
+    def test_sell_line_never_below_charges_floor(self, mocker):
+        self._enable(mocker)
+        state = _make_state()
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(
+            state, {"now": datetime(2026, 5, 5, 11, 0, 0)},
+        )
+        monitor._bind_profit_milestone_cfg()
+        # Giveback = max(500, 215) = 500. Floor = 215.
+        # Peak 520 → raw line 20 → floored to 215.
+        monitor._estimated_close_charges_rs = lambda _s: 165.0
+        _tick_pair(bus, state, 94.8, 94.8)  # MTM ≈ 520
+        assert state.mtm_peak_rs == pytest.approx(520.0, abs=1.0)
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(215.0)
 
     def test_disabled_skips(self, mocker):
         mocker.patch.dict(
@@ -862,6 +879,7 @@ class TestProfitMilestoneHit:
         )
         monitor._auto_exec = hook
         monitor._bind_profit_milestone_cfg()
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 80.0))
         bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 80.0))
         hook.reset_mock()
@@ -1004,6 +1022,7 @@ class TestMilestoneConfirmWindow:
         state = _make_state()
         clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
         monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
         _tick_pair(bus, state, 80.0, 80.0)
         types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
         assert "PROFIT_MILESTONE_HIT" not in types
@@ -1035,6 +1054,7 @@ class TestMilestoneConfirmWindow:
         state = _make_state()
         clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
         monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
         _tick_pair(bus, state, 80.0, 80.0)
         _tick_pair(bus, state, 86.0, 86.0)
         clock["now"] = datetime(2026, 5, 5, 11, 0, 2)
@@ -1064,6 +1084,7 @@ class TestMilestoneConfirmWindow:
         state = _make_state()
         clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
         monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
         _tick_pair(bus, state, 80.0, 80.0)
         _tick_pair(bus, state, 86.0, 86.0)
         assert notifier.notify.call_count == 0
@@ -1088,6 +1109,7 @@ class TestMilestoneConfirmWindow:
         state = _make_state()
         clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
         monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
         _tick_pair(bus, state, 80.0, 80.0)
         _tick_pair(bus, state, 86.0, 86.0)
         assert notifier.notify.call_count == 0
@@ -1100,11 +1122,50 @@ class TestMilestoneConfirmWindow:
         body = notifier.notify.call_args.kwargs.get("body") or ""
         assert "confirm skipped" in body
 
-    def test_giveback_floors_at_estimated_charges_on_every_peak(self, mocker):
+    def test_sell_line_floored_at_charges_then_trails(self, mocker):
         mocker.patch.dict(
             "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
             {"profit_milestone_alert": {
                 "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 0,
+                "charges_buffer_rs": 50,
+            }},
+            clear=False,
+        )
+        state = _make_state()
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        # Premium 10k → 5% = 500. Charges+buffer = 1850 → giveback = 1850.
+        # Peak 2000 (ltp 80) → raw line 150 → floored to 1850. MTM 2000 > 1850.
+        monitor._estimated_close_charges_rs = lambda _state: 1800.0
+        _tick_pair(bus, state, 80.0, 80.0)
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "PROFIT_MILESTONE_HIT" not in types
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(1850.0)
+
+        # Still above floor: ltp 81 → MTM 1900 > 1850
+        _tick_pair(bus, state, 81.0, 81.0)
+        assert "PROFIT_MILESTONE_HIT" not in [
+            c.kwargs.get("notif_type") for c in notifier.notify.call_args_list
+        ]
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(1850.0)
+
+        # New peak 4000 → raw line 2150 → above floor → trails at 2150
+        _tick_pair(bus, state, 60.0, 60.0)
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(2150.0)
+
+        notifier.reset_mock()
+        # Drop through trailing line: ltp 80 → MTM 2000 ≤ 2150
+        _tick_pair(bus, state, 80.0, 80.0)
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "PROFIT_MILESTONE_HIT"
+
+    def test_drop_below_charges_floor_fires(self, mocker):
+        """Once armed, MTM ≤ charges floor triggers even if peak−giveback is lower."""
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 0,
+                "charges_buffer_rs": 50,
             }},
             clear=False,
         )
@@ -1112,21 +1173,10 @@ class TestMilestoneConfirmWindow:
         clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
         monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
         monitor._estimated_close_charges_rs = lambda _state: 1800.0
-        _tick_pair(bus, state, 80.0, 80.0)
-        # Peak 2000. 5% = 500. Floor = 1800 + 50 buffer = 1850, line = 150.
-        _tick_pair(bus, state, 86.0, 86.0)
-        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
-        assert "PROFIT_MILESTONE_HIT" not in types
-        assert captured[-1].get("profit_milestone_line") == pytest.approx(150.0)
-
-        # New peak 3000 — same 1850 giveback. Line = 1150.
-        _tick_pair(bus, state, 70.0, 70.0)
-        assert captured[-1].get("profit_milestone_line") == pytest.approx(1150.0)
-        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
-        assert "PROFIT_MILESTONE_HIT" not in types
-
+        _tick_pair(bus, state, 80.0, 80.0)  # peak 2000, line floored 1850
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(1850.0)
         notifier.reset_mock()
-        _tick_pair(bus, state, 89.0, 89.0)
+        _tick_pair(bus, state, 86.0, 86.0)  # MTM 1400 ≤ 1850
         assert notifier.notify.call_count == 1
         assert notifier.notify.call_args.kwargs["notif_type"] == "PROFIT_MILESTONE_HIT"
 

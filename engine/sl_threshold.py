@@ -130,11 +130,10 @@ def loss_milestone_rs(*, investment_rs: float) -> Tuple[float, float]:
 def profit_milestone_config() -> Dict[str, Any]:
     """Resolved profit-milestone knobs from STRATEGY_CONFIG.
 
-    Independent of ``loss_milestone_alert``. Giveback is ``pct_of_premium`` of
-    entry premium, measured from the trade's peak MTM once that peak is at
-    least the giveback amount. Giveback is
-    ``max(pct of premium, estimated charges + charges_buffer_rs)`` on every
-    peak (``charges_buffer_rs`` default 50).
+    Independent of ``loss_milestone_alert``. Giveback is
+    ``max(pct of premium, estimated charges + charges_buffer_rs)``.
+    Sell line = peak − giveback, floored at charges + buffer so the line
+    never sits below brokerage. Line ratchets up with new peaks.
     """
     raw = STRATEGY_CONFIG.get("profit_milestone_alert") or {}
     enabled = bool(raw.get("enabled", False))
@@ -168,7 +167,7 @@ def profit_milestone_config() -> Dict[str, Any]:
 
 
 def _charges_buffer_rs(raw: dict, *, default: float = 50.0) -> float:
-    """Extra rupees on estimated charges when flooring profit-milestone giveback."""
+    """Extra rupees on estimated charges for giveback / sell-line floor."""
     if "charges_buffer_rs" not in raw:
         return default
     try:
@@ -181,8 +180,8 @@ def profit_milestone_rs(*, investment_rs: float, charges_rs: float = 0.0) -> Tup
     """Return (giveback_rs, pct_of_premium) when enabled; else (0.0, pct).
 
     Giveback is ``pct_of_premium`` of entry premium, but never smaller than
-    estimated round-trip charges + ``charges_buffer_rs``. Same rupee giveback
-    is used at every peak.
+    estimated round-trip charges + ``charges_buffer_rs``. Used as the
+    distance below peak for the trailing sell line.
     """
     cfg = profit_milestone_config()
     pct = cfg["pct_of_premium"]
@@ -195,6 +194,16 @@ def profit_milestone_rs(*, investment_rs: float, charges_rs: float = 0.0) -> Tup
         charges = 0.0
     floor = charges + float(cfg.get("charges_buffer_rs") or 0.0)
     return max(configured, floor), pct
+
+
+def profit_milestone_charges_floor_rs(*, charges_rs: float = 0.0) -> float:
+    """Estimated charges + ``charges_buffer_rs`` — minimum sell-line level."""
+    cfg = profit_milestone_config()
+    try:
+        charges = max(0.0, float(charges_rs or 0.0))
+    except (TypeError, ValueError):
+        charges = 0.0
+    return charges + float(cfg.get("charges_buffer_rs") or 0.0)
 
 
 def profit_pct_auto_close_config() -> Dict[str, Any]:
@@ -229,15 +238,25 @@ def profit_pct_auto_close_rs(*, investment_rs: float) -> Tuple[float, float]:
 
 
 def profit_milestone_line_rs(
-    *, peak_rs: Optional[float], giveback_rs: float,
+    *,
+    peak_rs: Optional[float],
+    giveback_rs: float,
+    min_line_rs: float = 0.0,
 ) -> Optional[float]:
-    """Sell-at MTM once peak is a real profit (peak ≥ giveback). Else None.
+    """Trailing sell line once peak ≥ giveback. Else None.
 
-    Line = peak − giveback and never goes negative. Ratchets only via peak.
+    Line = max(peak − giveback, min_line_rs) where ``min_line_rs`` is normally
+    charges + buffer. So the line trails with peak but never drops below
+    brokerage. Ratchets only via peak.
     """
     if giveback_rs <= 0 or peak_rs is None:
         return None
     peak = float(peak_rs)
-    if peak < giveback_rs:
+    giveback = float(giveback_rs)
+    if peak < giveback:
         return None
-    return peak - float(giveback_rs)
+    try:
+        floor = max(0.0, float(min_line_rs or 0.0))
+    except (TypeError, ValueError):
+        floor = 0.0
+    return max(peak - giveback, floor)

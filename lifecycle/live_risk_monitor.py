@@ -18,8 +18,9 @@ uses) and emits a notification when:
 * ``PROFIT_MILESTONE_HIT`` — giveback from peak MTM
   (``profit_milestone_alert``). SL is not shifted into profit. Auto-close
   lives in ``lifecycle.auto_execution`` when ``auto_close`` is on.
-  The sell line is that giveback below the peak at every new high
-  (``max(% of premium, estimated charges + charges_buffer_rs)``).
+  Sell line = peak − giveback, floored at charges + buffer
+  (``max(peak − giveback, charges + charges_buffer_rs)``); giveback itself
+  is ``max(% of premium, charges + buffer)``.
 * ``LOSS_LIMIT_HIT`` — current PnL crosses the strategy effective loss limit
   (``effective_sl_rs``). Alert only — no auto flatten. Loss-side only.
 * ``SL_TRIGGER`` — underlying spot crosses ``actual_stop_loss_level`` (when
@@ -90,6 +91,7 @@ from engine.sl_threshold import (
     effective_sl_rs,
     loss_milestone_config,
     loss_milestone_rs,
+    profit_milestone_charges_floor_rs,
     profit_milestone_config,
     profit_milestone_line_rs,
     profit_milestone_rs,
@@ -1098,8 +1100,11 @@ class LiveRiskMonitor:
         charges_rs = self._estimated_close_charges_rs(state)
         profit_giveback_rs, profit_ms_pct = profit_milestone_rs(
             investment_rs=investment, charges_rs=charges_rs)
+        charges_floor_rs = profit_milestone_charges_floor_rs(charges_rs=charges_rs)
         profit_line = profit_milestone_line_rs(
-            peak_rs=state.mtm_peak_rs, giveback_rs=profit_giveback_rs,
+            peak_rs=state.mtm_peak_rs,
+            giveback_rs=profit_giveback_rs,
+            min_line_rs=charges_floor_rs,
         )
         profit_pct_rs, profit_pct_val = profit_pct_auto_close_rs(
             investment_rs=investment,
@@ -1253,7 +1258,8 @@ class LiveRiskMonitor:
             )
 
         # 1b. Profit milestone — giveback from peak (independent of loss SL).
-        # Giveback is max(% of premium, estimated charges + buffer) at every peak.
+        # Giveback = max(% of premium, charges + buffer). Sell line =
+        # max(peak − giveback, charges + buffer) so it never sits below brokerage.
         if profit_in_zone:
             if not profit_ready:
                 return None, mtm_payload, trailing_persist, snapshot_payload

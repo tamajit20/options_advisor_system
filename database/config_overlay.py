@@ -161,15 +161,13 @@ _DESCRIPTIONS: Dict[str, str] = {
         "before auto-close. Legacy key pct_of_max_loss is still read if "
         "pct_of_premium is omitted.",
     "profit_milestone_alert":
-        "Auto-close to protect a winner: once peak MTM ≥ pct_of_premium % of "
-        "entry premium, sell if MTM gives back that amount from the peak "
-        "(line only ratchets up). SL stays on the loss side. Same JSON shape "
-        "as loss_milestone_alert including confirm_seconds. Independent percent. "
-        "confirm_seconds (default 15) waits that long at the sell line. If MTM "
-        "hits ₹0 or a loss during confirm, close immediately. Giveback is "
+        "Auto-close to protect a winner: once peak MTM ≥ giveback, sell if MTM "
+        "stays ≤ sell line for confirm_seconds (default 15). Giveback = "
         "max(pct_of_premium of entry premium, estimated charges + "
-        "charges_buffer_rs) at every peak. charges_buffer_rs (default 50) "
-        "covers estimate error vs the real contract note.",
+        "charges_buffer_rs). Sell line = max(peak − giveback, charges + "
+        "charges_buffer_rs) — trails with peak but never below brokerage. "
+        "If MTM hits ₹0 or a loss during confirm, close immediately. SL stays "
+        "on the loss side. charges_buffer_rs (default 50) covers estimate error.",
     "profit_pct_auto_close":
         "Hard profit take: {enabled, pct_of_premium}. When MTM profit reaches "
         "that % of entry premium, auto-close immediately (no confirm window). "

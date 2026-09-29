@@ -831,8 +831,9 @@ STRATEGY_CONFIG = {
     # auto_close flattens Zerodha trades on Kite / books manual at live LTP.
     # confirm_seconds waits that long at the sell line (wick filter).
     # If MTM hits ₹0 or a loss during the wait, close immediately.
-    # Giveback is max(pct of premium, estimated charges + charges_buffer_rs)
-    # at every peak. charges_buffer_rs covers estimate error (default ₹50).
+    # Giveback is max(pct of premium, estimated charges + charges_buffer_rs).
+    # Sell line = max(peak − giveback, charges + charges_buffer_rs) so it
+    # never displays/triggers below brokerage. charges_buffer_rs default ₹50.
     "profit_milestone_alert": {
         "enabled": True,
         "pct_of_premium": 5.0,

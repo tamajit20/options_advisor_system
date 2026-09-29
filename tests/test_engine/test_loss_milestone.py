@@ -156,8 +156,28 @@ class TestProfitMilestoneThreshold:
         assert profit_milestone_line_rs(peak_rs=400.0, giveback_rs=400.0) == pytest.approx(0.0)
         assert profit_milestone_line_rs(peak_rs=2000.0, giveback_rs=400.0) == pytest.approx(1600.0)
 
+    def test_sell_line_floored_at_charges(self):
+        # peak − giveback = 12, but floor 215 → show/trigger at 215.
+        assert profit_milestone_line_rs(
+            peak_rs=272.0, giveback_rs=260.0, min_line_rs=215.0,
+        ) == pytest.approx(215.0)
+        # Trailing above floor wins.
+        assert profit_milestone_line_rs(
+            peak_rs=2000.0, giveback_rs=260.0, min_line_rs=215.0,
+        ) == pytest.approx(1740.0)
+
     def test_line_none_when_giveback_zero(self):
         assert profit_milestone_line_rs(peak_rs=2000.0, giveback_rs=0.0) is None
+
+    def test_charges_floor_helper(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "charges_buffer_rs": 50,
+            }},
+        ):
+            from engine.sl_threshold import profit_milestone_charges_floor_rs
+            assert profit_milestone_charges_floor_rs(charges_rs=135.0) == pytest.approx(185.0)
 
     def test_auto_close_defaults_true(self):
         with patch(

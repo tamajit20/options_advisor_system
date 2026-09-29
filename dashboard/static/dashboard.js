@@ -208,10 +208,16 @@ function _zerodhaBtnTitle(fallback, requireLiveGate) {
   return escapeHtml(_zerodhaExecuteDisabledReason(requireLiveGate) || fallback);
 }
 
+function _tradeDetailRow(apiResp) {
+  if (!apiResp) return null;
+  return apiResp.trade != null ? apiResp.trade : apiResp;
+}
+
 function tradeExecutionChannel(t) {
   // Prefer server enrichment (opening Kite fills only). Never treat
   // execution_provider stamp alone as Zerodha — that caused paper→EXIT losses.
-  if (t?.execution_channel) return t.execution_channel;
+  const row = _tradeDetailRow(t) || t;
+  if (row?.execution_channel) return row.execution_channel;
   return 'manual';
 }
 
@@ -1435,20 +1441,20 @@ function _updateLiveProfitLevels(tradeId, payload) {
         if (lineNote) {
           const premRs = parseFloat(section.dataset.premiumRs);
           const chargesRs = thresholds && thresholds.chargesRs;
-          lineNote.textContent = `Auto-closes giveback from peak \u20b9${fmt(peakRs)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}`;
+          lineNote.textContent = `Auto-closes if MTM \u2264 sell line \u20b9${fmt(profitLine)} (peak \u20b9${fmt(peakRs)})${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}`;
         }
       } else {
         const premRs = parseFloat(section.dataset.premiumRs);
         const chargesRs = thresholds && thresholds.chargesRs;
-        const giveback = profitMilestoneGivebackRs(
-          (!isNaN(premRs) && premRs > 0) ? premRs : null,
-          chargesRs,
-        );
         lineEl.textContent = 'Not armed';
         lineEl.classList.add('muted');
         if (lineNote) {
+          const giveback = profitMilestoneGivebackRs(
+            (!isNaN(premRs) && premRs > 0) ? premRs : null,
+            chargesRs,
+          );
           lineNote.textContent = giveback != null
-            ? `Arms after profit \u2265 \u20b9${fmt(giveback)}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}`
+            ? `Arms after peak profit \u2265 \u20b9${fmt(giveback)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}`
             : 'Profit-side auto-close from peak MTM';
         }
       }
@@ -2034,7 +2040,7 @@ const TERM_HELP = {
   },
   profit_milestone: {
     label: 'Profit milestone',
-    html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner after the confirm window (default 15s). If profit falls to breakeven or a loss during the wait, it closes immediately. After peak MTM reaches the giveback (your % of entry premium, or estimated charges plus a buffer if that is larger — same amount at every new peak), the sell line is that many rupees below the peak and only moves up. Hard SL stays on the loss side.',
+    html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner after the confirm window (default 15s). If profit falls to breakeven or a loss during the wait, it closes immediately. Giveback from peak is max(% of entry premium, estimated charges + buffer). Sell line = peak − giveback, but never below charges + buffer. Hard SL stays on the loss side.',
   },
   profit_pct_auto_close: {
     label: 'Profit % auto-close',
@@ -2058,7 +2064,7 @@ const TERM_HELP = {
   },
   live_profit_levels: {
     label: 'Live profit levels',
-    html: '<strong>Live profit levels</strong> — MTM-based exit rails: target, profit milestone (giveback from peak), loss milestone, and loss limit. Breaches show here and send notifications.',
+    html: '<strong>Live profit levels</strong> — MTM-based exit rails: target, profit milestone (giveback from peak, floored at charges), loss milestone, and loss limit. Breaches show here and send notifications.',
   },
   pop: {
     label: 'PoP',
@@ -3424,34 +3430,43 @@ function profitMilestoneChargesBufferRs() {
   return n;
 }
 
+function profitMilestoneChargesFloorRs(chargesRs) {
+  const charges = parseFloat(chargesRs);
+  const buffer = profitMilestoneChargesBufferRs();
+  if (!isNaN(charges) && charges > 0) return charges + buffer;
+  return buffer;
+}
+
 function profitMilestoneGivebackRs(investmentRs, chargesRs) {
   if (!profitMilestoneEnabled() || investmentRs == null || investmentRs <= 0) return null;
   const pct = profitMilestonePct();
   if (pct == null) return null;
   const configured = investmentRs * (pct / 100);
-  const charges = parseFloat(chargesRs);
-  const buffer = profitMilestoneChargesBufferRs();
-  const floor = (!isNaN(charges) && charges > 0) ? (charges + buffer) : buffer;
+  const floor = profitMilestoneChargesFloorRs(chargesRs);
   return Math.max(configured, floor);
 }
 
 function profitMilestoneLineRs(peakRs, investmentRs, chargesRs) {
   const giveback = profitMilestoneGivebackRs(investmentRs, chargesRs);
   if (giveback == null || peakRs == null || isNaN(peakRs) || peakRs < giveback) return null;
-  return peakRs - giveback;
+  const floor = profitMilestoneChargesFloorRs(chargesRs);
+  return Math.max(peakRs - giveback, floor);
 }
 
 function profitMilestoneGivebackFloorNote(investmentRs, chargesRs) {
   const configuredPct = profitMilestonePct();
-  const lock = profitMilestoneGivebackRs(investmentRs, chargesRs);
-  if (lock == null || configuredPct == null) return '';
+  const giveback = profitMilestoneGivebackRs(investmentRs, chargesRs);
+  if (giveback == null || configuredPct == null) return '';
   const configured = investmentRs * (configuredPct / 100);
   const charges = parseFloat(chargesRs);
   const buffer = profitMilestoneChargesBufferRs();
-  if (!isNaN(charges) && charges > 0 && lock > configured) {
-    return ` \u00b7 giveback \u20b9${fmt(lock)} (est. charges \u20b9${fmt(charges)} + \u20b9${fmt(buffer)} buffer)`;
+  if (!isNaN(charges) && charges > 0 && giveback > configured) {
+    return ` \u00b7 giveback \u20b9${fmt(giveback)} (est. charges \u20b9${fmt(charges)} + \u20b9${fmt(buffer)} buffer); sell line floored at charges`;
   }
-  return '';
+  if (giveback > configured) {
+    return ` \u00b7 giveback \u20b9${fmt(giveback)} (charges buffer floor); sell line floored at charges`;
+  }
+  return ` \u00b7 giveback \u20b9${fmt(giveback)} (${configuredPct}% of premium); sell line floored at charges`;
 }
 
 function slExitPlanText(strategy, maxLossRs) {
@@ -3601,12 +3616,12 @@ function renderLiveProfitLevels(t) {
     profitMsNote = 'Enable profit_milestone_alert to auto-close on giveback from peak';
   } else if (profitLine != null) {
     profitMsValHtml = `<span class="lpl-val live-profit-ms-val">\u20b9${fmt(profitLine)}</span>`;
-    profitMsNote = `Auto-closes \u20b9${fmt(givebackRs)} below peak \u20b9${fmt(peakRs)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}`;
+    profitMsNote = `Auto-closes if MTM \u2264 sell line \u20b9${fmt(profitLine)} (peak \u20b9${fmt(peakRs)})${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}`;
   } else {
     profitMsValHtml = `<span class="lpl-val muted live-profit-ms-val">Not armed</span>`;
     profitMsNote = givebackRs != null
-      ? `Arms after profit \u2265 \u20b9${fmt(givebackRs)}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}`
-      : 'Arms after a real profit vs entry premium';
+      ? `Arms after peak profit \u2265 \u20b9${fmt(givebackRs)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}`
+      : 'Arms after peak reaches the giveback level';
   }
 
   const targetNote = profitTargetNote(strat, dte, mp, entryCredit);
@@ -4183,7 +4198,7 @@ function _computeTradeActionInstruction(opts) {
       verb: 'AUTO-CLOSE',
       title: 'Profit milestone hit — closing to keep the gain',
       instruction: pct != null && premRs
-        ? `Configured profit milestone (${Math.round(pct)}% of ${premLbl} \u20b9${fmt(premRs)} giveback from peak). `
+        ? `Configured profit milestone (${Math.round(pct)}% of ${premLbl} \u20b9${fmt(premRs)} giveback from peak, sell line floored at charges). `
           + 'The system is flattening this on Zerodha, or booking the close at live prices for a manual trade.'
         : 'Profit-side giveback from peak reached. Auto-closing now.',
       why: liveMtm != null && profitLine != null
@@ -7410,7 +7425,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     if (!data.legs.length) {
       content.innerHTML = '<div class="muted">No executed legs found.</div>'; return;
     }
-    const brokerChannel = tradeExecutionChannel(tradeMeta || {});
+    const brokerChannel = tradeExecutionChannel(tradeMeta);
     const showZerodhaClose = brokerChannel === 'zerodha';
     const liveLtps = (snap.trades && snap.trades[tradeId] && snap.trades[tradeId].leg_ltps) || {};
     const marketOpen = _inMarketHours();
@@ -7750,7 +7765,7 @@ async function submitClose(tradeId, panel) {
   // Belt-and-suspenders: Zerodha-channel trades must use Close in Zerodha.
   try {
     const meta = await API(`/api/trades/${tradeId}`).catch(() => null);
-    if (tradeExecutionChannel(meta || {}) === 'zerodha') {
+    if (tradeExecutionChannel(meta) === 'zerodha') {
       toast('This is a Zerodha trade — use Close in Zerodha so orders hit Kite', 'warn');
       return;
     }
