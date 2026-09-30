@@ -606,7 +606,7 @@ Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), no
 
 **Suggestions tab — Run live engine:** same `live_suggestion_engine` job as the hourly 10–14 IST scheduler / Jobs tab. POSTs `/api/jobs/live_suggestion_engine/trigger` (no weekday-backfill confirm). Jobs SSE stays connected on every tab and reloads Suggestions plus the Jobs grid when the run finishes — no browser refresh.
 
-**Suggestion gates:** HARD / SOFT / ADVISORY pass counts sit on the Gates & warnings header (`hard 3/3`, `soft 6/9`, …). Click the header to expand or collapse the table. Opens when any fail/soft/warn is present. The same issues also appear as **Before you place** above Place orders. Demo card: `python scripts/seed_gates_review_suggestion.py` → `SUG-GATES-REVIEW`.
+**Before you place** (above Place orders) is the single review surface: (1) blocks placing, (2) Zerodha & funds, (3) expandable **Gates** table with **Show only failed** (default on). Only **HARD FAIL** hides a card. Demo: `python scripts/seed_gates_review_suggestion.py` → `SUG-GATES-REVIEW`.
 
 **Live execution checks:** stale chain / strike buffer / scenario vetoes show as a **warning** with the exact reasons on the suggestion card; **Place orders in Zerodha** stays enabled (operator confirms). Only the daily P&L **circuit breaker** still hard-blocks broker place.
 

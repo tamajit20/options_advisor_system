@@ -76,8 +76,6 @@ def _conditions() -> list[dict]:
          "detail": "IV Rank 28 ≥ floor with sideways tape"},
         {"label": "Long-vol IV/HV", "status": "SOFT_FAIL", "kind": "SOFT",
          "detail": "IV/HV 0.91 above cheap ceiling — long vol edge weak"},
-        {"label": "Live execution checks", "status": "SOFT_FAIL", "kind": "ADVISORY",
-         "detail": "Demo: short strike within 0.4× EM of spot — Place orders stays available; review before confirming"},
     ]
 
 

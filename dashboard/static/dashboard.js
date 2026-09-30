@@ -186,21 +186,17 @@ function _refreshZerodhaExecButtons() {
 }
 
 function _updateZerodhaReadinessHints() {
-  // Hard disable reasons only (session / circuit). Soft live-check warnings
-  // are listed once in the Gates & warnings panel — do not repeat here.
+  // Place-time blocks / session live in Before you place — keep the old
+  // under-button hint hidden so warnings are not duplicated.
   $$('.zerodha-readiness-hint').forEach(el => {
-    const card = el.closest('.card[data-sug-id]');
-    const requireLiveGate = card?.dataset?.requireLiveGate === '1';
-    const hard = _zerodhaExecuteDisabledReason(requireLiveGate);
-    if (hard) {
-      el.hidden = false;
-      el.classList.remove('zerodha-readiness-hint--warn');
-      el.textContent = hard;
-      return;
-    }
     el.hidden = true;
-    el.classList.remove('zerodha-readiness-hint--warn');
     el.textContent = '';
+    el.classList.remove('zerodha-readiness-hint--warn');
+  });
+  $$('.card[data-sug-id][data-pre-place-wired]').forEach(card => refreshPrePlaceReview(card));
+  // Cards may not have the flag yet on first paint — still refresh any panel.
+  $$('.card[data-sug-id]').forEach(card => {
+    if (card.querySelector('[data-pre-place-review]')) refreshPrePlaceReview(card);
   });
 }
 
@@ -839,12 +835,23 @@ function _collectCardLotsForMargin(card) {
 function _applyZerodhaMarginToCard(card, preview) {
   const info = _formatZerodhaMarginOnCard(preview);
   if (!info) {
+    card.dataset.marginOk = '';
+    delete card.dataset.marginPeak;
+    delete card.dataset.marginAvail;
+    card.dataset.marginMessage = 'Zerodha Final / Peak unavailable';
     _setSuggestionMarginStatus(card, 'Zerodha Final / Peak unavailable', { warn: true });
+    refreshPrePlaceReview(card);
     return;
   }
   // Primary Amount needed = Kite Final (full structure) for every strategy.
   const amountRs = info.fin != null ? info.fin : info.peak;
   if (amountRs != null) _setSuggestionAmountNeeded(card, amountRs);
+  if (info.peak != null) card.dataset.marginPeak = String(info.peak);
+  if (preview.margin_available != null) card.dataset.marginAvail = String(preview.margin_available);
+  card.dataset.marginOk = info.blocked ? '0' : (preview.margin_ok === true ? '1' : '');
+  card.dataset.marginMessage = preview.margin_message
+    ? String(preview.margin_message)
+    : (info.blocked ? 'Not enough funds for peak margin + buffer' : '');
   const hint = card.querySelector('[data-econ-cap-hint]');
   if (hint) {
     hint.textContent = 'Zerodha Final (full basket). Peak below is the highest margin while placing legs; orders need Peak + buffer in available cash.';
@@ -859,6 +866,7 @@ function _applyZerodhaMarginToCard(card, preview) {
     compact.removeAttribute('hidden');
     compact.innerHTML = ` <span class="muted">(Peak \u20b9${fmt(info.peak)})</span>`;
   }
+  refreshPrePlaceReview(card);
 }
 
 async function _hydrateOneSuggestionZerodhaMargin(card) {
@@ -873,7 +881,9 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
     ? _zerodhaMarginQuoteDisabledReason()
     : '';
   if (blockedReason) {
+    card.dataset.marginMessage = blockedReason;
     _setSuggestionMarginStatus(card, blockedReason, { warn: true });
+    refreshPrePlaceReview(card);
     return;
   }
   const lots = _collectCardLotsForMargin(card);
@@ -886,6 +896,7 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
   }
   card.dataset.marginHydrated = 'pending';
   _setSuggestionMarginStatus(card, 'Fetching Zerodha Final / Peak\u2026');
+  refreshPrePlaceReview(card);
   try {
     const body = {};
     if (lots != null) body.lots = lots;
@@ -906,19 +917,23 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
     }
     card.dataset.marginHydrated = '0';
     delete card.dataset.marginFinal;
+    card.dataset.marginMessage = (prev?.preview?.margin_message) || 'Zerodha Final / Peak unavailable';
     _setSuggestionMarginStatus(
       card,
-      (prev?.preview?.margin_message) || 'Zerodha Final / Peak unavailable',
+      card.dataset.marginMessage,
       { warn: true },
     );
+    refreshPrePlaceReview(card);
   } catch (err) {
     card.dataset.marginHydrated = '0';
     delete card.dataset.marginFinal;
+    card.dataset.marginMessage = (err && err.message) ? String(err.message) : 'Zerodha Final / Peak unavailable';
     _setSuggestionMarginStatus(
       card,
-      (err && err.message) ? String(err.message) : 'Zerodha Final / Peak unavailable',
+      card.dataset.marginMessage,
       { warn: true },
     );
+    refreshPrePlaceReview(card);
   }
 }
 
@@ -5240,7 +5255,8 @@ function _extraGateWarningRows(s) {
   if (vs === 'STALE_0935' || vs === 'STALE_INTRADAY') {
     rows.push({
       label: 'Intraday validator',
-      status: 'FAIL',
+      // Advisory — does not hide the card (only HARD FAIL does).
+      status: 'SOFT_FAIL',
       kind: 'ADVISORY',
       detail: 'Re-priced after open and was no longer actionable (stale)',
     });
@@ -5284,8 +5300,20 @@ function collectAllGateRows(s) {
   return sortGatesForDisplay([...fromConf, ...mergedExtras]);
 }
 
-/** Non-pass rows an operator should scan before placing. */
-function collectPrePlaceIssues(s) {
+/** Suggestion rows kept so Before you place can refresh after margin/session updates. */
+const _suggestionById = Object.create(null);
+
+function rememberSuggestionForPrePlace(s) {
+  const id = s && s.suggestion_id;
+  if (id) _suggestionById[id] = s;
+}
+
+function _gateHidesSuggestionCard(c) {
+  return gateKindOf(c) === 'HARD' && (c.status === 'FAIL' || c.status === 'SOFT_FAIL');
+}
+
+/** Non-pass strategy-gate rows (confidence + folded extras). */
+function collectPrePlaceGateIssues(s) {
   return collectAllGateRows(s).filter(c => {
     const st = c.status || '';
     return st === 'FAIL' || st === 'SOFT_FAIL' || st === 'PASS_WARN' || st === 'PASS_ERROR';
@@ -5293,92 +5321,140 @@ function collectPrePlaceIssues(s) {
 }
 
 /**
- * Compact checklist above Place orders — same issues as Gates & warnings,
- * so nothing important lives only halfway up the card.
+ * Zerodha session / circuit / funds / live-check items for Before you place.
+ * ``card`` optional — when present, uses live margin hydrate state on the DOM.
  */
-function renderPrePlaceReview(s) {
-  const issues = collectPrePlaceIssues(s);
-  if (!issues.length) {
-    return `<div class="pre-place-review pre-place-review--ok" data-pre-place-review>
-      <div class="pre-place-head">
-        <strong>Before you place</strong>
-        <span class="tag tag-ok">No open warnings</span>
-      </div>
-      <p class="muted pre-place-note">All gates look clear. Still confirm size, prices, and amount needed.</p>
-    </div>`;
+function collectPrePlaceZerodhaItems(s, card) {
+  const items = [];
+  const requireLiveGate = suggestionCircuitBlocked(s)
+    || (card && card.dataset.requireLiveGate === '1');
+  const hard = _zerodhaExecuteDisabledReason(!!requireLiveGate);
+  if (hard) {
+    items.push({
+      section: 'blocks',
+      severity: 'block',
+      label: 'Cannot place in Zerodha',
+      detail: hard,
+    });
   }
-  const sid = escapeHtml(s.suggestion_id || '');
-  const nFail = issues.filter(c => c.status === 'FAIL').length;
-  const nSoft = issues.filter(c => c.status === 'SOFT_FAIL').length;
-  const nWarn = issues.filter(c => c.status === 'PASS_WARN' || c.status === 'PASS_ERROR').length;
-  const chips = [
-    nFail ? `<span class="tag tag-err">${nFail} fail</span>` : '',
-    nSoft ? `<span class="tag tag-warn">${nSoft} soft</span>` : '',
-    nWarn ? `<span class="tag tag-warn">${nWarn} warn</span>` : '',
-  ].filter(Boolean).join('');
-  const items = issues.map(c => {
-    const result = gateResultOf(c);
-    const plain = gateDetailPlainEnglish(c);
-    const resCls = result === 'FAIL' ? 'tag-err' : 'tag-warn';
-    return `<li class="pre-place-item">
-      <span class="tag ${resCls}">${escapeHtml(result)}</span>
-      <span class="pre-place-item-text">
-        <strong>${escapeHtml(c.label || 'Issue')}</strong>
-        <span class="muted"> — ${escapeHtml(plain.headline || plain.body || '')}</span>
-      </span>
-    </li>`;
-  }).join('');
-  return `<div class="pre-place-review pre-place-review--warn" data-pre-place-review>
-    <div class="pre-place-head">
-      <strong>Before you place</strong>
-      ${chips}
+  const liveWarn = _liveExecutionCheckWarning(s)
+    || (card && (card.dataset.liveGateWarning || '').trim());
+  if (liveWarn) {
+    items.push({
+      section: 'zerodha',
+      severity: 'warn',
+      label: 'Live execution checks',
+      detail: liveWarn,
+    });
+  }
+  if (card) {
+    const hydrated = card.dataset.marginHydrated;
+    const marginOk = card.dataset.marginOk;
+    const peak = card.dataset.marginPeak;
+    const fin = card.dataset.marginFinal;
+    const avail = card.dataset.marginAvail;
+    const marginMsg = (card.dataset.marginMessage || '').trim();
+    if (hydrated === 'pending') {
+      items.push({
+        section: 'zerodha',
+        severity: 'info',
+        label: 'Zerodha margin',
+        detail: 'Fetching Final / Peak / available cash\u2026',
+      });
+    } else if (marginOk === '0') {
+      const bits = [];
+      if (peak) bits.push(`Peak \u20b9${fmt(parseFloat(peak))}`);
+      if (fin) bits.push(`Final \u20b9${fmt(parseFloat(fin))}`);
+      if (avail) bits.push(`Available \u20b9${fmt(parseFloat(avail))}`);
+      items.push({
+        section: 'blocks',
+        severity: 'block',
+        label: 'Insufficient Zerodha funds',
+        detail: (bits.length ? bits.join(' \u00b7 ') + ' \u2014 ' : '')
+          + (marginMsg || 'Available cash does not cover peak margin + buffer'),
+      });
+    } else if (hydrated === '1' && (peak || fin || avail)) {
+      const bits = [];
+      if (fin) bits.push(`Final \u20b9${fmt(parseFloat(fin))}`);
+      if (peak) bits.push(`Peak \u20b9${fmt(parseFloat(peak))}`);
+      if (avail) bits.push(`Available \u20b9${fmt(parseFloat(avail))}`);
+      items.push({
+        section: 'zerodha',
+        severity: 'ok',
+        label: 'Zerodha funds',
+        detail: bits.join(' \u00b7 ') + (marginMsg ? ` \u2014 ${marginMsg}` : ' \u2014 covers peak'),
+      });
+    } else if (hydrated === '0' || marginMsg) {
+      items.push({
+        section: 'zerodha',
+        severity: 'warn',
+        label: 'Zerodha margin',
+        detail: marginMsg || 'Final / Peak quote unavailable — check session',
+      });
+    } else if (!_zerodhaMarginQuoteDisabledReason()) {
+      items.push({
+        section: 'zerodha',
+        severity: 'info',
+        label: 'Zerodha margin',
+        detail: 'Quote not loaded yet — will appear under Amount needed and here',
+      });
+    } else {
+      // Session/config already covered by hard block above when relevant.
+      const mReason = _zerodhaMarginQuoteDisabledReason();
+      if (mReason && !hard) {
+        items.push({
+          section: 'zerodha',
+          severity: 'warn',
+          label: 'Zerodha margin',
+          detail: mReason,
+        });
+      }
+    }
+  }
+  return items;
+}
+
+function _prePlaceItemHtml(item) {
+  const sev = item.severity || 'warn';
+  const tagCls = sev === 'block' || sev === 'fail' ? 'tag-err'
+    : sev === 'ok' ? 'tag-ok'
+    : sev === 'info' ? 'tag-muted'
+    : 'tag-warn';
+  const tag = item.tag || (sev === 'block' ? 'BLOCK'
+    : sev === 'fail' ? 'FAIL'
+    : sev === 'ok' ? 'OK'
+    : sev === 'info' ? 'INFO'
+    : 'WARN');
+  return `<li class="pre-place-item">
+    <span class="tag ${tagCls}">${escapeHtml(tag)}</span>
+    <span class="pre-place-item-text">
+      <strong>${escapeHtml(item.label || 'Issue')}</strong>
+      <span class="muted"> — ${escapeHtml(item.detail || '')}</span>
+    </span>
+  </li>`;
+}
+
+function _prePlaceSectionHtml(title, hint, items) {
+  if (!items.length) return '';
+  return `<div class="pre-place-section">
+    <div class="pre-place-section-title">${escapeHtml(title)}
+      ${hint ? `<span class="muted pre-place-section-hint">${escapeHtml(hint)}</span>` : ''}
     </div>
-    <ul class="pre-place-list">${items}</ul>
-    <p class="muted pre-place-note">
-      Same list as <a href="#conf-${sid}" class="pre-place-gates-link">Gates &amp; warnings</a> above
-      (Kind / Result table). Soft/advisory items do not lock Place orders — review, then confirm.
-    </p>
+    <ul class="pre-place-list">${items.map(_prePlaceItemHtml).join('')}</ul>
   </div>`;
 }
 
-/** One panel: every gate + warning (Kind · Result · Gate · Detail). */
-function renderGatesAndWarningsPanel(s) {
-  const checks = collectAllGateRows(s);
-  if (!checks.length) return '';
+function _gateIsIssue(c) {
+  const st = c.status || '';
+  return st === 'FAIL' || st === 'SOFT_FAIL' || st === 'PASS_WARN' || st === 'PASS_ERROR';
+}
 
+/** Kind/Result table rows for the Before you place gates subsection. */
+function renderGatesTableRowsHtml(checks) {
   const STATUS_CLASS = { PASS: 'conf-pass', FAIL: 'conf-fail', SOFT_FAIL: 'conf-soft-fail', PASS_WARN: 'conf-warn', PASS_ERROR: 'conf-error' };
   const RESULT_CLASS = { PASS: 'gate-res-pass', FAIL: 'gate-res-fail', WARN: 'gate-res-warn', ERROR: 'gate-res-error' };
   const KIND_CLASS   = { HARD: 'gate-kind-hard', SOFT: 'gate-kind-soft', ADVISORY: 'gate-kind-adv' };
-
-  const nFail     = checks.filter(c => c.status === 'FAIL').length;
-  const nSoftFail = checks.filter(c => c.status === 'SOFT_FAIL').length;
-  const nWarn     = checks.filter(c => c.status === 'PASS_WARN').length;
-  const nError    = checks.filter(c => c.status === 'PASS_ERROR').length;
-  const kindCounts = gateKindCounts(checks);
-  const sid       = escapeHtml(s.suggestion_id || Math.random().toString(36).slice(2));
-  const strategy  = s.strategy || '';
-  const softTotal = softTotalGates();
-  const softMin   = softMinForStrategy(strategy);
-  const softMaxFail = Math.max(0, softTotal - softMin);
-
-  const countChips = ['HARD', 'SOFT', 'ADVISORY'].map(kind => {
-    const { passed: kp, total: kt } = kindCounts[kind];
-    if (!kt) return '';
-    const cls = KIND_CLASS[kind] || '';
-    const label = kind === 'HARD' ? 'hard' : kind === 'SOFT' ? 'soft' : 'advisory';
-    return `<span class="gate-kind-badge ${cls}">${label} ${kp}/${kt}</span>`;
-  }).join('');
-
-  const rulesHtml = `<div class="gates-rules-box">
-    <div class="gates-rules-title">How gating works on this card</div>
-    <ul class="gates-rules-list">
-      <li><strong>HARD</strong> — ATM liquidity (and similar). One fail blocks the card.</li>
-      <li><strong>SOFT</strong> — the ${softTotal} counted gates. Need ≥${softMin} for ${escapeHtml(strategy || 'this strategy')} (up to ${softMaxFail} miss${softMaxFail === 1 ? '' : 'es'}).</li>
-      <li><strong>ADVISORY</strong> — extra rows (event, traj, quiet tape, long-vol notes). Not in the ${softMin}-of-${softTotal} vote. Quiet tape still demotes expansion picks in the selector.</li>
-    </ul>
-  </div>`;
-
-  const rows = checks.map(c => {
+  return checks.map(c => {
     const kind   = gateKindOf(c);
     const result = gateResultOf(c);
     const rowClass = STATUS_CLASS[c.status] || 'conf-pass';
@@ -5402,7 +5478,8 @@ function renderGatesAndWarningsPanel(s) {
     const helpIcon =
       `<span class="term-help" tabindex="0" role="button" aria-label="Explain: ${escapeHtml(c.label || 'gate')}">` +
       `\u24d8<span class="term-help-popup">${helpPopup}</span></span>`;
-    return `<tr class="conf-check-row ${rowClass}">
+    const issue = _gateIsIssue(c) ? '1' : '0';
+    return `<tr class="conf-check-row ${rowClass}" data-gate-issue="${issue}">
       <td class="gate-col-kind"><span class="gate-kind-badge ${KIND_CLASS[kind]}">${kind}</span></td>
       <td class="gate-col-result"><span class="gate-res-badge ${RESULT_CLASS[result] || ''}">${result}</span></td>
       <td class="conf-label gate-col-cond">
@@ -5412,33 +5489,186 @@ function renderGatesAndWarningsPanel(s) {
       <td class="conf-detail gate-col-detail">${detailHtml}</td>
     </tr>`;
   }).join('');
-
-  const hasIssues = nFail > 0 || nSoftFail > 0 || nWarn > 0 || nError > 0;
-  const titleCls = hasIssues ? 'conf-checks-title conf-checks-title--warn' : 'conf-checks-title';
-  // Open when anything needs review (not only HARD fails).
-  const startOpen = hasIssues ? ' open' : '';
-
-  return `<details class="conf-checks-panel gates-warnings-panel" id="conf-${sid}"${startOpen}>
-    <summary class="${titleCls} gates-summary">
-      <span class="gates-summary-label">Gates &amp; warnings</span>
-      <span class="gates-kind-counts">${countChips}</span>
-    </summary>
-    <div class="gates-panel-body">
-    ${rulesHtml}
-    <table class="conf-checks-table">
-      <thead><tr>
-        <th>Kind</th>
-        <th>Result</th>
-        <th>Condition</th>
-        <th>What this means</th>
-      </tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-    </div>
-  </details>`;
 }
 
-/** @deprecated alias — use renderGatesAndWarningsPanel */
+function _applyPrePlaceGatesFilter(panel, onlyFailed) {
+  if (!panel) return;
+  panel.querySelectorAll('tr.conf-check-row[data-gate-issue]').forEach(tr => {
+    const issue = tr.dataset.gateIssue === '1';
+    tr.hidden = !!(onlyFailed && !issue);
+  });
+  const empty = panel.querySelector('[data-gates-empty]');
+  if (empty) {
+    const visible = [...panel.querySelectorAll('tr.conf-check-row[data-gate-issue]')]
+      .some(tr => !tr.hidden);
+    empty.hidden = visible;
+  }
+}
+
+function wirePrePlaceReview(root) {
+  const panel = root?.matches?.('[data-pre-place-review]')
+    ? root
+    : root?.querySelector?.('[data-pre-place-review]');
+  if (!panel || panel.dataset.wired === '1') return;
+  panel.dataset.wired = '1';
+  const cb = panel.querySelector('[data-gates-only-failed]');
+  const details = panel.querySelector('details.pre-place-gates');
+  if (cb) {
+    _applyPrePlaceGatesFilter(panel, cb.checked);
+    cb.addEventListener('change', () => {
+      _applyPrePlaceGatesFilter(panel, cb.checked);
+    });
+  }
+  if (typeof wireTermHelpToggle === 'function') {
+    wireTermHelpToggle(panel);
+  }
+  // Preserve open + checkbox across margin refreshes via dataset on card.
+  const card = panel.closest('.card[data-sug-id]');
+  if (details && card) {
+    details.addEventListener('toggle', () => {
+      card.dataset.prePlaceGatesOpen = details.open ? '1' : '0';
+    });
+  }
+  if (cb && card) {
+    cb.addEventListener('change', () => {
+      card.dataset.prePlaceGatesOnlyFailed = cb.checked ? '1' : '0';
+    });
+  }
+}
+
+/**
+ * One place for place-time review: blocks, Zerodha/funds, then gates (expandable).
+ */
+function renderPrePlaceReview(s, card) {
+  rememberSuggestionForPrePlace(s);
+  const sid = escapeHtml(s.suggestion_id || '');
+  const zItems = collectPrePlaceZerodhaItems(s, card || null);
+  const blocks = zItems.filter(i => i.section === 'blocks');
+  const zerodha = zItems.filter(i => i.section === 'zerodha');
+  const allGates = collectAllGateRows(s);
+  const gateIssues = allGates.filter(_gateIsIssue);
+  const hardHides = gateIssues.filter(_gateHidesSuggestionCard);
+  hardHides.forEach(c => {
+    const plain = gateDetailPlainEnglish(c);
+    blocks.unshift({
+      section: 'blocks',
+      severity: 'block',
+      tag: 'HARD',
+      label: c.label || 'Hard gate',
+      detail: plain.headline || plain.body || 'This would normally hide the suggestion',
+    });
+  });
+
+  const nBlock = blocks.length;
+  const nZ = zerodha.filter(i => i.severity !== 'ok' && i.severity !== 'info').length;
+  const nGateIssues = gateIssues.filter(c => !_gateHidesSuggestionCard(c)).length;
+  const hasProblem = nBlock > 0 || nZ > 0 || nGateIssues > 0;
+  const chips = [
+    nBlock ? `<span class="tag tag-err">${nBlock} block</span>` : '',
+    nZ ? `<span class="tag tag-warn">${nZ} Zerodha</span>` : '',
+    nGateIssues ? `<span class="tag tag-warn">${nGateIssues} gate</span>` : '',
+  ].filter(Boolean).join('');
+
+  const kindCounts = gateKindCounts(allGates);
+  const KIND_CLASS = { HARD: 'gate-kind-hard', SOFT: 'gate-kind-soft', ADVISORY: 'gate-kind-adv' };
+  const countChips = ['HARD', 'SOFT', 'ADVISORY'].map(kind => {
+    const { passed: kp, total: kt } = kindCounts[kind];
+    if (!kt) return '';
+    const label = kind === 'HARD' ? 'hard' : kind === 'SOFT' ? 'soft' : 'advisory';
+    return `<span class="gate-kind-badge ${KIND_CLASS[kind]}">${label} ${kp}/${kt}</span>`;
+  }).join('');
+
+  const strategy = s.strategy || '';
+  const softTotal = softTotalGates();
+  const softMin = softMinForStrategy(strategy);
+  const softMaxFail = Math.max(0, softTotal - softMin);
+  const onlyFailedDefault = !(card && card.dataset.prePlaceGatesOnlyFailed === '0');
+  const gatesOpen = (card && card.dataset.prePlaceGatesOpen === '1')
+    || (!(card && card.dataset.prePlaceGatesOpen === '0') && nGateIssues > 0);
+  const rowsHtml = allGates.length ? renderGatesTableRowsHtml(allGates) : '';
+
+  const gatesSection = allGates.length ? `
+    <details class="pre-place-gates pre-place-section"${gatesOpen ? ' open' : ''}>
+      <summary class="pre-place-gates-summary">
+        <span class="pre-place-section-title" style="margin:0">Gates
+          <span class="muted pre-place-section-hint">Kind / Result — only HARD FAIL hides a card</span>
+        </span>
+        <span class="gates-kind-counts">${countChips}</span>
+      </summary>
+      <div class="pre-place-gates-body">
+        <label class="pre-place-gates-filter">
+          <input type="checkbox" data-gates-only-failed${onlyFailedDefault ? ' checked' : ''}>
+          Show only failed
+        </label>
+        <div class="gates-rules-box">
+          <div class="gates-rules-title">How gating works</div>
+          <ul class="gates-rules-list">
+            <li><strong>HARD</strong> — one fail hides / sit-outs the suggestion.</li>
+            <li><strong>SOFT</strong> — ${softTotal} counted gates; need ≥${softMin} for ${escapeHtml(strategy || 'this strategy')} (up to ${softMaxFail} miss${softMaxFail === 1 ? '' : 'es'}).</li>
+            <li><strong>ADVISORY</strong> — review only; never the sole reason to hide a card.</li>
+          </ul>
+        </div>
+        <table class="conf-checks-table">
+          <thead><tr>
+            <th>Kind</th><th>Result</th><th>Condition</th><th>What this means</th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <p class="muted pre-place-note" data-gates-empty hidden>No failed gates — uncheck &quot;Show only failed&quot; to see passes.</p>
+      </div>
+    </details>` : '';
+
+  const sections = [
+    _prePlaceSectionHtml(
+      'Blocks placing',
+      'Must clear before Zerodha Place orders works',
+      blocks,
+    ),
+    _prePlaceSectionHtml(
+      'Zerodha & funds',
+      'Session, live checks, Final / Peak / available cash',
+      zerodha,
+    ),
+    gatesSection,
+  ].join('');
+
+  return `<div class="pre-place-review ${hasProblem ? 'pre-place-review--warn' : 'pre-place-review--ok'}"
+       data-pre-place-review data-sug-id="${sid}">
+    <div class="pre-place-head">
+      <strong>Before you place</strong>
+      ${chips || '<span class="tag tag-ok">Clear</span>'}
+    </div>
+    ${sections || '<p class="muted pre-place-note">Nothing to review. Confirm size, prices, and Amount needed.</p>'}
+  </div>`;
+}
+
+/** Rebuild Before you place after margin/session changes (keeps subsections live). */
+function refreshPrePlaceReview(card) {
+  if (!card) return;
+  const sid = card.dataset.sugId;
+  const s = sid ? _suggestionById[sid] : null;
+  if (!s) return;
+  const host = card.querySelector('[data-pre-place-review]');
+  if (!host) return;
+  // Capture UI state before replace.
+  const prevDetails = host.querySelector('details.pre-place-gates');
+  const prevCb = host.querySelector('[data-gates-only-failed]');
+  if (prevDetails) card.dataset.prePlaceGatesOpen = prevDetails.open ? '1' : '0';
+  if (prevCb) card.dataset.prePlaceGatesOnlyFailed = prevCb.checked ? '1' : '0';
+  const wrap = document.createElement('div');
+  wrap.innerHTML = renderPrePlaceReview(s, card);
+  const next = wrap.firstElementChild;
+  if (!next) return;
+  host.replaceWith(next);
+  wirePrePlaceReview(next);
+}
+
+/** @deprecated — gates now live under Before you place only. */
+function renderGatesAndWarningsPanel(_s) {
+  return '';
+}
+
+/** @deprecated alias */
 function renderConfidenceChecks(s) {
   return renderGatesAndWarningsPanel(s);
 }
@@ -5484,7 +5714,7 @@ function renderPlainEnglishStructured(s) {
   }
   if (spot)               chips.push(`<span class="ctx-chip">Spot ₹${escapeHtml(spot)}</span>`);
   if (ivRank)             chips.push(`<span class="ctx-chip ctx-iv">IV Rank ${escapeHtml(ivRank)}%</span>`);
-  // Data provenance chip (facts only). Freshness warnings live in Gates & warnings.
+  // Data provenance chip (facts only). Freshness warnings live under Before you place.
   if (s.data_date) {
     const foIvDate  = s.data_date.slice(0, 10);
     const spotDate  = s.spot_data_date  ? s.spot_data_date.slice(0, 10)  : null;
@@ -5555,7 +5785,7 @@ function renderPlainEnglishStructured(s) {
               + `<0.8 → calls building faster (bullish positioning)`;
     chips.push(`<span class="${cls}" title="${escapeHtml(tip)}">OI\u0394 PCR ${escapeHtml(label)}</span>`);
   }
-  // Confidence / gate summary lives only in Gates & warnings panel (not as a chip).
+  // Confidence / gate summary lives only under Before you place (not as a chip).
   // Edge score (0-100) — composite quality blend; display + ranking only.
   if (s.edge_score != null) {
     const es = parseFloat(s.edge_score);
@@ -5721,8 +5951,8 @@ function renderPlainEnglishStructured(s) {
   const timelineHtml = tlRows
     ? `<div class="sug-section"><div class="sug-section-title">Timeline</div><div class="sug-timeline">${tlRows}</div></div>`
     : '';
-  const confHtml = renderGatesAndWarningsPanel(s);
-  return contextHtml + confHtml + introHtml + entryHtml + timelineHtml + renderExitPlan(s);
+  // Gates live only in Before you place (not duplicated here).
+  return contextHtml + introHtml + entryHtml + timelineHtml + renderExitPlan(s);
 }
 
 // Per-transaction (one-sided) charge estimate — each leg = 1 order, no assumed exit.
@@ -6440,7 +6670,7 @@ function _suggestionAlreadyExecuted(card) {
 
 /**
  * Status / hard-block banners only. Soft live checks, scenario notes, EM
- * calibration, etc. are shown once in Gates & warnings — not duplicated here.
+ * calibration, etc. live under Before you place — not duplicated here.
  */
 function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
   const status = (s.status || '').toUpperCase();
@@ -6479,6 +6709,7 @@ function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
 }
 
 function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader = false, expanded = false) {
+  rememberSuggestionForPrePlace(s);
   const isNoSug = s.strategy === 'NONE' || s.status === 'NO_SUGGESTION';
   if (isNoSug) {
     return renderSitOutCard(s);
@@ -6822,19 +7053,7 @@ function bindFlagResetButtons() {
 }
 
 function bindSuggestionActions() {
-  $$('.pre-place-gates-link').forEach(a => {
-    if (a.dataset.bound === '1') return;
-    a.dataset.bound = '1';
-    a.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      const id = (a.getAttribute('href') || '').replace(/^#/, '');
-      const panel = id ? document.getElementById(id) : null;
-      if (panel) {
-        panel.open = true;
-        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
-    });
-  });
+  $$('[data-pre-place-review]').forEach(el => wirePrePlaceReview(el));
   // Live recalc on every card. Triggers on:
   //   * exec-lots-input → shared order size (scales rupee totals)
   //   * data-leg-price  → shared per-leg price (shifts net credit; width is
