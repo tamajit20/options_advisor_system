@@ -4944,6 +4944,8 @@ const GATE_CONDITION_TIPS = [
   ['vix stable', 'India VIX should be stable or falling so premium decay is not fighting a vol spike.'],
   ['pcr in neutral', 'Put-call ratio in a neutral band — extreme PCR often means crowded positioning.'],
   ['oi walls', 'Visible open-interest walls give a rough range pin / support-resistance context.'],
+  ['today\'s tape', 'Same-day open vs spot plus nearby put/call OI walls. Directional picks sit out when tape disagrees or spot is within 1× EM of the opposing wall — no flip.'],
+  ['nearby oi wall', 'Same-day open vs spot plus nearby put/call OI walls. Directional picks sit out when tape disagrees or spot is within 1× EM of the opposing wall — no flip.'],
   ['trend identifiable', 'SMA / tape trend must be readable (bullish, bearish, or sideways) — MIXED sits out.'],
   ['iv premium vs realised', 'Implied vol vs 20-day realised (HV). High IV/HV favours selling; low favours buying.'],
   ['fii positioning', 'FII index futures positioning should not fight the effective trend hard.'],
@@ -5059,6 +5061,14 @@ function gateDetailPlainEnglish(c) {
       body = pcr
         ? `Put vs call positioning looks one-sided (ratio ${pcr}) — crowd may already be crowded.`
         : 'Put vs call positioning looks extreme — crowd risk.';
+    }
+  } else if (label.includes("today's tape") || label.includes('nearby oi wall')) {
+    if (/would sit out/i.test(detail)) {
+      body = 'Spot is close to an OI wall (within ~1 day expected move). A directional pick toward that wall would sit out — this card still shows for review.';
+    } else if (/skipped|n\/a \(no session/i.test(detail)) {
+      body = "No same-day session bar yet — today's tape check is skipped until the live bar is available.";
+    } else {
+      body = "Today's open-vs-spot tape and nearest OI walls are clear of the directional sit-out rule.";
     }
   } else if (label.includes('oi walls')) {
     if (/absent|cannot/i.test(detail)) {
@@ -5224,15 +5234,8 @@ function sortGatesForDisplay(checks) {
  */
 function _extraGateWarningRows(s) {
   const rows = [];
+  // Live execution checks live under Zerodha & funds (not duplicated in Gates).
   const liveWarn = _liveExecutionCheckWarning(s);
-  if (liveWarn) {
-    rows.push({
-      label: 'Live execution checks',
-      status: 'SOFT_FAIL',
-      kind: 'ADVISORY',
-      detail: liveWarn + ' — Place orders stays available; review before confirming',
-    });
-  }
   // Strategy veto only when not already covered by live execution_gate vetoes
   const veto = (s.strategy_veto || s.strategy_veto_reason || '').trim();
   if (veto && !liveWarn) {
@@ -5437,8 +5440,9 @@ function _prePlaceItemHtml(item) {
 function _prePlaceSectionHtml(title, hint, items) {
   if (!items.length) return '';
   return `<div class="pre-place-section">
-    <div class="pre-place-section-title">${escapeHtml(title)}
-      ${hint ? `<span class="muted pre-place-section-hint">${escapeHtml(hint)}</span>` : ''}
+    <div class="pre-place-section-head">
+      <div class="pre-place-section-title">${escapeHtml(title)}</div>
+      ${hint ? `<div class="muted pre-place-section-hint">${escapeHtml(hint)}</div>` : ''}
     </div>
     <ul class="pre-place-list">${items.map(_prePlaceItemHtml).join('')}</ul>
   </div>`;
@@ -5587,34 +5591,45 @@ function renderPrePlaceReview(s, card) {
     || (!(card && card.dataset.prePlaceGatesOpen === '0') && nGateIssues > 0);
   const rowsHtml = allGates.length ? renderGatesTableRowsHtml(allGates) : '';
 
+  const reviewGates = gateIssues.filter(c => !_gateHidesSuggestionCard(c));
+  const issuePreview = reviewGates.length
+    ? reviewGates.slice(0, 6).map(c => escapeHtml(c.label || 'Gate')).join(' · ')
+      + (reviewGates.length > 6 ? ` · +${reviewGates.length - 6} more` : '')
+    : '';
+
   const gatesSection = allGates.length ? `
     <details class="pre-place-gates pre-place-section"${gatesOpen ? ' open' : ''}>
       <summary class="pre-place-gates-summary">
-        <span class="pre-place-section-title" style="margin:0">Gates
-          <span class="muted pre-place-section-hint">Kind / Result — only HARD FAIL hides a card</span>
+        <span class="pre-place-gates-summary-left">
+          <span class="pre-place-section-title">Gates</span>
+          ${nGateIssues
+            ? `<span class="muted pre-place-gates-preview">${nGateIssues} to review${issuePreview ? ' — ' + issuePreview : ''}</span>`
+            : `<span class="muted pre-place-gates-preview">All clear</span>`}
         </span>
         <span class="gates-kind-counts">${countChips}</span>
       </summary>
       <div class="pre-place-gates-body">
+        <p class="muted pre-place-section-hint">Kind / Result — only HARD FAIL hides a card</p>
         <label class="pre-place-gates-filter">
           <input type="checkbox" data-gates-only-failed${onlyFailedDefault ? ' checked' : ''}>
           Show only failed
         </label>
-        <div class="gates-rules-box">
-          <div class="gates-rules-title">How gating works</div>
-          <ul class="gates-rules-list">
-            <li><strong>HARD</strong> — one fail hides / sit-outs the suggestion.</li>
-            <li><strong>SOFT</strong> — ${softTotal} counted gates; need ≥${softMin} for ${escapeHtml(strategy || 'this strategy')} (up to ${softMaxFail} miss${softMaxFail === 1 ? '' : 'es'}).</li>
-            <li><strong>ADVISORY</strong> — review only; never the sole reason to hide a card.</li>
-          </ul>
-        </div>
+        <p class="muted pre-place-note" data-gates-empty hidden>No failed gates — uncheck &quot;Show only failed&quot; to see passes.</p>
         <table class="conf-checks-table">
           <thead><tr>
             <th>Kind</th><th>Result</th><th>Condition</th><th>What this means</th>
           </tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>
-        <p class="muted pre-place-note" data-gates-empty hidden>No failed gates — uncheck &quot;Show only failed&quot; to see passes.</p>
+        <details class="gates-rules-box">
+          <summary class="gates-rules-title">How gating works</summary>
+          <ul class="gates-rules-list">
+            <li><strong>HARD</strong> — one fail hides / sit-outs the suggestion.</li>
+            <li><strong>SOFT</strong> — ${softTotal} counted gates; need ≥${softMin} for ${escapeHtml(strategy || 'this strategy')} (up to ${softMaxFail} miss${softMaxFail === 1 ? '' : 'es'}).</li>
+            <li><strong>ADVISORY</strong> — review only; never the sole reason to hide a card.</li>
+            <li><strong>Today's tape &amp; OI wall</strong> — directional picks sit out when today's session disagrees or spot is near the opposing OI wall (no flip).</li>
+          </ul>
+        </details>
       </div>
     </details>` : '';
 

@@ -58,6 +58,8 @@ def _conditions() -> list[dict]:
          "detail": "PCR 0.92"},
         {"label": "OI walls visible", "status": "PASS", "kind": "SOFT",
          "detail": "Put wall 24600 · Call wall 25200"},
+        {"label": "Today's tape & nearby OI wall", "status": "PASS_WARN", "kind": "ADVISORY",
+         "detail": "Today's tape: SIDEWAYS · put support 24600 (380 pts) · call resistance 24850 (70 pts) · 1-day EM 150 — call resistance within 1.00× 1-day EM 150 (would sit out a matching directional pick)"},
         {"label": "Trend identifiable", "status": "PASS", "kind": "SOFT",
          "detail": "SIDEWAYS"},
         {"label": "IV premium vs realised vol (HV-20)", "status": "SOFT_FAIL", "kind": "SOFT",
@@ -89,7 +91,7 @@ def seed(db: SQLServerConnection) -> None:
     conditions = _conditions()
     passed = sum(1 for c in conditions if c["status"] == "PASS")
     pe = (
-        f"NIFTY trading at {SPOT:,.0f}. Dummy LONG_STRADDLE for Gates & warnings review.\n"
+        f"NIFTY trading at {SPOT:,.0f}. Dummy LONG_STRADDLE for Before you place / gates review.\n"
         f"Strategy: buy ATM straddle (CE+PE {int(SPOT / 50) * 50}).\n\n"
         f"ENTRY\n"
         f"• Execute 09:20–10:00 IST\n\n"

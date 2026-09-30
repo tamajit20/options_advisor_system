@@ -20,12 +20,15 @@ class TestEvaluate:
             events_calendar_row_count=10,
         )
         assert result.all_passed is True
-        # 9 soft (incl. DTE) + event + 3 trajectory + IV-Rank/IV-HV alignment = 14 total.
+        # 9 soft (incl. DTE) + event + 3 trajectory + IV-Rank/IV-HV alignment
+        # + today's tape & OI wall = 15 total.
         # Soft gate 8 = OI change conviction (S6).
         # Trajectory gates are PASS_WARN when indicator fields are None
         # (default sample_indicators has no live trajectory).
-        assert result.total == 14
+        assert result.total == 15
         assert result.score >= 9
+        tape = next(c for c in result.checks if c.label == "Today's tape & nearby OI wall")
+        assert tape.kind == "ADVISORY"
 
     def test_mixed_trend_is_identifiable_not_a_failed_gate(self, sample_indicators):
         from dataclasses import replace

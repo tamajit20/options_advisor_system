@@ -433,6 +433,57 @@ def evaluate(
 
     checks.append(_gate("IV Rank vs IV/HV alignment", _iv_conflict_gate, kind="ADVISORY"))
 
+    # 14. Today's tape & nearby OI wall — advisory context for the live
+    # directional sit-out (rule 3 + wall). Never blocks here; selector vetoes
+    # directional picks. Surfaces on every card so operators see the rule.
+    def _tape_wall_gate():
+        today = getattr(indicators, "trend_today", None)
+        spot = float(getattr(indicators, "spot", 0) or 0)
+        try:
+            em = float(getattr(indicators, "expected_move_1d", None) or 0.0)
+        except (TypeError, ValueError):
+            em = 0.0
+        frac = float(STRATEGY_CONFIG.get("oi_wall_block_em_fraction", 1.0) or 1.0)
+
+        def _nearest(walls):
+            vals = []
+            for raw in walls or []:
+                try:
+                    vals.append(float(raw))
+                except (TypeError, ValueError):
+                    continue
+            if not vals or spot <= 0:
+                return None
+            return min(vals, key=lambda w: abs(w - spot))
+
+        put_w = _nearest(getattr(indicators, "oi_walls_put", None))
+        call_w = _nearest(getattr(indicators, "oi_walls_call", None))
+        bits = [f"Today's tape: {today or 'n/a (no session bar)'}"]
+        near_bits = []
+        for name, wall in (("put support", put_w), ("call resistance", call_w)):
+            if wall is None:
+                continue
+            dist = abs(spot - wall)
+            bits.append(f"{name} {wall:.0f} ({dist:.0f} pts)")
+            if em > 0 and dist <= frac * em:
+                near_bits.append(
+                    f"{name} within {frac:.2f}× 1-day EM {em:.0f}"
+                )
+        if em > 0:
+            bits.append(f"1-day EM {em:.0f}")
+        detail = " · ".join(bits)
+        if near_bits:
+            return (
+                _PASS_WARN,
+                detail + " — " + "; ".join(near_bits)
+                + " (would sit out a matching directional pick)",
+            )
+        if today is None:
+            return _PASS_WARN, detail + " — tape check skipped (EOD / no session bar)"
+        return _PASS, detail + " — directional sit-out clear"
+
+    checks.append(_gate("Today's tape & nearby OI wall", _tape_wall_gate, kind="ADVISORY"))
+
     # ══════════════════════════════════════════════════════════════
     # Score + all_passed
     # ══════════════════════════════════════════════════════════════
