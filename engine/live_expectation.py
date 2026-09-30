@@ -42,6 +42,8 @@ _RANGE_STRATEGIES = frozenset({
 _STANCE_BAND_PP = 5.0
 _TIGHT_EM_FRACTION = 0.5
 _TREND_BAND_PCT = 0.15
+# Relative IV shock for model win-chance band (no trade-history calibration).
+_POP_IV_STRESS = 0.15
 
 
 def _as_float(value: Any) -> Optional[float]:
@@ -663,12 +665,19 @@ def _summary(
     em_label: Optional[str],
     direction_label: Optional[str] = None,
     data_source: Optional[str] = None,
+    live_pop_lo: Optional[float] = None,
+    live_pop_hi: Optional[float] = None,
 ) -> str:
     if live_pop is None:
         if spot is None:
             return "Waiting for spot to score this trade."
         return "Waiting for ATM IV to score live win chance."
     head = f"Win chance {live_pop:.0f}%"
+    if (
+        live_pop_lo is not None and live_pop_hi is not None
+        and abs(live_pop_hi - live_pop_lo) >= 0.5
+    ):
+        head += f" (model {live_pop_lo:.0f}–{live_pop_hi:.0f}%)"
     if entry_pop is not None:
         head += f" (entry {entry_pop:.0f}%)"
     if stance == "improving":
@@ -706,25 +715,36 @@ def compute_expiry_ev(live_pop: Optional[float], max_profit: float, max_loss: fl
     return round(p * mp + (1.0 - p) * (-ml), 2)
 
 
+def _leg_mark_rs(
+    sl: SuggestionLeg,
+    leg_ltps: Optional[Mapping[str, Any]],
+) -> Optional[float]:
+    """Live LTP for a suggestion leg, if present."""
+    if not leg_ltps:
+        return None
+    from engine.exit_pricing import _legacy_leg_quote_key, format_leg_quote_key
+
+    keys = [
+        format_leg_quote_key(sl.symbol, sl.expiry_date, sl.strike, sl.option_type),
+        _legacy_leg_quote_key(sl.symbol, sl.strike, sl.option_type),
+    ]
+    for k in keys:
+        if k in leg_ltps:
+            px = _as_float(leg_ltps[k])
+            if px is not None and px > 0:
+                return px
+    return None
+
+
 def _apply_live_leg_prices(
     sug_legs: list[SuggestionLeg],
     leg_ltps: Optional[Mapping[str, Any]],
 ) -> list[SuggestionLeg]:
     if not leg_ltps or not sug_legs:
         return sug_legs
-    from engine.exit_pricing import _legacy_leg_quote_key, format_leg_quote_key
-
     out: list[SuggestionLeg] = []
     for sl in sug_legs:
-        keys = [
-            format_leg_quote_key(sl.symbol, sl.expiry_date, sl.strike, sl.option_type),
-            _legacy_leg_quote_key(sl.symbol, sl.strike, sl.option_type),
-        ]
-        live_p = None
-        for k in keys:
-            if k in leg_ltps:
-                live_p = _as_float(leg_ltps[k])
-                break
+        live_p = _leg_mark_rs(sl, leg_ltps)
         if live_p is not None and live_p > 0:
             out.append(replace(
                 sl,
@@ -735,6 +755,119 @@ def _apply_live_leg_prices(
         else:
             out.append(sl)
     return out
+
+
+def _chain_from_leg_marks(
+    sug_legs: Sequence[SuggestionLeg],
+    leg_ltps: Optional[Mapping[str, Any]],
+) -> list[dict]:
+    """Mini option chain for skew-aware PoP (live marks, else entry fills).
+
+    Skips when strike+option_type collide (e.g. calendars: near/far same strike)
+    because ``estimate_pop`` chain lookup has no expiry key.
+    """
+    rows: list[dict] = []
+    seen: set[tuple[float, str]] = set()
+    for sl in sug_legs or []:
+        key = (float(sl.strike), str(sl.option_type or "").upper())
+        if key in seen:
+            return []
+        seen.add(key)
+        px = _leg_mark_rs(sl, leg_ltps)
+        if px is None or px <= 0:
+            px = _as_float(getattr(sl, "suggested_price", None))
+        if px is None or px <= 0:
+            continue
+        rows.append({
+            "strike": float(sl.strike),
+            "option_type": sl.option_type,
+            "last_price": float(px),
+            "mid_price": float(px),
+        })
+    return rows
+
+
+def _estimate_pop_safe(
+    legs: Sequence[SuggestionLeg],
+    spot: float,
+    dte: int,
+    iv: float,
+    *,
+    chain: Optional[Sequence[Mapping[str, Any]]],
+    strategy: Optional[str],
+) -> Optional[float]:
+    try:
+        return float(estimate_pop(
+            legs, spot, dte, iv, chain=chain, strategy=strategy,
+        ))
+    except Exception:
+        return None
+
+
+def _pop_iv_stress_band(
+    legs: Sequence[SuggestionLeg],
+    spot: float,
+    dte: int,
+    iv: float,
+    *,
+    chain: Optional[Sequence[Mapping[str, Any]]],
+    strategy: Optional[str],
+    stress: float = _POP_IV_STRESS,
+    include_pop: Optional[float] = None,
+) -> tuple[Optional[float], Optional[float]]:
+    """Model band from ±IV shock on ATM IV (chain omitted so the shock bites).
+
+    When a mini-chain is present, per-strike IV would ignore ATM stress; the
+    band intentionally re-scores with ATM-only so the range is informative.
+    ``include_pop`` (skew point estimate) is folded in so the band always
+    covers the displayed win chance.
+    """
+    if iv <= 0 or dte <= 0 or spot <= 0:
+        return None, None
+    pops: list[float] = []
+    for mult in (1.0 - stress, 1.0, 1.0 + stress):
+        v = iv * mult
+        if v <= 0:
+            continue
+        # ATM-only path so ±IV moves PoP even when skew chain exists.
+        p = _estimate_pop_safe(legs, spot, dte, v, chain=None, strategy=strategy)
+        if p is not None:
+            pops.append(max(0.0, min(100.0, p)))
+    if include_pop is not None and not (include_pop != include_pop):  # not NaN
+        pops.append(max(0.0, min(100.0, float(include_pop))))
+    if not pops:
+        return None, None
+    return round(min(pops), 1), round(max(pops), 1)
+
+
+def _est_round_trip_charges_rs(
+    sug_legs: Sequence[SuggestionLeg],
+    leg_ltps: Optional[Mapping[str, Any]],
+) -> Optional[float]:
+    """Estimated flatten charges; None when legs cannot be priced."""
+    from engine.charges import estimated_round_trip_charges_rs
+
+    rows: list[dict] = []
+    for sl in sug_legs or []:
+        fill = _as_float(getattr(sl, "suggested_price", None))
+        if fill is None or fill < 0:
+            continue
+        mark = _leg_mark_rs(sl, leg_ltps)
+        if mark is None or mark < 0:
+            mark = fill
+        rows.append({
+            "action": sl.action,
+            "fill_price": fill,
+            "exit_price": mark,
+            "lots": int(getattr(sl, "lots", 0) or 0),
+            "lot_size": int(getattr(sl, "lot_size", 0) or 0),
+        })
+    if not rows:
+        return None
+    try:
+        return round(float(estimated_round_trip_charges_rs(rows)), 2)
+    except Exception:
+        return None
 
 
 def _fmt_signed_pts(pts: float) -> str:
@@ -1063,15 +1196,18 @@ def enrich_trade_outlook(
         out["regime_note"] = regime
     if em_calibration_warning:
         out["em_calibration_warning"] = em_calibration_warning
+    hold_ev = out.get("live_ev_net")
+    if hold_ev is None:
+        hold_ev = out.get("live_ev")
     out["hold_vs_close"] = hold_vs_close_advice(
         current_mtm=current_mtm,
-        hold_ev=out.get("live_ev"),
+        hold_ev=hold_ev,
         direction_fit=out.get("direction_fit"),
         strategy=strategy,
     )
     mtm_f = _as_float(current_mtm)
-    if mtm_f is not None and out.get("live_ev") is not None:
-        out["ev_from_now"] = round(float(out["live_ev"]) - mtm_f, 2)
+    if mtm_f is not None and hold_ev is not None:
+        out["ev_from_now"] = round(float(hold_ev) - mtm_f, 2)
     out["ev_note"] = expiry_ev_note(
         strategy=strategy,
         max_profit=max_profit,
@@ -1079,6 +1215,14 @@ def enrich_trade_outlook(
         near_dte=out.get("near_dte") if out.get("near_dte") is not None else dte,
         current_mtm=current_mtm,
     )
+    if out.get("live_ev") is not None and out.get("est_charges_rs") is not None:
+        chg = float(out["est_charges_rs"])
+        base_note = out.get("ev_note") or (
+            "Modeled total P&L at expiry (not extra gain from MTM)."
+        )
+        out["ev_note"] = (
+            f"{base_note} Gross EV before charges; net subtracts est. ₹{chg:,.0f} round-trip."
+        )
     if include_scenarios and legs is not None and expiry is not None:
         out["scenarios"] = compute_scenarios(
             legs=legs, strategy=strategy, underlying=underlying, expiry=expiry,
@@ -1109,6 +1253,10 @@ def live_trade_outlook(
 
     ``live_pop`` / ``live_ev`` are None until spot and ATM IV are available
     (except DTE 0, which only needs spot + breakevens).
+
+    When leg marks (or fills) yield a unique strike/type mini-chain, PoP is
+    skew-aware. Also emits ``live_pop_lo``/``hi`` (±15% ATM IV stress) and
+    ``live_ev_net`` (gross EV minus est. round-trip charges).
     """
     from utils import now_ist
 
@@ -1140,7 +1288,13 @@ def live_trade_outlook(
         except Exception:
             upper_be = lower_be = None
 
+    mark_chain = _chain_from_leg_marks(pop_legs, leg_ltps)
+    chain_for_pop: Optional[list[dict]] = mark_chain if mark_chain else None
+    pop_uses_skew = bool(chain_for_pop)
+
     live_pop: Optional[float] = None
+    live_pop_lo: Optional[float] = None
+    live_pop_hi: Optional[float] = None
     if spot_f is not None and spot_f > 0 and pop_legs:
         if dte_i <= 0:
             live_pop = _expiry_pop_from_bes(
@@ -1149,13 +1303,18 @@ def live_trade_outlook(
                 upper_be=upper_be,
                 lower_be=lower_be,
             )
+            if live_pop is not None:
+                live_pop_lo = live_pop_hi = live_pop
         elif iv is not None:
-            try:
-                live_pop = float(estimate_pop(
-                    pop_legs, spot_f, dte_i, iv, chain=None, strategy=strategy or None,
-                ))
-            except Exception:
-                live_pop = None
+            live_pop = _estimate_pop_safe(
+                pop_legs, spot_f, dte_i, iv,
+                chain=chain_for_pop, strategy=strategy or None,
+            )
+            live_pop_lo, live_pop_hi = _pop_iv_stress_band(
+                pop_legs, spot_f, dte_i, iv,
+                chain=chain_for_pop, strategy=strategy or None,
+                include_pop=live_pop,
+            )
         if live_pop is not None:
             live_pop = round(max(0.0, min(100.0, live_pop)), 1)
 
@@ -1163,6 +1322,11 @@ def live_trade_outlook(
     if live_pop is not None:
         p = live_pop / 100.0
         live_ev = round(p * mp + (1.0 - p) * (-ml), 2)
+
+    est_charges = _est_round_trip_charges_rs(pop_legs, leg_ltps) if pop_legs else None
+    live_ev_net: Optional[float] = None
+    if live_ev is not None and est_charges is not None:
+        live_ev_net = round(live_ev - est_charges, 2)
 
     em = None
     if spot_f is not None and iv is not None and dte_i > 0:
@@ -1206,11 +1370,17 @@ def live_trade_outlook(
         em_label=em_label,
         direction_label=direction.get("direction_label"),
         data_source=data_source,
+        live_pop_lo=live_pop_lo,
+        live_pop_hi=live_pop_hi,
     )
 
     result = {
         "live_pop": live_pop,
+        "live_pop_lo": live_pop_lo,
+        "live_pop_hi": live_pop_hi,
         "live_ev": live_ev,
+        "live_ev_net": live_ev_net,
+        "est_charges_rs": est_charges,
         "entry_pop": round(entry_pop_f, 1) if entry_pop_f is not None else None,
         "pop_delta": pop_delta,
         "stance": stance,
@@ -1237,6 +1407,7 @@ def live_trade_outlook(
         "data_source": data_source,
         "data_as_of": data_as_of,
         "uses_live_marks": uses_live_marks,
+        "pop_uses_skew": pop_uses_skew,
     }
     if horizon.get("far_dte") is not None and (strategy or "").upper() == "CALENDAR_SPREAD":
         result["ev_horizon_note"] = (

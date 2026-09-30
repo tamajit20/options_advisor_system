@@ -76,6 +76,8 @@ def _conditions() -> list[dict]:
          "detail": "IV Rank 28 ≥ floor with sideways tape"},
         {"label": "Long-vol IV/HV", "status": "SOFT_FAIL", "kind": "SOFT",
          "detail": "IV/HV 0.91 above cheap ceiling — long vol edge weak"},
+        {"label": "Live execution checks", "status": "SOFT_FAIL", "kind": "ADVISORY",
+         "detail": "Demo: short strike within 0.4× EM of spot — Place orders stays available; review before confirming"},
     ]
 
 
@@ -176,9 +178,24 @@ def seed(db: SQLServerConnection) -> None:
                 px, round(px * 0.95, 1), round(px * 1.05, 1), note,
             ],
         ).close()
-    db.commit()
+    # Optional columns — ignore if a lean DB has not migrated them yet.
+    try:
+        db.execute(
+            """
+            UPDATE options_suggestions
+               SET validator_status = ?
+             WHERE suggestion_id = ?
+            """,
+            ["STALE_INTRADAY", SID],
+        ).close()
+        db.commit()
+    except Exception:
+        pass
+
     print(f"Seeded {SID}  LONG_STRADDLE  entry={today}  expiry={expiry}  dte={dte}")
-    print("Open Suggestion tab — Gates & warnings should show Kind/Result including quiet-tape SOFT_FAIL.")
+    print("Open Suggestion tab → expand the card.")
+    print("  • Gates & warnings (upper half) — full Kind/Result table")
+    print("  • Before you place (above Place orders) — same issues, compact")
 
 
 def main() -> int:

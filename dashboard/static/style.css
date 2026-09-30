@@ -589,19 +589,57 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
 }
 .tag-current-pnl .cpnl-pct-bracket,
 .pnl-pct-bracket { font-size:.68rem; font-weight:500; color:var(--text-dim); white-space:nowrap; }
-.tag-current-pnl.mtm-pos .cpnl-val { color:var(--ok); }
-.tag-current-pnl.mtm-neg .cpnl-val { color:var(--err); }
-.tag-current-pnl.mtm-pos .cpnl-pct-bracket { color:var(--ok); opacity:.85; }
-.tag-current-pnl.mtm-neg .cpnl-pct-bracket { color:var(--err); opacity:.85; }
-.tag-current-pnl .cpnl-gross-val.mtm-pos { color:var(--ok); }
-.tag-current-pnl .cpnl-gross-val.mtm-neg { color:var(--err); }
+.tag-current-pnl.mtm-pos .cpnl-val,
+.tag-current-pnl.mtm-pos .cpnl-net-pct { color:var(--ok); }
+.tag-current-pnl.mtm-neg .cpnl-val,
+.tag-current-pnl.mtm-neg .cpnl-net-pct { color:var(--err); }
+.tag-current-pnl.mtm-pos .cpnl-net-pct,
+.tag-current-pnl.mtm-neg .cpnl-net-pct { opacity:.85; }
+.tag-current-pnl .cpnl-gross-val.mtm-pos,
+.tag-current-pnl .cpnl-gross-val.mtm-pos + .cpnl-gross-pct { color:var(--ok); }
+.tag-current-pnl .cpnl-gross-val.mtm-neg,
+.tag-current-pnl .cpnl-gross-val.mtm-neg + .cpnl-gross-pct { color:var(--err); }
+.tag-current-pnl .cpnl-gross-val.mtm-pos + .cpnl-gross-pct,
+.tag-current-pnl .cpnl-gross-val.mtm-neg + .cpnl-gross-pct { opacity:.85; }
 .hist-card-pnl .pnl-pct-bracket { font-size:.82rem; font-weight:500; margin-left:2px; }
 .live-pnl-preview .pnl-pct-bracket,
 .fill-pnl-preview .pnl-pct-bracket { display:inline; font-size:.78rem; }
 .close-loss-warn .pnl-pct-bracket { font-size:inherit; }
-.lpl-current-row .cpnl-val { font-weight:700; }
-.lpl-current-row.mtm-pos .cpnl-val { color:var(--ok); }
-.lpl-current-row.mtm-neg .cpnl-val { color:var(--err); }
+.lpl-current-row .cpnl-metrics {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0;
+  font-variant-numeric: tabular-nums;
+}
+.lpl-current-row .cpnl-pair {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.lpl-current-row .cpnl-k {
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.lpl-current-row .cpnl-sep {
+  margin: 0 8px;
+  color: var(--text-dim);
+  opacity: .55;
+}
+.lpl-current-row .cpnl-val { font-weight:700; font-size: .95rem; }
+.lpl-current-row .cpnl-gross-val { font-weight:600; font-size: .9rem; opacity: .95; }
+.lpl-current-row .cpnl-pct-bracket { font-size: .72rem; font-weight: 500; white-space: nowrap; }
+.lpl-current-row.mtm-pos .cpnl-val,
+.lpl-current-row.mtm-pos .cpnl-net-pct { color:var(--ok); }
+.lpl-current-row.mtm-neg .cpnl-val,
+.lpl-current-row.mtm-neg .cpnl-net-pct { color:var(--err); }
+.lpl-current-row .cpnl-gross-val.mtm-pos,
+.lpl-current-row .cpnl-gross-val.mtm-pos + .cpnl-gross-pct { color:var(--ok); }
+.lpl-current-row .cpnl-gross-val.mtm-neg,
+.lpl-current-row .cpnl-gross-val.mtm-neg + .cpnl-gross-pct { color:var(--err); }
 .live-feed-tag { font-size:.72rem; white-space:nowrap; }
 .live-feed-banner { font-size:.78rem; padding:6px 10px; border-radius:6px; margin-bottom:8px; line-height:1.35; }
 .live-feed-banner--login { background:rgba(239,68,68,.12); color:#fca5a5; border:1px solid rgba(239,68,68,.22); }
@@ -862,6 +900,48 @@ table.dt {
 }
 .exec-lots-input { width: 76px; }
 .exec-lots-qty { font-size: .74rem; }
+
+.pre-place-review {
+  margin: 14px 0 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.03);
+}
+.pre-place-review--warn {
+  border-color: rgba(245, 158, 11, .4);
+  background: rgba(245, 158, 11, .08);
+}
+.pre-place-review--ok {
+  border-color: rgba(16, 185, 129, .28);
+  background: rgba(16, 185, 129, .06);
+}
+.pre-place-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.pre-place-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pre-place-item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: .84rem;
+  line-height: 1.35;
+}
+.pre-place-item .tag { flex-shrink: 0; margin-top: 1px; }
+.pre-place-item-text { min-width: 0; }
+.pre-place-note { font-size: .76rem; margin: 8px 0 0; line-height: 1.35; }
+.pre-place-gates-link { color: var(--accent); text-decoration: underline; cursor: pointer; }
 
 .exec-actions-panel {
   display: grid;

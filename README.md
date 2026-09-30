@@ -417,7 +417,7 @@ Runtime kill-switches: `options_runtime_flags`.
 
 **Index lot sizes (Jan 2026+ NSE revision):** `options_lot_sizes` wins over `STRATEGY_CONFIG.default_lot_sizes` — NIFTY **65**, BANKNIFTY **30**, FINNIFTY **60**. After a revision, re-stamp legs / recalc closed P&L with `scripts/migrate_nse_lot_sizes.py` (close path uses stamped `lot_size`, not live Zerodha qty).
 
-Trend knobs (high traffic): `trend_sma_*`, `trend_adx_min`, `trend_return_*`, `trend_session_*`. Opposing SMA vs tape -> `MIXED` sit-out; chop SMA is **not** lifted to BEARISH by a 5-10 day dump alone.
+Trend knobs (high traffic): `trend_sma_*`, `trend_adx_min`, `trend_return_*`, `trend_session_*`. Opposing SMA vs tape -> `MIXED` sit-out; chop SMA is **not** lifted to BEARISH by a 5-10 day dump alone. Live directional picks also need **today's** open-vs-spot to match (`directional_require_today_tape`); a nearby put wall blocks a bearish pick and a nearby call wall blocks a bullish pick (`oi_wall_block_em_fraction` × 1-day EM). No direction flip.
 
 ---
 
@@ -537,6 +537,8 @@ sequenceDiagram
 | Agreeing BULLISH / BEARISH   | Directional strategies by IV zone |
 | SIDEWAYS (true chop)         | Single pick: condor / calendar / straddle by IV |
 | MIXED (SMA vs tape disagree) | Sit out                           |
+| Live directional, today's tape disagrees | Sit out (no flip)        |
+| Live directional, spot within 1× 1-day EM of the fighting OI wall (put vs bearish, call vs bullish) | Sit out |
 
 **Sideways:** one strategy via `select_strategy` (same as directional) — no range+breakout pair cards.
 
@@ -604,7 +606,7 @@ Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), no
 
 **Suggestions tab — Run live engine:** same `live_suggestion_engine` job as the hourly 10–14 IST scheduler / Jobs tab. POSTs `/api/jobs/live_suggestion_engine/trigger` (no weekday-backfill confirm). Jobs SSE stays connected on every tab and reloads Suggestions plus the Jobs grid when the run finishes — no browser refresh.
 
-**Suggestion gates:** HARD / SOFT / ADVISORY pass counts sit on the Gates & warnings header (`hard 3/3`, `soft 6/9`, …). Click the header to expand or collapse the table. Opens automatically when a HARD gate fails.
+**Suggestion gates:** HARD / SOFT / ADVISORY pass counts sit on the Gates & warnings header (`hard 3/3`, `soft 6/9`, …). Click the header to expand or collapse the table. Opens when any fail/soft/warn is present. The same issues also appear as **Before you place** above Place orders. Demo card: `python scripts/seed_gates_review_suggestion.py` → `SUG-GATES-REVIEW`.
 
 **Live execution checks:** stale chain / strike buffer / scenario vetoes show as a **warning** with the exact reasons on the suggestion card; **Place orders in Zerodha** stays enabled (operator confirms). Only the daily P&L **circuit breaker** still hard-blocks broker place.
 
@@ -644,6 +646,7 @@ Quick answers, then the call chains. Preview Mermaid with `Ctrl+Shift+V`.
 | Dashboard API entry? | `dashboard/server.py` (`/api/suggestion/.../zerodha-execute`, `mark-executed`, …) |
 | WS ticks? | `providers/zerodha/ws_runner.py` (container `stock_ws_runner`) |
 | Who acts on ticks for open trades? | `lifecycle/live_risk_monitor.py` (same process as WS runner) |
+| Live win chance / expiry EV? | `engine/live_expectation.py` — skew from leg marks when available; ±15% IV model band; EV gross + net of est. charges (not calibrated to your closed-trade hit rate) |
 
 
 ```
@@ -770,6 +773,8 @@ Two Docker processes share the DB; ticks live in the **WS runner** process only.
        +-- lifecycle/live_risk_monitor.py   LiveRiskMonitor
        |         subscribed to same event_bus
        |              +-- MTM, milestones, SL / exit alerts
+       |              +-- live outlook via engine/live_expectation.py
+       |                    (skew-aware PoP, IV stress band, EV net of charges)
        |              +-- status file for dashboard WS monitor
        |
        +-- providers/ws_watchdog.py / ws_health.py

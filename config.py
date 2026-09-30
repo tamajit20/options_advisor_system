@@ -989,6 +989,14 @@ STRATEGY_CONFIG = {
     "trend_session_nday_pct_min":  0.60,
     "trend_live_session_override": True,
     "trend_session_confirm_structural": True,  # SMA vs live session opposite → MIXED
+    # Directional picks (live only): today's open-vs-spot must match the thesis.
+    # Flat/up blocks a bearish card; flat/down blocks a bullish card. No flip.
+    # Missing session bar (EOD) does not block.
+    "directional_require_today_tape": True,
+    # After tape agrees: sit out if spot is within this × 1-day EM of the wall
+    # that fights the thesis (put wall vs bearish, call wall vs bullish).
+    "oi_wall_block_enabled": True,
+    "oi_wall_block_em_fraction": 1.0,
     # Index spot backfill window (calendar days) for --backfill-index-spot
     "index_spot_backfill_days": 400,
 }

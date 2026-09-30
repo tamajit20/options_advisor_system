@@ -41,14 +41,15 @@ def get_chain_row(chain: Sequence[Mapping], strike: float, option_type: str) -> 
 
 
 def mid_price(row: Mapping) -> float:
-    """Best available mark: settle → close → last (live chains often only have last)."""
-    sp = float(row.get("settle_price") or 0.0)
-    if sp > 0:
-        return sp
-    cp = float(row.get("close_price") or 0.0)
-    if cp > 0:
-        return cp
-    return float(row.get("last_price") or 0.0)
+    """Best available mark: settle → close → last → mid/ltp (live mini-chains)."""
+    for key in ("settle_price", "close_price", "last_price", "mid_price", "ltp"):
+        try:
+            px = float(row.get(key) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if px > 0:
+            return px
+    return 0.0
 
 
 def price_band(row: Mapping, band_pct: float = 0.02) -> tuple[float, float]:
@@ -534,6 +535,29 @@ def _prob_below(spot: float, level: float, dte: int, vol: float) -> float:
     return float(norm.cdf(-d2))
 
 
+def _blended_be_vol(
+    atm_iv: float,
+    legs: Sequence[SuggestionLeg],
+    spot: float,
+    dte: int,
+    chain: Optional[Sequence[Mapping]],
+    iv_for_leg,
+) -> float:
+    """ATM blended with per-leg IVs when a mini-chain is available (skew-aware BE math)."""
+    vols = [atm_iv] if atm_iv and atm_iv > 0 else []
+    if chain is not None:
+        for leg in legs:
+            try:
+                v = float(iv_for_leg(leg))
+            except Exception:
+                continue
+            if v and v > 0:
+                vols.append(v)
+    if not vols:
+        return atm_iv
+    return sum(vols) / len(vols)
+
+
 def estimate_pop(
     legs: Sequence[SuggestionLeg],
     spot: float,
@@ -586,7 +610,11 @@ def estimate_pop(
         upper_be, lower_be = breakevens(legs, strategy or "")
         if upper_be is not None and lower_be is not None:
             if lower_be < upper_be:
-                p_in = _prob_below(spot, upper_be, dte, atm_iv) - _prob_below(spot, lower_be, dte, atm_iv)
+                be_vol = _blended_be_vol(atm_iv, legs, spot, dte, chain, _iv_for_leg)
+                p_in = (
+                    _prob_below(spot, upper_be, dte, be_vol)
+                    - _prob_below(spot, lower_be, dte, be_vol)
+                )
                 return max(0.0, min(100.0, p_in * 100.0))
             # Degenerate envelope (live marks can collapse BEs) — don't fall through
             # to short-leg delta, which over-states PoP when spot drifted away.
@@ -596,9 +624,10 @@ def estimate_pop(
     # ---- Debit / long-premium path: BE-crossing probability ----
     if strategy in _DEBIT_STRATEGIES_PoP:
         upper_be, lower_be = breakevens(legs, strategy)
+        be_vol = _blended_be_vol(atm_iv, legs, spot, dte, chain, _iv_for_leg)
         # Probabilities of profit on each side of the breakeven envelope
-        p_above = (1.0 - _prob_below(spot, upper_be, dte, atm_iv)) if upper_be is not None else 0.0
-        p_below = _prob_below(spot, lower_be, dte, atm_iv) if lower_be is not None else 0.0
+        p_above = (1.0 - _prob_below(spot, upper_be, dte, be_vol)) if upper_be is not None else 0.0
+        p_below = _prob_below(spot, lower_be, dte, be_vol) if lower_be is not None else 0.0
         # The two regions are disjoint for any of these structures, so simple sum
         pop = (p_above + p_below) * 100.0
         return max(0.0, min(100.0, pop))

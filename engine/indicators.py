@@ -19,7 +19,7 @@ from typing import List, Optional, Sequence, Tuple
 from config import STRATEGY_CONFIG
 from contracts import ChainTrajectory, MarketIndicators
 from engine import trajectory as _traj
-from engine.trend_model import compute_trends, filter_spot_history
+from engine.trend_model import compute_trends, filter_spot_history, session_intraday_trend
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +469,10 @@ def build_indicators(
         trend            = effective_trend,
         trend_structural = structural_trend,
         trend_session    = session_trend_val,
+        trend_today      = (
+            session_intraday_trend(spot_now=spot, session_bar=session_bar)
+            if live_mode else None
+        ),
         trend_return_pct = return_pct,
         trend_short_horizon = return_trend_val,
         vix_close        = float(vix_history[-1]["close_price"]) if vix_history else None,

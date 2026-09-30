@@ -173,3 +173,73 @@ def test_mid_iv_sideways_now_returns_calendar_spread():
     """P4 implemented: mid-IV + sideways returns CALENDAR_SPREAD (no more veto)."""
     result = select_strategy(iv_rank=40.0, trend="SIDEWAYS", indicators=_ind())
     assert result == "CALENDAR_SPREAD"
+
+
+class TestTodayTapeAndOiWall:
+    def test_bearish_allowed_when_today_is_down_and_walls_far(self):
+        ind = replace(
+            _ind(),
+            trend_today="BEARISH",
+            expected_move_1d=100.0,
+            oi_walls_put=[22000.0],
+            oi_walls_call=[23100.0],
+        )
+        assert select_strategy(iv_rank=60.0, trend="BEARISH", indicators=ind) == "BEAR_CALL_SPREAD"
+
+    def test_bearish_sits_out_when_today_is_not_down(self):
+        ind = replace(_ind(), trend_today="SIDEWAYS")
+        with pytest.raises(StrategyVeto, match="today's tape"):
+            select_strategy(iv_rank=60.0, trend="BEARISH", indicators=ind)
+
+    def test_bullish_sits_out_when_today_is_down(self):
+        ind = replace(_ind(), trend_today="BEARISH")
+        with pytest.raises(StrategyVeto, match="today's tape"):
+            select_strategy(iv_rank=60.0, trend="BULLISH", indicators=ind)
+
+    def test_eod_without_today_tape_still_picks(self):
+        ind = replace(_ind(), trend_today=None)
+        assert select_strategy(iv_rank=60.0, trend="BEARISH", indicators=ind) == "BEAR_CALL_SPREAD"
+
+    def test_bearish_sits_out_near_put_wall(self):
+        ind = replace(
+            _ind(),
+            trend_today="BEARISH",
+            spot=23000.0,
+            expected_move_1d=120.0,
+            oi_walls_put=[23050.0],
+        )
+        with pytest.raises(StrategyVeto, match="put support"):
+            select_strategy(iv_rank=60.0, trend="BEARISH", indicators=ind)
+
+    def test_nearby_call_wall_does_not_block_bearish(self):
+        ind = replace(
+            _ind(),
+            trend_today="BEARISH",
+            spot=23000.0,
+            expected_move_1d=120.0,
+            oi_walls_call=[23040.0],
+            oi_walls_put=[21000.0],
+        )
+        assert select_strategy(iv_rank=60.0, trend="BEARISH", indicators=ind) == "BEAR_CALL_SPREAD"
+
+    def test_bullish_sits_out_near_call_wall(self):
+        ind = replace(
+            _ind(),
+            trend_today="BULLISH",
+            spot=23000.0,
+            expected_move_1d=100.0,
+            oi_walls_call=[23080.0],
+            oi_walls_put=[22000.0],
+        )
+        with pytest.raises(StrategyVeto, match="call resistance"):
+            select_strategy(iv_rank=60.0, trend="BULLISH", indicators=ind)
+
+    def test_sideways_ignores_tape_and_walls(self):
+        ind = replace(
+            _ind(),
+            trend_today="BEARISH",
+            expected_move_1d=50.0,
+            oi_walls_put=[23010.0],
+            oi_walls_call=[23010.0],
+        )
+        assert select_strategy(iv_rank=60.0, trend="SIDEWAYS", indicators=ind) == "IRON_CONDOR"

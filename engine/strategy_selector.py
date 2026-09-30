@@ -323,7 +323,79 @@ def effective_iv_rank_for_regime(
     return rank
 
 
-def select_strategy(
+_BULLISH_PICKS = frozenset({
+    "BULL_PUT_SPREAD", "JADE_LIZARD", "BULL_CALL_SPREAD", "LONG_CALL",
+})
+_BEARISH_PICKS = frozenset({
+    "BEAR_CALL_SPREAD", "BEAR_PUT_SPREAD", "LONG_PUT",
+})
+
+
+def _nearest_wall(spot: float, walls: Sequence[float]) -> Optional[float]:
+    vals: list[float] = []
+    for raw in walls or []:
+        try:
+            vals.append(float(raw))
+        except (TypeError, ValueError):
+            continue
+    if not vals or spot <= 0:
+        return None
+    return min(vals, key=lambda w: abs(w - spot))
+
+
+def enforce_directional_tape_and_wall(strategy: str, indicators: MarketIndicators) -> None:
+    """Sit out directional picks that today's tape or a nearby OI wall fights.
+
+    Rule 3: a bearish structure needs today's session down; a bullish structure
+    needs today's session up. Flat or the opposite tape → sit out (no flip).
+    No same-day bar (EOD) → tape check skipped.
+
+    On top: if tape agrees, sit out when spot is within
+    ``oi_wall_block_em_fraction`` × 1-day expected move of the put wall
+    (bearish) or call wall (bullish). The opposite wall does not flip direction.
+    """
+    if strategy in _BEARISH_PICKS:
+        side = "BEARISH"
+        walls = getattr(indicators, "oi_walls_put", None) or []
+        wall_name = "put support"
+    elif strategy in _BULLISH_PICKS:
+        side = "BULLISH"
+        walls = getattr(indicators, "oi_walls_call", None) or []
+        wall_name = "call resistance"
+    else:
+        return
+
+    if STRATEGY_CONFIG.get("directional_require_today_tape", True):
+        today = getattr(indicators, "trend_today", None)
+        if today is not None and today != side:
+            raise StrategyVeto(
+                f"{strategy} needs today's tape {side}; session is {today}. "
+                "Sitting out — not flipping direction."
+            )
+
+    if not STRATEGY_CONFIG.get("oi_wall_block_enabled", True):
+        return
+    try:
+        em = float(getattr(indicators, "expected_move_1d", None) or 0.0)
+    except (TypeError, ValueError):
+        em = 0.0
+    if em <= 0:
+        return
+    frac = float(STRATEGY_CONFIG.get("oi_wall_block_em_fraction", 1.0) or 1.0)
+    spot = float(getattr(indicators, "spot", 0) or 0)
+    wall = _nearest_wall(spot, walls)
+    if wall is None:
+        return
+    dist = abs(spot - wall)
+    if dist <= frac * em:
+        raise StrategyVeto(
+            f"{strategy} blocked: spot {spot:.0f} is {dist:.0f} pts from "
+            f"{wall_name} {wall:.0f} (within {frac:.2f}× 1-day EM {em:.0f}). "
+            "Sitting out — not flipping direction."
+        )
+
+
+def _select_strategy_matrix(
     *,
     iv_rank: Optional[float],
     trend: str,
@@ -426,6 +498,24 @@ def select_strategy(
     # Sideways in mid-IV: calendar spread (P4). The short near-leg decays faster
     # than the long far-leg, extracting theta without a large directional bet.
     return "CALENDAR_SPREAD"
+
+
+def select_strategy(
+    *,
+    iv_rank: Optional[float],
+    trend: str,
+    indicators: MarketIndicators,
+    has_long_vol_catalyst: bool = False,
+) -> str:
+    """Matrix pick, then today's tape and nearby OI-wall sit-outs."""
+    strategy = _select_strategy_matrix(
+        iv_rank=iv_rank,
+        trend=trend,
+        indicators=indicators,
+        has_long_vol_catalyst=has_long_vol_catalyst,
+    )
+    enforce_directional_tape_and_wall(strategy, indicators)
+    return strategy
 
 
 # ---------------------------------------------------------------------------

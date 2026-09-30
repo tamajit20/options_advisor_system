@@ -126,7 +126,8 @@ class MarketIndicators:
     sma20_slope_pct:  Optional[float] = None  # SMA20 5-day slope as % of price; None = insufficient history
     sma_diff_pct:     Optional[float] = None  # (SMA20 - SMA50) / SMA50 * 100; None = insufficient history
     trend_structural: str = "SIDEWAYS"  # SMA crossover + ADX on settled daily OHLC
-    trend_session:    Optional[str] = None  # Live intraday; None in EOD mode
+    trend_session:    Optional[str] = None  # Live tape (same-day, else N-day); None in EOD
+    trend_today:      Optional[str] = None  # Same-day open vs spot only; None if no session bar
     trend_return_pct: Optional[float] = None  # % vs N-day ago close (5d/10d lookback)
     trend_short_horizon: Optional[str] = None  # BULLISH/BEARISH/SIDEWAYS from return_pct
     oi_pcr_change:    Optional[float] = None  # ΣΔPut OI / ΣΔCall OI — >1 puts building, <1 calls building; None = not available

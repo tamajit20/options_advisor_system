@@ -1433,6 +1433,9 @@ function _updateLiveProfitLevels(tradeId, payload) {
     }
     if (payload.est_charges_rs != null && !isNaN(parseFloat(payload.est_charges_rs))) {
       section.dataset.estCharges = String(payload.est_charges_rs);
+      section.querySelectorAll('.live-mtm[data-charges-rs]').forEach(el => {
+        el.dataset.chargesRs = String(payload.est_charges_rs);
+      });
     }
     if (lineEl && profitMilestoneEnabled()) {
       if (profitLine != null && !isNaN(profitLine)) {
@@ -1551,21 +1554,27 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
     const premInfo = premRs > 0
       ? { rs: premRs, kind: el.dataset.premiumKind || 'paid' }
       : null;
-    const isHeader = el.classList.contains('tag-current-pnl');
-    if (isHeader) {
+    const netEl = el.querySelector('.cpnl-net-val');
+    const grossEl = el.querySelector('.cpnl-gross-val');
+    const hasNetGross = !!(netEl || grossEl);
+    if (hasNetGross) {
       const charges = parseFloat(el.dataset.chargesRs);
       const net = (!isNaN(charges) && charges >= 0) ? displayMtm - charges : null;
       const colorSrc = net != null ? net : displayMtm;
-      const netEl = el.querySelector('.cpnl-net-val');
-      const grossEl = el.querySelector('.cpnl-gross-val');
-      const pctEl = el.querySelector('.cpnl-net-pct');
+      const netPctEl = el.querySelector('.cpnl-net-pct');
+      const grossPctEl = el.querySelector('.cpnl-gross-pct');
       if (netEl) netEl.textContent = _fmtSignedInr(net);
       if (grossEl) {
         grossEl.textContent = _fmtSignedInr(displayMtm);
         grossEl.classList.toggle('mtm-pos', displayMtm > 0);
         grossEl.classList.toggle('mtm-neg', displayMtm < 0);
       }
-      if (pctEl) pctEl.textContent = net != null ? pnlPctTextCompact(net, premInfo) : '';
+      if (netPctEl) {
+        netPctEl.textContent = net != null ? pnlPctTextCompact(net, premInfo) : '';
+      }
+      if (grossPctEl) {
+        grossPctEl.textContent = pnlPctTextCompact(displayMtm, premInfo);
+      }
       el.classList.toggle('mtm-pos', colorSrc > 0);
       el.classList.toggle('mtm-neg', colorSrc < 0);
       const feed = _liveFeedInfo(tradeId);
@@ -1954,7 +1963,7 @@ function strategyGuideInfoBtn(code) {
 const TERM_HELP = {
   win_chance: {
     label: 'Win chance',
-    html: '<strong>Win chance</strong> — Estimated odds this trade finishes profitable at expiry, from today\u2019s index level, days left, and volatility. A model guess, not a forecast of tomorrow\u2019s move.',
+    html: '<strong>Win chance</strong> — Model odds this trade finishes profitable at expiry from spot, DTE, and IV (skew-adjusted when leg marks exist). The band is a \u00b115% IV stress range — not a historical hit rate. Directional only; not a forecast of tomorrow\u2019s move.',
   },
   pop_entry: {
     label: 'Entry PoP',
@@ -1964,13 +1973,9 @@ const TERM_HELP = {
     label: 'Live PoP',
     html: '<strong>Live PoP</strong> — Win chance recalculated with today\u2019s spot and time left. Updates during the session or from the last market snapshot when closed.',
   },
-  close_now_mtm: {
-    label: 'Close now',
-    html: '<strong>Close now</strong> — Profit or loss if you exited at current option prices right now. This is real money on the table, before brokerage.',
-  },
   near_expiry_ev: {
     label: 'Near-expiry EV',
-    html: '<strong>Near-expiry EV</strong> (expected value) — Average outcome if you hold to expiry: blends max profit \u00d7 win% with max loss \u00d7 loss%. Total P&amp;L at expiry, <em>not</em> extra gain on top of today\u2019s MTM.',
+    html: '<strong>Near-expiry EV</strong> (expected value) — Average outcome if you hold to expiry: blends max profit \u00d7 win% with max loss \u00d7 loss%. Shows gross and net (minus est. round-trip charges). Total P&amp;L at expiry, <em>not</em> extra gain on top of today\u2019s MTM.',
   },
   structural_fit: {
     label: 'Structural fit',
@@ -1986,7 +1991,7 @@ const TERM_HELP = {
   },
   mtm: {
     label: 'MTM / P&L',
-    html: '<strong>MTM</strong> (mark-to-market) — Live profit/loss from current option prices vs your entry fills. The trade header shows <em>Net</em> (MTM minus estimated round-trip charges) and <em>Gross</em> (raw MTM the engine uses). Changes every tick; not final until you close.',
+    html: '<strong>MTM</strong> (mark-to-market) — Live profit/loss from current option prices vs your entry fills. Shows <em>Net</em> (MTM minus estimated round-trip charges) and <em>Gross</em> (raw MTM the engine uses), each with % of premium. Changes every tick; not final until you close.',
   },
   max_profit: {
     label: 'Max profit',
@@ -3592,13 +3597,34 @@ function renderLiveProfitLevels(t) {
   const premAttrs = premium
     ? ` data-premium-rs="${premium.rs}" data-premium-kind="${premium.kind}"`
     : '';
+  const execLegs = (t.legs || []).filter(l => l.executed);
+  const estCharges = estChargesFromLegs(execLegs);
+  const chargesAttrRow = estCharges != null ? ` data-charges-rs="${estCharges}"` : '';
+  const seedMtm = _resolveTradeMtm(t, null);
+  const seedNet = (seedMtm != null && estCharges != null) ? seedMtm - estCharges : null;
+  const seedColor = seedNet != null ? seedNet : seedMtm;
+  const seedRowCls = seedColor > 0 ? ' mtm-pos' : (seedColor < 0 ? ' mtm-neg' : '');
+  const seedGrossCls = seedMtm > 0 ? ' mtm-pos' : (seedMtm < 0 ? ' mtm-neg' : '');
+  const seedNetPct = (seedNet != null && premium) ? pnlPctTextCompact(seedNet, premium) : '';
+  const seedGrossPct = (seedMtm != null && premium) ? pnlPctTextCompact(seedMtm, premium) : '';
   const currentRow = `
-        <div class="lpl-row lpl-current-row live-mtm" data-trade-id="${escapeHtml(t.trade_id)}"${premAttrs}>
+        <div class="lpl-row lpl-current-row live-mtm${seedRowCls}" data-trade-id="${escapeHtml(t.trade_id)}"${premAttrs}${chargesAttrRow}
+             title="Net = live MTM minus estimated round-trip charges. Gross = raw MTM.">
           <span class="lpl-label">${labelWithHelp('Current P&amp;L', 'mtm')}</span>
           <span class="lpl-val-line">
-            <strong class="cpnl-val lpl-current-val">\u2014</strong><span class="cpnl-pct-bracket lpl-current-pct muted"></span>
+            <span class="cpnl-metrics">
+              <span class="cpnl-pair">
+                <span class="cpnl-k">Net</span>
+                <strong class="cpnl-val cpnl-net-val lpl-current-val">${_fmtSignedInr(seedNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct lpl-current-pct muted">${seedNetPct}</span>
+              </span>
+              <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+              <span class="cpnl-pair">
+                <span class="cpnl-k">Gross</span>
+                <strong class="cpnl-gross-val${seedGrossCls}">${_fmtSignedInr(seedMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${seedGrossPct}</span>
+              </span>
+            </span>
           </span>
-          <span class="muted lpl-note">Live MTM vs entry fills</span>
+          <span class="muted lpl-note">Net = MTM \u2212 est. charges \u00b7 Gross = raw MTM</span>
         </div>`;
   const mpRaw = t.actual_max_profit != null ? t.actual_max_profit
               : (sug.max_profit != null ? sug.max_profit : null);
@@ -3626,8 +3652,6 @@ function renderLiveProfitLevels(t) {
   const milestoneRs = lossMilestoneRs(investmentRs);
   const milestoneKind = premium ? premium.kind : 'paid';
   const peakRs = t.mtm_peak_rs != null ? parseFloat(t.mtm_peak_rs) : null;
-  const execLegs = (t.legs || []).filter(l => l.executed);
-  const estCharges = estChargesFromLegs(execLegs);
   const chargesAttr = estCharges != null
     ? ` data-est-charges="${estCharges}"`
     : '';
@@ -3717,13 +3741,12 @@ function renderLiveOutlook(t) {
         <button type="button" class="lo-help-btn" aria-label="What do these numbers mean?">?</button>
       </div>
       <div class="lo-help-sheet" hidden>
-        <p><strong>Win chance</strong> — estimated odds of profit at expiry from today\u2019s spot and days left. Not a prediction of tomorrow\u2019s direction.</p>
-        <p><strong>Close now</strong> — real profit/loss if you exit at current option prices (MTM).</p>
-        <p><strong>Near-expiry EV</strong> — average total P&amp;L if held to expiry (win% \u00d7 max profit + loss% \u00d7 \u2212max loss). Not extra profit on top of MTM.</p>
+        <p><strong>Win chance</strong> — model odds of profit at expiry from spot, DTE, and IV (band = \u00b115% IV stress). Not a historical hit rate or tomorrow\u2019s direction.</p>
+        <p><strong>Near-expiry EV</strong> — average total P&amp;L if held to expiry (win% \u00d7 max profit + loss% \u00d7 \u2212max loss); gross and net of est. charges. Not extra profit on top of MTM.</p>
         <p><strong>Structural fit</strong> — whether the index is where this strategy needs it. Green MTM + poor fit can happen (time decay).</p>
         <p><strong>Profit zone</strong> — points the index must move (+ up, \u2212 down) to reach the winning breakeven band.</p>
-        <p><strong>Close now vs hold</strong> — compares locking in MTM vs modeled hold-to-expiry outcome.</p>
-        <p class="muted" style="margin-top:.35rem">Tip: tap the \u24d8 icons beside each row for a short explanation.</p>
+        <p><strong>Gross vs hold</strong> — compares Current P&amp;L Gross (lock in now) vs modeled hold-to-expiry outcome.</p>
+        <p class="muted" style="margin-top:.35rem">Tip: tap the \u24d8 icons beside each row for a short explanation. Live MTM is under <em>Current P&amp;L</em> above.</p>
       </div>
       <div class="lo-entry-now muted"></div>
       <div class="lo-grid">
@@ -3731,18 +3754,17 @@ function renderLiveOutlook(t) {
           <span class="lpl-label">${labelWithHelp('Win chance', 'win_chance')}</span>
           <span class="lpl-val-line">
             <strong class="lo-pop">\u2014</strong>
+            <span class="lo-pop-band muted"></span>
             <span class="lo-pop-delta muted"></span>
           </span>
-          <span class="muted lpl-note lo-pop-note">From spot, DTE, and ATM IV \u2014 updates live or from last EOD/intraday data</span>
-        </div>
-        <div class="lo-row lo-row-mtm" hidden>
-          <span class="lpl-label">${labelWithHelp('Close now', 'close_now_mtm')}</span>
-          <span class="lpl-val-line"><strong class="lo-mtm">\u2014</strong></span>
-          <span class="muted lpl-note lo-mtm-note">Current mark-to-market P&amp;L</span>
+          <span class="muted lpl-note lo-pop-note">Model from spot, DTE, IV (\u00b115% IV band) \u2014 not a historical hit rate</span>
         </div>
         <div class="lo-row">
           <span class="lpl-label lo-ev-label">${labelWithHelp('Near-expiry EV', 'near_expiry_ev')}</span>
-          <span class="lpl-val-line"><strong class="lo-ev">\u2014</strong></span>
+          <span class="lpl-val-line">
+            <strong class="lo-ev">\u2014</strong>
+            <span class="lo-ev-net muted"></span>
+          </span>
           <span class="muted lpl-note lo-ev-note">Modeled total P&amp;L at near expiry (not extra gain from MTM)</span>
         </div>
         <div class="lo-row lo-row-direction">
@@ -3957,12 +3979,12 @@ function _updateLiveOutlook(tradeId, payload) {
     _renderLoEntryNow(el, payload);
     _renderLoScenarios(el, payload);
     const popEl = el.querySelector('.lo-pop');
+    const popBandEl = el.querySelector('.lo-pop-band');
     const deltaEl = el.querySelector('.lo-pop-delta');
     const popNote = el.querySelector('.lo-pop-note');
-    const mtmRow = el.querySelector('.lo-row-mtm');
-    const mtmEl = el.querySelector('.lo-mtm');
     const evLabel = el.querySelector('.lo-ev-label');
     const evEl = el.querySelector('.lo-ev');
+    const evNetEl = el.querySelector('.lo-ev-net');
     const evNote = el.querySelector('.lo-ev-note');
     const dirEl = el.querySelector('.lo-direction');
     const dirNote = el.querySelector('.lo-direction-note');
@@ -3985,6 +4007,15 @@ function _updateLiveOutlook(tradeId, payload) {
       popEl.textContent = (pop != null && !isNaN(pop)) ? fmtPct(pop) : '\u2014';
       popEl.classList.remove('pnl-profit', 'pnl-loss');
     }
+    if (popBandEl) {
+      const lo = payload.live_pop_lo != null ? parseFloat(payload.live_pop_lo) : null;
+      const hi = payload.live_pop_hi != null ? parseFloat(payload.live_pop_hi) : null;
+      if (lo != null && hi != null && !isNaN(lo) && !isNaN(hi) && Math.abs(hi - lo) >= 0.5) {
+        popBandEl.textContent = `model ${fmtPct(lo)}\u2013${fmtPct(hi)}`;
+      } else {
+        popBandEl.textContent = '';
+      }
+    }
     if (deltaEl) {
       if (delta != null && !isNaN(delta) && entryPop != null) {
         const arrow = delta > 0.05 ? '\u25b2 ' : (delta < -0.05 ? '\u25bc ' : '');
@@ -4002,29 +4033,30 @@ function _updateLiveOutlook(tradeId, payload) {
     }
     if (popNote) {
       let note = payload.summary || popNote.textContent;
-      if (payload.close_now_ev != null && payload.live_ev != null) {
-        note += ` · Close now ${_fmtSignedRs(payload.close_now_ev)} vs hold ${_fmtSignedRs(payload.live_ev)}`;
+      const holdEv = payload.live_ev_net != null ? payload.live_ev_net : payload.live_ev;
+      if (payload.close_now_ev != null && holdEv != null) {
+        note += ` · Gross ${_fmtSignedRs(payload.close_now_ev)} vs hold ${_fmtSignedRs(holdEv)}`;
       }
+      if (payload.pop_uses_skew) note += ' · skew-adjusted';
       popNote.textContent = note;
-    }
-    const closeNow = payload.close_now_ev != null ? parseFloat(payload.close_now_ev)
-      : (payload.mtm != null ? parseFloat(payload.mtm) : null);
-    if (mtmRow && mtmEl) {
-      if (closeNow != null && !isNaN(closeNow)) {
-        mtmRow.hidden = false;
-        mtmEl.textContent = _fmtSignedRs(closeNow);
-        mtmEl.classList.remove('pnl-profit', 'pnl-loss');
-        mtmEl.classList.add(closeNow >= 0 ? 'pnl-profit' : 'pnl-loss');
-      } else {
-        mtmRow.hidden = true;
-      }
     }
     if (evEl) {
       const ev = payload.live_ev != null ? parseFloat(payload.live_ev) : null;
-      evEl.textContent = _fmtSignedRs(ev);
+      evEl.textContent = ev != null && !isNaN(ev) ? `Gross ${_fmtSignedRs(ev)}` : '\u2014';
       evEl.classList.remove('pnl-profit', 'pnl-loss');
       if (ev != null && !isNaN(ev)) {
         evEl.classList.add(ev >= 0 ? 'pnl-profit' : 'pnl-loss');
+      }
+    }
+    if (evNetEl) {
+      const evNet = payload.live_ev_net != null ? parseFloat(payload.live_ev_net) : null;
+      if (evNet != null && !isNaN(evNet)) {
+        evNetEl.textContent = `\u00b7 Net ${_fmtSignedRs(evNet)}`;
+        evNetEl.classList.remove('pnl-profit', 'pnl-loss', 'muted');
+        evNetEl.classList.add(evNet >= 0 ? 'pnl-profit' : 'pnl-loss');
+      } else {
+        evNetEl.textContent = '';
+        evNetEl.classList.add('muted');
       }
     }
     if (evLabel) {
@@ -5243,14 +5275,75 @@ function _extraGateWarningRows(s) {
   return rows;
 }
 
-/** One panel: every gate + warning (Kind · Result · Gate · Detail). */
-function renderGatesAndWarningsPanel(s) {
+/** All gate rows (confidence + folded extras), sorted for display. */
+function collectAllGateRows(s) {
   const fromConf = parseConditionsJson(s) || [];
   const extras = _extraGateWarningRows(s);
-  // Dedupe extras whose label already appears in confidence checks
   const confLabels = new Set(fromConf.map(c => (c.label || '').toLowerCase()));
   const mergedExtras = extras.filter(e => !confLabels.has((e.label || '').toLowerCase()));
-  const checks = sortGatesForDisplay([...fromConf, ...mergedExtras]);
+  return sortGatesForDisplay([...fromConf, ...mergedExtras]);
+}
+
+/** Non-pass rows an operator should scan before placing. */
+function collectPrePlaceIssues(s) {
+  return collectAllGateRows(s).filter(c => {
+    const st = c.status || '';
+    return st === 'FAIL' || st === 'SOFT_FAIL' || st === 'PASS_WARN' || st === 'PASS_ERROR';
+  });
+}
+
+/**
+ * Compact checklist above Place orders — same issues as Gates & warnings,
+ * so nothing important lives only halfway up the card.
+ */
+function renderPrePlaceReview(s) {
+  const issues = collectPrePlaceIssues(s);
+  if (!issues.length) {
+    return `<div class="pre-place-review pre-place-review--ok" data-pre-place-review>
+      <div class="pre-place-head">
+        <strong>Before you place</strong>
+        <span class="tag tag-ok">No open warnings</span>
+      </div>
+      <p class="muted pre-place-note">All gates look clear. Still confirm size, prices, and amount needed.</p>
+    </div>`;
+  }
+  const sid = escapeHtml(s.suggestion_id || '');
+  const nFail = issues.filter(c => c.status === 'FAIL').length;
+  const nSoft = issues.filter(c => c.status === 'SOFT_FAIL').length;
+  const nWarn = issues.filter(c => c.status === 'PASS_WARN' || c.status === 'PASS_ERROR').length;
+  const chips = [
+    nFail ? `<span class="tag tag-err">${nFail} fail</span>` : '',
+    nSoft ? `<span class="tag tag-warn">${nSoft} soft</span>` : '',
+    nWarn ? `<span class="tag tag-warn">${nWarn} warn</span>` : '',
+  ].filter(Boolean).join('');
+  const items = issues.map(c => {
+    const result = gateResultOf(c);
+    const plain = gateDetailPlainEnglish(c);
+    const resCls = result === 'FAIL' ? 'tag-err' : 'tag-warn';
+    return `<li class="pre-place-item">
+      <span class="tag ${resCls}">${escapeHtml(result)}</span>
+      <span class="pre-place-item-text">
+        <strong>${escapeHtml(c.label || 'Issue')}</strong>
+        <span class="muted"> — ${escapeHtml(plain.headline || plain.body || '')}</span>
+      </span>
+    </li>`;
+  }).join('');
+  return `<div class="pre-place-review pre-place-review--warn" data-pre-place-review>
+    <div class="pre-place-head">
+      <strong>Before you place</strong>
+      ${chips}
+    </div>
+    <ul class="pre-place-list">${items}</ul>
+    <p class="muted pre-place-note">
+      Same list as <a href="#conf-${sid}" class="pre-place-gates-link">Gates &amp; warnings</a> above
+      (Kind / Result table). Soft/advisory items do not lock Place orders — review, then confirm.
+    </p>
+  </div>`;
+}
+
+/** One panel: every gate + warning (Kind · Result · Gate · Detail). */
+function renderGatesAndWarningsPanel(s) {
+  const checks = collectAllGateRows(s);
   if (!checks.length) return '';
 
   const STATUS_CLASS = { PASS: 'conf-pass', FAIL: 'conf-fail', SOFT_FAIL: 'conf-soft-fail', PASS_WARN: 'conf-warn', PASS_ERROR: 'conf-error' };
@@ -5322,7 +5415,8 @@ function renderGatesAndWarningsPanel(s) {
 
   const hasIssues = nFail > 0 || nSoftFail > 0 || nWarn > 0 || nError > 0;
   const titleCls = hasIssues ? 'conf-checks-title conf-checks-title--warn' : 'conf-checks-title';
-  const startOpen = nFail > 0 ? ' open' : '';
+  // Open when anything needs review (not only HARD fails).
+  const startOpen = hasIssues ? ' open' : '';
 
   return `<details class="conf-checks-panel gates-warnings-panel" id="conf-${sid}"${startOpen}>
     <summary class="${titleCls} gates-summary">
@@ -6592,6 +6686,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     <div class="legs-grid">${legsHtml}</div>
     ${creditBreakdownHtml(s.legs, 'suggest', !readOnly)}
     ${readOnly ? '' : (showExecActions ? `
+    ${renderPrePlaceReview(s)}
     <div class="exec-order-bar">
       <div class="sl-monitor-label" style="margin-bottom:6px">Your order</div>
       <div class="exec-order-row">
@@ -6727,6 +6822,19 @@ function bindFlagResetButtons() {
 }
 
 function bindSuggestionActions() {
+  $$('.pre-place-gates-link').forEach(a => {
+    if (a.dataset.bound === '1') return;
+    a.dataset.bound = '1';
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const id = (a.getAttribute('href') || '').replace(/^#/, '');
+      const panel = id ? document.getElementById(id) : null;
+      if (panel) {
+        panel.open = true;
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
+  });
   // Live recalc on every card. Triggers on:
   //   * exec-lots-input → shared order size (scales rupee totals)
   //   * data-leg-price  → shared per-leg price (shifts net credit; width is
@@ -8166,6 +8274,8 @@ function renderTrade(t, expanded = false) {
   const _headerGrossCls = _headerMtm > 0 ? ' mtm-pos' : (_headerMtm < 0 ? ' mtm-neg' : '');
   const _headerNetPct = (_headerNet != null && _tradePremium)
     ? pnlPctTextCompact(_headerNet, _tradePremium) : '';
+  const _headerGrossPct = (_headerMtm != null && _tradePremium)
+    ? pnlPctTextCompact(_headerMtm, _tradePremium) : '';
   const _chargesAttr = _headerCharges != null ? ` data-charges-rs="${_headerCharges}"` : '';
   const summaryHtml = `
     <div class="card-head collapsible-card-head">
@@ -8233,7 +8343,7 @@ function renderTrade(t, expanded = false) {
             <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
             <span class="cpnl-pair">
               <span class="cpnl-k">Gross</span>
-              <strong class="cpnl-gross-val${_headerGrossCls}">${_fmtSignedInr(_headerMtm)}</strong>
+              <strong class="cpnl-gross-val${_headerGrossCls}">${_fmtSignedInr(_headerMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${_headerGrossPct}</span>
             </span>
           </span>
         </span>
