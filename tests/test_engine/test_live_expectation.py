@@ -515,6 +515,7 @@ class TestProfitZoneDetail:
         )
         assert out["profit_zone_side"] == "below_upper"
         assert out["profit_zone_pts"] == pytest.approx(80.0, abs=0.01)
+        assert out["profit_zone_note"].startswith("Above")
 
     def test_bear_put_above_lower_needs_decline(self):
         out = _profit_zone_detail(
@@ -524,7 +525,10 @@ class TestProfitZoneDetail:
             upper_be=23200.0,
         )
         assert out["profit_zone_side"] == "above_lower"
-        assert out["profit_zone_pts"] == pytest.approx(80.0, abs=0.01)
+        # Signed convention: negative = decline needed.
+        assert out["profit_zone_pts"] == pytest.approx(-80.0, abs=0.01)
+        assert "−80" in out["profit_zone_text"] or "-80" in out["profit_zone_text"]
+        assert out["profit_zone_note"].startswith("Below")
 
     def test_iron_condor_above_upper_needs_decline(self):
         out = _profit_zone_detail(

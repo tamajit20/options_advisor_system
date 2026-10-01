@@ -1776,30 +1776,6 @@ function _applyLegLtpsToClosePanel(tradeId, legLtps) {
     anyUpdated = true;
   });
   if (!anyUpdated) return false;
-  const rows = [...closePanel.querySelectorAll('.cf-live-leg')];
-  let gross = 0; let allFilled = true;
-  const entryTxns = [], exitTxns = [];
-  rows.forEach(row => {
-    const action = row.dataset.action;
-    const ep = parseFloat(row.dataset.fillPrice) || 0;
-    const lots = parseInt(row.dataset.lots) || 1;
-    const ls = parseInt(row.dataset.lotSize) || 1;
-    const cp = parseFloat(row.querySelector('.cf-live-price')?.dataset.ltp);
-    if (isNaN(cp) || cp <= 0) { allFilled = false; return; }
-    gross += action === 'SELL' ? (ep - cp) * lots * ls : (cp - ep) * lots * ls;
-    entryTxns.push({ action, fill_price: ep, lots, lot_size: ls });
-    exitTxns.push({ action: action === 'SELL' ? 'BUY' : 'SELL', fill_price: cp, lots, lot_size: ls });
-  });
-  const preview = closePanel.querySelector('.live-pnl-preview');
-  if (preview && allFilled) {
-    const charges = estChargesOneSide([...entryTxns, ...exitTxns]);
-    const net = gross - charges;
-    const prem = _premiumFromDataset(preview);
-    _setPnlLine(preview.querySelector('.live-pnl-gross'), preview.querySelector('.live-pnl-gross-pct'), gross, prem);
-    const c = preview.querySelector('.live-pnl-charges');
-    if (c) c.textContent = `\u20b9${fmt(charges)}`;
-    _setPnlLine(preview.querySelector('.live-pnl-value'), preview.querySelector('.live-pnl-pct'), net, prem);
-  }
   // Fill-side preview: blank boxes track live LTP; typed values stay fixed.
   const fillRows = [...closePanel.querySelectorAll('.leg-exit-row')];
   if (fillRows.length) {
@@ -4609,7 +4585,10 @@ function _updateLiveOutlook(tradeId, payload) {
         beDistEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-dir-neutral');
         const side = payload.profit_zone_side || payload.be_side || '';
         if (side === 'inside') beDistEl.classList.add('pnl-profit');
-        else if (side in { below_lower: 1, above_upper: 1, needs_breakout: 1 }) {
+        else if (side in {
+          below_lower: 1, above_upper: 1, below_upper: 1, above_lower: 1,
+          needs_breakout: 1,
+        }) {
           beDistEl.classList.add('pnl-loss');
         } else beDistEl.classList.add('lo-dir-neutral');
       } else {
@@ -8464,12 +8443,6 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
             <div id="live-feed-banner-${escapeHtml(tradeId)}" class="live-feed-banner" hidden></div>
             <div class="close-col-title">📡 Current market prices</div>
             <div class="cf-live-legs">${liveLegsHtml}</div>
-            <div class="live-pnl-preview" id="live-pnl-${escapeHtml(tradeId)}"${closePremium ? ` data-premium-rs="${closePremium.rs}" data-premium-kind="${closePremium.kind}"` : ''}>
-              <div class="live-pnl-label">If you close now</div>
-              <div>Gross P&amp;L: <strong class="live-pnl-gross">\u2014</strong><span class="live-pnl-gross-pct pnl-pct-bracket muted"></span></div>
-              <div class="muted" style="font-size:.82rem">Est. charges: <strong class="live-pnl-charges">\u2014</strong></div>
-              <div>Net P&amp;L: <strong class="live-pnl-value">\u2014</strong><span class="live-pnl-pct pnl-pct-bracket muted"></span></div>
-            </div>
             ${targetExitHtml}
           </div>
 
@@ -8517,12 +8490,11 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     function _renderPnl(container, result) {
       if (!container) return;
       const prem = _premiumFromDataset(container) || closePremium;
-      const isFill = container.classList.contains('fill-pnl-preview');
-      const grossEl = container.querySelector(isFill ? '.fill-pnl-gross' : '.live-pnl-gross');
-      const grossPctEl = container.querySelector(isFill ? '.fill-pnl-gross-pct' : '.live-pnl-gross-pct');
-      const chargesEl = container.querySelector(isFill ? '.fill-pnl-charges' : '.live-pnl-charges');
-      const netEl = container.querySelector(isFill ? '.fill-pnl-value' : '.live-pnl-value');
-      const netPctEl = container.querySelector(isFill ? '.fill-pnl-pct' : '.live-pnl-pct');
+      const grossEl = container.querySelector('.fill-pnl-gross');
+      const grossPctEl = container.querySelector('.fill-pnl-gross-pct');
+      const chargesEl = container.querySelector('.fill-pnl-charges');
+      const netEl = container.querySelector('.fill-pnl-value');
+      const netPctEl = container.querySelector('.fill-pnl-pct');
       if (!netEl) return;
       if (!result) {
         _setPnlLine(grossEl, grossPctEl, null, prem);
@@ -8542,17 +8514,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       } else if (warnEl) warnEl.remove();
     }
 
-    // LEFT panel: recalc from live price display spans
-    function recalcLivePnl() {
-      const rows = [...content.querySelectorAll('.cf-live-leg')];
-      const result = _calcPnl(rows, row => row.querySelector('.cf-live-price')?.dataset.ltp);
-      _renderPnl(content.querySelector('.live-pnl-preview'), result);
-      if (result && (_lastMtmByTrade[tradeId] == null || _lastMtmByTrade[tradeId].mtm == null)) {
-        _updateCurrentPnlBadge(tradeId, result.gross, !_inMarketHours() ? 'last EOD' : null, false);
-      }
-    }
-
-    // RIGHT panel: typed fills, or live LTP when a box is left blank
+    // Typed fills, or live LTP when a box is left blank
     function recalcFillPnl() {
       const rows = [...content.querySelectorAll('.leg-exit-row')];
       const result = _calcPnl(rows, row => {
@@ -8564,11 +8526,13 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
         )?.dataset?.ltp;
       });
       _renderPnl(content.querySelector('.fill-pnl-preview'), result);
+      if (result && (_lastMtmByTrade[tradeId] == null || _lastMtmByTrade[tradeId].mtm == null)) {
+        _updateCurrentPnlBadge(tradeId, result.gross, !_inMarketHours() ? 'last EOD' : null, false);
+      }
     }
 
     content.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcFillPnl));
     recalcFillPnl();
-    recalcLivePnl();
     const hasLivePrices = data.legs.some(l =>
       (mktPriceMap[l.leg_order] > 0) && priceSrcMap[l.leg_order] === 'live');
     const usingEod = !marketOpen && data.legs.some(l => mktPriceMap[l.leg_order] > 0);

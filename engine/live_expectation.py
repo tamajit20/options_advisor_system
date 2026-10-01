@@ -875,9 +875,37 @@ def _fmt_signed_pts(pts: float) -> str:
     return f"{sign}{abs(pts):,.0f} pts"
 
 
-def _profit_zone_note(lower_be: Optional[float], upper_be: Optional[float]) -> str:
+def _profit_zone_note(
+    strategy: str,
+    lower_be: Optional[float],
+    upper_be: Optional[float],
+) -> str:
+    """Describe the profit side of the structure (Above / Below / Zone)."""
     lb = _as_float(lower_be)
     ub = _as_float(upper_be)
+    strat = (strategy or "").upper()
+    if strat in _RANGE_STRATEGIES or strat in _BREAKOUT_STRATEGIES:
+        if lb is not None and ub is not None and lb < ub:
+            return f"Zone ₹{lb:,.0f}–₹{ub:,.0f}"
+        if lb is not None:
+            return f"Above ₹{lb:,.0f}"
+        if ub is not None:
+            return f"Below ₹{ub:,.0f}"
+        return ""
+    # Debit call vertical / bull structures: profit at or above the BE.
+    if strat == "BULL_CALL_SPREAD":
+        key = ub if ub is not None else lb
+        return f"Above ₹{key:,.0f}" if key is not None else ""
+    if strat in _BULL_STRATEGIES:
+        key = lb if lb is not None else ub
+        return f"Above ₹{key:,.0f}" if key is not None else ""
+    # Debit put vertical / bear structures: profit at or below the BE.
+    if strat == "BEAR_PUT_SPREAD":
+        key = lb if lb is not None else ub
+        return f"Below ₹{key:,.0f}" if key is not None else ""
+    if strat in _BEAR_STRATEGIES:
+        key = ub if ub is not None else lb
+        return f"Below ₹{key:,.0f}" if key is not None else ""
     if lb is not None and ub is not None and lb < ub:
         return f"Zone ₹{lb:,.0f}–₹{ub:,.0f}"
     if lb is not None:
@@ -902,7 +930,7 @@ def _profit_zone_detail(
         return {}
 
     strat = (strategy or "").upper()
-    note = _profit_zone_note(lb, ub)
+    note = _profit_zone_note(strat, lb, ub)
     pct = lambda pts: round(abs(pts) / spot_f * 100.0, 2) if spot_f > 0 else None
 
     def _inside() -> dict:
@@ -971,11 +999,12 @@ def _profit_zone_detail(
             return _outside(pts=round(key - spot_f, 2), side="below_upper")
         return {"be_side": "unknown"}
     if strat == "BEAR_PUT_SPREAD":
+        # Profit at/below long-put − debit. Spot above that BE needs a decline.
         key = lb
         if key is not None:
             if spot_f <= key:
                 return _inside()
-            return _outside(pts=round(spot_f - key, 2), side="above_lower")
+            return _outside(pts=round(key - spot_f, 2), side="above_lower")
         return {"be_side": "unknown"}
 
     # Directional bull: spot at/above lower breakeven (or short put level).
