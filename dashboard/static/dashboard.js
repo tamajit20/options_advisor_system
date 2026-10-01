@@ -1555,22 +1555,21 @@ function _updateLiveProfitLevels(tradeId, payload) {
       }
       const lossVal = section.querySelector('.live-loss-ms-val');
       const lossNote = section.querySelector('.live-loss-ms-note');
+      const kind = section.dataset.premiumKind || 'paid';
       if (lossVal && milestoneRs != null) {
-        const kind = section.dataset.premiumKind || 'paid';
-        lossVal.textContent = lossFixed
-          ? `\u20b9${fmt(milestoneRs)} loss`
-          : `\u20b9${fmt(milestoneRs)} loss${lossMilestonePctHint(kind)}`;
+        lossVal.textContent = `\u20b9${fmt(milestoneRs)} loss`;
         lossVal.classList.remove('muted');
+        _syncLossMsStep(section, milestoneRs, kind, lossFixed);
       } else if (lossVal && !lossFixed) {
         lossVal.textContent = 'Off';
         lossVal.classList.add('muted');
+        _syncLossMsStep(section, null, kind, false);
       }
       if (lossNote && milestoneRs != null) {
         if (lossFixed) {
           lossNote.textContent = `Fixed loss line \u2014 auto-closes if MTM \u2264 \u2212\u20b9${fmt(milestoneRs)}${milestoneConfirmNote(lossMilestoneConfig())}`;
         } else {
           const premRs = parseFloat(section.dataset.premiumRs);
-          const kind = section.dataset.premiumKind || 'paid';
           const premLabel = kind === 'received' ? 'premium received' : 'premium paid';
           const premTxt = (!isNaN(premRs) && premRs > 0) ? fmt(premRs) : '';
           lossNote.textContent = `Auto-closes at ${Math.round(lossMilestonePct() || 0)}% loss on \u20b9${premTxt} ${premLabel}${milestoneConfirmNote(lossMilestoneConfig())} \u2014 separate from hard SL`;
@@ -3832,18 +3831,35 @@ function profitMsStepsHtml(plan, pointer) {
     const i = parseInt(lev.i, 10) || 0;
     let cls = 'lpl-ms-step';
     if (p >= i) cls += p === i ? ' is-current' : ' is-done';
+    else if (p === 0 && i === 1) cls += ' is-next';
     else cls += ' is-pending';
     const peak = parseFloat(lev.peak_rs);
     const sell = parseFloat(lev.sell_rs);
-    const title = `M${i}: arms at peak \u20b9${fmt(peak)}, sell \u20b9${fmt(sell)}`;
+    const title = p === 0 && i === 1
+      ? `Next: M1 arms at peak \u20b9${fmt(peak)}, then sell \u20b9${fmt(sell)}`
+      : `M${i}: arms at peak \u20b9${fmt(peak)}, sell \u20b9${fmt(sell)}`;
     return `<span class="${cls}" title="${escapeHtml(title)}">M${i} \u20b9${fmt(sell)}</span>`;
   }).join('');
-  return `<div class="lpl-ms-steps">${chips}</div>`;
+  return `<div class="lpl-ms-steps lpl-profit-ms-steps">${chips}</div>`;
+}
+
+function lossMsStepHtml(milestoneRs, premiumKind, fixed) {
+  if (milestoneRs == null || isNaN(milestoneRs) || milestoneRs <= 0) return '';
+  const pct = lossMilestonePct();
+  const kind = premiumKind === 'received' ? 'premium received' : 'premium paid';
+  const title = fixed
+    ? `Fixed loss line \u20b9${fmt(milestoneRs)}`
+    : (pct != null
+      ? `Loss line \u20b9${fmt(milestoneRs)} (${Math.round(pct)}% of ${kind})`
+      : `Loss line \u20b9${fmt(milestoneRs)}`);
+  return `<div class="lpl-ms-steps lpl-loss-ms-steps">`
+    + `<span class="lpl-ms-step is-current" title="${escapeHtml(title)}">`
+    + `L \u20b9${fmt(milestoneRs)}</span></div>`;
 }
 
 function _syncProfitMsSteps(section, plan, pointer) {
   if (!section) return;
-  let el = section.querySelector('.lpl-ms-steps');
+  let el = section.querySelector('.lpl-profit-ms-steps');
   const html = profitMsStepsHtml(plan, pointer);
   if (!html) {
     if (el) el.remove();
@@ -3862,6 +3878,26 @@ function _syncProfitMsSteps(section, plan, pointer) {
   if (plan) {
     try { section.dataset.profitMsPlan = JSON.stringify(plan); } catch (e) { /* ignore */ }
     section.dataset.profitMsPointer = String(pointer || 0);
+  }
+}
+
+function _syncLossMsStep(section, milestoneRs, premiumKind, fixed) {
+  if (!section) return;
+  let el = section.querySelector('.lpl-loss-ms-steps');
+  const html = lossMsStepHtml(milestoneRs, premiumKind, fixed);
+  if (!html) {
+    if (el) el.remove();
+    return;
+  }
+  if (el) {
+    el.outerHTML = html;
+  } else {
+    const row = section.querySelector('.lpl-milestone-row');
+    const ov = row && row.querySelector('.lpl-ms-override');
+    const note = row && row.querySelector('.live-loss-ms-note');
+    if (ov) ov.insertAdjacentHTML('beforebegin', html);
+    else if (note) note.insertAdjacentHTML('beforebegin', html);
+    else if (row) row.insertAdjacentHTML('beforeend', html);
   }
 }
 
@@ -4027,7 +4063,7 @@ function _profitMsRowHtml(t, profitMsValHtml, profitMsNote, stepsHtml) {
         </div>`;
 }
 
-function _lossMsRowHtml(t, valHtml, note) {
+function _lossMsRowHtml(t, valHtml, note, stepHtml) {
   return `
         <div class="lpl-row lpl-milestone-row">
           <span class="lpl-label">${labelWithHelp('Loss milestone', 'loss_milestone')}</span>
@@ -4035,6 +4071,7 @@ function _lossMsRowHtml(t, valHtml, note) {
             ${valHtml}
             <span class="lpl-status lpl-status-milestone" hidden></span>
           </span>
+          ${stepHtml || ''}
           ${milestoneOverrideHtml('loss', t)}
           <span class="muted lpl-note live-loss-ms-note">${escapeHtml(note)}</span>
         </div>`;
@@ -4157,14 +4194,17 @@ function renderLiveProfitLevels(t) {
     lossValHtml = `<span class="lpl-val lpl-milestone live-loss-ms-val">\u20b9${fmt(milestoneRs)} loss</span>`;
     lossNote = `Fixed loss line \u2014 auto-closes if MTM \u2264 \u2212\u20b9${fmt(milestoneRs)}${milestoneConfirmNote(lossMilestoneConfig())}`;
   } else if (milestoneRs != null) {
-    lossValHtml = `<span class="lpl-val lpl-milestone live-loss-ms-val">\u20b9${fmt(milestoneRs)} loss${lossMilestonePctHint(milestoneKind)}</span>`;
+    lossValHtml = `<span class="lpl-val lpl-milestone live-loss-ms-val">\u20b9${fmt(milestoneRs)} loss</span>`;
     lossNote = `Auto-closes at ${Math.round(lossMilestonePct() || 0)}% loss on \u20b9${fmt(investmentRs)} ${milestoneKind === 'received' ? 'premium received' : 'premium paid'}${milestoneConfirmNote(lossMilestoneConfig())} \u2014 separate from hard SL`;
   } else {
     lossValHtml = `<span class="lpl-val muted live-loss-ms-val">Off</span>`;
     lossNote = 'Enable loss_milestone_alert or check Fixed to set a rupee loss line';
   }
+  const lossStepHtml = milestoneRs != null
+    ? lossMsStepHtml(milestoneRs, milestoneKind, lossFixed)
+    : '';
   const profitRowHtml = _profitMsRowHtml(t, profitMsValHtml, profitMsNote, stepsHtml);
-  const lossRowHtml = _lossMsRowHtml(t, lossValHtml, lossNote);
+  const lossRowHtml = _lossMsRowHtml(t, lossValHtml, lossNote, lossStepHtml);
   const premData = premium
     ? ` data-premium-rs="${premium.rs}" data-premium-kind="${premium.kind}"`
     : '';
@@ -5288,6 +5328,73 @@ function legTargetCloseHint(action, entry, strategy, dte, legOrder) {
   const verb = action === 'SELL' ? 'buy back' : 'sell back';
   const cmp = action === 'SELL' ? '\u2264' : '\u2265';
   return `<span class="leg-target-close">Target close: ${verb} ${cmp} \u20b9<span class="target-close-val"${orderAttr}>${fmt(targetClose)}</span> (${capLabel})</span>`;
+}
+
+/** Target-exit box for open legs (used in Close Trade left column). */
+function targetExitBoxHtml(legs, strategy, dte, netCreditActual) {
+  const openExecLegs = (legs || []).filter(l => l.executed && !l.exit_price);
+  if (!openExecLegs.length) return '';
+  const strat = strategy || (openExecLegs[0] && openExecLegs[0].strategy) || '';
+  let dteSafe = dte;
+  if (dteSafe == null) {
+    const exp = openExecLegs[0] && (openExecLegs[0].expiry_date || openExecLegs[0].expiry);
+    dteSafe = dteFromExpiry(exp);
+  }
+  const netCr = netCreditActual != null && netCreditActual !== ''
+    ? parseFloat(netCreditActual) : NaN;
+  const isCreditTrade = !isNaN(netCr) && netCr > 0;
+  const isDebitTrade = !isNaN(netCr) && netCr < 0;
+  const tradePct = isCreditTrade
+    ? creditCaptureFraction(strat)
+    : (isDebitSpreadStrategy(strat)
+      ? debitSpreadTargetFraction()
+      : longPremiumTargetMult(dteSafe));
+  const tradePctLabel = `${Math.round(tradePct * 100)}%`;
+  const structureQty = Math.max(...openExecLegs.map(
+    l => ((l.lots_actual || l.lots || 1) * (l.lot_size || 1))
+  )) || 1;
+  let perUnitCredit = 0;
+  openExecLegs.forEach(l => {
+    perUnitCredit += (l.action === 'SELL' ? 1 : -1) * (l.fill_price || 0);
+  });
+  const creditBase = (!isNaN(netCr) && netCr !== 0) ? netCr : (perUnitCredit * structureQty);
+  const targetPct = creditBase * tradePct;
+  const targetRows = openExecLegs.map(l => {
+    const tc = legTargetClosePrice(l.action, l.fill_price, strat, dteSafe);
+    const capLabel = legTargetCloseCaption(l.action, strat, dteSafe);
+    const lotsUsed = l.lots_actual || l.lots || 1;
+    const lotSize = l.lot_size || 1;
+    const qty = lotsUsed * lotSize;
+    const closeVerb = l.action === 'SELL' ? 'Buy back' : 'Sell back';
+    const sign = l.action === 'SELL' ? '\u2264' : '\u2265';
+    const priceBit = tc != null
+      ? `${closeVerb} ${sign} <strong>\u20b9${fmt(tc)}</strong>`
+      : closeVerb;
+    return `<div class="target-row">
+      <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'} tag-sm">${escapeHtml(l.action||'')}</span>
+      <span><strong>${formatLegInstrument(l)}</strong></span>
+      <span>${priceBit} <span class="muted">(${capLabel} \u00b7 entry \u20b9${fmt(l.fill_price)} \u00d7 ${qty}u)</span></span>
+    </div>`;
+  }).join('');
+  let footer = '';
+  if (isCreditTrade) {
+    footer = `<div class="target-exit-keep">Close when ~\u20b9${fmt(targetPct)} of the \u20b9${fmt(netCr)} total credit is captured</div>`;
+  } else if (isDebitTrade) {
+    const debit = Math.abs(netCr);
+    const frac = isDebitSpreadStrategy(strat)
+      ? debitSpreadTargetFraction()
+      : longPremiumTargetMult(dteSafe);
+    const targetGain = Math.round(debit * frac * 10) / 10;
+    footer = `<div class="target-exit-keep">Close when position gains ~\u20b9${fmt(targetGain)} (${Math.round(frac * 100)}% of \u20b9${fmt(debit)} debit paid)</div>`;
+  }
+  const titleLabel = isDebitTrade
+    ? `${tradePctLabel} debit gain target`
+    : `${tradePctLabel} credit capture`;
+  return `<div class="target-exit-box">
+    <div class="target-exit-title">\u{1F3AF} Target exit (${titleLabel})</div>
+    ${targetRows}
+    ${footer}
+  </div>`;
 }
 
 // ── Confidence checks breakdown ──────────────────────────────────────────────
@@ -6545,7 +6652,7 @@ function creditBreakdownHtml(legs, mode, live = false) {
       : aboveRange
         ? `<span class="cb-fill-status cb-fill-above">↑ above range (favourable)</span>`
         : `<span class="cb-fill-status cb-fill-below">↓ below suggested minimum</span>`;
-    tradeCompareHtml = `<div class="cb-trade-compare">${rangeLabel} &nbsp;·&nbsp; ${fillStatus}</div>`;
+    tradeCompareHtml = `<span class="cb-trade-compare">${rangeLabel} · ${fillStatus}</span>`;
   }
   // The equation above prices blank legs at the suggested midpoint, but they
   // actually execute at the live LTP. This second row redoes the maths at the
@@ -6560,11 +6667,10 @@ function creditBreakdownHtml(legs, mode, live = false) {
   return `<div class="credit-breakdown">
     <div class="cb-equation">${rows}
       <span class="cb-sep"> = </span>
-      <span class="cb-net" data-cb-net style="color:${netColor}">\u20b9${fmt(Math.abs(netMid))}/unit</span>${rangeText}${mode === 'suggest' ? ' <span class="cb-live-status" data-cb-status></span>' : ''}
+      <span class="cb-net" data-cb-net style="color:${netColor}">\u20b9${fmt(Math.abs(netMid))}/unit</span>${rangeText}${tradeCompareHtml}${mode === 'suggest' ? ' <span class="cb-live-status" data-cb-status></span>' : ''}
     </div>
     <div class="cb-label">${escapeHtml(netLabel)} per unit (1 lot each leg)</div>
     ${liveRowHtml}
-    ${tradeCompareHtml}
   </div>`;
 }
 
@@ -6660,39 +6766,16 @@ function execStepBadge(legs, leg, strategy, mode) {
   return `<span class="${cls}" title="${tip}">${pos}</span>`;
 }
 
-// Banner shown above the legs list explaining the order rule.
-function execOrderSeqHtml(legs, strategy, mode) {
-  if (!legs || legs.length <= 1) return null;
-  const map = executionOrder(legs, strategy, mode);
-  if (!map.size) return null;
-  const ordered = [...legs].sort((a, b) => (map.get(a.leg_order) || 99) - (map.get(b.leg_order) || 99));
-  const seq = ordered.map(l => {
-    const verb = mode === 'close'
-      ? (l.action === 'SELL' ? 'Buy back' : 'Sell back')
-      : l.action;
-    const verbClass = (mode === 'close')
-      ? (l.action === 'SELL' ? 'tag-ok' : 'tag-err')
-      : (l.action === 'SELL' ? 'tag-err' : 'tag-ok');
-    const stepCls = mode === 'close' ? 'exec-step exec-step-close' : 'exec-step exec-step-entry';
-    return `<span class="exec-seq-item">
-      <span class="${stepCls}">${map.get(l.leg_order)}</span>
-      <span class="tag ${verbClass} tag-sm">${verb}</span>
-      ${l.strike || ''} ${escapeHtml(_normExpiry(l.expiry_date || l.expiry) || '')} ${escapeHtml(l.option_type || '')}
-    </span>`;
-  }).join('<span class="exec-seq-arrow">\u2192</span>');
-  const heading = mode === 'close'
-    ? 'Close in this order \u2014 buy back short legs FIRST, then sell longs:'
-    : 'Execute in this order \u2014 acquire hedges (BUY) FIRST, then SELL shorts:';
-  return { heading, seq };
-}
-
+// Banner above the legs list — heading only; step numbers live on the tiles.
 function execOrderBanner(legs, strategy, mode) {
-  const content = execOrderSeqHtml(legs, strategy, mode);
-  if (!content) return '';
-  const icon = mode === 'close' ? '\u26a0\ufe0f ' : '\u26a0\ufe0f ';
+  if (!legs || legs.length <= 1) return '';
+  const map = executionOrder(legs, strategy, mode);
+  if (!map.size) return '';
+  const heading = mode === 'close'
+    ? 'Close in this order \u2014 buy back short legs FIRST, then sell longs (see step numbers on each tile).'
+    : 'Execute in this order \u2014 acquire hedges (BUY) FIRST, then SELL shorts (see step numbers on each tile).';
   return `<div class="exec-order-banner exec-order-${mode}">
-    <div class="exec-order-heading">${icon}${content.heading}</div>
-    <div class="exec-order-seq">${content.seq}</div>
+    <div class="exec-order-heading">\u26a0\ufe0f ${heading}</div>
   </div>`;
 }
 
@@ -8290,6 +8373,16 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       }
     });
     const closeStrategy = (data.legs[0] && data.legs[0].strategy) || '';
+    const tradeRow = (tradeMeta && tradeMeta.trade) || {};
+    const closeNetCredit = parseFloat(
+      tradeRow.net_credit_actual != null ? tradeRow.net_credit_actual : netCreditActual
+    ) || 0;
+    const closeDte = dteFromExpiry(
+      (data.legs[0] && (data.legs[0].expiry_date || data.legs[0].expiry)) || null
+    );
+    const targetExitHtml = targetExitBoxHtml(
+      data.legs, closeStrategy, closeDte, closeNetCredit,
+    );
 
     // ── LEFT: read-only live market price display ──
     const liveLegsHtml = data.legs.map(l => {
@@ -8377,6 +8470,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
               <div class="muted" style="font-size:.82rem">Est. charges: <strong class="live-pnl-charges">\u2014</strong></div>
               <div>Net P&amp;L: <strong class="live-pnl-value">\u2014</strong><span class="live-pnl-pct pnl-pct-bracket muted"></span></div>
             </div>
+            ${targetExitHtml}
           </div>
 
           <!-- RIGHT: actual fills entry -->
@@ -8831,76 +8925,7 @@ function renderTrade(t, expanded = false) {
 
   let legsHtml = '';
   if (hasLegDetails && legs.length) {
-    // Build target-exit summary for open executed legs
-    const openExecLegs = legs.filter(l => l.executed && !l.exit_price);
-    let targetSummaryHtml = '';
-    // Strategy-specific profit target %: Iron Butterfly exits earlier (25%) due to narrow wings
-    const _tradeStrategy = (t.suggestion && t.suggestion.strategy) || '';
-    const _tradeDte = (t.suggestion && t.suggestion.dte != null)
-      ? parseInt(t.suggestion.dte, 10) : null;
-    const _netCr = t.net_credit_actual != null ? parseFloat(t.net_credit_actual)
-      : (t.suggestion && t.suggestion.net_credit != null
-        ? parseFloat(t.suggestion.net_credit) : null);
-    const isCreditTrade = _netCr != null && _netCr > 0;
-    const isDebitTrade  = _netCr != null && _netCr < 0;
-    const tradePct = isCreditTrade
-      ? creditCaptureFraction(_tradeStrategy)
-      : (isDebitSpreadStrategy(_tradeStrategy)
-        ? debitSpreadTargetFraction()
-        : longPremiumTargetMult(_tradeDte));
-    const tradePctLabel = `${Math.round(tradePct * 100)}%`;
-    if (openExecLegs.length > 0) {
-      const netCreditActual = t.net_credit_actual || 0;
-      // One structure quantity — do not sum qty across every leg (that 4×'d ICs).
-      const structureQty = Math.max(...openExecLegs.map(
-        l => ((l.lots_actual || l.lots || 1) * (l.lot_size || 1))
-      )) || 1;
-      let perUnitCredit = 0;
-      openExecLegs.forEach(l => {
-        perUnitCredit += (l.action === 'SELL' ? 1 : -1) * (l.fill_price || 0);
-      });
-      const targetPct = (netCreditActual
-        ? netCreditActual * tradePct
-        : perUnitCredit * tradePct * structureQty);
-      const targetRows = openExecLegs.map(l => {
-        const tc = legTargetClosePrice(l.action, l.fill_price, _tradeStrategy, _tradeDte);
-        const capLabel = legTargetCloseCaption(l.action, _tradeStrategy, _tradeDte);
-        const lotsUsed = l.lots_actual || l.lots || 1;
-        const lotSize = l.lot_size || 1;
-        const qty = lotsUsed * lotSize;
-        const closeVerb = l.action === 'SELL' ? 'Buy back' : 'Sell back';
-        const sign = l.action === 'SELL' ? '\u2264' : '\u2265';
-        const priceBit = tc != null
-          ? `${closeVerb} ${sign} <strong>\u20b9${fmt(tc)}</strong>`
-          : closeVerb;
-        return `<div class="target-row">
-          <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'} tag-sm">${escapeHtml(l.action||'')}</span>
-          <span><strong>${formatLegInstrument(l)}</strong></span>
-          <span>${priceBit} <span class="muted">(${capLabel} \u00b7 entry \u20b9${fmt(l.fill_price)} \u00d7 ${qty}u)</span></span>
-        </div>`;
-      }).join('');
-      let footer = '';
-      if (isCreditTrade) {
-        footer = `<div class="target-exit-keep">Close when ~\u20b9${fmt(targetPct)} of the \u20b9${fmt(netCreditActual)} total credit is captured</div>`;
-      } else if (isDebitTrade) {
-        const debit = Math.abs(_netCr);
-        const frac = isDebitSpreadStrategy(_tradeStrategy)
-          ? debitSpreadTargetFraction()
-          : longPremiumTargetMult(_tradeDte);
-        const targetGain = Math.round(debit * frac * 10) / 10;
-        footer = `<div class="target-exit-keep">Close when position gains ~\u20b9${fmt(targetGain)} (${Math.round(frac * 100)}% of \u20b9${fmt(debit)} debit paid)</div>`;
-      }
-      const titleLabel = isDebitTrade
-        ? `${tradePctLabel} debit gain target`
-        : `${tradePctLabel} credit capture`;
-      targetSummaryHtml = `<div class="target-exit-box">
-        <div class="target-exit-title">\u{1F3AF} Target exit (${titleLabel})</div>
-        ${targetRows}
-        ${footer}
-      </div>`;
-    }
     legsHtml = `<div class="trade-legs-section">
-      ${targetSummaryHtml}
       ${(() => {
         // Entry-order banner when there are still pending (un-executed) legs to fill.
         const pending = legs.filter(l => !l.executed);
