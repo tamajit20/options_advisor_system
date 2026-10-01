@@ -133,8 +133,8 @@ def profit_milestone_config() -> Dict[str, Any]:
     Independent of ``loss_milestone_alert``. Giveback is
     ``max(pct of premium, estimated charges + charges_buffer_rs)``.
     Sell line = peak − giveback, floored at charges + buffer so the line
-    never sits below brokerage. Line ratchets up with new peaks until
-    ``max_locks`` (blank / omitted = unlimited).
+    Line ratchets up with new peaks until ``max_locks`` (blank / omitted =
+    unlimited). A lock is one giveback-sized step of peak, not each tick.
     """
     raw = STRATEGY_CONFIG.get("profit_milestone_alert") or {}
     enabled = bool(raw.get("enabled", False))
@@ -211,11 +211,20 @@ def advance_profit_milestone_locks(
     prev_line_rs: Optional[float],
     lock_count: int,
     max_locks: Optional[int],
+    peak_rs: Optional[float] = None,
+    giveback_rs: Optional[float] = None,
 ) -> Tuple[Optional[float], int, bool]:
-    """Apply optional freeze after ``max_locks`` upward ratchets.
+    """Apply optional freeze after ``max_locks`` material ratchets.
 
     Returns ``(line_rs, lock_count, frozen)``.
-    A lock is counted when the sell line first appears or moves strictly up.
+
+    A lock is one giveback-sized step of peak MTM (lock 1 when the line
+    first arms at peak ≥ giveback; lock 2 at 2× giveback, …). Tiny live
+    ticks must not consume locks — otherwise ``max_locks=3`` freezes on
+    the charges floor after three ₹1 upticks.
+
+    When ``peak_rs`` / ``giveback_rs`` are omitted, falls back to counting
+    any upward move of the sell line (unit tests / legacy).
     When ``max_locks`` is ``None``, behaviour matches unlimited trailing.
     """
     count = max(0, int(lock_count or 0))
@@ -225,18 +234,36 @@ def advance_profit_milestone_locks(
         return prev_line_rs, count, bool(count >= max_locks and prev_line_rs is not None)
 
     raw = float(raw_line_rs)
-    frozen = count >= max_locks and prev_line_rs is not None
-    if frozen:
+    if count >= max_locks and prev_line_rs is not None:
         return float(prev_line_rs), count, True
 
+    peak = _positive_float(peak_rs)
+    giveback = _positive_float(giveback_rs)
+    if peak is not None and giveback is not None:
+        implied = max(1, int(peak // giveback))
+        implied = max(count, implied)
+        if implied >= max_locks:
+            return raw, max_locks, True
+        return raw, implied, False
+
+    # Legacy: any strictly higher sell line consumes a lock.
     if prev_line_rs is None:
         return raw, 1, max_locks <= 1
-
     prev = float(prev_line_rs)
     if raw > prev + 1e-9:
         new_count = count + 1
         return raw, new_count, new_count >= max_locks
     return prev, count, False
+
+
+def _positive_float(val: Any) -> Optional[float]:
+    if val is None:
+        return None
+    try:
+        n = float(val)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
 
 
 def profit_milestone_rs(*, investment_rs: float, charges_rs: float = 0.0) -> Tuple[float, float]:

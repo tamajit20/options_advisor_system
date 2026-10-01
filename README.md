@@ -568,7 +568,7 @@ stateDiagram-v2
   IGNORED --> SIM: simulation_update
 ```
 
-Monitoring: WS ticks -> `live_risk_monitor` (MTM, profit/loss milestones with confirm; profit-milestone `confirm_seconds` default 15s; giveback is max(% of premium, estimated charges + `charges_buffer_rs` default ₹50); sell line = max(peak − giveback, charges + buffer) so it never sits below brokerage; `max_locks` blank = trail forever, integer freezes the sell line after that many upward ratchets; aborts and closes if MTM hits ₹0 or a loss; optional hard `profit_pct_auto_close`); fallback job `intraday_sl_fallback`; daily `exit_engine`.  
+Monitoring: WS ticks -> `live_risk_monitor` (MTM, profit/loss milestones with confirm; profit-milestone `confirm_seconds` default 15s; giveback is max(% of premium, estimated charges + `charges_buffer_rs` default ₹50); sell line = max(peak − giveback, charges + buffer) so it never sits below brokerage; `max_locks` blank = trail forever, integer freezes after peak has grown by that many × giveback (not each tick); aborts and closes if MTM hits ₹0 or a loss; optional hard `profit_pct_auto_close`); fallback job `intraday_sl_fallback`; daily `exit_engine`.  
 **Which files:** [B12](#b12-code-flows).
 
 ---

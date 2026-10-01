@@ -2062,7 +2062,7 @@ const TERM_HELP = {
   },
   profit_milestone: {
     label: 'Profit milestone',
-    html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner after the confirm window (default 15s). If profit falls to breakeven or a loss during the wait, it closes immediately. Giveback from peak is max(% of entry premium, estimated charges + buffer). Sell line = peak − giveback, but never below charges + buffer. Optional <code>max_locks</code>: leave blank to trail forever; a number freezes the sell line after that many upward ratchets. Hard SL stays on the loss side.',
+    html: '<strong>Profit milestone</strong> — Auto-closes to protect a winner after the confirm window (default 15s). If profit falls to breakeven or a loss during the wait, it closes immediately. Giveback from peak is max(% of entry premium, estimated charges + buffer). Sell line = peak − giveback, but never below charges + buffer. Optional <code>max_locks</code>: leave blank to trail forever; a number freezes the sell line after peak has grown by that many × giveback (lock 1 when it first arms — not every live tick). Hard SL stays on the loss side.',
   },
   profit_pct_auto_close: {
     label: 'Profit % auto-close',
@@ -4126,6 +4126,7 @@ function _updateLiveOutlook(tradeId, payload) {
       const bits = [];
       if (payload.uses_live_marks) bits.push('PoP uses entry-fill breakevens; MTM uses live leg marks.');
       if (payload.ev_horizon_note) bits.push(payload.ev_horizon_note);
+      const closeNow = payload.close_now_ev != null ? parseFloat(payload.close_now_ev) : null;
       if (payload.ev_from_now != null && closeNow != null && !isNaN(closeNow)) {
         bits.push(`Expected Δ from now: ${_fmtSignedRs(payload.ev_from_now)}.`);
       }
@@ -7590,7 +7591,9 @@ async function loadTrades() {
       const snap = await API('/api/live/mtm/snapshot');
       _bootstrapLiveLevelsForTrades(data.trades, snap);
     } catch (_) {
-      _bootstrapLiveLevelsForTrades(data.trades, { trades: {} });
+      try {
+        _bootstrapLiveLevelsForTrades(data.trades, { trades: {} });
+      } catch (__) { /* keep rendered cards even if live overlay fails */ }
     }
     _pruneMtmCache(data.trades.map(t => t.trade_id));
     // Phase 3 — #3: open SSE stream once after each trades render so live

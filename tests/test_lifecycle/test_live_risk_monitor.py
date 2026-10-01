@@ -1193,18 +1193,13 @@ class TestMilestoneConfirmWindow:
         clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
         monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
         monitor._estimated_close_charges_rs = lambda _s: 0.0
-        # Peak 2000 → line 1500 = lock 1
+        # Peak 2000 vs giveback 500 (5% of 10k credit) → already 4× giveback,
+        # so max_locks=2 freezes on the first armed line (1500).
         _tick_pair(bus, state, 80.0, 80.0)
-        assert captured[-1].get("profit_milestone_line") == pytest.approx(1500.0)
-        assert captured[-1].get("profit_ms_lock_count") == 1
-        assert captured[-1].get("profit_ms_frozen") is False
-        # Next higher peak ratchets to lock 2 and freezes (may freeze on the
-        # mid-pair tick when only one leg has moved).
-        _tick_pair(bus, state, 60.0, 60.0)
         frozen_line = captured[-1].get("profit_milestone_line")
+        assert frozen_line == pytest.approx(1500.0)
         assert captured[-1].get("profit_ms_lock_count") == 2
         assert captured[-1].get("profit_ms_frozen") is True
-        assert frozen_line is not None
         # Still-higher peak must not raise the frozen sell line
         _tick_pair(bus, state, 50.0, 50.0)
         assert state.mtm_peak_rs == pytest.approx(5000.0)

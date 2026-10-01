@@ -21,7 +21,7 @@ uses) and emits a notification when:
   Sell line = peak − giveback, floored at charges + buffer
   (``max(peak − giveback, charges + charges_buffer_rs)``); giveback itself
   is ``max(% of premium, charges + buffer)``. Optional ``max_locks`` freezes
-  the sell line after N upward ratchets (blank = unlimited trail).
+  the sell line after peak has grown by N × giveback (blank = unlimited trail).
 * ``LOSS_LIMIT_HIT`` — current PnL crosses the strategy effective loss limit
   (``effective_sl_rs``). Alert only — no auto flatten. Loss-side only.
 * ``SL_TRIGGER`` — underlying spot crosses ``actual_stop_loss_level`` (when
@@ -1151,6 +1151,8 @@ class LiveRiskMonitor:
             prev_line_rs=state.profit_ms_line_rs,
             lock_count=state.profit_ms_lock_count,
             max_locks=self._profit_milestone_max_locks,
+            peak_rs=state.mtm_peak_rs,
+            giveback_rs=profit_giveback_rs,
         )
         state.profit_ms_line_rs = profit_line
         state.profit_ms_lock_count = lock_count

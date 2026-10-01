@@ -246,6 +246,48 @@ class TestProfitMilestoneThreshold:
         )
         assert line == pytest.approx(2000.0) and count == 3 and frozen is True
 
+    def test_advance_locks_giveback_steps_ignore_tiny_ticks(self):
+        from engine.sl_threshold import advance_profit_milestone_locks
+        line, count, frozen = None, 0, False
+        # Charges floor ~218; peak climbs a few rupees at a time.
+        floor = 218.0
+        giveback = 583.0
+        peak = 583.0
+        for _ in range(6):
+            raw = max(peak - giveback, floor)
+            line, count, frozen = advance_profit_milestone_locks(
+                raw_line_rs=raw, prev_line_rs=line, lock_count=count,
+                max_locks=3, peak_rs=peak, giveback_rs=giveback,
+            )
+            peak += 2.0
+        assert count == 1 and frozen is False
+        assert line == pytest.approx(floor)
+        # Peak ~1200 still only lock 2 (1200/583 = 2); line trails.
+        peak = 1200.0
+        raw = max(peak - giveback, floor)
+        line, count, frozen = advance_profit_milestone_locks(
+            raw_line_rs=raw, prev_line_rs=line, lock_count=count,
+            max_locks=3, peak_rs=peak, giveback_rs=giveback,
+        )
+        assert count == 2 and frozen is False
+        assert line == pytest.approx(1200.0 - 583.0)
+        # Lock 3 at 3× giveback; freeze at that trailing line.
+        peak = 3 * giveback
+        raw = max(peak - giveback, floor)
+        line, count, frozen = advance_profit_milestone_locks(
+            raw_line_rs=raw, prev_line_rs=line, lock_count=count,
+            max_locks=3, peak_rs=peak, giveback_rs=giveback,
+        )
+        assert count == 3 and frozen is True
+        frozen_line = line
+        peak = 2500.0
+        raw = max(peak - giveback, floor)
+        line, count, frozen = advance_profit_milestone_locks(
+            raw_line_rs=raw, prev_line_rs=line, lock_count=count,
+            max_locks=3, peak_rs=peak, giveback_rs=giveback,
+        )
+        assert line == pytest.approx(frozen_line) and count == 3 and frozen is True
+
     def test_auto_close_defaults_true(self):
         with patch(
             "engine.sl_threshold.STRATEGY_CONFIG",
