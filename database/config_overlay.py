@@ -152,25 +152,31 @@ _DESCRIPTIONS: Dict[str, str] = {
     "strategy_sl_limits":
         "Per-strategy MTM stop (loss_fraction + ₹ cap). Exit Plan and LOSS_LIMIT_HIT.",
     "loss_milestone_alert":
-        "Auto-close when MTM loss hits pct_of_premium % of entry premium "
-        "(paid for debits, received for credits — same as P&L % brackets). "
-        "Zerodha trades flatten on Kite; manual trades close in the DB at live LTP. "
-        "Separate from strategy SL. JSON: {enabled, pct_of_premium, auto_close, "
-        "confirm_seconds, cooldown_minutes, auto_close_retry_seconds}. "
+        "Auto-close when MTM loss hits a fixed rupee line: pct_of_premium % of "
+        "entry premium (paid for debits, received for credits — same as P&L % "
+        "brackets), stamped at fill. Overlay % change rebuilds the line on open "
+        "trades. Zerodha trades flatten on Kite; manual trades close in the DB "
+        "at live LTP. Separate from strategy SL. JSON: {enabled, pct_of_premium, "
+        "auto_close, confirm_seconds, cooldown_minutes, auto_close_retry_seconds}. "
         "confirm_seconds (default 20) waits that long at/through the line "
         "before auto-close. Legacy key pct_of_max_loss is still read if "
-        "pct_of_premium is omitted.",
+        "pct_of_premium is omitted. My Trades: check Fixed + Save a rupee "
+        "amount to override overlay on that trade; uncheck + Save to return.",
     "profit_milestone_alert":
         "Auto-close to protect a winner: once peak MTM ≥ giveback, sell if MTM "
-        "stays ≤ sell line for confirm_seconds (default 15). Giveback = "
-        "max(pct_of_premium of entry premium, estimated charges + "
-        "charges_buffer_rs). Sell line = max(peak − giveback, charges + "
-        "charges_buffer_rs) — trails with peak but never below brokerage. "
-        "max_locks: blank/\"\" = trail forever; integer e.g. 3 freezes the sell "
-        "line after peak MTM has grown by 3× the giveback (lock 1 when the "
-        "line first arms, not every live tick). Peak may still rise. "
+        "stays ≤ the current milestone sell line for confirm_seconds (default 15). "
+        "Giveback = max(pct_of_premium of entry premium, estimated charges + "
+        "charges_buffer_rs). "
+        "max_locks: blank/\"\" = trail forever (sell line = max(peak − giveback, "
+        "charges + buffer)); integer N = M1..MN at N × giveback "
+        "(arm at i×giveback, sell at (i−1)×giveback / charges floor). Ticks only "
+        "move a pointer. If N / pct_of_premium / charges_buffer_rs change while a "
+        "trade is open, the plan rebuilds and the pointer is re-aimed from current "
+        "peak. "
         "If MTM hits ₹0 or a loss during confirm, close immediately. SL stays "
-        "on the loss side. charges_buffer_rs (default 50) covers estimate error.",
+        "on the loss side. charges_buffer_rs (default 50) covers estimate error. "
+        "My Trades: check Fixed + Save a sell-line ₹ to override overlay on that "
+        "trade (works even when this overlay is off); uncheck + Save to return.",
     "profit_pct_auto_close":
         "Hard profit take: {enabled, pct_of_premium}. When MTM profit reaches "
         "that % of entry premium, auto-close immediately (no confirm window). "

@@ -775,6 +775,42 @@ _TABLE_DDL: List[str] = [
     ALTER TABLE options_trades ADD profit_ms_lock_count INT NOT NULL DEFAULT 0
     """,
 
+    # Precomputed profit-milestone plan (M1..MN) stamped at trade entry.
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'profit_ms_plan_json')
+    ALTER TABLE options_trades ADD profit_ms_plan_json NVARCHAR(MAX) NULL
+    """,
+
+    # Fixed loss-milestone rupee line (% of entry premium) stamped at entry.
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'loss_ms_plan_json')
+    ALTER TABLE options_trades ADD loss_ms_plan_json NVARCHAR(MAX) NULL
+    """,
+
+    # Per-trade fixed milestone overrides (dashboard checkbox).
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'profit_ms_fixed')
+    ALTER TABLE options_trades ADD profit_ms_fixed BIT NOT NULL DEFAULT 0
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'profit_ms_fixed_rs')
+    ALTER TABLE options_trades ADD profit_ms_fixed_rs DECIMAL(18,4) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'loss_ms_fixed')
+    ALTER TABLE options_trades ADD loss_ms_fixed BIT NOT NULL DEFAULT 0
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'loss_ms_fixed_rs')
+    ALTER TABLE options_trades ADD loss_ms_fixed_rs DECIMAL(18,4) NULL
+    """,
+
     # Notification provenance — links each alert back to its tick / cycle
     """
     IF NOT EXISTS (SELECT 1 FROM sys.columns

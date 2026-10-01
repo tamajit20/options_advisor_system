@@ -493,6 +493,38 @@ class TestLossMilestoneHit:
         assert kwargs["notif_type"] == "LOSS_MILESTONE_HIT"
         assert kwargs["severity"] == "WARNING"
 
+    def test_loss_line_rebuilds_when_overlay_pct_changes(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "confirm_seconds": 0,
+            }},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        monitor._bind_loss_milestone_cfg()
+        # MTM −500 = 5% of ₹10k premium — below the stamped 25% line.
+        _tick_pair(bus, state, 105.0, 105.0)
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "LOSS_MILESTONE_HIT" not in types
+        plan = (captured[-1] or {}).get("loss_ms_plan") or {}
+        assert plan.get("loss_rs") == pytest.approx(2500.0)
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 0,
+            }},
+            clear=False,
+        )
+        monitor._bind_loss_milestone_cfg()
+        notifier.reset_mock()
+        _tick_pair(bus, state, 105.0, 105.0)
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "LOSS_MILESTONE_HIT"
+        assert captured[-1].get("loss_ms_plan", {}).get("loss_rs") == pytest.approx(500.0)
+
     def test_milestone_uses_premium_not_max_loss(self, mocker):
         """25% of premium (10k→−2.5k) fires at −3k MTM; 25% of max_loss (20k→−5k) would not."""
         mocker.patch.dict(
@@ -1193,19 +1225,187 @@ class TestMilestoneConfirmWindow:
         clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
         monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
         monitor._estimated_close_charges_rs = lambda _s: 0.0
-        # Peak 2000 vs giveback 500 (5% of 10k credit) → already 4× giveback,
-        # so max_locks=2 freezes on the first armed line (1500).
+        # Peak 2000 vs giveback 500 → already past max_locks=2. Freeze at
+        # the 2nd-step line (1× giveback = 500), not at current peak−giveback.
         _tick_pair(bus, state, 80.0, 80.0)
         frozen_line = captured[-1].get("profit_milestone_line")
-        assert frozen_line == pytest.approx(1500.0)
+        assert frozen_line == pytest.approx(500.0)
         assert captured[-1].get("profit_ms_lock_count") == 2
         assert captured[-1].get("profit_ms_frozen") is True
-        # Still-higher peak must not raise the frozen sell line
         _tick_pair(bus, state, 50.0, 50.0)
         assert state.mtm_peak_rs == pytest.approx(5000.0)
         assert captured[-1].get("profit_milestone_line") == pytest.approx(frozen_line)
         assert captured[-1].get("profit_ms_frozen") is True
         assert captured[-1].get("profit_ms_lock_count") == 2
+
+    def test_plan_pointer_stays_on_m1_until_m2_peak(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 0,
+                "charges_buffer_rs": 0, "max_locks": 3,
+            }},
+            clear=False,
+        )
+        state = _make_state()
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
+        # ltp 92 → MTM 800. M1 arms at 500, M2 at 1000. Pointer stays M1,
+        # sell line stays 0 — not a live peak−giveback trail of 300.
+        _tick_pair(bus, state, 92.0, 92.0)
+        last = captured[-1]
+        assert last.get("profit_ms_lock_count") == 1
+        assert last.get("profit_ms_frozen") is False
+        assert last.get("profit_milestone_line") == pytest.approx(0.0)
+        plan = last.get("profit_ms_plan") or {}
+        assert [lv["peak_rs"] for lv in plan.get("levels") or []] == [500.0, 1000.0, 1500.0]
+        _tick_pair(bus, state, 89.0, 89.0)  # MTM 1100 → M2
+        last = captured[-1]
+        assert last.get("profit_ms_lock_count") == 2
+        assert last.get("profit_milestone_line") == pytest.approx(500.0)
+        assert last.get("profit_ms_frozen") is False
+
+    def test_plan_rebuilds_when_max_locks_changes(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 0,
+                "charges_buffer_rs": 0, "max_locks": 2,
+            }},
+            clear=False,
+        )
+        state = _make_state()
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
+        _tick_pair(bus, state, 80.0, 80.0)  # MTM/peak 2000
+        assert len((captured[-1].get("profit_ms_plan") or {}).get("levels") or []) == 2
+        assert captured[-1].get("profit_ms_lock_count") == 2
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(500.0)
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 0,
+                "charges_buffer_rs": 0, "max_locks": 4,
+            }},
+            clear=False,
+        )
+        monitor._bind_profit_milestone_cfg()
+        _tick_pair(bus, state, 80.0, 80.0)
+        plan = captured[-1].get("profit_ms_plan") or {}
+        assert [lv["i"] for lv in plan.get("levels") or []] == [1, 2, 3, 4]
+        # Peak 2000 vs giveback 500 → pointer M4, sell 3× giveback.
+        assert captured[-1].get("profit_ms_lock_count") == 4
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(1500.0)
+        assert captured[-1].get("profit_ms_frozen") is True
+
+    def test_fixed_sell_line_fires_when_overlay_off(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": False, "pct_of_premium": 5.0, "confirm_seconds": 0,
+                "auto_close": True, "charges_buffer_rs": 0,
+            }},
+            clear=False,
+        )
+        state = _make_state()
+        state.profit_ms_fixed = True
+        state.profit_ms_fixed_rs = 1500.0
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
+        _tick_pair(bus, state, 80.0, 80.0)  # MTM +2000
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "PROFIT_MILESTONE_HIT" not in types
+        assert captured[-1].get("profit_ms_fixed") is True
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(1500.0)
+        notifier.reset_mock()
+        _tick_pair(bus, state, 86.0, 86.0)  # MTM +1400 ≤ 1500
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "PROFIT_MILESTONE_HIT"
+
+    def test_fixed_profit_ignores_overlay_rebuild(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 0,
+                "charges_buffer_rs": 0, "max_locks": 2,
+            }},
+            clear=False,
+        )
+        state = _make_state()
+        state.profit_ms_fixed = True
+        state.profit_ms_fixed_rs = 900.0
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        monitor._estimated_close_charges_rs = lambda _s: 0.0
+        _tick_pair(bus, state, 80.0, 80.0)  # MTM/peak 2000
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(900.0)
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 0,
+                "charges_buffer_rs": 0, "max_locks": 4,
+            }},
+            clear=False,
+        )
+        monitor._bind_profit_milestone_cfg()
+        _tick_pair(bus, state, 80.0, 80.0)
+        assert captured[-1].get("profit_milestone_line") == pytest.approx(900.0)
+        assert captured[-1].get("profit_ms_plan") is None
+        assert captured[-1].get("profit_ms_frozen") is True
+
+    def test_fixed_loss_fires_when_overlay_off(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": False, "pct_of_premium": 25.0, "confirm_seconds": 0,
+                "auto_close": True,
+            }},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        state.loss_ms_fixed = True
+        state.loss_ms_fixed_rs = 400.0
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        _tick_pair(bus, state, 105.0, 105.0)  # MTM −500
+        assert notifier.notify.call_count == 1
+        assert notifier.notify.call_args.kwargs["notif_type"] == "LOSS_MILESTONE_HIT"
+        assert captured[-1].get("loss_ms_fixed") is True
+        assert captured[-1].get("loss_milestone_rs") == pytest.approx(400.0)
+
+    def test_fixed_loss_ignores_overlay_pct_rebuild(self, mocker):
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 25.0, "confirm_seconds": 0,
+            }},
+            clear=False,
+        )
+        state = _make_state(max_loss=10000.0)
+        state.loss_ms_fixed = True
+        state.loss_ms_fixed_rs = 2500.0
+        clock = {"now": datetime(2026, 5, 5, 11, 0, 0)}
+        monitor, notifier, bus, captured = _clocked_milestone_monitor(state, clock)
+        _tick_pair(bus, state, 105.0, 105.0)  # MTM −500
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "LOSS_MILESTONE_HIT" not in types
+        assert captured[-1].get("loss_ms_plan", {}).get("loss_rs") == pytest.approx(2500.0)
+        mocker.patch.dict(
+            "lifecycle.live_risk_monitor.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "confirm_seconds": 0,
+            }},
+            clear=False,
+        )
+        monitor._bind_loss_milestone_cfg()
+        notifier.reset_mock()
+        _tick_pair(bus, state, 105.0, 105.0)
+        types = [c.kwargs.get("notif_type") for c in notifier.notify.call_args_list]
+        assert "LOSS_MILESTONE_HIT" not in types
+        assert captured[-1].get("loss_milestone_rs") == pytest.approx(2500.0)
 
     def test_hard_sl_still_immediate(self, mocker):
         mocker.patch.dict(

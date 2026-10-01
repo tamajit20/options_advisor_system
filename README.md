@@ -568,7 +568,7 @@ stateDiagram-v2
   IGNORED --> SIM: simulation_update
 ```
 
-Monitoring: WS ticks -> `live_risk_monitor` (MTM, profit/loss milestones with confirm; profit-milestone `confirm_seconds` default 15s; giveback is max(% of premium, estimated charges + `charges_buffer_rs` default ₹50); sell line = max(peak − giveback, charges + buffer) so it never sits below brokerage; `max_locks` blank = trail forever, integer freezes after peak has grown by that many × giveback (not each tick); aborts and closes if MTM hits ₹0 or a loss; optional hard `profit_pct_auto_close`); fallback job `intraday_sl_fallback`; daily `exit_engine`.  
+Monitoring: WS ticks -> `live_risk_monitor` (MTM, profit/loss milestones with confirm; loss-milestone overlay is a fixed ₹ line = `pct_of_premium` of entry premium, rebuilt only if that overlay % changes; profit-milestone `confirm_seconds` default 15s; giveback is max(% of premium, estimated charges + `charges_buffer_rs` default ₹50); `max_locks` blank = trail forever (sell line = max(peak − giveback, charges + buffer)); integer N is M1..MN — M*i* arms at *i* × giveback and sells at max(charges floor, (*i*−1) × giveback); ticks only advance a pointer (`profit_ms_lock_count`); if N / % / buffer change while a trade is open, the overlay plan rebuilds and the pointer is re-aimed from current peak; **per-trade Fixed** checkbox + rupee box + Save on each milestone row overrides overlay for that trade (sell if MTM ≤ ₹X / lose if MTM ≤ −₹X; works even when overlay is off); uncheck + Save returns to overlay; monitor picks up a save on the next ~60s reload; aborts and closes if MTM hits ₹0 or a loss; optional hard `profit_pct_auto_close`); fallback job `intraday_sl_fallback`; daily `exit_engine`.  
 **Which files:** [B12](#b12-code-flows).
 
 ---
@@ -593,6 +593,8 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 **My Trades / History channel filter:** shared All / Zerodha only / Manual only on My Trades and across all History tabs (Trades, Suggestions, Performance, Charts). `?channel=` on `/api/trades/open`, `/api/history/closed-trades`, `/api/history/suggestions`, `/api/stats/pnl-timeline`, `/api/stats/strategy-performance`. Channel follows opening Kite ENTRY/SUPPLEMENT fills (execution reversals count as Zerodha). Suggestions without a linked trade are hidden when a channel filter is active. History → Trades cards also embed that trade’s Zerodha execution log (ENTRY → EXIT, plus suggestion-only failed attempts) in time order.
 
 **My Trades Current P&L:** header badge shows live MTM in session; **off-market** it keeps the last live/DB MTM (same figure as expanded Live P&L / Close now), not a blank dash.
+
+**My Trades profit / loss milestone:** each row has **Fixed** + a rupee box + **Save**. Checked = this trade uses that ₹ line (profit = sell when MTM ≤ ₹X; loss = close when MTM ≤ −₹X). Unchecked = overlay M1..MN / % of entry premium. Overlay off still honors a saved Fixed line.
 
 **Header index strip:** Nifty / BN / FN / VIX on one row — compact ▲/▼ % vs prior EOD (full change in tooltip). No second header row; phones hide header banners so VIX stays visible.
 

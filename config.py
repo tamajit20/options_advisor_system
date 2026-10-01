@@ -807,14 +807,16 @@ STRATEGY_CONFIG = {
     },
 
     # Loss milestone — MTM auto-exit (top-left signal + LOSS_MILESTONE_HIT).
-    # Independent of strategy SL. Fires when MTM loss reaches pct_of_premium of
-    # entry premium (paid on debits, received on credits). auto_close flattens
+    # Independent of strategy SL. Fixed rupee line = pct_of_premium of
+    # entry premium (paid on debits, received on credits), stamped at fill.
+    # Overlay % change rebuilds the line on open trades. auto_close flattens
     # Zerodha trades on Kite and books manual trades at live LTP.
     # cooldown_minutes None = use live_risk_monitor cooldown for alerts.
     # auto_close_retry_seconds re-attempts flatten while still in breach
     # without waiting for that alert cooldown (in-flight closes are skipped).
     # confirm_seconds: MTM must stay at/through the line this long before
     # auto-close (filters a one-tick wick). 0 = close on the first print.
+    # Per-trade Fixed on My Trades overrides this % line until unchecked.
     "loss_milestone_alert": {
         "enabled": True,
         "pct_of_premium": 5.0,
@@ -834,10 +836,11 @@ STRATEGY_CONFIG = {
     # Giveback is max(pct of premium, estimated charges + charges_buffer_rs).
     # Sell line = max(peak − giveback, charges + charges_buffer_rs) so it
     # never displays/triggers below brokerage. charges_buffer_rs default ₹50.
-    # max_locks: "" / blank / omitted = trail forever (today's behaviour).
-    # Integer e.g. 3 = freeze after peak has grown by 3× the giveback
-    # (lock 1 at first arm, lock 2 at 2× giveback, …). Tiny ticks do not
-    # consume locks. Peak may still rise after freeze.
+    # max_locks: "" / blank / omitted = trail forever (peak − giveback).
+    # Integer N = M1..MN (arm at i×giveback, sell at (i-1)×giveback /
+    # charges floor). Runtime only advances a pointer. Overlay changes
+    # to N / % / buffer rebuild the plan on open trades. Per-trade Fixed
+    # on My Trades overrides overlay (sell-line ₹ / loss ₹) until unchecked.
     "profit_milestone_alert": {
         "enabled": True,
         "pct_of_premium": 5.0,

@@ -160,6 +160,15 @@ def clone_one(db: SQLServerConnection, src: dict, *, dry_run: bool) -> str | Non
         execution_provider="manual",
         gate_passed=True,
     )
+    try:
+        from lifecycle.trade_executor import _stamp_profit_milestone_plan
+        _stamp_profit_milestone_plan(
+            trd, new_id,
+            net_credit=float(src.get("net_credit_actual") or 0),
+            executed_legs=trade_legs,
+        )
+    except Exception as exc:
+        print(f"  warn {new_id} — profit milestone plan stamp failed: {exc}")
     return new_id
 
 

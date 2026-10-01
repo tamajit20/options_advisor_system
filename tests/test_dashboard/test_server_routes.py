@@ -199,6 +199,74 @@ class TestMonitorPatch:
         upd.assert_called_once()
 
 
+class TestMilestoneOverridePatch:
+    def test_404_when_missing(self, client, mocker):
+        mocker.patch("dashboard.server.TradeRepo.get", return_value=None)
+        resp = client.patch(
+            "/api/trades/TRD-X/milestones",
+            data=json.dumps({"kind": "profit", "fixed": True, "rs": 1000}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 404
+
+    def test_rejects_bad_kind(self, client, mocker):
+        mocker.patch("dashboard.server.TradeRepo.get",
+                     return_value={"trade_id": "TRD-1"})
+        resp = client.patch(
+            "/api/trades/TRD-1/milestones",
+            data=json.dumps({"kind": "peak", "fixed": True, "rs": 1000}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400
+
+    def test_saves_fixed_profit(self, client, mocker):
+        mocker.patch("dashboard.server.TradeRepo.get",
+                     return_value={"trade_id": "TRD-1", "profit_ms_fixed_rs": None})
+        wr = mocker.patch("dashboard.server.TradeRepo.write_milestone_override")
+        resp = client.patch(
+            "/api/trades/TRD-1/milestones",
+            data=json.dumps({"kind": "profit", "fixed": True, "rs": 2500}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["ok"] is True
+        assert body["kind"] == "profit"
+        assert body["fixed"] is True
+        assert body["rs"] == 2500.0
+        wr.assert_called_once()
+        assert wr.call_args.kwargs["kind"] == "profit"
+        assert wr.call_args.kwargs["fixed"] is True
+        assert wr.call_args.kwargs["rs"] == 2500.0
+
+    def test_uncheck_keeps_last_rs(self, client, mocker):
+        mocker.patch("dashboard.server.TradeRepo.get",
+                     return_value={"trade_id": "TRD-1", "loss_ms_fixed_rs": 800.0})
+        wr = mocker.patch("dashboard.server.TradeRepo.write_milestone_override")
+        resp = client.patch(
+            "/api/trades/TRD-1/milestones",
+            data=json.dumps({"kind": "loss", "fixed": False, "rs": None}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["fixed"] is False
+        assert body["rs"] == 800.0
+        wr.assert_called_once()
+        assert wr.call_args.kwargs["fixed"] is False
+        assert wr.call_args.kwargs["rs"] == 800.0
+
+    def test_rejects_zero_loss(self, client, mocker):
+        mocker.patch("dashboard.server.TradeRepo.get",
+                     return_value={"trade_id": "TRD-1"})
+        resp = client.patch(
+            "/api/trades/TRD-1/milestones",
+            data=json.dumps({"kind": "loss", "fixed": True, "rs": 0}),
+            content_type="application/json",
+        )
+        assert resp.status_code == 400
+
+
 class TestGapReplay:
     def test_404_when_missing(self, client, mocker):
         mocker.patch("dashboard.server.replay_gap_for_trade",

@@ -2547,6 +2547,44 @@ def create_app() -> Flask:
         db.commit()
         return jsonify({"ok": True})
 
+    @app.route("/api/trades/<trade_id>/milestones", methods=["PATCH"])
+    @_with_db
+    def api_trade_milestones(db: SQLServerConnection, trade_id: str):
+        """Per-trade fixed profit sell-line / loss-line. Unchecked = overlay math."""
+        trd = TradeRepo(db)
+        row = trd.get(trade_id)
+        if row is None:
+            return jsonify({"error": "Not found"}), 404
+        payload = request.get_json(silent=True) or {}
+        kind = str(payload.get("kind") or "").strip().lower()
+        if kind not in ("profit", "loss"):
+            return jsonify({"error": "kind must be profit or loss"}), 400
+        fixed = bool(payload.get("fixed"))
+        rs_raw = payload.get("rs")
+        rs: Optional[float] = None
+        if rs_raw is not None and rs_raw != "":
+            try:
+                rs = float(rs_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "rs must be a number"}), 400
+            if rs < 0:
+                return jsonify({"error": "rs must be ≥ 0"}), 400
+        if fixed:
+            if rs is None:
+                return jsonify({"error": "rs is required when Fixed is on"}), 400
+            if kind == "loss" and rs <= 0:
+                return jsonify({"error": "loss milestone must be > 0"}), 400
+        else:
+            col = "profit_ms_fixed_rs" if kind == "profit" else "loss_ms_fixed_rs"
+            if rs is None and row.get(col) is not None:
+                try:
+                    rs = float(row[col])
+                except (TypeError, ValueError):
+                    rs = None
+        trd.write_milestone_override(trade_id, kind=kind, fixed=fixed, rs=rs)
+        db.commit()
+        return jsonify({"ok": True, "kind": kind, "fixed": fixed, "rs": rs})
+
     @app.route("/api/trades/<trade_id>/gap-replay")
     @_with_db
     def api_trade_gap_replay(db: SQLServerConnection, trade_id: str):

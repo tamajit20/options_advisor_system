@@ -6,10 +6,16 @@ from unittest.mock import patch
 import pytest
 
 from engine.sl_threshold import (
+    apply_profit_milestone_plan,
+    build_loss_milestone_plan,
+    build_profit_milestone_plan,
     loss_milestone_config,
+    loss_milestone_plan_matches_config,
     loss_milestone_rs,
+    parse_profit_milestone_plan,
     profit_milestone_config,
     profit_milestone_line_rs,
+    profit_milestone_plan_matches_config,
     profit_milestone_rs,
     trade_investment_rs,
 )
@@ -41,6 +47,23 @@ class TestLossMilestoneThreshold:
             rs, pct = loss_milestone_rs(investment_rs=9397.5)
             assert rs == pytest.approx(2349.375, abs=0.01)
             assert pct == 25.0
+
+    def test_plan_is_fixed_rupees_from_entry_pct(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 25.0}},
+        ):
+            plan = build_loss_milestone_plan(investment_rs=10000.0)
+            assert plan["loss_rs"] == pytest.approx(2500.0)
+            assert plan["pct_of_premium"] == 25.0
+            assert loss_milestone_plan_matches_config(plan) is True
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"loss_milestone_alert": {"enabled": True, "pct_of_premium": 10.0}},
+        ):
+            assert loss_milestone_plan_matches_config(plan) is False
+            rebuilt = build_loss_milestone_plan(investment_rs=10000.0)
+            assert rebuilt["loss_rs"] == pytest.approx(1000.0)
 
     def test_legacy_pct_of_max_loss_fallback(self):
         with patch(
@@ -271,7 +294,8 @@ class TestProfitMilestoneThreshold:
         )
         assert count == 2 and frozen is False
         assert line == pytest.approx(1200.0 - 583.0)
-        # Lock 3 at 3× giveback; freeze at that trailing line.
+        # Lock 3 at 3× giveback; freeze at the 3rd-step line (2× giveback),
+        # even if peak has already run further.
         peak = 3 * giveback
         raw = max(peak - giveback, floor)
         line, count, frozen = advance_profit_milestone_locks(
@@ -279,14 +303,131 @@ class TestProfitMilestoneThreshold:
             max_locks=3, peak_rs=peak, giveback_rs=giveback,
         )
         assert count == 3 and frozen is True
-        frozen_line = line
+        assert line == pytest.approx(2 * giveback)
         peak = 2500.0
         raw = max(peak - giveback, floor)
         line, count, frozen = advance_profit_milestone_locks(
             raw_line_rs=raw, prev_line_rs=line, lock_count=count,
             max_locks=3, peak_rs=peak, giveback_rs=giveback,
         )
-        assert line == pytest.approx(frozen_line) and count == 3 and frozen is True
+        assert line == pytest.approx(2 * giveback) and count == 3 and frozen is True
+
+    def test_advance_locks_gap_up_freezes_at_nth_step_not_current_peak(self):
+        from engine.sl_threshold import advance_profit_milestone_locks
+        giveback = 1138.0
+        peak = 15353.0
+        raw = peak - giveback
+        line, count, frozen = advance_profit_milestone_locks(
+            raw_line_rs=raw, prev_line_rs=None, lock_count=0,
+            max_locks=3, peak_rs=peak, giveback_rs=giveback,
+        )
+        assert frozen is True and count == 3
+        assert line == pytest.approx(2 * giveback)
+
+    def test_build_plan_three_fixed_levels(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0,
+                "charges_buffer_rs": 50, "max_locks": 3,
+            }},
+        ):
+            plan = build_profit_milestone_plan(
+                investment_rs=10000.0, charges_rs=150.0,
+            )
+            assert profit_milestone_plan_matches_config(plan) is True
+        assert plan is not None
+        assert plan["giveback_rs"] == pytest.approx(500.0)
+        assert [lv["peak_rs"] for lv in plan["levels"]] == [500.0, 1000.0, 1500.0]
+        # M1 sells at charges floor (200); M2/M3 at 1× / 2× giveback.
+        assert [lv["sell_rs"] for lv in plan["levels"]] == [200.0, 500.0, 1000.0]
+        assert plan["max_locks"] == 3
+
+    def test_build_plan_n_from_max_locks(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0,
+                "charges_buffer_rs": 0, "max_locks": 5,
+            }},
+        ):
+            plan = build_profit_milestone_plan(investment_rs=10000.0, charges_rs=0.0)
+        assert [lv["i"] for lv in plan["levels"]] == [1, 2, 3, 4, 5]
+        assert plan["levels"][-1]["peak_rs"] == pytest.approx(2500.0)
+        assert plan["levels"][-1]["sell_rs"] == pytest.approx(2000.0)
+
+    def test_plan_stale_when_overlay_n_or_pct_changes(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0,
+                "charges_buffer_rs": 50, "max_locks": 4,
+            }},
+        ):
+            plan = build_profit_milestone_plan(
+                investment_rs=10000.0, charges_rs=150.0,
+            )
+            assert profit_milestone_plan_matches_config(plan) is True
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0,
+                "charges_buffer_rs": 50, "max_locks": 2,
+            }},
+        ):
+            assert profit_milestone_plan_matches_config(plan) is False
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 10.0,
+                "charges_buffer_rs": 50, "max_locks": 4,
+            }},
+        ):
+            assert profit_milestone_plan_matches_config(plan) is False
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0,
+                "charges_buffer_rs": 50, "max_locks": "",
+            }},
+        ):
+            assert profit_milestone_plan_matches_config(plan) is False
+            assert profit_milestone_plan_matches_config(None) is True
+
+    def test_build_plan_none_when_unlimited(self):
+        with patch(
+            "engine.sl_threshold.STRATEGY_CONFIG",
+            {"profit_milestone_alert": {
+                "enabled": True, "pct_of_premium": 5.0, "max_locks": "",
+            }},
+        ):
+            assert build_profit_milestone_plan(investment_rs=10000.0) is None
+
+    def test_apply_plan_pointer_from_peak_never_backwards(self):
+        plan = {
+            "levels": [
+                {"i": 1, "peak_rs": 500, "sell_rs": 200},
+                {"i": 2, "peak_rs": 1000, "sell_rs": 500},
+                {"i": 3, "peak_rs": 1500, "sell_rs": 1000},
+            ],
+        }
+        assert apply_profit_milestone_plan(plan, peak_rs=100, pointer=0) == (None, 0, False)
+        line, ptr, frozen = apply_profit_milestone_plan(plan, peak_rs=500, pointer=0)
+        assert line == pytest.approx(200) and ptr == 1 and frozen is False
+        # Between M1 and M2 the sell line stays at M1 — no live trail.
+        line, ptr, frozen = apply_profit_milestone_plan(plan, peak_rs=800, pointer=1)
+        assert line == pytest.approx(200) and ptr == 1 and frozen is False
+        line, ptr, frozen = apply_profit_milestone_plan(plan, peak_rs=1500, pointer=1)
+        assert line == pytest.approx(1000) and ptr == 3 and frozen is True
+        line, ptr, frozen = apply_profit_milestone_plan(plan, peak_rs=100, pointer=3)
+        assert line == pytest.approx(1000) and ptr == 3 and frozen is True
+
+    def test_parse_plan_round_trip(self):
+        raw = '{"levels":[{"i":1,"peak_rs":500,"sell_rs":50}]}'
+        parsed = parse_profit_milestone_plan(raw)
+        assert parsed is not None and parsed["levels"][0]["i"] == 1
+        assert parse_profit_milestone_plan("not-json") is None
+        assert parse_profit_milestone_plan(None) is None
 
     def test_auto_close_defaults_true(self):
         with patch(

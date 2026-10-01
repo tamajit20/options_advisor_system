@@ -12,16 +12,19 @@ uses) and emits a notification when:
 * ``PRE_BREACH_WARNING`` — current loss first crosses
   ``pre_breach_fraction × effective_sl_rs``. Soft warning; gives the user lead
   time before a hard loss limit. Fires once per trade per IST day.
-* ``LOSS_MILESTONE_HIT`` — user-configured ``pct_of_premium`` of entry
-  premium (see ``loss_milestone_alert``). Alert only here; auto-close lives
-  in ``lifecycle.auto_execution`` when ``auto_close`` is on.
+* ``LOSS_MILESTONE_HIT`` — ``pct_of_premium`` of *entry* premium as a
+  fixed rupee line (``loss_ms_plan_json``). Ticks only compare MTM to that
+  line. If the overlay % changes while the trade is open, the line rebuilds.
+  Auto-close lives in ``lifecycle.auto_execution`` when ``auto_close`` is on.
 * ``PROFIT_MILESTONE_HIT`` — giveback from peak MTM
   (``profit_milestone_alert``). SL is not shifted into profit. Auto-close
   lives in ``lifecycle.auto_execution`` when ``auto_close`` is on.
-  Sell line = peak − giveback, floored at charges + buffer
-  (``max(peak − giveback, charges + charges_buffer_rs)``); giveback itself
-  is ``max(% of premium, charges + buffer)``. Optional ``max_locks`` freezes
-  the sell line after peak has grown by N × giveback (blank = unlimited trail).
+  When ``max_locks`` is an integer N, M1..MN rupee levels follow that N
+  (``profit_ms_plan_json``). Ticks only advance a pointer. If the overlay
+  changes N / % / buffer while the trade is open, the plan is rebuilt and
+  the pointer is re-derived from current peak. M*i* arms at *i* × giveback
+  and sells at max(charges floor, (*i*−1) × giveback). Blank ``max_locks``
+  still trails continuously (peak − giveback, floored at charges + buffer).
 * ``LOSS_LIMIT_HIT`` — current PnL crosses the strategy effective loss limit
   (``effective_sl_rs``). Alert only — no auto flatten. Loss-side only.
 * ``SL_TRIGGER`` — underlying spot crosses ``actual_stop_loss_level`` (when
@@ -91,12 +94,18 @@ from engine.pnl_targets import profit_target_trade_rs
 from engine.sl_threshold import (
     effective_sl_rs,
     loss_milestone_config,
-    loss_milestone_rs,
     profit_milestone_charges_floor_rs,
     profit_milestone_config,
     profit_milestone_line_rs,
     profit_milestone_rs,
     advance_profit_milestone_locks,
+    apply_profit_milestone_plan,
+    build_loss_milestone_plan,
+    build_profit_milestone_plan,
+    parse_loss_milestone_plan,
+    parse_profit_milestone_plan,
+    profit_milestone_plan_matches_config,
+    loss_milestone_plan_matches_config,
     profit_pct_auto_close_config,
     profit_pct_auto_close_rs,
     trade_investment_rs,
@@ -218,6 +227,14 @@ class _TradeState:
     mtm_peak_rs: Optional[float] = None
     profit_ms_line_rs: Optional[float] = None
     profit_ms_lock_count: int = 0
+    profit_ms_plan: Optional[dict] = None
+    profit_ms_plan_dirty: bool = False
+    loss_ms_plan: Optional[dict] = None
+    loss_ms_plan_dirty: bool = False
+    profit_ms_fixed: bool = False
+    profit_ms_fixed_rs: Optional[float] = None
+    loss_ms_fixed: bool = False
+    loss_ms_fixed_rs: Optional[float] = None
     milestone_confirm_at: Dict[str, datetime] = field(default_factory=dict)
 
 
@@ -364,6 +381,20 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                                    if trade.get("profit_ms_line_rs") is not None
                                    else None),
                 profit_ms_lock_count=int(trade.get("profit_ms_lock_count") or 0),
+                profit_ms_plan=parse_profit_milestone_plan(
+                    trade.get("profit_ms_plan_json")
+                ),
+                loss_ms_plan=parse_loss_milestone_plan(
+                    trade.get("loss_ms_plan_json")
+                ),
+                profit_ms_fixed=bool(trade.get("profit_ms_fixed")),
+                profit_ms_fixed_rs=(float(trade["profit_ms_fixed_rs"])
+                                    if trade.get("profit_ms_fixed_rs") is not None
+                                    else None),
+                loss_ms_fixed=bool(trade.get("loss_ms_fixed")),
+                loss_ms_fixed_rs=(float(trade["loss_ms_fixed_rs"])
+                                  if trade.get("loss_ms_fixed_rs") is not None
+                                  else None),
                 entry_pop=entry_pop,
                 entry_spot=entry_spot,
                 atm_iv=atm_iv,
@@ -513,6 +544,7 @@ class LiveRiskMonitor:
         clock: Callable[[], datetime] = now_ist,
         trailing_persister: Optional[Callable[[str, Optional[float], int], None]] = None,
         peak_persister: Optional[Callable[[str, Optional[float]], None]] = None,
+        plan_persister: Optional[Callable[[str, Optional[dict]], None]] = None,
         mtm_snapshot_persister: Optional[Callable[[dict], None]] = None,
         level_event_persister: Optional[Callable[[dict], None]] = None,
         events_repo: Optional[object] = None,
@@ -526,6 +558,7 @@ class LiveRiskMonitor:
         self._config_override = config
         self._trailing_persister = trailing_persister
         self._peak_persister = peak_persister
+        self._plan_persister = plan_persister
         self._mtm_snapshot_persister = mtm_snapshot_persister
         self._level_event_persister = level_event_persister
         self._events_repo = events_repo
@@ -765,17 +798,38 @@ class LiveRiskMonitor:
                     if old_peak is not None and (
                             new_peak is None or old_peak > new_peak):
                         new_state.mtm_peak_rs = old_peak
-                    if old.profit_ms_lock_count > new_state.profit_ms_lock_count:
-                        new_state.profit_ms_lock_count = old.profit_ms_lock_count
-                        new_state.profit_ms_line_rs = old.profit_ms_line_rs
-                    elif (
-                        old.profit_ms_line_rs is not None
-                        and (
-                            new_state.profit_ms_line_rs is None
-                            or old.profit_ms_line_rs > new_state.profit_ms_line_rs
-                        )
+                    # Per-trade Fixed flags always come from DB — never copy
+                    # in-memory overlay lock/line over a saved sell line.
+                    if not new_state.profit_ms_fixed:
+                        if old.profit_ms_lock_count > new_state.profit_ms_lock_count:
+                            new_state.profit_ms_lock_count = old.profit_ms_lock_count
+                            new_state.profit_ms_line_rs = old.profit_ms_line_rs
+                        elif (
+                            old.profit_ms_line_rs is not None
+                            and (
+                                new_state.profit_ms_line_rs is None
+                                or old.profit_ms_line_rs > new_state.profit_ms_line_rs
+                            )
+                        ):
+                            new_state.profit_ms_line_rs = old.profit_ms_line_rs
+                    if (
+                        not new_state.profit_ms_fixed
+                        and old.profit_ms_plan and not new_state.profit_ms_plan
                     ):
-                        new_state.profit_ms_line_rs = old.profit_ms_line_rs
+                        new_state.profit_ms_plan = old.profit_ms_plan
+                    if (
+                        not new_state.profit_ms_fixed
+                        and old.profit_ms_plan_dirty
+                    ):
+                        new_state.profit_ms_plan_dirty = True
+                        if old.profit_ms_plan:
+                            new_state.profit_ms_plan = old.profit_ms_plan
+                    if old.loss_ms_plan and not new_state.loss_ms_plan:
+                        new_state.loss_ms_plan = old.loss_ms_plan
+                    if old.loss_ms_plan_dirty:
+                        new_state.loss_ms_plan_dirty = True
+                        if old.loss_ms_plan:
+                            new_state.loss_ms_plan = old.loss_ms_plan
             self._snapshot = new_snap
             persist_mtm = self._prune_closed_mtm_locked()
             mtm_dump = dict(self._mtm_state) if persist_mtm else None
@@ -832,6 +886,7 @@ class LiveRiskMonitor:
         pending_mtm: List[dict] = []
         pending_trail: List[Tuple[str, Optional[float], int]] = []
         pending_peaks: List[Tuple[str, Optional[float], Optional[float], int]] = []
+        pending_plans: List[Tuple[str, Optional[dict], Optional[dict]]] = []
         pending_snapshots: List[dict] = []
         with self._lock:
             for tid in self._snapshot.index.get(key, ()):
@@ -861,12 +916,18 @@ class LiveRiskMonitor:
                         state.profit_ms_line_rs,
                         int(state.profit_ms_lock_count or 0),
                     ))
+                if state.profit_ms_plan_dirty or state.loss_ms_plan_dirty:
+                    pending_plans.append((
+                        state.trade_id, state.profit_ms_plan, state.loss_ms_plan,
+                    ))
+                    state.profit_ms_plan_dirty = False
+                    state.loss_ms_plan_dirty = False
                 if snap is not None:
                     pending_snapshots.append(snap)
 
         self._flush_outputs(
             decisions, pending_mtm, pending_trail, pending_snapshots,
-            pending_peaks,
+            pending_peaks, pending_plans,
         )
 
     def _flush_outputs(
@@ -876,6 +937,7 @@ class LiveRiskMonitor:
         pending_trail: List[Tuple[str, Optional[float], int]],
         pending_snapshots: List[dict],
         pending_peaks: Optional[List[Tuple[str, Optional[float], Optional[float], int]]] = None,
+        pending_plans: Optional[List[Tuple[str, Optional[dict], Optional[dict]]]] = None,
     ) -> None:
         for d in decisions:
             self._dispatch(d)
@@ -898,6 +960,8 @@ class LiveRiskMonitor:
             self._persist_trailing(*args)
         for args in (pending_peaks or []):
             self._persist_peak(*args)
+        for args in (pending_plans or []):
+            self._persist_plan(*args)
 
     def _handle_spot_tick(self, quote: LiveQuote) -> None:
         sym = str(quote.symbol or "").upper()
@@ -911,6 +975,7 @@ class LiveRiskMonitor:
         pending_mtm: List[dict] = []
         pending_trail: List[Tuple[str, Optional[float], int]] = []
         pending_peaks: List[Tuple[str, Optional[float], Optional[float], int]] = []
+        pending_plans: List[Tuple[str, Optional[dict], Optional[dict]]] = []
         pending_snapshots: List[dict] = []
         with self._lock:
             tids = list(self._snapshot.spot_index.get(quote.symbol, ()))
@@ -950,6 +1015,12 @@ class LiveRiskMonitor:
                         ))
                     if snap is not None:
                         pending_snapshots.append(snap)
+                    if state.profit_ms_plan_dirty or state.loss_ms_plan_dirty:
+                        pending_plans.append((
+                            state.trade_id, state.profit_ms_plan, state.loss_ms_plan,
+                        ))
+                        state.profit_ms_plan_dirty = False
+                        state.loss_ms_plan_dirty = False
                 if not self._spot_sl_enabled:
                     continue
                 if state.sl_level is None or state.sl_level <= 0:
@@ -998,7 +1069,7 @@ class LiveRiskMonitor:
                         state.last_alert_at.pop(key, None)
         self._flush_outputs(
             decisions, pending_mtm, pending_trail, pending_snapshots,
-            pending_peaks,
+            pending_peaks, pending_plans,
         )
 
     def _mtm_throttle_elapsed(self, state: _TradeState, now: datetime) -> bool:
@@ -1136,24 +1207,75 @@ class LiveRiskMonitor:
             state.mtm_peak_rs = current_pnl
 
         investment = trade_investment_rs(entry_net_credit_rs=state.entry_net_credit)
-        milestone_rs, milestone_pct = loss_milestone_rs(investment_rs=investment)
+        if state.loss_ms_fixed and state.loss_ms_fixed_rs and state.loss_ms_fixed_rs > 0:
+            milestone_rs = float(state.loss_ms_fixed_rs)
+            milestone_pct = 0.0
+            loss_plan = {
+                "fixed": True,
+                "loss_rs": round(milestone_rs, 2),
+                "pct_of_premium": None,
+            }
+        else:
+            loss_plan = parse_loss_milestone_plan(state.loss_ms_plan)
+            if not loss_milestone_plan_matches_config(loss_plan):
+                loss_plan = build_loss_milestone_plan(investment_rs=investment)
+                state.loss_ms_plan = loss_plan
+                state.loss_ms_plan_dirty = True
+            if loss_plan:
+                milestone_rs = float(loss_plan["loss_rs"])
+                milestone_pct = float(loss_plan.get("pct_of_premium") or 0.0)
+            else:
+                milestone_rs, milestone_pct = 0.0, (
+                    loss_milestone_config().get("pct_of_premium") or 0.0
+                )
         charges_rs = self._estimated_close_charges_rs(state)
         profit_giveback_rs, profit_ms_pct = profit_milestone_rs(
             investment_rs=investment, charges_rs=charges_rs)
         charges_floor_rs = profit_milestone_charges_floor_rs(charges_rs=charges_rs)
-        raw_profit_line = profit_milestone_line_rs(
-            peak_rs=state.mtm_peak_rs,
-            giveback_rs=profit_giveback_rs,
-            min_line_rs=charges_floor_rs,
-        )
-        profit_line, lock_count, line_frozen = advance_profit_milestone_locks(
-            raw_line_rs=raw_profit_line,
-            prev_line_rs=state.profit_ms_line_rs,
-            lock_count=state.profit_ms_lock_count,
-            max_locks=self._profit_milestone_max_locks,
-            peak_rs=state.mtm_peak_rs,
-            giveback_rs=profit_giveback_rs,
-        )
+        if (
+            state.profit_ms_fixed
+            and state.profit_ms_fixed_rs is not None
+            and state.profit_ms_fixed_rs >= 0
+        ):
+            profit_line = float(state.profit_ms_fixed_rs)
+            lock_count = 1
+            line_frozen = True
+            plan = None
+            fresh_plan = False
+        else:
+            plan = parse_profit_milestone_plan(state.profit_ms_plan)
+            fresh_plan = False
+            if not profit_milestone_plan_matches_config(plan):
+                plan = build_profit_milestone_plan(
+                    investment_rs=investment, charges_rs=charges_rs,
+                )
+                state.profit_ms_plan = plan
+                state.profit_ms_plan_dirty = True
+                fresh_plan = True
+            if plan:
+                # Config rebuild (or first stamp) must not inherit an old
+                # lock_count — pointer comes from peak vs the current M1..MN.
+                pointer = 0 if fresh_plan else state.profit_ms_lock_count
+                profit_line, lock_count, line_frozen = apply_profit_milestone_plan(
+                    plan,
+                    peak_rs=state.mtm_peak_rs,
+                    pointer=pointer,
+                )
+            else:
+                raw_profit_line = profit_milestone_line_rs(
+                    peak_rs=state.mtm_peak_rs,
+                    giveback_rs=profit_giveback_rs,
+                    min_line_rs=charges_floor_rs,
+                )
+                profit_line, lock_count, line_frozen = advance_profit_milestone_locks(
+                    raw_line_rs=raw_profit_line,
+                    prev_line_rs=state.profit_ms_line_rs,
+                    lock_count=state.profit_ms_lock_count,
+                    max_locks=self._profit_milestone_max_locks,
+                    peak_rs=state.mtm_peak_rs,
+                    giveback_rs=profit_giveback_rs,
+                    min_line_rs=charges_floor_rs,
+                )
         state.profit_ms_line_rs = profit_line
         state.profit_ms_lock_count = lock_count
         profit_pct_rs, profit_pct_val = profit_pct_auto_close_rs(
@@ -1185,6 +1307,21 @@ class LiveRiskMonitor:
                 ),
                 "profit_ms_lock_count": int(lock_count),
                 "profit_ms_frozen": bool(line_frozen),
+                "profit_ms_plan": plan,
+                "loss_ms_plan": loss_plan,
+                "loss_milestone_rs": (
+                    round(milestone_rs, 2) if milestone_rs else None
+                ),
+                "profit_ms_fixed": bool(state.profit_ms_fixed),
+                "profit_ms_fixed_rs": (
+                    round(state.profit_ms_fixed_rs, 2)
+                    if state.profit_ms_fixed_rs is not None else None
+                ),
+                "loss_ms_fixed": bool(state.loss_ms_fixed),
+                "loss_ms_fixed_rs": (
+                    round(state.loss_ms_fixed_rs, 2)
+                    if state.loss_ms_fixed_rs is not None else None
+                ),
                 "est_charges_rs": round(charges_rs, 2),
                 "profit_milestone_confirming": False,
                 "loss_milestone_confirming": False,
@@ -1290,7 +1427,7 @@ class LiveRiskMonitor:
             return alert, mtm_payload, trailing_persist, snapshot_payload
 
         profit_in_zone = (
-            self._profit_milestone_enabled
+            (self._profit_milestone_enabled or state.profit_ms_fixed)
             and profit_line is not None
             and current_pnl <= profit_line
         )
@@ -1309,9 +1446,9 @@ class LiveRiskMonitor:
                 profit_in_zone and not profit_ready
             )
 
-        # 1b. Profit milestone — giveback from peak (independent of loss SL).
-        # Giveback = max(% of premium, charges + buffer). Sell line =
-        # max(peak − giveback, charges + buffer) so it never sits below brokerage.
+        # 1b. Profit milestone — independent of loss SL.
+        # With max_locks, sell line is the precomputed M[pointer] level.
+        # Unlimited trail: max(peak − giveback, charges + buffer).
         if profit_in_zone:
             if not profit_ready:
                 return None, mtm_payload, trailing_persist, snapshot_payload
@@ -1323,19 +1460,25 @@ class LiveRiskMonitor:
                 if self._profit_milestone_auto_close
                 else "Consider booking — hard SL unchanged."
             )
-            peak = state.mtm_peak_rs or 0.0
             held = (
                 "MTM ≤ ₹0 — confirm skipped"
                 if profit_unprofitable
                 else self._held_for_phrase(self._profit_milestone_confirm)
             )
-            reason = (
-                f"Profit milestone ({profit_ms_pct:.0f}% of {prem_label} ₹"
-                f"{investment:,.0f} = ₹{profit_giveback_rs:,.0f} giveback from "
-                f"peak ₹{peak:,.0f}): MTM ₹{current_pnl:,.0f} ≤ ₹{profit_line:,.0f} "
-                f"{held}. "
-                f"{close_note}"
-            )
+            n_ms = len(plan["levels"]) if plan else None
+            if state.profit_ms_fixed:
+                reason = (
+                    f"Fixed profit sell line ₹{profit_line:,.0f}: "
+                    f"MTM ₹{current_pnl:,.0f} ≤ that line {held}. {close_note}"
+                )
+            else:
+                ms_label = f"{lock_count}/{n_ms}" if n_ms else str(lock_count)
+                reason = (
+                    f"Profit milestone {ms_label} ({profit_ms_pct:.0f}% of {prem_label} "
+                    f"₹{investment:,.0f} = ₹{profit_giveback_rs:,.0f} per step): "
+                    f"MTM ₹{current_pnl:,.0f} ≤ sell line ₹{profit_line:,.0f} "
+                    f"{held}. {close_note}"
+                )
             alert = self._maybe_alert(
                 state, "PROFIT_MILESTONE_HIT", "WARNING",
                 title=f"Profit milestone hit on {state.trade_name}",
@@ -1349,7 +1492,7 @@ class LiveRiskMonitor:
             return alert, mtm_payload, trailing_persist, snapshot_payload
 
         loss_in_zone = (
-            self._loss_milestone_enabled
+            (self._loss_milestone_enabled or state.loss_ms_fixed)
             and milestone_rs > 0
             and decision.decision != "SL_HIT"
             and current_pnl <= -milestone_rs
@@ -1375,12 +1518,19 @@ class LiveRiskMonitor:
                 if self._loss_milestone_auto_close
                 else "Consider closing — hard SL unchanged."
             )
-            reason = (
-                f"Loss milestone ({milestone_pct:.0f}% of {prem_label} ₹"
-                f"{investment:,.0f} = ₹{milestone_rs:,.0f}): "
-                f"MTM ₹{current_pnl:,.0f} "
-                f"{self._held_for_phrase(self._loss_milestone_confirm)}. {close_note}"
-            )
+            if state.loss_ms_fixed:
+                reason = (
+                    f"Fixed loss milestone ₹{milestone_rs:,.0f}: "
+                    f"MTM ₹{current_pnl:,.0f} "
+                    f"{self._held_for_phrase(self._loss_milestone_confirm)}. {close_note}"
+                )
+            else:
+                reason = (
+                    f"Loss milestone ({milestone_pct:.0f}% of {prem_label} ₹"
+                    f"{investment:,.0f} = ₹{milestone_rs:,.0f}): "
+                    f"MTM ₹{current_pnl:,.0f} "
+                    f"{self._held_for_phrase(self._loss_milestone_confirm)}. {close_note}"
+                )
             alert = self._maybe_alert(
                 state, "LOSS_MILESTONE_HIT", "WARNING",
                 title=f"Loss milestone hit on {state.trade_name}",
@@ -2048,6 +2198,26 @@ class LiveRiskMonitor:
         except Exception:
             logger.exception(
                 "LiveRiskMonitor: peak_persister raised for %s", trade_id)
+
+    def _persist_plan(
+        self,
+        trade_id: str,
+        profit_plan: Optional[dict],
+        loss_plan: Optional[dict] = None,
+    ) -> None:
+        if self._plan_persister is None:
+            return
+        try:
+            self._plan_persister(trade_id, profit_plan, loss_plan=loss_plan)
+        except TypeError:
+            try:
+                self._plan_persister(trade_id, profit_plan)
+            except Exception:
+                logger.exception(
+                    "LiveRiskMonitor: plan_persister raised for %s", trade_id)
+        except Exception:
+            logger.exception(
+                "LiveRiskMonitor: plan_persister raised for %s", trade_id)
 
     def _format_pnl_body(self, state: _TradeState, current_pnl: float, reason: str) -> str:
         body = (

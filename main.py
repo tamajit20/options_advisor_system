@@ -334,6 +334,16 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict) -> str:
         )
         db.commit()
 
+    def _persist_profit_ms_plan(
+        trade_id: str,
+        plan: dict | None,
+        loss_plan: dict | None = None,
+    ) -> None:
+        trd = TradeRepo(db)
+        trd.write_profit_ms_plan(trade_id, plan)
+        trd.write_loss_ms_plan(trade_id, loss_plan)
+        db.commit()
+
     from database.config_overlay import apply_strategy_overrides
     try:
         apply_strategy_overrides(db)
@@ -348,6 +358,7 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict) -> str:
         trailing_persister=lambda tid, floor, idx: TradeRepo(db).update_trailing(
             tid, trailing_pnl_floor=floor, trailing_step_idx=idx),
         peak_persister=_persist_mtm_peak,
+        plan_persister=_persist_profit_ms_plan,
         mtm_snapshot_persister=_persist_mtm_snapshot,
         level_event_persister=_persist_level_event,
         events_repo=EventCalendarRepo(db),

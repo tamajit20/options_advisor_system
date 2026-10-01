@@ -1077,6 +1077,58 @@ class TradeRepo:
             [mtm_peak_rs, profit_ms_line_rs, int(profit_ms_lock_count or 0), trade_id],
         ).close()
 
+    def write_profit_ms_plan(self, trade_id: str, plan: Any) -> None:
+        import json as _json
+        payload = None if plan is None or plan == "" else (
+            plan if isinstance(plan, str) else _json.dumps(plan)
+        )
+        self.db.execute(
+            "UPDATE options_trades SET profit_ms_plan_json = ? WHERE trade_id = ?",
+            [payload, trade_id],
+        ).close()
+
+    def write_loss_ms_plan(self, trade_id: str, plan: Any) -> None:
+        import json as _json
+        payload = None if plan is None or plan == "" else (
+            plan if isinstance(plan, str) else _json.dumps(plan)
+        )
+        self.db.execute(
+            "UPDATE options_trades SET loss_ms_plan_json = ? WHERE trade_id = ?",
+            [payload, trade_id],
+        ).close()
+
+    def write_milestone_override(
+        self,
+        trade_id: str,
+        *,
+        kind: str,
+        fixed: bool,
+        rs: Optional[float] = None,
+    ) -> None:
+        """Per-trade fixed profit sell-line or loss-line override."""
+        flag = 1 if fixed else 0
+        if kind == "profit":
+            if fixed and rs is not None:
+                self.db.execute(
+                    "UPDATE options_trades SET profit_ms_fixed = ?, profit_ms_fixed_rs = ?, "
+                    "profit_ms_line_rs = ? WHERE trade_id = ?",
+                    [flag, rs, rs, trade_id],
+                ).close()
+            else:
+                self.db.execute(
+                    "UPDATE options_trades SET profit_ms_fixed = ?, profit_ms_fixed_rs = ? "
+                    "WHERE trade_id = ?",
+                    [flag, rs, trade_id],
+                ).close()
+        elif kind == "loss":
+            self.db.execute(
+                "UPDATE options_trades SET loss_ms_fixed = ?, loss_ms_fixed_rs = ? "
+                "WHERE trade_id = ?",
+                [flag, rs, trade_id],
+            ).close()
+        else:
+            raise ValueError(f"unknown milestone kind: {kind}")
+
     def update_status(self, trade_id: str, status: str, daily_status: Optional[str] = None,
                       exit_instruction: Optional[str] = None) -> None:
         self.db.execute(

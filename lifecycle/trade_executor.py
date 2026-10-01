@@ -254,6 +254,38 @@ def _circuit_breaker_on(db: SQLServerConnection) -> bool:
         ) from None
 
 
+def _stamp_profit_milestone_plan(
+    trd: TradeRepo,
+    trade_id: str,
+    *,
+    net_credit: float,
+    executed_legs: Sequence[dict],
+) -> None:
+    """Write M1..MN profit levels and the fixed loss-milestone rupee line."""
+    from engine.charges import estimate_charges
+    from engine.sl_threshold import (
+        build_loss_milestone_plan,
+        build_profit_milestone_plan,
+        trade_investment_rs,
+    )
+
+    chg_legs = []
+    for leg in executed_legs:
+        chg_legs.append({
+            "action": leg.get("action"),
+            "price": leg.get("fill_price"),
+            "lots": leg.get("lots_actual") or leg.get("lots"),
+            "lot_size": leg.get("lot_size"),
+        })
+    charges = float(estimate_charges(chg_legs).total) if chg_legs else 0.0
+    investment = trade_investment_rs(entry_net_credit_rs=net_credit)
+    plan = build_profit_milestone_plan(
+        investment_rs=investment, charges_rs=charges,
+    )
+    trd.write_profit_ms_plan(trade_id, plan)
+    trd.write_loss_ms_plan(trade_id, build_loss_milestone_plan(investment_rs=investment))
+
+
 def mark_executed(
     db: SQLServerConnection,
     suggestion_id: str,
@@ -482,6 +514,16 @@ def mark_executed(
         })
     trd.insert_legs(trade_id, trade_legs)
     sug.update_status(suggestion_id, "EXECUTED")
+    try:
+        _stamp_profit_milestone_plan(
+            trd, trade_id,
+            net_credit=actual_net_credit,
+            executed_legs=executed_legs,
+        )
+    except Exception:
+        logger.exception(
+            "trade_executor: profit milestone plan stamp failed for %s", trade_id,
+        )
     # Phase 2c: stamp execution provenance (best-effort).
     try:
         gen_on = suggestion.get("generated_on")
