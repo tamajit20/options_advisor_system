@@ -1,9 +1,10 @@
 # Options Advisor - Complete Guide
 
-**Last updated:** 2026-09-22
+**Last updated:** 2026-10-04
 
-**Single document** for install, day-to-day ops, and architecture.  
-Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.
+**Single document** for install, day-to-day ops, and lean architecture.  
+Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.  
+Developer-depth module chapters: [`docs/architecture/README.md`](docs/architecture/README.md) (boundary contract: [`ARCHITECTURE.txt`](ARCHITECTURE.txt)).
 
 
 | How to navigate    | Tip                                                                   |
@@ -11,6 +12,7 @@ Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markd
 | **Jump index**     | Click a link below                                                    |
 | **Editor Outline** | Auto TOC from headings                                                |
 | **Diagrams**       | ASCII always visible; Mermaid needs Markdown Preview (`Ctrl+Shift+V`) |
+| **Architecture suite** | Module chapters + Mermaid — [`docs/architecture/`](docs/architecture/README.md) |
 
 
 ---
@@ -33,6 +35,7 @@ Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markd
 
 ### Part B - Architecture
 
+- **[Developer architecture suite](docs/architecture/README.md)** (modules, flows, Mermaid) · [`ARCHITECTURE.txt`](ARCHITECTURE.txt) (boundaries only)
 - [B1. Layers and boundaries](#b1-layers-and-boundaries)
 - [B2. Runtime and Docker](#b2-runtime-and-docker)
 - [B3. Contracts and exceptions](#b3-contracts-and-exceptions)
@@ -164,11 +167,11 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
  Mon-Fri (VM up 08:55-15:45)
  08:55  Azure starts VM
  09:00  morning_eod_catchup  (+ events_seed on Monday)
+ 09:05  event_eve_review (eve-of HIGH event → PRE_EVENT_EXIT for ACTIVE shorts)
  09:15  Laptop archive task (retry every 15m until ACK or ~15:45; needs readable VM ``*-latest.bak``)
  09:30  Fri: weekly_archive
  09:35  Fri: weekly_log_cleanup | daily: intraday_validator
   10:00–14:00 hourly     live_suggestion_engine
-  14:30  event_eve_review
  15:35  intraday_close_snapshot
  15:36  Fri: archive_export
  15:38  Fri: db_backup
@@ -203,7 +206,7 @@ Enable flags / handlers live in `SCHEDULER_CONFIG["jobs"]` and `JOB_FUNCS` in `s
 | `intraday_close_snapshot`                                                | On @ 15:35      | LTP capture                   |
 | `intraday_sl_fallback`                                                   | On every 3m     | If WS stale                   |
 | `pcr_regen_poll`                                                         | On every 5m     | Regen hints                   |
-| `event_eve_review` / `events_seed`                                       | On              | Events                        |
+| `event_eve_review` / `events_seed`                                       | On @ 09:05 / Mon | Eve-of HIGH + seed           |
 | `weekly_archive` / `weekly_log_cleanup` / `archive_export` / `db_backup` | Fri             | Archive path                  |
 | Solo `fo_bhav_*` … `suggestion_engine`                                   | Usually off     | Available for manual Jobs tab |
 | `weekly_cleanup`                                                         | Blocked         | Legacy                        |
@@ -320,6 +323,8 @@ ACK refuses if `LAST_HOT_BACKUP.json` is missing or older than this export, `PEN
 
 
 # Part B - Architecture
+
+Lean operator-facing map. For per-module “start here” chapters, public APIs, and change playbooks see [`docs/architecture/README.md`](docs/architecture/README.md). Import rules: [`ARCHITECTURE.txt`](ARCHITECTURE.txt).
 
 
 
@@ -468,9 +473,13 @@ Other important tables: `options_config`, `options_runtime_flags`, `options_job_
 
 ## B6. Module map
 
+Expanded tree + ownership: [`docs/architecture/02-module-map.md`](docs/architecture/02-module-map.md).
+
 ```
 options_advisor_system/
-├── README.md                 # THIS GUIDE
+├── README.md                 # THIS GUIDE (ops + lean architecture)
+├── ARCHITECTURE.txt          # Boundary contract
+├── docs/architecture/        # Developer module chapters
 ├── main.py, config.py, contracts.py, exceptions.py, utils.py
 ├── engine/                   # pure decisions
 ├── lifecycle/                # job orchestrators
@@ -597,6 +606,8 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 **My Trades profit / loss milestone:** each row has **Fixed** + a rupee box + **Save**. Checked = this trade uses that ₹ line (profit = sell when MTM ≤ ₹X; loss = close when MTM ≤ −₹X). Unchecked = overlay M1..MN / % of entry premium. Overlay off still honors a saved Fixed line.
 
 **Header index strip:** Nifty / BN / FN / VIX on one row — compact ▲/▼ % vs prior EOD (full change in tooltip). No second header row; phones hide header banners so VIX stays visible.
+
+**Pre-event exit marquee:** from the **morning of the prior day**, when a HIGH-impact event is **tomorrow** (or still **today**) and any ACTIVE short/credit trade is open, a single-line scrolling banner under the header warns to consider closing tonight (advisory). Multiple events are **one at a time** on that line — **×** dismisses the current event (localStorage through the event date) and shows the next. Driven by live `/api/system-status` (`pre_event_exit.items`), not unread state; visible on phones. Job `event_eve_review` (**09:05 IST**) inserts `PRE_EVENT_EXIT` (CRITICAL) for shorts and `EVENT_AHEAD_REVIEW` for other ACTIVE trades.
 
 **My Trades Close / Void:** **Close Trade** is in the card header (opens the close form after confirm); **Void Trade** is at the bottom of the card (confirm before void). Recording fills also confirms before finalize.
 
@@ -836,14 +847,14 @@ pytest tests/test_database/test_schema.py tests/test_scheduler/test_scheduler.py
 | Deploy / archive script | README A4 / A8; `setup-new-environment.ps1` / manifest if greenfield-visible                   |
 | HTTPS on VM             | A7 HTTPS; default self-signed IP; or `HTTPS_MODE=acme` + sslip.io; `enable-https.sh` / open-port-https |
 | Index lot-size revision | `options_lot_sizes`, `config.py` `default_lot_sizes`, `scripts/migrate_nse_lot_sizes.py`, README B4 |
-| New module / boundary   | README B1 / B6 / B12                                                                           |
+| New module / boundary   | README B1 / B6 / B12; [`ARCHITECTURE.txt`](ARCHITECTURE.txt); matching `docs/architecture/` chapter |
 | Code-only ship          | [A7](#a7-code-deploy)                                                                          |
 
 
 **Agent shorthand:** saying **deploy** means document (if needed) → commit → push → VM deploy (A7).
 
-**Definition of done:** code + tests + lean README update when impactful + `validate_setup_sync.py` clean when setup-related.
+**Definition of done:** code + tests + lean README update when impactful + architecture chapter when public API / job wiring / boundary changes + `validate_setup_sync.py` clean when setup-related.
 
 ---
 
-*End of guide. Keep everything in this* `README.md`*.*
+*End of ops guide. Keep install/ops/lean architecture in this* `README.md`*; developer module depth in* `docs/architecture/`*.*

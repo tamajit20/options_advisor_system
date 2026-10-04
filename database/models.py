@@ -567,6 +567,16 @@ class EventCalendarRepo:
             [start, end],
         )
 
+    def high_impact_events(self, start: date, end: date) -> List[dict]:
+        """All HIGH-impact events in the range (ordered)."""
+        return self.db.fetch_all(
+            "SELECT event_date, event_type, description, impact "
+            "FROM options_events_calendar "
+            "WHERE event_date BETWEEN ? AND ? AND impact = 'HIGH' "
+            "ORDER BY event_date, event_type, description",
+            [start, end],
+        ) or []
+
     def count_all(self) -> int:
         """Total rows in the calendar table — 0 means it has never been seeded."""
         n = self.db.scalar("SELECT COUNT(*) FROM options_events_calendar")
@@ -1531,7 +1541,7 @@ class NotificationRepo:
           profit    → TARGET_HIT, TAKE_PROFIT, TARGET_LOCKED, PROFIT_FLOOR_SET,
                       PROFIT_MILESTONE_HIT
           exit      → EXIT_TOMORROW, TIME_DECAY_DONE, EXPIRE, AUTO_SETTLED
-          event     → EVENT_AHEAD_REVIEW
+          event     → EVENT_AHEAD_REVIEW, PRE_EVENT_EXIT
           system    → CIRCUIT_BREAKER, BROKEN_TRADE, DATA_REPAIR, KILL_SWITCH
           suggestion→ NEW_SUGGESTION, NO_SUGGESTION, STRATEGY_VETO
         """
@@ -1544,7 +1554,7 @@ class NotificationRepo:
                            "PROFIT_MILESTONE_CLOSE_FAILED",
                            "PROFIT_PCT_HIT", "PROFIT_PCT_CLOSE_FAILED"],
             "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
-            "event":      ["EVENT_AHEAD_REVIEW"],
+            "event":      ["EVENT_AHEAD_REVIEW", "PRE_EVENT_EXIT"],
             "system":     ["CIRCUIT_BREAKER", "BROKEN_TRADE", "DATA_REPAIR", "KILL_SWITCH"],
             "suggestion": ["NEW_SUGGESTION", "NO_SUGGESTION", "STRATEGY_VETO"],
         }
@@ -1601,7 +1611,7 @@ class NotificationRepo:
                            "PROFIT_MILESTONE_CLOSE_FAILED",
                            "PROFIT_PCT_HIT", "PROFIT_PCT_CLOSE_FAILED"],
             "exit":       ["EXIT_TOMORROW", "TIME_DECAY_DONE", "EXPIRE", "AUTO_SETTLED"],
-            "event":      ["EVENT_AHEAD_REVIEW"],
+            "event":      ["EVENT_AHEAD_REVIEW", "PRE_EVENT_EXIT"],
             "system":     ["CIRCUIT_BREAKER", "BROKEN_TRADE", "DATA_REPAIR", "KILL_SWITCH"],
             "suggestion": ["NEW_SUGGESTION", "NO_SUGGESTION", "STRATEGY_VETO"],
         }
@@ -1652,6 +1662,7 @@ class NotificationRepo:
             "EXIT_TOMORROW": "exit", "TIME_DECAY_DONE": "exit",
             "EXPIRE": "exit", "AUTO_SETTLED": "exit",
             "EVENT_AHEAD_REVIEW": "event",
+            "PRE_EVENT_EXIT": "event",
             "CIRCUIT_BREAKER": "system", "BROKEN_TRADE": "system",
             "DATA_REPAIR": "system", "KILL_SWITCH": "system",
             "NEW_SUGGESTION": "suggestion", "NO_SUGGESTION": "suggestion",

@@ -131,12 +131,11 @@ SCHEDULER_CONFIG = {
                 {"day_of_week": "mon-fri", "hour": 14, "minute": 0},
             ],
         },
-        # Phase 3 — #5. Event-eve review: at 14:30 IST, if there is a HIGH-impact
-        # event scheduled for tomorrow (or today afternoon), post one
-        # EVENT_AHEAD_REVIEW notification per ACTIVE trade so the user
-        # decides whether to close before the event.
+        # Eve-of HIGH event: morning of the prior day (09:05 IST, after
+        # morning_eod_catchup). PRE_EVENT_EXIT for ACTIVE shorts + softer
+        # EVENT_AHEAD_REVIEW for other ACTIVE trades. Marquee is live all day.
         "event_eve_review": {
-            "day_of_week": "mon-fri", "hour": 14, "minute": 30, "enabled": True,
+            "day_of_week": "mon-fri", "hour": 9, "minute": 5, "enabled": True,
         },
         # 15:35 IST: capture live LTP for every leg of every ACTIVE trade.
         "intraday_close_snapshot": {

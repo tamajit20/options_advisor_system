@@ -1090,7 +1090,7 @@ def _job_display_sort_key(
         return (_JOB_GROUP_ORDER["open"], mins, 0, name)
     if mins < 10 * 60:
         return (_JOB_GROUP_ORDER["open"], mins, 0, name)
-    if name in ("event_eve_review", "intraday_close_snapshot", "weekly_cleanup"):
+    if name in ("intraday_close_snapshot", "weekly_cleanup"):
         return (_JOB_GROUP_ORDER["close"], mins, 0, name)
     if mins < 15 * 60 + 45:
         return (_JOB_GROUP_ORDER["intraday"], mins, 0, name)
@@ -1613,6 +1613,12 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
         sch_running = bool(sch and sch.running)
     except Exception:
         logger.debug("system-status: scheduler probe failed", exc_info=True)
+    pre_event = None
+    try:
+        from lifecycle.event_eve_review import build_pre_event_exit_banner
+        pre_event = build_pre_event_exit_banner(db)
+    except Exception:
+        logger.debug("system-status: pre_event_exit banner skipped", exc_info=True)
     return {
         "circuit_breaker_active": cb_active,
         "kill_switch":             kill_switch,
@@ -1622,6 +1628,7 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
         "scheduler_running":       sch_running,
         "trade_signals":           _active_trade_signals(db),
         "pnl_rules":               _pnl_rules_payload(),
+        "pre_event_exit":          pre_event,
     }
 
 

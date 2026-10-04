@@ -1205,6 +1205,72 @@ input:focus, select:focus, textarea:focus {
   border: 1px dashed #3a4754; border-radius: 10px;
 }
 
+/* ---------- Pre-event exit marquee (full width under header) ---------- */
+/* Live from calendar + ACTIVE short/credit trades — not unread-alert state.
+   Stays visible on phones (unlike .global-banners which hide <640px). */
+.pre-event-marquee {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: linear-gradient(90deg, #7f1d1d 0%, #b45309 50%, #7f1d1d 100%);
+  border-bottom: 1px solid rgba(254, 243, 199, .35);
+  color: #fffbeb;
+  font-size: .82rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  line-height: 1.35;
+  padding: 4px 8px 4px 0;
+  z-index: 40;
+}
+.pre-event-marquee[hidden] { display: none !important; }
+.pre-event-marquee-viewport {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.pre-event-marquee-track {
+  display: inline-block;
+  white-space: nowrap;
+  animation: pre-event-marquee-rtl 32s linear infinite;
+  will-change: transform;
+}
+.pre-event-marquee-viewport:hover .pre-event-marquee-track {
+  animation-play-state: paused;
+}
+.pre-event-marquee-dismiss {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 251, 235, .45);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, .28);
+  color: #fffbeb;
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.pre-event-marquee-dismiss:hover {
+  background: rgba(0, 0, 0, .45);
+}
+@keyframes pre-event-marquee-rtl {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(-100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pre-event-marquee-track {
+    animation: none;
+    display: block;
+    padding: 0 12px;
+    white-space: normal;
+    transform: none;
+  }
+}
+
 /* ---------- System banners (Phase 4 / Task 7 surfacing) ---------- */
 /* Global banners — pinned strip under the app header. Visible on every
    tab so the user can never miss a CRITICAL alert. Auto-hides when empty

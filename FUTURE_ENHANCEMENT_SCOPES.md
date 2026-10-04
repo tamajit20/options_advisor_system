@@ -13,7 +13,7 @@ Pick up from here in future development sessions.
 
 ### Overnight gap risk ⚠️
 **Issue:** The 1.5× credit SL is intraday only. A surprise overnight gap (RBI decision, global shock, earnings) can put short options deep ITM before the exit engine runs. This is inherent to short-premium strategies but can be partially mitigated:
-1. **Event-aware forced early exit** — if `event_repo.has_high_impact(tomorrow, tomorrow+1)` is True, flag the trade for evening close (add `PRE_EVENT_EXIT` alert in `lifecycle/exit_orchestrator.py`)
+1. ~~**Event-aware early exit alert**~~ — **Shipped (advisory):** eve-of HIGH event → `PRE_EVENT_EXIT` for ACTIVE short/credit trades + top marquee (`lifecycle/event_eve_review.py`). Still operator-decided; no auto-close.
 2. **Gap-buffer SL** — widen SL to 2.5× credit when VIX is rising AND a high-impact event is within 2 days
 3. **Reduce lot size on high-event weeks** — position sizing multiplier < 1.0 when event risk is elevated
 

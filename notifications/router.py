@@ -69,8 +69,9 @@ _TYPE_TO_FLAG = {
     # Circuit-breaker is a hard system-wide alarm — always show, but it
     # uses sl_alerts as the operator-facing risk-flag bucket.
     "DAILY_PNL_BREACH":       "sl_alerts",
-    # Phase 3 — #5 event-eve pre-emptive review reminder. Risk-side flag.
+    # Phase 3 — #5 event-eve pre-emptive review / pre-event exit. Risk-side flag.
     "EVENT_AHEAD_REVIEW":     "sl_alerts",
+    "PRE_EVENT_EXIT":         "sl_alerts",
     # Phase 3 — #7 dead-man WS watchdog. Operator-critical, risk-side.
     "WS_DEAD_MAN":            "sl_alerts",
 }

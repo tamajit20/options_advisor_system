@@ -2798,10 +2798,105 @@ function _refreshPnlSignalRail() {
   _renderSignalRail(_lastStatusForRail);
 }
 
+const _PRE_EVENT_DISMISS_KEY = 'pre_event_dismissed_v1';
+let _preEventItems = [];
+let _preEventCurrentKey = '';
+
+function _preEventDismissMap() {
+  try {
+    const raw = localStorage.getItem(_PRE_EVENT_DISMISS_KEY);
+    const obj = raw ? JSON.parse(raw) : {};
+    return obj && typeof obj === 'object' ? obj : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function _preEventPruneDismissals(map) {
+  const today = new Date();
+  const y = today.getFullYear();
+  const m = String(today.getMonth() + 1).padStart(2, '0');
+  const d = String(today.getDate()).padStart(2, '0');
+  const todayIso = `${y}-${m}-${d}`;
+  let changed = false;
+  Object.keys(map).forEach((k) => {
+    const until = String(map[k] || '').slice(0, 10);
+    if (!until || until < todayIso) {
+      delete map[k];
+      changed = true;
+    }
+  });
+  if (changed) {
+    try { localStorage.setItem(_PRE_EVENT_DISMISS_KEY, JSON.stringify(map)); } catch (_) {}
+  }
+  return map;
+}
+
+function _preEventVisibleItems(items) {
+  const map = _preEventPruneDismissals(_preEventDismissMap());
+  return (items || []).filter((it) => it && it.event_key && !map[it.event_key]);
+}
+
+function _dismissPreEventItem(eventKey) {
+  if (!eventKey) return;
+  const map = _preEventPruneDismissals(_preEventDismissMap());
+  const item = _preEventItems.find((it) => it.event_key === eventKey);
+  // Keep dismissed through the event calendar date (ISO).
+  map[eventKey] = (item && item.event_date) || new Date().toISOString().slice(0, 10);
+  try { localStorage.setItem(_PRE_EVENT_DISMISS_KEY, JSON.stringify(map)); } catch (_) {}
+  _paintPreEventMarquee();
+}
+
+function _paintPreEventMarquee() {
+  const host = document.getElementById('pre-event-marquee');
+  const track = document.getElementById('pre-event-marquee-track');
+  const btn = document.getElementById('pre-event-marquee-dismiss');
+  if (!host || !track) return;
+  const visible = _preEventVisibleItems(_preEventItems);
+  if (!visible.length) {
+    track.textContent = '';
+    _preEventCurrentKey = '';
+    host.hidden = true;
+    if (btn) btn.onclick = null;
+    return;
+  }
+  // One event at a time on a single line; after dismiss, the next appears.
+  const cur = visible[0];
+  _preEventCurrentKey = cur.event_key;
+  const msg = String(cur.message || '');
+  const more = visible.length > 1 ? `  (${visible.length} event warnings)` : '';
+  track.textContent = `${msg}${more}   ···   ${msg}${more}`;
+  host.hidden = false;
+  host.title = msg;
+  host.dataset.eventKey = cur.event_key;
+  if (btn) {
+    btn.onclick = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      _dismissPreEventItem(_preEventCurrentKey);
+    };
+  }
+}
+
+function _renderPreEventMarquee(st) {
+  const pe = st && st.pre_event_exit;
+  let items = (pe && pe.active && Array.isArray(pe.items)) ? pe.items : [];
+  if (!items.length && pe && pe.active && pe.message) {
+    items = [{
+      event_key: pe.event_key || pe.message,
+      event_date: pe.event_date,
+      message: pe.message,
+    }];
+  }
+  _preEventItems = items;
+  _paintPreEventMarquee();
+}
+
 function _renderGlobalBanners(st, unread) {
   const host = document.getElementById('global-banners');
   if (!host) return;
   _renderSignalRail(st);
+  _renderPreEventMarquee(st);
   // Text pills retired: unread CRITICAL spam (THESIS_FAIL every 15m) hid real SL.
   host.innerHTML = '';
   host.hidden = true;
