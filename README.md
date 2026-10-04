@@ -2,9 +2,8 @@
 
 **Last updated:** 2026-10-04
 
-**Single document** for install, day-to-day ops, and lean architecture.  
-Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.  
-Developer-depth module chapters: [`docs/architecture/README.md`](docs/architecture/README.md) (boundary contract: [`ARCHITECTURE.txt`](ARCHITECTURE.txt)).
+**Single document** for install, day-to-day ops, and architecture.  
+Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.
 
 
 | How to navigate    | Tip                                                                   |
@@ -12,7 +11,6 @@ Developer-depth module chapters: [`docs/architecture/README.md`](docs/architectu
 | **Jump index**     | Click a link below                                                    |
 | **Editor Outline** | Auto TOC from headings                                                |
 | **Diagrams**       | ASCII always visible; Mermaid needs Markdown Preview (`Ctrl+Shift+V`) |
-| **Architecture suite** | Module chapters + Mermaid — [`docs/architecture/`](docs/architecture/README.md) |
 
 
 ---
@@ -35,7 +33,6 @@ Developer-depth module chapters: [`docs/architecture/README.md`](docs/architectu
 
 ### Part B - Architecture
 
-- **[Developer architecture suite](docs/architecture/README.md)** (modules, flows, Mermaid) · [`ARCHITECTURE.txt`](ARCHITECTURE.txt) (boundaries only)
 - [B1. Layers and boundaries](#b1-layers-and-boundaries)
 - [B2. Runtime and Docker](#b2-runtime-and-docker)
 - [B3. Contracts and exceptions](#b3-contracts-and-exceptions)
@@ -324,8 +321,6 @@ ACK refuses if `LAST_HOT_BACKUP.json` is missing or older than this export, `PEN
 
 # Part B - Architecture
 
-Lean operator-facing map. For per-module “start here” chapters, public APIs, and change playbooks see [`docs/architecture/README.md`](docs/architecture/README.md). Import rules: [`ARCHITECTURE.txt`](ARCHITECTURE.txt).
-
 
 
 ## B1. Layers and boundaries
@@ -473,13 +468,9 @@ Other important tables: `options_config`, `options_runtime_flags`, `options_job_
 
 ## B6. Module map
 
-Expanded tree + ownership: [`docs/architecture/02-module-map.md`](docs/architecture/02-module-map.md).
-
 ```
 options_advisor_system/
-├── README.md                 # THIS GUIDE (ops + lean architecture)
-├── ARCHITECTURE.txt          # Boundary contract
-├── docs/architecture/        # Developer module chapters
+├── README.md                 # THIS GUIDE
 ├── main.py, config.py, contracts.py, exceptions.py, utils.py
 ├── engine/                   # pure decisions
 ├── lifecycle/                # job orchestrators
@@ -847,14 +838,14 @@ pytest tests/test_database/test_schema.py tests/test_scheduler/test_scheduler.py
 | Deploy / archive script | README A4 / A8; `setup-new-environment.ps1` / manifest if greenfield-visible                   |
 | HTTPS on VM             | A7 HTTPS; default self-signed IP; or `HTTPS_MODE=acme` + sslip.io; `enable-https.sh` / open-port-https |
 | Index lot-size revision | `options_lot_sizes`, `config.py` `default_lot_sizes`, `scripts/migrate_nse_lot_sizes.py`, README B4 |
-| New module / boundary   | README B1 / B6 / B12; [`ARCHITECTURE.txt`](ARCHITECTURE.txt); matching `docs/architecture/` chapter |
+| New module / boundary   | README B1 / B6 / B12                                                                           |
 | Code-only ship          | [A7](#a7-code-deploy)                                                                          |
 
 
 **Agent shorthand:** saying **deploy** means document (if needed) → commit → push → VM deploy (A7).
 
-**Definition of done:** code + tests + lean README update when impactful + architecture chapter when public API / job wiring / boundary changes + `validate_setup_sync.py` clean when setup-related.
+**Definition of done:** code + tests + lean README update when impactful + `validate_setup_sync.py` clean when setup-related.
 
 ---
 
-*End of ops guide. Keep install/ops/lean architecture in this* `README.md`*; developer module depth in* `docs/architecture/`*.*
+*End of guide. Keep everything in this* `README.md`*.*
