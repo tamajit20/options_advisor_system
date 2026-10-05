@@ -2071,13 +2071,17 @@ const TERM_HELP = {
     label: 'Structural fit',
     html: '<strong>Structural fit</strong> — Is the index where this strategy needs it to be (inside breakevens, near strike, etc.)? You can show green MTM while fit is poor — time decay can help marks before expiry structure fails.',
   },
+  spots_and_fit: {
+    label: 'Spots & fit',
+    html: '<strong>Spots &amp; fit</strong> — <em>Entry</em> index when you opened, <em>Current</em> live (or last) spot, and <em>Profit zone</em> breakeven band for this structure. Structural fit and “to zone” distance sit underneath.',
+  },
   profit_zone: {
-    label: 'Profit zone',
-    html: '<strong>Profit zone</strong> — Index range where this trade wins at expiry. <strong>+X pts</strong> = needs a rally that many points; <strong>\u2212X pts</strong> = needs a fall. Inside = already in the winning band.',
+    label: 'To zone',
+    html: '<strong>To zone</strong> — Points the index must move (+ up, \u2212 down) to reach the winning breakeven band. Inside = already in the profit zone.',
   },
   market_outlook: {
     label: 'Market',
-    html: '<strong>Market</strong> — Spot, expected move (EM), and days to expiry. EM \u00b1X = typical one-day index swing from volatility; compare with how far spot is from breakevens.',
+    html: '<strong>Market</strong> — Data source, expected move (EM), and days to expiry. EM \u00b1X = typical one-day index swing from volatility. Entry/current/zone spots are in <em>Spots &amp; fit</em> above.',
   },
   mtm: {
     label: 'MTM / P&L',
@@ -4334,23 +4338,28 @@ function renderLiveOutlook(t) {
         <button type="button" class="lo-help-btn" aria-label="What do these numbers mean?">?</button>
       </div>
       <div class="lo-help-sheet" hidden>
-        <p><strong>Win chance</strong> — model odds of profit at expiry from spot, DTE, and IV (band = \u00b115% IV stress). Not a historical hit rate or tomorrow\u2019s direction.</p>
+        <p><strong>Win chance</strong> — model odds of profit at expiry from spot, DTE, and IV (band = \u00b115% IV stress). Graph = recent readings. Not a historical hit rate.</p>
         <p><strong>Near-expiry EV</strong> — average total P&amp;L if held to expiry (win% \u00d7 max profit + loss% \u00d7 \u2212max loss); gross and net of est. charges. Not extra profit on top of MTM.</p>
-        <p><strong>Structural fit</strong> — whether the index is where this strategy needs it. Green MTM + poor fit can happen (time decay).</p>
-        <p><strong>Profit zone</strong> — points the index must move (+ up, \u2212 down) to reach the winning breakeven band.</p>
+        <p><strong>Spots &amp; fit</strong> — Entry / current / profit-zone index levels together. Structural fit is spot vs that zone (not the same as MTM).</p>
         <p><strong>Gross vs hold</strong> — compares Current P&amp;L Gross (lock in now) vs modeled hold-to-expiry outcome.</p>
         <p class="muted" style="margin-top:.35rem">Tip: tap the \u24d8 icons beside each row for a short explanation. Live MTM is under <em>Current P&amp;L</em> above.</p>
       </div>
       <div class="lo-entry-now muted"></div>
       <div class="lo-grid">
-        <div class="lo-row">
-          <span class="lpl-label">${labelWithHelp('Win chance', 'win_chance')}</span>
-          <span class="lpl-val-line">
-            <strong class="lo-pop">\u2014</strong>
-            <span class="lo-pop-band muted"></span>
-            <span class="lo-pop-delta muted"></span>
-          </span>
-          <span class="muted lpl-note lo-pop-note">Model from spot, DTE, IV (\u00b115% IV band) \u2014 not a historical hit rate</span>
+        <div class="lo-win-block">
+          <div class="lo-row lo-row-win">
+            <span class="lpl-label">${labelWithHelp('Win chance', 'win_chance')}</span>
+            <span class="lpl-val-line">
+              <strong class="lo-pop">\u2014</strong>
+              <span class="lo-pop-band muted"></span>
+              <span class="lo-pop-delta muted"></span>
+            </span>
+            <span class="muted lpl-note lo-pop-note">Model from spot, DTE, IV (\u00b115% IV band) \u2014 not a historical hit rate</span>
+          </div>
+          <div class="lo-sparkline-wrap" hidden>
+            <span class="lo-spark-label muted">Recent win chance</span>
+            <canvas class="lo-sparkline" width="280" height="44" aria-hidden="true"></canvas>
+          </div>
         </div>
         <div class="lo-row">
           <span class="lpl-label lo-ev-label">${labelWithHelp('Near-expiry EV', 'near_expiry_ev')}</span>
@@ -4360,15 +4369,35 @@ function renderLiveOutlook(t) {
           </span>
           <span class="muted lpl-note lo-ev-note">Modeled total P&amp;L at near expiry (not extra gain from MTM)</span>
         </div>
-        <div class="lo-row lo-row-direction">
-          <span class="lpl-label">${labelWithHelp('Structural fit', 'structural_fit')}</span>
-          <span class="lpl-val-line"><strong class="lo-direction">\u2014</strong></span>
-          <span class="muted lpl-note lo-direction-note">Spot vs breakevens for this strategy \u2014 not the same as current P&amp;L</span>
-        </div>
-        <div class="lo-row lo-row-be-dist" hidden>
-          <span class="lpl-label">${labelWithHelp('Profit zone', 'profit_zone')}</span>
-          <span class="lpl-val-line"><strong class="lo-be-dist">\u2014</strong></span>
-          <span class="muted lpl-note lo-be-dist-note"></span>
+        <div class="lo-structure-block">
+          <div class="lo-structure-head">
+            <span class="lpl-label">${labelWithHelp('Spots &amp; fit', 'spots_and_fit')}</span>
+          </div>
+          <div class="lo-spot-strip" aria-label="Entry, current, and profit-zone spot">
+            <div class="lo-spot-cell">
+              <span class="lo-spot-k">Entry</span>
+              <strong class="lo-spot-entry">\u2014</strong>
+            </div>
+            <div class="lo-spot-cell lo-spot-cell-now">
+              <span class="lo-spot-k">Current</span>
+              <strong class="lo-spot-now">\u2014</strong>
+              <span class="lo-spot-chg muted"></span>
+            </div>
+            <div class="lo-spot-cell">
+              <span class="lo-spot-k">Profit zone</span>
+              <strong class="lo-spot-zone">\u2014</strong>
+            </div>
+          </div>
+          <div class="lo-row lo-row-direction">
+            <span class="lpl-label">${labelWithHelp('Structural fit', 'structural_fit')}</span>
+            <span class="lpl-val-line"><strong class="lo-direction">\u2014</strong></span>
+            <span class="muted lpl-note lo-direction-note">Spot vs breakevens for this strategy \u2014 not the same as current P&amp;L</span>
+          </div>
+          <div class="lo-row lo-row-be-dist" hidden>
+            <span class="lpl-label">${labelWithHelp('To zone', 'profit_zone')}</span>
+            <span class="lpl-val-line"><strong class="lo-be-dist">\u2014</strong></span>
+            <span class="muted lpl-note lo-be-dist-note"></span>
+          </div>
         </div>
         <div class="lo-row">
           <span class="lpl-label">${labelWithHelp('Market', 'market_outlook')}</span>
@@ -4386,10 +4415,6 @@ function renderLiveOutlook(t) {
         <span class="lo-scen-label muted">Scenarios</span>
         <div class="lo-scenario-chips"></div>
         <div class="lo-scenario-detail muted"></div>
-      </div>
-      <div class="lo-sparkline-wrap" hidden>
-        <span class="lo-spark-label muted">Win chance (recent)</span>
-        <canvas class="lo-sparkline" width="280" height="44" aria-hidden="true"></canvas>
       </div>
     </div>`;
 }
@@ -4450,6 +4475,72 @@ function _renderLoEntryNow(el, payload) {
     bits.push(`Now ${fmtPct(livePop)}${liveEv != null && !isNaN(liveEv) ? ` · ${_fmtSignedRs(liveEv)} EV` : ''}`);
   }
   strip.textContent = bits.join('  \u2192  ');
+}
+
+function _loProfitZoneLabel(payload) {
+  const note = (payload.profit_zone_note || '').trim();
+  if (note) {
+    // Strip leading "Zone " so the cell value stays compact: "₹x–₹y" / "Above ₹x"
+    return note.replace(/^Zone\s+/i, '');
+  }
+  const lb = payload.lower_be != null ? parseFloat(payload.lower_be) : null;
+  const ub = payload.upper_be != null ? parseFloat(payload.upper_be) : null;
+  if (lb != null && !isNaN(lb) && ub != null && !isNaN(ub) && lb < ub) {
+    return `\u20b9${fmt(lb)}\u2013\u20b9${fmt(ub)}`;
+  }
+  if (lb != null && !isNaN(lb)) return `\u20b9${fmt(lb)}`;
+  if (ub != null && !isNaN(ub)) return `\u20b9${fmt(ub)}`;
+  return '\u2014';
+}
+
+function _renderLoSpotStrip(el, payload) {
+  if (!el || !payload) return;
+  const entryEl = el.querySelector('.lo-spot-entry');
+  const nowEl = el.querySelector('.lo-spot-now');
+  const chgEl = el.querySelector('.lo-spot-chg');
+  const zoneEl = el.querySelector('.lo-spot-zone');
+  const strip = el.querySelector('.lo-spot-strip');
+  const entry = payload.entry_spot != null ? parseFloat(payload.entry_spot) : null;
+  const spot = payload.spot != null ? parseFloat(payload.spot) : null;
+  const chg = payload.spot_change != null ? parseFloat(payload.spot_change) : null;
+  if (entryEl) {
+    entryEl.textContent = (entry != null && !isNaN(entry)) ? `\u20b9${fmt(entry)}` : '\u2014';
+  }
+  if (nowEl) {
+    nowEl.textContent = (spot != null && !isNaN(spot)) ? `\u20b9${fmt(spot)}` : '\u2014';
+    nowEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-dir-neutral');
+    if (chg != null && !isNaN(chg)) {
+      if (chg > 0) nowEl.classList.add('pnl-profit');
+      else if (chg < 0) nowEl.classList.add('pnl-loss');
+      else nowEl.classList.add('lo-dir-neutral');
+    }
+  }
+  if (chgEl) {
+    if (chg != null && !isNaN(chg) && entry != null && !isNaN(entry)) {
+      const sign = chg > 0 ? '+' : '';
+      chgEl.textContent = `${sign}${fmt(chg)} vs entry`;
+      chgEl.classList.remove('pnl-profit', 'pnl-loss');
+      if (chg > 0) chgEl.classList.add('pnl-profit');
+      else if (chg < 0) chgEl.classList.add('pnl-loss');
+    } else {
+      chgEl.textContent = '';
+      chgEl.classList.remove('pnl-profit', 'pnl-loss');
+    }
+  }
+  if (zoneEl) {
+    zoneEl.textContent = _loProfitZoneLabel(payload);
+    zoneEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-dir-neutral');
+    const side = payload.profit_zone_side || payload.be_side || '';
+    if (side === 'inside') zoneEl.classList.add('pnl-profit');
+    else if (side) zoneEl.classList.add('pnl-loss');
+  }
+  if (strip) {
+    strip.hidden = !(
+      (entry != null && !isNaN(entry))
+      || (spot != null && !isNaN(spot))
+      || (payload.lower_be != null || payload.upper_be != null || payload.profit_zone_note)
+    );
+  }
 }
 
 function _renderLoScenarios(el, payload) {
@@ -4672,6 +4763,7 @@ function _updateLiveOutlook(tradeId, payload) {
     if (dirNote && payload.direction_detail) {
       dirNote.textContent = payload.direction_detail;
     }
+    _renderLoSpotStrip(el, payload);
     if (beDistRow && beDistEl) {
       const pzText = payload.profit_zone_text || payload.be_distance_text;
       if (pzText) {
@@ -4690,7 +4782,8 @@ function _updateLiveOutlook(tradeId, payload) {
         beDistRow.hidden = true;
       }
       if (beDistNote) {
-        beDistNote.textContent = payload.profit_zone_note || '';
+        // Zone levels live in the spot strip above — avoid repeating them here.
+        beDistNote.textContent = '';
       }
     }
     if (holdCloseEl) {
@@ -4715,17 +4808,6 @@ function _updateLiveOutlook(tradeId, payload) {
     }
     const marketBits = [];
     if (srcLabel) marketBits.push(srcLabel);
-    if (payload.spot != null) {
-      let spotLine = 'Spot \u20b9' + fmt(payload.spot);
-      if (payload.spot_change != null) {
-        const ch = parseFloat(payload.spot_change);
-        if (!isNaN(ch)) {
-          const sign = ch > 0 ? '+' : '';
-          spotLine += ` (${sign}${fmt(ch)} vs entry)`;
-        }
-      }
-      marketBits.push(spotLine);
-    }
     if (payload.expected_move != null) {
       marketBits.push('EM \u00b1' + fmt(payload.expected_move));
     }

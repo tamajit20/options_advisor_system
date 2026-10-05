@@ -2230,7 +2230,16 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .sl-monitor-footer { margin-top: 8px; display: flex; align-items: center; gap: 10px; }
 .sl-save-msg { font-size: .8rem; color: var(--ok); }
 .sl-action-note { margin-top: 10px; font-size: .8rem; color: var(--text-dim); background: rgba(245,158,11,.08); border-left: 3px solid var(--warn); padding: 6px 10px; border-radius: 0 4px 4px 0; }
-@media (max-width: 500px) { .sl-monitor-grid { grid-template-columns: 1fr 1fr; } .lo-row { grid-template-columns: 1fr; } }
+@media (max-width: 500px) {
+  .sl-monitor-grid { grid-template-columns: 1fr 1fr; }
+  .lo-row { grid-template-columns: 1fr; }
+  .lo-spot-strip { grid-template-columns: 1fr; gap: 8px; }
+  .lo-spot-cell-now {
+    padding: 6px 0;
+    border-top: 1px solid rgba(148, 163, 184, .18);
+    border-bottom: 1px solid rgba(148, 163, 184, .18);
+  }
+}
 
 /* Live profit levels — target vs trailing floor vs loss limit */
 .live-profit-levels {
@@ -2456,6 +2465,64 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
   border-color: rgba(14, 165, 233, .55);
 }
 .lo-scenario-detail { margin-top: 4px; font-size: .72rem; }
+.lo-win-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(14, 165, 233, .06);
+  border: 1px solid rgba(14, 165, 233, .18);
+}
+.lo-win-block .lo-row-win { margin: 0; }
+.lo-win-block .lo-sparkline-wrap {
+  margin: 2px 0 0;
+  padding-left: 0;
+}
+.lo-win-block .lo-sparkline { max-width: 100%; }
+.lo-structure-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, .06);
+  border: 1px solid rgba(148, 163, 184, .18);
+}
+.lo-structure-head { margin: 0; }
+.lo-spot-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 10px;
+  padding: 6px 0 2px;
+}
+.lo-spot-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.lo-spot-k {
+  font-size: .68rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.lo-spot-cell strong {
+  font-size: .95rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  word-break: break-word;
+}
+.lo-spot-cell-now { padding: 0 2px; }
+.lo-spot-chg {
+  font-size: .68rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.lo-structure-block .lo-row { margin: 0; }
 .lo-sparkline-wrap { margin-top: 8px; }
 .lo-spark-label { display: block; font-size: .72rem; margin-bottom: 2px; }
 .lo-sparkline { display: block; width: 100%; max-width: 280px; height: 44px; }
