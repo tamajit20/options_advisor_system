@@ -180,6 +180,25 @@ foreach ($section in $manifest.sections) {
                     }
                 }
             }
+            "azure_os_disk_standard_ssd" {
+                $az = "${env:ProgramFiles}\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
+                if (-not (Test-Path $az)) { $ok = $false; $detail = "az not installed" }
+                else {
+                    $rg = Get-ConfigValue "AzureResourceGroup"
+                    $vm = Get-ConfigValue "AzureVmName"
+                    if (-not $rg) { $rg = "STOCKAPPS" }
+                    if (-not $vm) { $vm = "OptionsAdvisor" }
+                    $diskName = & $az vm show -g $rg -n $vm --query "storageProfile.osDisk.name" -o tsv 2>$null
+                    if ($LASTEXITCODE -ne 0 -or -not $diskName) {
+                        $ok = $false
+                        $detail = "could not read OS disk (az login / RG / VM?)"
+                    } else {
+                        $sku = & $az disk show -g $rg -n $diskName --query "sku.name" -o tsv 2>$null
+                        $ok = ($LASTEXITCODE -eq 0) -and ($sku -eq "StandardSSD_LRS")
+                        $detail = if ($ok) { $sku } else { "sku=$sku - re-run setup-new-environment.ps1 (OS disk step)" }
+                    }
+                }
+            }
             "vm_file" {
                 $target = Get-SshTarget
                 $dir = Get-ConfigValue "VmProjectDir"

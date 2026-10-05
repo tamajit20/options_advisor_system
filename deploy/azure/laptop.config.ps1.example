@@ -6,6 +6,8 @@
 #      and deploy/azure/restore-database-from-laptop.ps1
 
 # Azure VM (optional — open-port-5001.ps1 and VMUpTimeConfiguration.ps1)
+# Preferred create: Ubuntu 22.04, Standard_B2s, OS disk Standard SSD (not Premium).
+# setup-new-environment.ps1 converts Premium → StandardSSD_LRS if needed.
 $script:AzureResourceGroup = "STOCKAPPS"
 $script:AzureVmName        = "OptionsAdvisor"
 $script:AzureNsgSource      = "*"    # set to "YOUR.IP.ADDR/32" to restrict dashboard access

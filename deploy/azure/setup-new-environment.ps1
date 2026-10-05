@@ -30,6 +30,41 @@ param(
 $ErrorActionPreference = "Stop"
 $DeployDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $DeployDir)
+$LaptopConfig = Join-Path $DeployDir "laptop.config.ps1"
+if (Test-Path $LaptopConfig) { . $LaptopConfig }
+
+function Ensure-OsDiskStandardSsd {
+    param([string]$AzCmd)
+    $rg = if ($script:AzureResourceGroup) { $script:AzureResourceGroup } else { "STOCKAPPS" }
+    $vm = if ($script:AzureVmName) { $script:AzureVmName } else { "OptionsAdvisor" }
+    $targetSku = "StandardSSD_LRS"
+    Write-Host "==> Ensure OS disk is Standard SSD (not Premium) for VM '$vm'"
+    $diskName = & $AzCmd vm show -g $rg -n $vm --query "storageProfile.osDisk.name" -o tsv 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $diskName) {
+        Write-Host "WARNING: could not read OS disk — skip SKU ensure"
+        return
+    }
+    $currentSku = & $AzCmd disk show -g $rg -n $diskName --query "sku.name" -o tsv 2>$null
+    if ($currentSku -eq $targetSku) {
+        Write-Host "    OS disk already $targetSku"
+        return
+    }
+    Write-Host "    Converting $diskName from $currentSku -> $targetSku (VM must be deallocated)"
+    $power = & $AzCmd vm get-instance-view -g $rg -n $vm `
+        --query "instanceView.statuses[?starts_with(code, 'PowerState/')].displayStatus | [0]" -o tsv 2>$null
+    $wasRunning = ($power -match "running")
+    if ($wasRunning) {
+        & $AzCmd vm deallocate -g $rg -n $vm
+        if ($LASTEXITCODE -ne 0) { throw "az vm deallocate failed during OS disk SKU ensure" }
+    }
+    & $AzCmd disk update -g $rg -n $diskName --sku $targetSku
+    if ($LASTEXITCODE -ne 0) { throw "az disk update to $targetSku failed" }
+    if ($wasRunning) {
+        & $AzCmd vm start -g $rg -n $vm
+        if ($LASTEXITCODE -ne 0) { throw "az vm start failed after OS disk SKU ensure" }
+    }
+    Write-Host "    OS disk is now $targetSku"
+}
 
 Write-Host "============================================================"
 Write-Host " Options Advisor — new environment setup"
@@ -60,19 +95,20 @@ if (-not $SkipVmInstall) {
     Write-Host "==> [2/5] Skipped VM install (-SkipVmInstall)"
 }
 
-# --- Step 3: VM uptime schedules ---
+# --- Step 3: VM uptime schedules + Standard SSD OS disk ---
 if (-not $SkipVmUptime) {
     Write-Host ""
-    Write-Host "==> [3/5] VM uptime (Mon-Fri 08:55-15:45 IST)"
+    Write-Host "==> [3/5] VM uptime (Mon-Fri 08:55-15:45 IST) + OS disk Standard SSD"
     $az = "${env:ProgramFiles}\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
     if (-not (Test-Path $az)) {
-        Write-Host "WARNING: Azure CLI not found — skip VM uptime or install: winget install Microsoft.AzureCLI"
+        Write-Host "WARNING: Azure CLI not found — skip VM uptime / disk SKU or install: winget install Microsoft.AzureCLI"
     } else {
         & (Join-Path $DeployDir "VMUpTimeConfiguration.ps1")
+        Ensure-OsDiskStandardSsd -AzCmd $az
     }
 } else {
     Write-Host ""
-    Write-Host "==> [3/5] Skipped VM uptime (-SkipVmUptime)"
+    Write-Host "==> [3/5] Skipped VM uptime (-SkipVmUptime); OS disk Standard SSD ensure also skipped"
 }
 
 # --- Step 4: Optional DB restore ---

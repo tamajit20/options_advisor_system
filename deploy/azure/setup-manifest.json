@@ -45,6 +45,7 @@
       "title": "VM automation (Azure)",
       "items": [
         {"id": "vm_uptime_schedules", "label": "VM start/stop schedules", "critical": false, "check": "azure_uptime"},
+        {"id": "vm_os_disk_standard_ssd", "label": "OS disk Standard SSD (not Premium)", "critical": false, "check": "azure_os_disk_standard_ssd"},
         {"id": "vm_archive_scripts", "label": "Archive export scripts on VM", "critical": false, "check": "vm_file", "remote_path": "deploy/archive-export.sh"}
       ]
     }

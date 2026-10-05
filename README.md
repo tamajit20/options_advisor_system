@@ -1,6 +1,6 @@
 # Options Advisor - Complete Guide
 
-**Last updated:** 2026-10-04
+**Last updated:** 2026-10-05
 
 **Single document** for install, day-to-day ops, and architecture.  
 Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.
@@ -99,6 +99,8 @@ Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markd
 - [ ] Git, Python 3, Azure CLI, OpenSSH on laptop
 - [ ] SQL Server Express + SSMS/sqlcmd on laptop
 - [ ] Azure Ubuntu 22.04 VM, `.pem` key, public IP
+  - Preferred: size **Standard_B2s**, OS disk **Standard SSD** (~32 GB), not Premium SSD
+  - `setup-new-environment.ps1` converts Premium → Standard SSD automatically if needed
 - [ ] Repo cloned
 - [ ] Secrets: DB password, Zerodha API key/secret, `OPT_DASHBOARD_API_KEY`
 - [ ] Optional: `OptionsAdvisorDB-*.bak` to restore
@@ -134,7 +136,7 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 
 | Script                                                                            | Purpose                             |
 | --------------------------------------------------------------------------------- | ----------------------------------- |
-| `deploy/azure/setup-new-environment.ps1`                                          | Greenfield laptop + VM + uptime     |
+| `deploy/azure/setup-new-environment.ps1`                                          | Greenfield laptop + VM + uptime (+ Standard SSD OS disk) |
 | `deploy/azure/setup-laptop.ps1`                                                   | Laptop folders + archive task       |
 | `deploy/azure/Test-EnvironmentSetup.ps1`                                          | Verification checklist              |
 | `deploy/azure/remote-vm-install.ps1`                                              | VM Docker + app + self-signed HTTPS |
@@ -836,6 +838,7 @@ pytest tests/test_database/test_schema.py tests/test_scheduler/test_scheduler.py
 | Table                   | `schema.py` `list_tables()`; archive registry if historical; README B5 / A8 never-archive list |
 | Job                     | `SCHEDULER_CONFIG`, `JOB_FUNCS`, lifecycle `run_*`, dashboard job meta, README A5              |
 | Deploy / archive script | README A4 / A8; `setup-new-environment.ps1` / manifest if greenfield-visible                   |
+| VM OS disk cost         | Prefer Standard SSD at create; `setup-new-environment.ps1` converts Premium if needed         |
 | HTTPS on VM             | A7 HTTPS; default self-signed IP; or `HTTPS_MODE=acme` + sslip.io; `enable-https.sh` / open-port-https |
 | Index lot-size revision | `options_lot_sizes`, `config.py` `default_lot_sizes`, `scripts/migrate_nse_lot_sizes.py`, README B4 |
 | New module / boundary   | README B1 / B6 / B12                                                                           |
