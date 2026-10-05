@@ -833,9 +833,10 @@ class TestJobsList:
         names = [j["job_name"] for j in jobs]
 
         assert names.index("events_seed") < names.index("intraday_validator")
+        # event_eve_review is 09:05 (morning PRE_EVENT_EXIT), before live engine hours
+        assert names.index("event_eve_review") < names.index("intraday_validator")
         assert names.index("intraday_validator") < names.index("live_suggestion_engine")
-        assert names.index("live_suggestion_engine") < names.index("event_eve_review")
-        assert names.index("event_eve_review") < names.index("intraday_close_snapshot")
+        assert names.index("live_suggestion_engine") < names.index("intraday_close_snapshot")
         assert names.index("morning_eod_catchup") < names.index("weekly_archive")
         assert names.index("weekly_archive") < names.index("weekly_log_cleanup")
         assert names.index("intraday_validator") < names.index("intraday_close_snapshot")
