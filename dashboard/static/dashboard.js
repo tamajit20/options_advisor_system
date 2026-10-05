@@ -4342,7 +4342,7 @@ function renderLiveOutlook(t) {
         <p><strong>Spots &amp; fit</strong> — Entry / current / profit-zone index levels, structural fit, distance to zone, and market context (source, EM, DTE).</p>
         <p><strong>Near-expiry EV</strong> — average total P&amp;L if held to expiry (win% \u00d7 max profit + loss% \u00d7 \u2212max loss); gross and net of est. charges. Not extra profit on top of MTM.</p>
         <p><strong>Gross vs hold</strong> — compares Current P&amp;L Gross (lock in now) vs modeled hold-to-expiry outcome.</p>
-        <p class="muted" style="margin-top:.35rem">Tip: tap the \u24d8 icons beside each row for a short explanation. Live MTM is under <em>Current P&amp;L</em> above.</p>
+        <p class="muted" style="margin-top:.35rem">Per-row \u24d8 for a short popup. Live MTM is under <em>Current P&amp;L</em> above \u2014 not in this panel.</p>
       </div>
       <div class="lo-columns">
         <div class="lo-col lo-col-metrics">
