@@ -30,7 +30,7 @@ def test_resolve_limit_uses_user_price():
 
 def test_resolve_limit_auto_buy_slippage():
     px = _resolve_limit_price(100.0, "BUY", _inst(), user_limit=None)
-    assert px == 100.2  # 0.2% default slippage
+    assert px == 100.25  # 0.25% default slippage
 
 
 def test_parse_leg_limits_list():

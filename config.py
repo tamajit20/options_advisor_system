@@ -1141,7 +1141,7 @@ ZERODHA_EXECUTION_CONFIG = {
     # process-wide sliding 1s window; waits when the cap is full.
     "orders_per_sec": _env_int("OPT_ZERODHA_ORDERS_PER_SEC", 9),
     # LIMIT price offset from LTP: BUY pays up, SELL accepts less (better fill odds).
-    "limit_slippage_pct": float(_env("OPT_ZERODHA_LIMIT_SLIPPAGE_PCT", "0.2")),
+    "limit_slippage_pct": float(_env("OPT_ZERODHA_LIMIT_SLIPPAGE_PCT", "0.25")),
     "limit_slip_walk_per_retry": float(_env("OPT_ZERODHA_SLIP_WALK", "0.25")),
     "use_bid_ask_pricing": _env_bool("OPT_ZERODHA_USE_BID_ASK", True),
     "product": _env("OPT_ZERODHA_ORDER_PRODUCT", "NRML"),
