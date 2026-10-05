@@ -27,7 +27,7 @@ class ExecutionProfile:
 def profile_for(mode: str) -> ExecutionProfile:
     cfg = ZERODHA_EXECUTION_CONFIG
     m = str(mode or "entry").lower()
-    base_slip = float(cfg.get("limit_slippage_pct", 0.5))
+    base_slip = float(cfg.get("limit_slippage_pct", 0.2))
     walk = float(cfg.get("limit_slip_walk_per_retry", 0.25))
     if m == "rollback":
         return ExecutionProfile(
