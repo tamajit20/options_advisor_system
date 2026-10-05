@@ -2073,11 +2073,11 @@ const TERM_HELP = {
   },
   spots_and_fit: {
     label: 'Spots & fit',
-    html: '<strong>Spots &amp; fit</strong> — <em>Entry</em> / <em>Current</em> / <em>Profit zone</em> index levels, structural fit, distance to zone, plus market context (data source, EM, DTE).',
+    html: '<strong>Spots &amp; fit</strong> — <em>Entry</em> / <em>Current</em> / <em>Profit zone</em> index levels. Under Current: change vs entry. Under Profit zone: how far spot must move (+ up, \u2212 down). Plus market context (data source, EM, DTE).',
   },
   profit_zone: {
-    label: 'To zone',
-    html: '<strong>To zone</strong> — Points the index must move (+ up, \u2212 down) to reach the winning breakeven band. Inside = already in the profit zone.',
+    label: 'Profit zone',
+    html: '<strong>Profit zone</strong> — Breakeven band for this structure. The line under it is the signed move still needed (+ rally, \u2212 decline). Inside = already in the winning band.',
   },
   market_outlook: {
     label: 'Market',
@@ -4339,7 +4339,7 @@ function renderLiveOutlook(t) {
       </div>
       <div class="lo-help-sheet" hidden>
         <p><strong>Win chance</strong> — model odds of profit at expiry from spot, DTE, and IV (band = \u00b115% IV stress). Shows current vs entry %, plus recent graph. Not a historical hit rate.</p>
-        <p><strong>Spots &amp; fit</strong> — Entry / current / profit-zone index levels, structural fit, distance to zone, and market context (source, EM, DTE).</p>
+        <p><strong>Spots &amp; fit</strong> — Entry / current / profit-zone index levels (zone line shows how far spot must move), plus market context (source, EM, DTE).</p>
         <p><strong>Near-expiry EV</strong> — average total P&amp;L if held to expiry (win% \u00d7 max profit + loss% \u00d7 \u2212max loss); gross and net of est. charges. Not extra profit on top of MTM.</p>
         <p><strong>Gross vs hold</strong> — compares Current P&amp;L Gross (lock in now) vs modeled hold-to-expiry outcome.</p>
         <p class="muted" style="margin-top:.35rem">Per-row \u24d8 for a short popup. Live MTM is under <em>Current P&amp;L</em> above \u2014 not in this panel.</p>
@@ -4387,20 +4387,9 @@ function renderLiveOutlook(t) {
                 <span class="lo-spot-chg muted"></span>
               </div>
               <div class="lo-spot-cell">
-                <span class="lo-spot-k">Profit zone</span>
+                <span class="lo-spot-k">${labelWithHelp('Profit zone', 'profit_zone')}</span>
                 <strong class="lo-spot-zone">\u2014</strong>
-              </div>
-            </div>
-            <div class="lo-fit-row">
-              <div class="lo-fit-cell">
-                <span class="lo-spot-k">${labelWithHelp('Fit', 'structural_fit')}</span>
-                <strong class="lo-direction">\u2014</strong>
-                <span class="muted lo-direction-note" hidden></span>
-              </div>
-              <div class="lo-fit-cell lo-row-be-dist" hidden>
-                <span class="lo-spot-k">${labelWithHelp('To zone', 'profit_zone')}</span>
-                <strong class="lo-be-dist">\u2014</strong>
-                <span class="muted lo-be-dist-note" hidden></span>
+                <span class="lo-spot-zone-dist muted"></span>
               </div>
             </div>
             <div class="lo-row lo-row-market">
@@ -4529,6 +4518,19 @@ function _renderLoSpotStrip(el, payload) {
     const side = payload.profit_zone_side || payload.be_side || '';
     if (side === 'inside') zoneEl.classList.add('pnl-profit');
     else if (side) zoneEl.classList.add('pnl-loss');
+  }
+  const zoneDistEl = el.querySelector('.lo-spot-zone-dist');
+  if (zoneDistEl) {
+    let dist = (payload.profit_zone_text || payload.be_distance_text || '').trim();
+    // Compact: "Spot needs −545 for profit zone" → "Spot needs −545"
+    dist = dist.replace(/\s+for profit zone\.?$/i, '');
+    const side = payload.profit_zone_side || payload.be_side || '';
+    zoneDistEl.textContent = dist;
+    zoneDistEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-dir-neutral');
+    if (dist) {
+      if (side === 'inside') zoneDistEl.classList.add('pnl-profit');
+      else if (side) zoneDistEl.classList.add('pnl-loss');
+    }
   }
   if (strip) {
     strip.hidden = !(
@@ -4667,13 +4669,8 @@ function _updateLiveOutlook(tradeId, payload) {
     const evNetEl = el.querySelector('.lo-ev-net');
     const evEntryEl = el.querySelector('.lo-ev-entry');
     const evNote = el.querySelector('.lo-ev-note');
-    const dirEl = el.querySelector('.lo-direction');
-    const dirNote = el.querySelector('.lo-direction-note');
     const marketEl = el.querySelector('.lo-market');
     const marketNote = el.querySelector('.lo-market-note');
-    const beDistRow = el.querySelector('.lo-row-be-dist');
-    const beDistEl = el.querySelector('.lo-be-dist');
-    const beDistNote = el.querySelector('.lo-be-dist-note');
     const holdCloseEl = el.querySelector('.lo-hold-close');
     const regimeEl = el.querySelector('.lo-regime');
     const emWarnEl = el.querySelector('.lo-em-warn');
@@ -4682,7 +4679,6 @@ function _updateLiveOutlook(tradeId, payload) {
     const entryPop = payload.entry_pop != null ? parseFloat(payload.entry_pop) : null;
     const delta = payload.pop_delta != null ? parseFloat(payload.pop_delta) : null;
     const stance = payload.stance || '';
-    const dirFit = payload.direction_fit || '';
     const srcLabel = _loDataSourceLabel(payload.data_source, payload.data_as_of);
     if (popEl) {
       popEl.textContent = (pop != null && !isNaN(pop)) ? fmtPct(pop) : '\u2014';
@@ -4758,39 +4754,7 @@ function _updateLiveOutlook(tradeId, payload) {
       evNote.textContent = payload.ev_note
         || 'Modeled total P&L at expiry (not extra gain from MTM)';
     }
-    if (dirEl) {
-      dirEl.textContent = payload.direction_label || '\u2014';
-      dirEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-dir-neutral');
-      if (dirFit === 'aligned') dirEl.classList.add('pnl-profit');
-      else if (dirFit === 'against') dirEl.classList.add('pnl-loss');
-      else dirEl.classList.add('lo-dir-neutral');
-    }
-    if (dirNote && payload.direction_detail) {
-      dirNote.textContent = payload.direction_detail;
-    }
     _renderLoSpotStrip(el, payload);
-    if (beDistRow && beDistEl) {
-      const pzText = payload.profit_zone_text || payload.be_distance_text;
-      if (pzText) {
-        beDistRow.hidden = false;
-        beDistEl.textContent = pzText;
-        beDistEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-dir-neutral');
-        const side = payload.profit_zone_side || payload.be_side || '';
-        if (side === 'inside') beDistEl.classList.add('pnl-profit');
-        else if (side in {
-          below_lower: 1, above_upper: 1, below_upper: 1, above_lower: 1,
-          needs_breakout: 1,
-        }) {
-          beDistEl.classList.add('pnl-loss');
-        } else beDistEl.classList.add('lo-dir-neutral');
-      } else {
-        beDistRow.hidden = true;
-      }
-      if (beDistNote) {
-        // Zone levels live in the spot strip above — avoid repeating them here.
-        beDistNote.textContent = '';
-      }
-    }
     if (holdCloseEl) {
       holdCloseEl.textContent = payload.hold_vs_close || '';
     }
