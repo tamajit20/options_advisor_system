@@ -2433,12 +2433,11 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 }
 .lo-help-sheet p { margin: 0 0 .45rem; }
 .lo-help-sheet p:last-child { margin-bottom: 0; }
-.lo-entry-now {
+.lo-pop-entry {
   font-size: .78rem;
   font-weight: 600;
-  margin-bottom: 6px;
-  line-height: 1.35;
 }
+.lo-ev-entry { font-size: .78rem; }
 .lo-extra {
   display: flex;
   flex-direction: column;

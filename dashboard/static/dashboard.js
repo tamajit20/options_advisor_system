@@ -2073,7 +2073,7 @@ const TERM_HELP = {
   },
   spots_and_fit: {
     label: 'Spots & fit',
-    html: '<strong>Spots &amp; fit</strong> — <em>Entry</em> index when you opened, <em>Current</em> live (or last) spot, and <em>Profit zone</em> breakeven band for this structure. Structural fit and “to zone” distance sit underneath.',
+    html: '<strong>Spots &amp; fit</strong> — <em>Entry</em> / <em>Current</em> / <em>Profit zone</em> index levels, structural fit, distance to zone, plus market context (data source, EM, DTE).',
   },
   profit_zone: {
     label: 'To zone',
@@ -2081,7 +2081,7 @@ const TERM_HELP = {
   },
   market_outlook: {
     label: 'Market',
-    html: '<strong>Market</strong> — Data source, expected move (EM), and days to expiry. EM \u00b1X = typical one-day index swing from volatility. Entry/current/zone spots are in <em>Spots &amp; fit</em> above.',
+    html: '<strong>Market</strong> — Data source, expected move (EM), and days to expiry for the spots above. EM \u00b1X = typical one-day index swing from volatility.',
   },
   mtm: {
     label: 'MTM / P&L',
@@ -4338,13 +4338,12 @@ function renderLiveOutlook(t) {
         <button type="button" class="lo-help-btn" aria-label="What do these numbers mean?">?</button>
       </div>
       <div class="lo-help-sheet" hidden>
-        <p><strong>Win chance</strong> — model odds of profit at expiry from spot, DTE, and IV (band = \u00b115% IV stress). Graph = recent readings. Not a historical hit rate.</p>
+        <p><strong>Win chance</strong> — model odds of profit at expiry from spot, DTE, and IV (band = \u00b115% IV stress). Shows current vs entry %, plus recent graph. Not a historical hit rate.</p>
+        <p><strong>Spots &amp; fit</strong> — Entry / current / profit-zone index levels, structural fit, distance to zone, and market context (source, EM, DTE).</p>
         <p><strong>Near-expiry EV</strong> — average total P&amp;L if held to expiry (win% \u00d7 max profit + loss% \u00d7 \u2212max loss); gross and net of est. charges. Not extra profit on top of MTM.</p>
-        <p><strong>Spots &amp; fit</strong> — Entry / current / profit-zone index levels together. Structural fit is spot vs that zone (not the same as MTM).</p>
         <p><strong>Gross vs hold</strong> — compares Current P&amp;L Gross (lock in now) vs modeled hold-to-expiry outcome.</p>
         <p class="muted" style="margin-top:.35rem">Tip: tap the \u24d8 icons beside each row for a short explanation. Live MTM is under <em>Current P&amp;L</em> above.</p>
       </div>
-      <div class="lo-entry-now muted"></div>
       <div class="lo-grid">
         <div class="lo-win-block">
           <div class="lo-row lo-row-win">
@@ -4354,20 +4353,13 @@ function renderLiveOutlook(t) {
               <span class="lo-pop-band muted"></span>
               <span class="lo-pop-delta muted"></span>
             </span>
+            <span class="muted lpl-note lo-pop-entry"></span>
             <span class="muted lpl-note lo-pop-note">Model from spot, DTE, IV (\u00b115% IV band) \u2014 not a historical hit rate</span>
           </div>
           <div class="lo-sparkline-wrap" hidden>
             <span class="lo-spark-label muted">Recent win chance</span>
             <canvas class="lo-sparkline" width="280" height="44" aria-hidden="true"></canvas>
           </div>
-        </div>
-        <div class="lo-row">
-          <span class="lpl-label lo-ev-label">${labelWithHelp('Near-expiry EV', 'near_expiry_ev')}</span>
-          <span class="lpl-val-line">
-            <strong class="lo-ev">\u2014</strong>
-            <span class="lo-ev-net muted"></span>
-          </span>
-          <span class="muted lpl-note lo-ev-note">Modeled total P&amp;L at near expiry (not extra gain from MTM)</span>
         </div>
         <div class="lo-structure-block">
           <div class="lo-structure-head">
@@ -4398,11 +4390,20 @@ function renderLiveOutlook(t) {
             <span class="lpl-val-line"><strong class="lo-be-dist">\u2014</strong></span>
             <span class="muted lpl-note lo-be-dist-note"></span>
           </div>
+          <div class="lo-row lo-row-market">
+            <span class="lpl-label">${labelWithHelp('Market', 'market_outlook')}</span>
+            <span class="lpl-val-line"><span class="lo-market">Loading market data\u2026</span></span>
+            <span class="muted lpl-note lo-market-note"></span>
+          </div>
         </div>
         <div class="lo-row">
-          <span class="lpl-label">${labelWithHelp('Market', 'market_outlook')}</span>
-          <span class="lpl-val-line"><span class="lo-market">Loading market data\u2026</span></span>
-          <span class="muted lpl-note lo-market-note"></span>
+          <span class="lpl-label lo-ev-label">${labelWithHelp('Near-expiry EV', 'near_expiry_ev')}</span>
+          <span class="lpl-val-line">
+            <strong class="lo-ev">\u2014</strong>
+            <span class="lo-ev-net muted"></span>
+            <span class="lo-ev-entry muted"></span>
+          </span>
+          <span class="muted lpl-note lo-ev-note">Modeled total P&amp;L at near expiry (not extra gain from MTM)</span>
         </div>
       </div>
       <div class="lo-extra muted">
@@ -4454,27 +4455,17 @@ function _updateOutlookFreshnessBadge(tradeId, payload) {
   });
 }
 
-function _renderLoEntryNow(el, payload) {
-  const strip = el && el.querySelector('.lo-entry-now');
-  if (!strip) return;
+function _renderLoEntryPop(el, payload) {
+  const entryEl = el && el.querySelector('.lo-pop-entry');
+  if (!entryEl) return;
   const entryPop = payload.entry_pop != null ? parseFloat(payload.entry_pop) : null;
-  const livePop = payload.live_pop != null ? parseFloat(payload.live_pop) : null;
-  const entryEv = payload.entry_ev != null ? parseFloat(payload.entry_ev) : null;
-  const liveEv = payload.live_ev != null ? parseFloat(payload.live_ev) : null;
-  if (entryPop == null && livePop == null) {
-    strip.textContent = '';
-    strip.hidden = true;
-    return;
-  }
-  strip.hidden = false;
-  const bits = [];
   if (entryPop != null && !isNaN(entryPop)) {
-    bits.push(`Entry ${fmtPct(entryPop)}${entryEv != null && !isNaN(entryEv) ? ` · ${_fmtSignedRs(entryEv)} EV` : ''}`);
+    entryEl.textContent = `Entry ${fmtPct(entryPop)}`;
+    entryEl.hidden = false;
+  } else {
+    entryEl.textContent = '';
+    entryEl.hidden = true;
   }
-  if (livePop != null && !isNaN(livePop)) {
-    bits.push(`Now ${fmtPct(livePop)}${liveEv != null && !isNaN(liveEv) ? ` · ${_fmtSignedRs(liveEv)} EV` : ''}`);
-  }
-  strip.textContent = bits.join('  \u2192  ');
 }
 
 function _loProfitZoneLabel(payload) {
@@ -4660,7 +4651,7 @@ function _updateLiveOutlook(tradeId, payload) {
   _updateOutlookFreshnessBadge(tradeId, payload);
   document.querySelectorAll(`.live-outlook[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
     _wireLiveOutlookHelp(el);
-    _renderLoEntryNow(el, payload);
+    _renderLoEntryPop(el, payload);
     _renderLoScenarios(el, payload);
     const popEl = el.querySelector('.lo-pop');
     const popBandEl = el.querySelector('.lo-pop-band');
@@ -4669,6 +4660,7 @@ function _updateLiveOutlook(tradeId, payload) {
     const evLabel = el.querySelector('.lo-ev-label');
     const evEl = el.querySelector('.lo-ev');
     const evNetEl = el.querySelector('.lo-ev-net');
+    const evEntryEl = el.querySelector('.lo-ev-entry');
     const evNote = el.querySelector('.lo-ev-note');
     const dirEl = el.querySelector('.lo-direction');
     const dirNote = el.querySelector('.lo-direction-note');
@@ -4741,6 +4733,14 @@ function _updateLiveOutlook(tradeId, payload) {
       } else {
         evNetEl.textContent = '';
         evNetEl.classList.add('muted');
+      }
+    }
+    if (evEntryEl) {
+      const entryEv = payload.entry_ev != null ? parseFloat(payload.entry_ev) : null;
+      if (entryEv != null && !isNaN(entryEv)) {
+        evEntryEl.textContent = `\u00b7 Entry ${_fmtSignedRs(entryEv)}`;
+      } else {
+        evEntryEl.textContent = '';
       }
     }
     if (evLabel) {
