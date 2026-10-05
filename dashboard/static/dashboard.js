@@ -2579,10 +2579,14 @@ function _signalKindFromFields({ dailyStatus, exitInstruction, riskNotif, live }
   const daily = String(dailyStatus || '').toUpperCase();
   const exitTxt = String(exitInstruction || '').toLowerCase();
   const risk = String(riskNotif || '').toUpperCase();
+  const liveMtmKnown = live && live.liveMtm != null && !isNaN(Number(live.liveMtm));
+  // Sticky session LOSS_LIMIT / SL_TRIGGER must clear once live MTM recovered.
+  const stickySlActive = ['LOSS_LIMIT_HIT', 'SL_TRIGGER'].includes(risk)
+    && !(liveMtmKnown && live && live.lossHit === false);
   if (live && live.lossHit) return 'sl';
   if (['SL_HIT', 'LOSS_LIMIT_HIT'].includes(daily)
       || exitTxt.includes('sl_hit')
-      || ['LOSS_LIMIT_HIT', 'SL_TRIGGER'].includes(risk)) {
+      || stickySlActive) {
     return 'sl';
   }
   if (daily === 'THESIS_FAIL' || exitTxt.includes('thesis_fail')) return 'thesis';
@@ -2630,17 +2634,38 @@ function _syncCardSignal(tradeId, live) {
   document.querySelectorAll(`.card-signal[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(host => {
     const card = host.closest('.card');
     const rec = _lastMtmByTrade[tradeId] || {};
+    const liveMtm = (live && live.liveMtm != null) ? live.liveMtm : rec.mtm;
+    const lossHit = (live && live.lossHit != null) ? live.lossHit : rec.lossHit;
     const kind = _signalKindFromFields({
       dailyStatus: card && card.dataset.dailyStatus,
       exitInstruction: card && card.dataset.exitInstruction,
       riskNotif: card && card.dataset.riskNotif,
       live: {
         ...(live || {}),
-        liveMtm: (live && live.liveMtm != null) ? live.liveMtm : rec.mtm,
+        liveMtm,
+        lossHit,
       },
     });
     host.innerHTML = _signalMarkHtml(kind);
     host.hidden = !kind;
+    // Hide sticky PRE_BREACH / LOSS_LIMIT chip once live MTM has recovered.
+    if (card) {
+      const sticky = card.querySelector('.risk-alert-static');
+      if (sticky) {
+        const rn = String(card.dataset.riskNotif || '').toUpperCase();
+        const recoveredSl = (rn === 'LOSS_LIMIT_HIT' || rn === 'SL_TRIGGER')
+          && liveMtm != null && lossHit === false;
+        const recoveredPre = rn === 'PRE_BREACH_WARNING'
+          && liveMtm != null && lossHit === false
+          && !(live && live.preBreachNear);
+        // preBreachNear may only be on action-panel updates — also hide PRE_BREACH
+        // when MTM is clearly above 70% of loss limit if we know lossRs.
+        const lossRs = rec.lossRs;
+        const abovePreBreach = lossRs != null && liveMtm != null
+          && liveMtm > -(liveRiskMonitor().pre_breach_fraction * lossRs);
+        sticky.hidden = !!(recoveredSl || recoveredPre || (rn === 'PRE_BREACH_WARNING' && abovePreBreach));
+      }
+    }
   });
 }
 
@@ -4841,7 +4866,11 @@ function _computeTradeActionInstruction(opts) {
       cta: 'Use Close Trade below and record exit prices.',
     };
   }
-  if (lossHit || rn === 'LOSS_LIMIT_HIT' || rn === 'THESIS_FAIL' || rn === 'EXIT_THESIS_FAIL') {
+  // Sticky LOSS_LIMIT_HIT from earlier today only if live MTM is still through SL
+  // (or we have no live MTM yet). Recovered trades must not keep saying CLOSE NOW.
+  const lossLimitActive = lossHit
+    || (rn === 'LOSS_LIMIT_HIT' && (liveMtm == null || lossHit));
+  if (lossLimitActive || rn === 'THESIS_FAIL' || rn === 'EXIT_THESIS_FAIL') {
     return {
       tone: 'critical',
       verb: 'CLOSE NOW',
@@ -4966,7 +4995,8 @@ function _computeTradeActionInstruction(opts) {
       cta: 'Optional: Close Trade below to book profit.',
     };
   }
-  if (preBreachNear || rn === 'PRE_BREACH_WARNING') {
+  // Sticky PRE_BREACH only when still near the line (or no live MTM yet).
+  if (preBreachNear || (rn === 'PRE_BREACH_WARNING' && liveMtm == null)) {
     return {
       tone: 'watch',
       verb: 'INFO ONLY',
@@ -5275,6 +5305,11 @@ function _updateTradeActionPanel(tradeId, payload, stripState) {
     }
     const why = panel.querySelector('.tap-why');
     if (why) why.textContent = instr.why;
+    _syncCardSignal(tradeId, {
+      liveMtm,
+      lossHit: stripState && stripState.lossHit,
+      preBreachNear,
+    });
   });
 }
 

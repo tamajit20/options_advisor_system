@@ -1244,16 +1244,55 @@ def _live_mtm_by_trade() -> Dict[str, Dict[str, Any]]:
             if mtm is None:
                 continue
             try:
-                out[str(tid)] = {
+                rec: Dict[str, Any] = {
                     "mtm": float(mtm),
                     "trade_name": payload.get("trade_name"),
                 }
+                max_loss = payload.get("max_loss")
+                if max_loss is not None:
+                    rec["max_loss"] = float(max_loss)
+                out[str(tid)] = rec
             except (TypeError, ValueError):
                 continue
         return out
     except Exception:
         logger.debug("system-status: live MTM snapshot read failed", exc_info=True)
         return {}
+
+
+def _sticky_sl_risk_still_active(
+    *,
+    risk_type: Optional[str],
+    mtm: Optional[float],
+    max_loss: Optional[float],
+    strategy: str = "",
+) -> bool:
+    """True when today's LOSS_LIMIT / SL_TRIGGER should still light the rail.
+
+    Once MTM recovers above the effective SL threshold, sticky session alerts
+    must not keep showing a stop-loss signal (operator sees recovery).
+    """
+    risk = (risk_type or "").upper()
+    if risk not in _SL_RISK_TYPES:
+        return False
+    if mtm is None or max_loss is None:
+        return True  # no live context — keep alert visible
+    try:
+        mtm_f = float(mtm)
+        max_loss_f = float(max_loss)
+    except (TypeError, ValueError):
+        return True
+    if max_loss_f <= 0:
+        return True
+    try:
+        from engine.sl_threshold import effective_sl_rs
+        sl_rs, _ = effective_sl_rs(strategy=strategy or "", max_loss_rs=max_loss_f)
+    except Exception:
+        return True
+    if not sl_rs or sl_rs <= 0:
+        return True
+    # Still at/through SL → keep signal; recovered above SL → clear sticky.
+    return mtm_f <= -float(sl_rs)
 
 
 def _stored_mtm_payloads(db: Optional[SQLServerConnection] = None) -> Dict[str, Dict[str, Any]]:
@@ -1444,6 +1483,8 @@ def _signal_kind_for_open_trade(
     *,
     risk_type: Optional[str] = None,
     mtm: Optional[float] = None,
+    max_loss: Optional[float] = None,
+    strategy: str = "",
 ) -> Optional[str]:
     """Map an open trade row to a header signal kind, or None if quiet.
 
@@ -1452,11 +1493,16 @@ def _signal_kind_for_open_trade(
     Loss still wins over profit if both are present.
     Action kinds (SL / thesis / take-profit / close pending) beat MTM-only
     in-loss / in-profit status.
+    Sticky LOSS_LIMIT_HIT / SL_TRIGGER clear once live MTM recovers above SL.
     """
     daily = (row.get("daily_status") or "").upper()
     exit_txt = (row.get("exit_instruction") or "").lower()
     risk = (risk_type or "").upper()
-    if daily in _SL_SIGNAL_STATUSES or "sl_hit" in exit_txt or risk in _SL_RISK_TYPES:
+    if daily in _SL_SIGNAL_STATUSES or "sl_hit" in exit_txt:
+        return "sl"
+    if risk in _SL_RISK_TYPES and _sticky_sl_risk_still_active(
+        risk_type=risk, mtm=mtm, max_loss=max_loss, strategy=strategy,
+    ):
         return "sl"
     if daily in _THESIS_SIGNAL_STATUSES or "thesis_fail" in exit_txt:
         return "thesis"
@@ -1507,21 +1553,26 @@ def _active_trade_signals(db: SQLServerConnection) -> List[Dict[str, Any]]:
     except Exception:
         logger.debug("system-status: open_trades read failed", exc_info=True)
         return []
-    risk_by_trade = _today_risk_type_by_trade(
-        db,
-        [r.get("trade_id") for r in rows if isinstance(r, dict) and r.get("trade_id")],
-    )
+    trade_ids = [
+        r.get("trade_id") for r in rows
+        if isinstance(r, dict) and r.get("trade_id")
+    ]
+    risk_by_trade = _today_risk_type_by_trade(db, trade_ids)
     mtm_by_trade = _live_mtm_by_trade()
+    strategy_by_trade = _strategy_by_open_trade(db, rows)
     out: List[Dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
         tid = row.get("trade_id")
         mtm_rec = mtm_by_trade.get(str(tid) if tid else "") or {}
+        tid_s = str(tid) if tid else ""
         kind = _signal_kind_for_open_trade(
             row,
-            risk_type=risk_by_trade.get(tid),
+            risk_type=risk_by_trade.get(tid_s) or risk_by_trade.get(tid),
             mtm=mtm_rec.get("mtm"),
+            max_loss=mtm_rec.get("max_loss") or row.get("actual_max_loss"),
+            strategy=strategy_by_trade.get(tid_s) or "",
         )
         if not kind:
             continue
@@ -1531,6 +1582,45 @@ def _active_trade_signals(db: SQLServerConnection) -> List[Dict[str, Any]]:
             "trade_name": row.get("trade_name") or mtm_rec.get("trade_name"),
             "daily_status": row.get("daily_status"),
         })
+    return out
+
+
+def _strategy_by_open_trade(
+    db: SQLServerConnection,
+    rows: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Map trade_id → suggestion.strategy for open trades. Fail-open."""
+    sug_ids = []
+    tid_by_sug: Dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        tid = row.get("trade_id")
+        sid = row.get("suggestion_id")
+        if tid and sid:
+            sug_ids.append(str(sid))
+            tid_by_sug[str(sid)] = str(tid)
+    if not sug_ids:
+        return {}
+    try:
+        ph = ",".join("?" for _ in sug_ids)
+        sug_rows = db.fetch_all(
+            f"SELECT suggestion_id, strategy FROM options_suggestions "
+            f"WHERE suggestion_id IN ({ph})",
+            sug_ids,
+        ) or []
+    except Exception:
+        logger.debug("system-status: strategy lookup failed", exc_info=True)
+        return {}
+    out: Dict[str, str] = {}
+    for srow in sug_rows:
+        if not isinstance(srow, dict):
+            continue
+        sid = srow.get("suggestion_id")
+        strat = srow.get("strategy")
+        tid = tid_by_sug.get(str(sid) if sid else "")
+        if tid and strat:
+            out[tid] = str(strat)
     return out
 
 

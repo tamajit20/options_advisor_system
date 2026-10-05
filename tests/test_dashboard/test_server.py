@@ -999,6 +999,25 @@ class TestTradeSignalKind:
             mtm=400.0,
         ) == "profit"
 
+    def test_sticky_loss_limit_clears_when_mtm_recovers(self):
+        # BEAR_PUT SL = 40% × 11352 ≈ 4541; MTM −1494 is recovered.
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "OPEN", "exit_instruction": None},
+            risk_type="LOSS_LIMIT_HIT",
+            mtm=-1494.0,
+            max_loss=11352.0,
+            strategy="BEAR_PUT_SPREAD",
+        ) == "in_loss"
+
+    def test_sticky_loss_limit_stays_when_still_through_sl(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "OPEN", "exit_instruction": None},
+            risk_type="LOSS_LIMIT_HIT",
+            mtm=-4600.0,
+            max_loss=11352.0,
+            strategy="BEAR_PUT_SPREAD",
+        ) == "sl"
+
 
 class TestApiSystemStatus:
     def test_returns_status_keys(self, client, mocker):
