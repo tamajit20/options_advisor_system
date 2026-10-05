@@ -4344,66 +4344,71 @@ function renderLiveOutlook(t) {
         <p><strong>Gross vs hold</strong> — compares Current P&amp;L Gross (lock in now) vs modeled hold-to-expiry outcome.</p>
         <p class="muted" style="margin-top:.35rem">Tip: tap the \u24d8 icons beside each row for a short explanation. Live MTM is under <em>Current P&amp;L</em> above.</p>
       </div>
-      <div class="lo-grid">
-        <div class="lo-win-block">
-          <div class="lo-row lo-row-win">
-            <span class="lpl-label">${labelWithHelp('Win chance', 'win_chance')}</span>
+      <div class="lo-columns">
+        <div class="lo-col lo-col-metrics">
+          <div class="lo-win-block">
+            <div class="lo-row lo-row-win">
+              <span class="lpl-label">${labelWithHelp('Win chance', 'win_chance')}</span>
+              <span class="lpl-val-line">
+                <strong class="lo-pop">\u2014</strong>
+                <span class="lo-pop-band muted"></span>
+                <span class="lo-pop-delta muted"></span>
+              </span>
+              <span class="muted lpl-note lo-pop-entry"></span>
+              <span class="muted lpl-note lo-pop-note" hidden></span>
+            </div>
+            <div class="lo-sparkline-wrap" hidden>
+              <canvas class="lo-sparkline" width="240" height="40" aria-hidden="true"></canvas>
+            </div>
+          </div>
+          <div class="lo-row lo-row-ev">
+            <span class="lpl-label lo-ev-label">${labelWithHelp('Near-expiry EV', 'near_expiry_ev')}</span>
             <span class="lpl-val-line">
-              <strong class="lo-pop">\u2014</strong>
-              <span class="lo-pop-band muted"></span>
-              <span class="lo-pop-delta muted"></span>
+              <strong class="lo-ev">\u2014</strong>
+              <span class="lo-ev-net muted"></span>
+              <span class="lo-ev-entry muted"></span>
             </span>
-            <span class="muted lpl-note lo-pop-entry"></span>
-            <span class="muted lpl-note lo-pop-note">Model from spot, DTE, IV (\u00b115% IV band) \u2014 not a historical hit rate</span>
-          </div>
-          <div class="lo-sparkline-wrap" hidden>
-            <span class="lo-spark-label muted">Recent win chance</span>
-            <canvas class="lo-sparkline" width="280" height="44" aria-hidden="true"></canvas>
+            <span class="muted lpl-note lo-ev-note" hidden></span>
           </div>
         </div>
-        <div class="lo-structure-block">
-          <div class="lo-structure-head">
-            <span class="lpl-label">${labelWithHelp('Spots &amp; fit', 'spots_and_fit')}</span>
-          </div>
-          <div class="lo-spot-strip" aria-label="Entry, current, and profit-zone spot">
-            <div class="lo-spot-cell">
-              <span class="lo-spot-k">Entry</span>
-              <strong class="lo-spot-entry">\u2014</strong>
+        <div class="lo-col lo-col-structure">
+          <div class="lo-structure-block">
+            <div class="lo-structure-head">
+              <span class="lpl-label">${labelWithHelp('Spots &amp; fit', 'spots_and_fit')}</span>
             </div>
-            <div class="lo-spot-cell lo-spot-cell-now">
-              <span class="lo-spot-k">Current</span>
-              <strong class="lo-spot-now">\u2014</strong>
-              <span class="lo-spot-chg muted"></span>
+            <div class="lo-spot-strip" aria-label="Entry, current, and profit-zone spot">
+              <div class="lo-spot-cell">
+                <span class="lo-spot-k">Entry</span>
+                <strong class="lo-spot-entry">\u2014</strong>
+              </div>
+              <div class="lo-spot-cell lo-spot-cell-now">
+                <span class="lo-spot-k">Current</span>
+                <strong class="lo-spot-now">\u2014</strong>
+                <span class="lo-spot-chg muted"></span>
+              </div>
+              <div class="lo-spot-cell">
+                <span class="lo-spot-k">Profit zone</span>
+                <strong class="lo-spot-zone">\u2014</strong>
+              </div>
             </div>
-            <div class="lo-spot-cell">
-              <span class="lo-spot-k">Profit zone</span>
-              <strong class="lo-spot-zone">\u2014</strong>
+            <div class="lo-fit-row">
+              <div class="lo-fit-cell">
+                <span class="lo-spot-k">${labelWithHelp('Fit', 'structural_fit')}</span>
+                <strong class="lo-direction">\u2014</strong>
+                <span class="muted lo-direction-note" hidden></span>
+              </div>
+              <div class="lo-fit-cell lo-row-be-dist" hidden>
+                <span class="lo-spot-k">${labelWithHelp('To zone', 'profit_zone')}</span>
+                <strong class="lo-be-dist">\u2014</strong>
+                <span class="muted lo-be-dist-note" hidden></span>
+              </div>
+            </div>
+            <div class="lo-row lo-row-market">
+              <span class="lpl-label">${labelWithHelp('Market', 'market_outlook')}</span>
+              <span class="lpl-val-line"><span class="lo-market">Loading\u2026</span></span>
+              <span class="muted lpl-note lo-market-note"></span>
             </div>
           </div>
-          <div class="lo-row lo-row-direction">
-            <span class="lpl-label">${labelWithHelp('Structural fit', 'structural_fit')}</span>
-            <span class="lpl-val-line"><strong class="lo-direction">\u2014</strong></span>
-            <span class="muted lpl-note lo-direction-note">Spot vs breakevens for this strategy \u2014 not the same as current P&amp;L</span>
-          </div>
-          <div class="lo-row lo-row-be-dist" hidden>
-            <span class="lpl-label">${labelWithHelp('To zone', 'profit_zone')}</span>
-            <span class="lpl-val-line"><strong class="lo-be-dist">\u2014</strong></span>
-            <span class="muted lpl-note lo-be-dist-note"></span>
-          </div>
-          <div class="lo-row lo-row-market">
-            <span class="lpl-label">${labelWithHelp('Market', 'market_outlook')}</span>
-            <span class="lpl-val-line"><span class="lo-market">Loading market data\u2026</span></span>
-            <span class="muted lpl-note lo-market-note"></span>
-          </div>
-        </div>
-        <div class="lo-row">
-          <span class="lpl-label lo-ev-label">${labelWithHelp('Near-expiry EV', 'near_expiry_ev')}</span>
-          <span class="lpl-val-line">
-            <strong class="lo-ev">\u2014</strong>
-            <span class="lo-ev-net muted"></span>
-            <span class="lo-ev-entry muted"></span>
-          </span>
-          <span class="muted lpl-note lo-ev-note">Modeled total P&amp;L at near expiry (not extra gain from MTM)</span>
         </div>
       </div>
       <div class="lo-extra muted">
