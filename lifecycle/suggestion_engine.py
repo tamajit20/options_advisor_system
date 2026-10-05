@@ -48,7 +48,11 @@ from database.models import (
     VixRepo,
 )
 from engine.confidence import evaluate as evaluate_confidence
-from engine.em_calibration import band_dte, compute_calibration_warning
+from engine.em_calibration import (
+    band_dte,
+    calibration_strike_scale,
+    compute_calibration_warning,
+)
 from engine.indicators import build_indicators
 from engine.trend_model import MIXED_TREND, mixed_trend_sitout_reason
 from engine.market_data_provenance import (
@@ -235,6 +239,33 @@ def _append_ic_ib_companions(
                 "Companion %s veto for %s %s: %s",
                 companion_strategy, primary.underlying, primary.expiry_date, veto,
             )
+
+
+def _apply_em_strike_scale(db: SQLServerConnection, indicators, underlying: str, dte: int) -> None:
+    """Nudge expected_move used for strikes. No-op (scale 1.0) on thin history or DB errors."""
+    try:
+        band = band_dte(dte)
+        if band == "unknown":
+            return
+        ratios = EmCalibrationRepo(db).recent_ratios(
+            underlying=underlying,
+            dte_band=band,
+            limit=int(STRATEGY_CONFIG.get("em_calibration_lookback_limit", 12)),
+        )
+        scale = calibration_strike_scale(
+            ratios,
+            min_samples=int(STRATEGY_CONFIG.get("em_calibration_min_samples", 4)),
+            blend=float(STRATEGY_CONFIG.get("em_calibration_strike_blend", 0.5)),
+            scale_min=float(STRATEGY_CONFIG.get("em_calibration_strike_scale_min", 0.92)),
+            scale_max=float(STRATEGY_CONFIG.get("em_calibration_strike_scale_max", 1.12)),
+        )
+    except Exception:
+        logger.debug("EM strike scale unavailable for %s (non-fatal)", underlying, exc_info=True)
+        return
+    indicators.em_strike_scale = scale
+    em = float(getattr(indicators, "expected_move", 0) or 0)
+    if scale != 1.0 and em > 0:
+        indicators.expected_move = em * scale
 
 
 def _attach_em_calibration_warning(db: SQLServerConnection, sug: Suggestion) -> None:
@@ -676,8 +707,11 @@ def _evaluate_underlying(
     existing_names = [t.get("trade_name") for t in trade_repo.open_trades()
                       if t.get("trade_name")]
 
-    # FII net futures positioning — anchored to trade_date (never future data)
+    # FII positioning — anchored to trade_date (never future data).
+    # Futures net feeds the existing soft gate; options long−short is advisory only.
     fii_net_futures: Optional[float] = None
+    fii_net_calls: Optional[float] = None
+    fii_net_puts: Optional[float] = None
     actual_fii_date: Optional[date] = None
     try:
         fii_rows = FiiRepo(db).for_date(trade_date)
@@ -685,8 +719,14 @@ def _evaluate_underlying(
         if fii_row:
             fii_net_futures = float(fii_row["future_long"]) - float(fii_row["future_short"])
             actual_fii_date = fii_row.get("trade_date")
+            cl, cs = fii_row.get("option_call_long"), fii_row.get("option_call_short")
+            pl, ps = fii_row.get("option_put_long"), fii_row.get("option_put_short")
+            if cl is not None and cs is not None:
+                fii_net_calls = float(cl) - float(cs)
+            if pl is not None and ps is not None:
+                fii_net_puts = float(pl) - float(ps)
     except Exception:
-        logger.debug("FII net futures unavailable for %s (non-fatal)", symbol)
+        logger.debug("FII positioning unavailable for %s (non-fatal)", symbol)
 
     # Capture the most recent VIX date used
     actual_vix_date: Optional[date] = (
@@ -817,12 +857,15 @@ def _evaluate_underlying(
             atm_iv=atm_iv,
             dte=entry_dte,
             fii_net_futures=fii_net_futures,
+            fii_net_calls=fii_net_calls,
+            fii_net_puts=fii_net_puts,
             oi_chain_rows=oi_abs_rows,
             oi_change_rows=oi_change_rows,
             trajectory=load_trajectory(db, symbol=symbol, expiry=expiry) if _live_mode else None,
             session_bar=_session_bar,
             live_mode=_live_mode,
         )
+        _apply_em_strike_scale(db, indicators, symbol, entry_dte)
 
         confidence = evaluate_confidence(
             iv_rank=iv_rank,
@@ -951,6 +994,8 @@ def _evaluate_underlying(
                         atm_iv=use_atm_iv,
                         dte=use_dte,
                         fii_net_futures=fii_net_futures,
+                        fii_net_calls=fii_net_calls,
+                        fii_net_puts=fii_net_puts,
                         oi_chain_rows=use_oi_abs,
                         oi_change_rows=use_oi_change,
                         trajectory=load_trajectory(
@@ -959,6 +1004,7 @@ def _evaluate_underlying(
                         session_bar=_session_bar,
                         live_mode=_live_mode,
                     )
+                    _apply_em_strike_scale(db, use_indicators, symbol, use_dte)
                     use_confidence = evaluate_confidence(
                         iv_rank=use_iv_rank if use_iv_rank is not None else iv_rank,
                         indicators=use_indicators,

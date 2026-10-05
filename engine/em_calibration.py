@@ -124,8 +124,37 @@ def compute_calibration_warning(
     )
 
 
+def calibration_strike_scale(
+    samples: Sequence[float],
+    *,
+    min_samples: int,
+    blend: float = 0.5,
+    scale_min: float = 0.92,
+    scale_max: float = 1.12,
+) -> float:
+    """Multiplier for expected-move strike placement.
+
+    Returns 1.0 when the cohort is too small. Otherwise moves halfway
+    toward the median realised/expected ratio and clamps the result so
+    short strikes only nudge — the suggestion is still built.
+    """
+    valid = [float(r) for r in samples if r is not None and math.isfinite(r) and r > 0.0]
+    if len(valid) < int(min_samples):
+        return 1.0
+    med = median(valid)
+    if not math.isfinite(med) or med <= 0:
+        return 1.0
+    blended = 1.0 + (med - 1.0) * float(blend)
+    lo = float(scale_min)
+    hi = float(scale_max)
+    if hi < lo:
+        lo, hi = hi, lo
+    return max(lo, min(hi, blended))
+
+
 __all__ = [
     "compute_realised_ratio",
     "band_dte",
     "compute_calibration_warning",
+    "calibration_strike_scale",
 ]

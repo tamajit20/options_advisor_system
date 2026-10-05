@@ -36,6 +36,7 @@ from contracts import (
 )
 from exceptions import StrategyVeto
 from engine import leg_builder
+from engine.data_edge import build_data_edge_checks
 from engine.charges import estimate_charges
 from engine.name_generator import make_trade_name
 from utils import now_ist
@@ -1041,11 +1042,16 @@ def assemble_suggestion(
 
     confidence = _merge_confidence_checks(
         confidence,
-        build_strategy_entry_gate_checks(
+        list(build_strategy_entry_gate_checks(
             strategy=strategy,
             iv_rank=iv_rank,
             indicators=indicators,
             has_long_vol_catalyst=has_long_vol_catalyst,
+        )) + build_data_edge_checks(
+            strategy=strategy,
+            iv_rank=iv_rank,
+            indicators=indicators,
+            legs=legs,
         ),
     )
 
@@ -1106,7 +1112,15 @@ def _explain(
     parts.append(
         f"IV Rank {iv_rank:.0f}, trend {indicators.trend.lower()}, {vix_bit}."
     )
-    parts.append(f"Entry DTE {dte}, expected move \u00b1{indicators.expected_move:.0f} pts.")
+    em_pts = indicators.expected_move
+    scale = float(getattr(indicators, "em_strike_scale", 1.0) or 1.0)
+    if abs(scale - 1.0) >= 0.005:
+        parts.append(
+            f"Entry DTE {dte}, expected move \u00b1{em_pts:.0f} pts "
+            f"({scale:.2f}\u00d7 raw EM from recent realised moves)."
+        )
+    else:
+        parts.append(f"Entry DTE {dte}, expected move \u00b1{em_pts:.0f} pts.")
     if econ.upper_breakeven is not None and econ.lower_breakeven is not None:
         parts.append(f"Profit zone: {econ.lower_breakeven:.0f}\u2013{econ.upper_breakeven:.0f}.")
     elif econ.upper_breakeven is not None:

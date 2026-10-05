@@ -565,6 +565,15 @@ STRATEGY_CONFIG = {
     "em_calibration_min_samples":         4,
     "em_calibration_deviation_threshold": 0.25,
     "em_calibration_lookback_limit":      12,   # most recent N expiries per cohort
+    # Strike placement uses the same cohort, blended halfway toward the
+    # median and clamped so wings move at most ~12%. 1.0 when samples are thin.
+    "em_calibration_strike_blend":        0.5,
+    "em_calibration_strike_scale_min":    0.92,
+    "em_calibration_strike_scale_max":    1.12,
+    # Advisory-only (never blocks). FII options skew vs a directional pick.
+    "fii_options_skew_threshold":         100_000,
+    # Advisory-only. Long vol without a live volume burst still shows.
+    "volume_burst_quiet_z":               0.5,
 
     # ---------------------------------------------------------------
     # Edge score — numeric quality score 0–100 (display + ranking only;

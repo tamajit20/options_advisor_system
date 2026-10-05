@@ -7,6 +7,7 @@ import pytest
 
 from engine.em_calibration import (
     band_dte,
+    calibration_strike_scale,
     compute_calibration_warning,
     compute_realised_ratio,
 )
@@ -111,3 +112,22 @@ class TestComputeCalibrationWarning:
         long = compute_calibration_warning(ratios, **self._kw(dte=30))
         assert "0-7" in short
         assert "22+" in long
+
+
+class TestCalibrationStrikeScale:
+    def test_thin_sample_is_identity(self):
+        assert calibration_strike_scale([1.4, 1.5, 1.6], min_samples=4) == 1.0
+
+    def test_overshoot_nudges_up_and_clamps(self):
+        # median 1.5 → blend halfway = 1.25 → clamp 1.12
+        scale = calibration_strike_scale(
+            [1.5, 1.5, 1.5, 1.5], min_samples=4, blend=0.5, scale_min=0.92, scale_max=1.12,
+        )
+        assert scale == pytest.approx(1.12)
+
+    def test_mild_undershoot_stays_inside_band(self):
+        # median 0.90 → 0.95, inside the clamp
+        scale = calibration_strike_scale(
+            [0.90, 0.90, 0.90, 0.90], min_samples=4, blend=0.5, scale_min=0.92, scale_max=1.12,
+        )
+        assert scale == pytest.approx(0.95)

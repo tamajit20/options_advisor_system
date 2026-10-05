@@ -145,6 +145,11 @@ class MarketIndicators:
     # quiet-tape gate must not fire on missing data (other parameters still decide).
     session_range:        Optional[float] = None
     expected_move_1d:     Optional[float] = None  # spot × IV × √(1/365); quiet-tape vs same-day EM
+    # FII index-options book (long − short). None when the participant row lacks them.
+    fii_net_calls:        Optional[float] = None
+    fii_net_puts:         Optional[float] = None
+    # Applied to expected_move before strike placement. 1.0 = raw Black-Scholes EM.
+    em_strike_scale:      float = 1.0
 
 
 @dataclass
