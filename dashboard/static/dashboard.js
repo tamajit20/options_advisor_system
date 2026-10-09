@@ -1771,6 +1771,19 @@ function _applyLegLtpsToClosePanel(tradeId, legLtps) {
     if (ltp == null || ltp <= 0) return;
     span.textContent = `\u20b9${fmt(ltp)}`;
     span.dataset.ltp = ltp;
+    const liveRow = span.closest('.cf-live-leg');
+    if (liveRow) {
+      _setCloseLegPnlEl(
+        liveRow.querySelector('.cf-live-leg-pnl'),
+        _closeLegMtm(
+          liveRow.dataset.action,
+          liveRow.dataset.fillPrice,
+          ltp,
+          liveRow.dataset.lots,
+          liveRow.dataset.lotSize,
+        ),
+      );
+    }
     span.classList.add('ltp-flash');
     setTimeout(() => span.classList.remove('ltp-flash'), 600);
     anyUpdated = true;
@@ -1960,6 +1973,27 @@ function _fmtSignedInr(n) {
   if (n == null || isNaN(Number(n))) return '\u2014';
   const v = Number(n);
   return (v >= 0 ? '+' : '\u2212') + '\u20b9' + fmt(Math.abs(v));
+}
+
+/** Mark-to-market of one open leg at a close price (rupees). */
+function _closeLegMtm(action, entry, closePx, lots, lotSize) {
+  const px = parseFloat(closePx);
+  const ep = parseFloat(entry);
+  if (!(px > 0) || !(ep > 0)) return null;
+  const qty = (parseInt(lots, 10) || 1) * (parseInt(lotSize, 10) || 1);
+  return String(action).toUpperCase() === 'SELL' ? (ep - px) * qty : (px - ep) * qty;
+}
+
+function _setCloseLegPnlEl(el, pnl) {
+  if (!el) return;
+  el.classList.remove('pnl-pos', 'pnl-neg', 'muted');
+  if (pnl == null) {
+    el.classList.add('muted');
+    el.textContent = 'Leg P&L \u2014';
+    return;
+  }
+  el.classList.add(pnl >= 0 ? 'pnl-pos' : 'pnl-neg');
+  el.textContent = `Leg P&L ${_fmtSignedInr(pnl)}`;
 }
 
 /** Compact percentage for tight headers — premium stays in the tooltip. */
@@ -8504,11 +8538,22 @@ async function submitSupplement(tradeId, panel) {
     loadTrades();
   } catch (err) { toast(err.message, 'err'); }
 }
+function _showLegsInCloseGap(panel) {
+  const slot = panel && panel.querySelector('.trade-legs-slot');
+  if (!slot) return;
+  slot.hidden = false;
+  const gap = panel.querySelector('.cf-legs-gap');
+  if (gap) gap.appendChild(slot);
+  else panel.appendChild(slot);
+}
+
 async function openCloseForm(tradeId, netCreditActual = 0) {
   const panel = document.getElementById(`close-${tradeId}`);
   if (!panel) return;
   const content = panel.querySelector('.close-trade-content');
   if (!content) return;
+  const legsSlot = panel.querySelector('.trade-legs-slot');
+  if (legsSlot) panel.appendChild(legsSlot);
   content.innerHTML = '<div class="muted">Loading legs…</div>';
   try {
     const [data, sugg, snap, tradeMeta] = await Promise.all([
@@ -8518,7 +8563,9 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       API(`/api/trades/${tradeId}`).catch(() => null),
     ]);
     if (!data.legs.length) {
-      content.innerHTML = '<div class="muted">No executed legs found.</div>'; return;
+      content.innerHTML = '<div class="muted">No executed legs found.</div>';
+      _showLegsInCloseGap(panel);
+      return;
     }
     const brokerChannel = tradeExecutionChannel(tradeMeta);
     const showZerodhaClose = brokerChannel === 'zerodha';
@@ -8555,25 +8602,43 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     );
 
     // ── LEFT: read-only live market price display ──
+    const closePremium = tradePremiumFromLegs(data.legs);
+    const tradeOpenHtml = closePremium
+      ? `<div class="cf-trade-open">Trade open <strong>\u20b9${fmt(closePremium.rs)}</strong> ${closePremium.kind === 'received' ? 'credit' : 'debit'}</div>`
+      : '';
     const liveLegsHtml = data.legs.map(l => {
       const closeAction = l.action === 'SELL' ? 'Buy back' : 'Sell back';
       const lotsUsed = l.lots_actual || l.lots || 1;
+      const lotSize = l.lot_size || 1;
+      const entry = parseFloat(l.fill_price) || 0;
       const mp = (mktPriceMap[l.leg_order] != null && mktPriceMap[l.leg_order] > 0)
                  ? mktPriceMap[l.leg_order] : null;
       const psrc = priceSrcMap[l.leg_order];
       const legKey = _normLegKey(l.symbol, l.expiry_date, l.strike, l.option_type);
       let priceDisplay = mp != null ? `\u20b9${fmt(mp)}` : '<span class="muted">—</span>';
       if (mp != null && psrc === 'intrinsic_fallback') priceDisplay += ' <span class="tag tag-warn" style="font-size:.65rem">intrinsic est.</span>';
+      const legPnl = _closeLegMtm(l.action, entry, mp, lotsUsed, lotSize);
+      const pnlCls = legPnl == null ? 'muted' : (legPnl >= 0 ? 'pnl-pos' : 'pnl-neg');
+      const pnlTxt = legPnl == null ? 'Leg P&L \u2014' : `Leg P&L ${_fmtSignedInr(legPnl)}`;
+      const openTxt = entry > 0
+        ? `Open \u20b9${fmt(entry)} \u00d7 ${lotsUsed} lot${lotsUsed !== 1 ? 's' : ''}`
+        : 'Open \u2014';
       return `<div class="cf-live-leg"
                    data-leg-order="${l.leg_order}"
                    data-action="${escapeHtml(l.action)}"
                    data-fill-price="${l.fill_price || 0}"
                    data-lots="${lotsUsed}"
-                   data-lot-size="${l.lot_size || 1}">
-        <span class="muted" style="font-size:.78rem">${escapeHtml(closeAction)}</span>
-        <strong>${formatLegInstrument(l)}</strong>
-        <span class="cf-live-price" data-leg-key="${escapeHtml(legKey)}"
-              data-ltp="${mp != null ? mp : ''}">${priceDisplay}</span>
+                   data-lot-size="${lotSize}">
+        <div class="cf-live-leg-main">
+          <span class="muted" style="font-size:.78rem">${escapeHtml(closeAction)}</span>
+          <strong>${formatLegInstrument(l)}</strong>
+          <span class="cf-live-price" data-leg-key="${escapeHtml(legKey)}"
+                data-ltp="${mp != null ? mp : ''}">${priceDisplay}</span>
+        </div>
+        <div class="cf-live-leg-meta">
+          <span>${openTxt}</span>
+          <span class="cf-live-leg-pnl ${pnlCls}">${pnlTxt}</span>
+        </div>
       </div>`;
     }).join('');
 
@@ -8602,7 +8667,6 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
         </div>`;
     }).join('');
 
-    const closePremium = tradePremiumFromLegs(data.legs);
     const zCloseSt = _zerodhaExecButtonState(
       false,
       'Place closing LIMIT orders in Zerodha. Leave fill fields blank for auto limits.',
@@ -8634,7 +8698,9 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
             <div id="live-feed-banner-${escapeHtml(tradeId)}" class="live-feed-banner" hidden></div>
             <div class="close-col-title">📡 Current market prices</div>
             <div class="cf-live-legs">${liveLegsHtml}</div>
+            ${tradeOpenHtml}
             ${targetExitHtml}
+            <div class="cf-legs-gap"></div>
           </div>
 
           <!-- RIGHT: actual fills entry -->
@@ -8724,6 +8790,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
 
     content.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcFillPnl));
     recalcFillPnl();
+    _showLegsInCloseGap(panel);
     const hasLivePrices = data.legs.some(l =>
       (mktPriceMap[l.leg_order] > 0) && priceSrcMap[l.leg_order] === 'live');
     const usingEod = !marketOpen && data.legs.some(l => mktPriceMap[l.leg_order] > 0);
@@ -8739,6 +8806,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     }
   } catch (err) {
     content.innerHTML = `<div class="muted">Error: ${escapeHtml(err.message)}</div>`;
+    _showLegsInCloseGap(panel);
   }
 }
 async function submitZerodhaClose(tradeId, btn, panel) {
@@ -9318,6 +9386,7 @@ function renderTrade(t, expanded = false) {
         ${hasPendingClose ? `<div class="pending-close-alert pending-close-inline">\u26a0 Exit fills not recorded \u2014 use Close Trade below to compute P&amp;L</div>` : ''}
       </div>
       <div class="close-trade-content"><div class="muted">Loading…</div></div>
+      <div class="trade-legs-slot" hidden>${legsHtml}</div>
     </section>` : ''}
     ${hasExecutedLegs ? `
     <section class="gap-replay-section" id="gap-replay-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs} hidden>
@@ -9329,7 +9398,7 @@ function renderTrade(t, expanded = false) {
         <div class="muted" style="font-size:.8rem">Loading replay\u2026</div>
       </div>
     </section>` : ''}
-    ${legsHtml}
+    ${hasExecutedLegs ? '' : legsHtml}
     ${t.exit_instruction ? `<p class="muted" style="margin:8px 0 0">Exit: ${escapeHtml(t.exit_instruction)}</p>` : ''}
     ${brokenHtml}
     ${isPartial ? `<div class="btn-row" style="margin-top:10px">

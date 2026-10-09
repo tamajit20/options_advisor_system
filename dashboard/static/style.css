@@ -3192,7 +3192,7 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 .step-badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:.7rem;font-weight:700;margin-right:3px}
 .step-badge.step-1{background:#1a3a5c;color:#4fc3f7}
 .step-badge.step-2{background:#1a3a2c;color:#81c784}
-.close-two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px;}
+.close-two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px;align-items:start;}
 @media(max-width:700px){.close-two-col{grid-template-columns:1fr;}}
 .close-col{display:flex;flex-direction:column;gap:8px;}
 .close-col-title{font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);padding-bottom:4px;border-bottom:1px solid rgba(255,255,255,.06);}
@@ -3204,8 +3204,13 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 }
 .close-col-live{background:rgba(6,182,212,.04);border:1px solid rgba(6,182,212,.12);border-radius:8px;padding:10px 12px;}
 .close-col-fills{background:rgba(148,163,184,.04);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:10px 12px;}
-.cf-live-legs{display:flex;flex-direction:column;gap:5px;}
-.cf-live-leg{display:flex;align-items:center;gap:8px;font-size:.85rem;padding:4px 0;}
+.cf-live-legs{display:flex;flex-direction:column;gap:2px;}
+.cf-live-leg{display:flex;flex-direction:column;align-items:stretch;gap:2px;font-size:.85rem;padding:4px 0 6px;border-bottom:1px solid rgba(255,255,255,.05);}
+.cf-live-leg-main{display:flex;align-items:center;gap:8px;}
+.cf-live-leg-meta{display:flex;flex-wrap:wrap;gap:12px;font-size:.75rem;color:var(--text-dim);}
+.cf-trade-open{font-size:.78rem;color:var(--text-dim);margin-top:6px;}
+.cf-legs-gap{margin-top:4px;}
+.cf-legs-gap .trade-legs-section{margin:8px 0 0;padding-top:8px;border-top:1px solid rgba(6,182,212,.25);}
 .cf-live-price{margin-left:auto;font-weight:700;font-size:.9rem;color:var(--text);}
 .live-pnl-preview,.fill-pnl-preview{padding:8px 10px;background:#0d1f2d;border-radius:6px;font-size:.85rem;color:#8898aa;border:1px solid #2a3744;}
 .live-pnl-label{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:4px;opacity:.7;}
