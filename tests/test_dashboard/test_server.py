@@ -1257,7 +1257,10 @@ class TestJsDashboardContracts:
         assert "Place orders in Zerodha" in js
         assert "_lookupLegLtp" in js
         assert "renderTrade(t, false)" in js
-        assert "btn-close-trade card-head-btn" in js
+        # Close lives in the card body, not a heading button.
+        assert "btn-close-trade card-head-btn" not in js
+        assert "close-trade-header" in js
+        assert "openCloseForm" in js
         assert "btn-void-trade" in js
         assert "trade-void-row" in js
         # Regime pairs removed — single select_strategy pick only.
