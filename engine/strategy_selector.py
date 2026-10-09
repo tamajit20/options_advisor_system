@@ -656,6 +656,8 @@ def assemble_suggestion(
     calendar_legs: dict | None = None,
     has_long_vol_catalyst: bool = False,
     companion_mode: bool = False,
+    has_event_in_hold: bool = False,
+    event_in_hold_description: str = "",
 ) -> Suggestion:
     """Top-level: select strategy, build legs, compute economics, return Suggestion.
 
@@ -935,6 +937,33 @@ def assemble_suggestion(
                 f"{np_per_share/spread_w_for_veto*100:.1f}% < {min_cw_ratio*100:.0f}% minimum",
                 collected_vetoes, defer=defer_entry_vetoes,
             )
+        # Live book: sell the bid, buy the ask, then take off a round trip of
+        # charges. Missing depth does not veto — EOD settles have no bid/ask.
+        exec_prices = leg_builder.executable_leg_prices(legs, chain)
+        if exec_prices is not None:
+            exec_net = leg_builder.executable_net_premium(legs, chain) or 0.0
+            exec_charges = estimate_charges([
+                {
+                    "action": l.action,
+                    "price": px,
+                    "lots": l.lots,
+                    "lot_size": l.lot_size,
+                }
+                for l, px in zip(legs, exec_prices)
+            ])
+            qty = max(int(lots) * int(lot_size), 1)
+            charge_pts = float(exec_charges.total) / qty
+            net_after = exec_net - charge_pts
+            floor_pts = min_cw_ratio * spread_w_for_veto
+            if net_after < floor_pts:
+                _entry_veto(
+                    f"Executable credit too thin: sell-at-bid / buy-at-ask "
+                    f"{exec_net:.1f} pts minus charges {charge_pts:.1f} = "
+                    f"{net_after:.1f}/{spread_w_for_veto:.0f} = "
+                    f"{(net_after / spread_w_for_veto * 100) if spread_w_for_veto else 0:.1f}% "
+                    f"< {min_cw_ratio * 100:.0f}% minimum",
+                    collected_vetoes, defer=defer_entry_vetoes,
+                )
 
     max_profit_ps, max_loss_ps = leg_builder.max_profit_loss(legs, strategy)
     upper_be, lower_be = leg_builder.breakevens(legs, strategy)
@@ -1052,6 +1081,8 @@ def assemble_suggestion(
             iv_rank=iv_rank,
             indicators=indicators,
             legs=legs,
+            has_event_in_hold=has_event_in_hold,
+            event_in_hold_description=event_in_hold_description,
         ),
     )
 

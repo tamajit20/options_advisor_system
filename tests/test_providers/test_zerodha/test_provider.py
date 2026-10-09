@@ -205,6 +205,26 @@ def test_get_chain_today_uses_live(provider, facade_mock):
     facade_mock.ltp.assert_not_called()  # quote() succeeded, ltp() not needed
 
 
+def test_get_chain_copies_bid_ask_from_quote_depth(provider, facade_mock):
+    facade_mock.quote.return_value = {
+        "NFO:NIFTY26MAY23000CE": {
+            "last_price": 120.5,
+            "oi": 500_000,
+            "depth": {
+                "buy": [{"price": 119.5, "quantity": 75}],
+                "sell": [{"price": 121.0, "quantity": 75}],
+            },
+        },
+        "NFO:NIFTY26MAY23000PE": {"last_price": 95.5, "oi": 600_000},
+    }
+    rows = provider.get_chain("NIFTY", _today_ist(), date(2026, 5, 28))
+    by_type = {r["option_type"]: r for r in rows}
+    assert by_type["CE"]["bid"] == 119.5
+    assert by_type["CE"]["ask"] == 121.0
+    assert by_type["PE"]["bid"] is None
+    assert by_type["PE"]["ask"] is None
+
+
 def test_get_chain_falls_back_to_ltp_when_quote_fails(provider, facade_mock, eod_mock):
     """If quote() raises, get_chain retries with ltp() (OI will be None)."""
     from exceptions import ProviderError

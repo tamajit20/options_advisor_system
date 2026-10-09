@@ -40,6 +40,55 @@ def get_chain_row(chain: Sequence[Mapping], strike: float, option_type: str) -> 
     return None
 
 
+def book_price(row: Mapping, action: str) -> Optional[float]:
+    """Price we can actually trade: a sell hits the bid, a buy lifts the ask."""
+    key = "bid" if str(action).upper() == "SELL" else "ask"
+    raw = row.get(key)
+    if raw is None:
+        depth = row.get("depth") or {}
+        side = "buy" if key == "bid" else "sell"
+        levels = depth.get(side) or []
+        if levels and isinstance(levels, list) and isinstance(levels[0], Mapping):
+            raw = levels[0].get("price")
+    try:
+        px = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return px if px > 0 else None
+
+
+def executable_leg_prices(
+    legs: Sequence[SuggestionLeg],
+    chain: Sequence[Mapping],
+) -> Optional[List[float]]:
+    """Sell-at-bid / buy-at-ask prices, or None when any leg has no book."""
+    prices: List[float] = []
+    for leg in legs:
+        row = get_chain_row(chain, leg.strike, leg.option_type)
+        if row is None:
+            return None
+        px = book_price(row, leg.action)
+        if px is None:
+            return None
+        prices.append(px)
+    return prices
+
+
+def executable_net_premium(
+    legs: Sequence[SuggestionLeg],
+    chain: Sequence[Mapping],
+) -> Optional[float]:
+    """Net credit per share at the touch. None when bid/ask is missing."""
+    prices = executable_leg_prices(legs, chain)
+    if prices is None:
+        return None
+    total = 0.0
+    for leg, px in zip(legs, prices):
+        sign = 1.0 if leg.action == "SELL" else -1.0
+        total += sign * px
+    return total
+
+
 def mid_price(row: Mapping) -> float:
     """Best available mark: settle → close → last → mid/ltp (live mini-chains)."""
     for key in ("settle_price", "close_price", "last_price", "mid_price", "ltp"):

@@ -99,3 +99,38 @@ def test_fii_conflict_and_quiet_volume_warn_only():
         legs=[_leg("BUY", "CE", 24000)],
     )
     assert any(c.label == "Volume burst" and c.kind == "ADVISORY" for c in vol)
+
+
+def test_event_inside_hold_warns_short_premium_only():
+    warned = build_data_edge_checks(
+        strategy="IRON_CONDOR",
+        iv_rank=70.0,
+        indicators=_ind(),
+        legs=[_leg("SELL", "CE", 24500)],
+        has_event_in_hold=True,
+        event_in_hold_description="RBI policy on 2026-05-10",
+    )
+    note = next(c for c in warned if c.label == "Event inside the hold")
+    assert note.kind == "ADVISORY"
+    assert note.status == "SOFT_FAIL"
+    assert "RBI policy" in note.detail
+    assert "Warning only" in note.detail
+
+    quiet = build_data_edge_checks(
+        strategy="IRON_CONDOR",
+        iv_rank=70.0,
+        indicators=_ind(),
+        legs=[_leg("SELL", "CE", 24500)],
+        has_event_in_hold=False,
+    )
+    assert not any(c.label == "Event inside the hold" for c in quiet)
+
+    debit = build_data_edge_checks(
+        strategy="LONG_STRADDLE",
+        iv_rank=15.0,
+        indicators=_ind(),
+        legs=[_leg("BUY", "CE", 24000)],
+        has_event_in_hold=True,
+        event_in_hold_description="RBI policy on 2026-05-10",
+    )
+    assert not any(c.label == "Event inside the hold" for c in debit)

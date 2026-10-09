@@ -82,6 +82,30 @@ def _is_token_exception(exc: BaseException) -> bool:
     return False
 
 
+def _top_of_book(entry: dict) -> tuple[Optional[float], Optional[float]]:
+    """Best bid and ask from Kite quote depth. Missing book stays None."""
+    def _px(raw) -> Optional[float]:
+        try:
+            px = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return px if px > 0 else None
+
+    depth = entry.get("depth") or {}
+    bid = ask = None
+    buys = depth.get("buy") or []
+    sells = depth.get("sell") or []
+    if buys and isinstance(buys[0], dict):
+        bid = _px(buys[0].get("price"))
+    if sells and isinstance(sells[0], dict):
+        ask = _px(sells[0].get("price"))
+    if bid is None:
+        bid = _px(entry.get("bid") if entry.get("bid") is not None else entry.get("buy_price"))
+    if ask is None:
+        ask = _px(entry.get("ask") if entry.get("ask") is not None else entry.get("sell_price"))
+    return bid, ask
+
+
 def _normalise_index_symbol(symbol: str) -> str:
     """Map our internal symbols to Kite's tradingsymbol convention.
 
@@ -464,6 +488,7 @@ class ZerodhaProvider:
             # quote() response has last_price + oi; ltp() has last_price only.
             raw_oi = entry.get("oi")          # present in quote(), absent in ltp()
             live_oi = int(raw_oi) if raw_oi else None
+            bid, ask = _top_of_book(entry)
             rows.append({
                 "trade_date":     _today_ist(),
                 "symbol":         inst.name,
@@ -479,6 +504,8 @@ class ZerodhaProvider:
                 "contracts":      None,
                 "open_interest":  live_oi,
                 "change_in_oi":   None,
+                "bid":            bid,
+                "ask":            ask,
                 "_source":        DataSource.LIVE.value,
                 "_provider":      self.name,
                 "_freshness_ms":  freshness_ms,

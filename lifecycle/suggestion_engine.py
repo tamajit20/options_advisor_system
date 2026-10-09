@@ -101,6 +101,23 @@ def expiry_dte_sit_out_reason(
     return f"No expiry in the {dte_min}–{dte_max} DTE band{nearest}"
 
 
+def _hold_event_blurb(row: Optional[dict]) -> str:
+    if not row:
+        return ""
+    ed = row.get("event_date", "")
+    et = row.get("description") or row.get("event_type", "")
+    return f"{et} on {ed}" if ed else str(et or "")
+
+
+def _hold_event_kwargs(event_repo, start: date, end: date) -> dict:
+    """Advisory flag: a HIGH-impact event falls inside this suggestion's hold."""
+    row = event_repo.first_high_impact_event(start, end)
+    return {
+        "has_event_in_hold": row is not None,
+        "event_in_hold_description": _hold_event_blurb(row),
+    }
+
+
 def _data_gap_sit_out(symbol: str, reason: str) -> NoSuggestion:
     """Sit-out row when an underlying never reaches gates (missing data / DTE)."""
     return NoSuggestion(
@@ -1053,6 +1070,7 @@ def _evaluate_underlying(
             oi_pcr_change=use_indicators.oi_pcr_change,
             calendar_legs=calendar_legs,
             has_long_vol_catalyst=_has_lv_catalyst,
+            **_hold_event_kwargs(event_repo, entry_day, use_expiry),
         )
 
         try:

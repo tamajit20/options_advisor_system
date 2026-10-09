@@ -36,12 +36,19 @@ def build_data_edge_checks(
     iv_rank: Optional[float],
     indicators: MarketIndicators,
     legs: Sequence[SuggestionLeg],
+    has_event_in_hold: bool = False,
+    event_in_hold_description: str = "",
 ) -> List[ConfidenceCheck]:
     """Visible notes only. Missing data is omitted or PASS_WARN — never a veto."""
     out: List[ConfidenceCheck] = []
     mid = _mid_iv_note(iv_rank)
     if mid is not None:
         out.append(mid)
+    event = _event_in_hold_note(
+        strategy, has_event_in_hold, event_in_hold_description,
+    )
+    if event is not None:
+        out.append(event)
     oi = _oi_pcr_range_note(strategy, indicators)
     if oi is not None:
         out.append(oi)
@@ -73,6 +80,24 @@ def _mid_iv_note(iv_rank: Optional[float]) -> Optional[ConfidenceCheck]:
     )
 
 
+def _event_in_hold_note(
+    strategy: str,
+    has_event: bool,
+    description: str,
+) -> Optional[ConfidenceCheck]:
+    """Short premium only. Warning — does not hide the card or block Place."""
+    if strategy not in _CREDIT or not has_event:
+        return None
+    detail = "HIGH-impact event inside the hold"
+    if description:
+        detail += f" ({description})"
+    detail += (
+        " — short premium can gap through the stop. "
+        "Warning only; suggestion still shown"
+    )
+    return _note("Event inside the hold", "SOFT_FAIL", detail)
+
+
 def _oi_pcr_range_note(strategy: str, indicators: MarketIndicators) -> Optional[ConfidenceCheck]:
     if strategy not in _RANGE:
         return None
@@ -87,7 +112,8 @@ def _oi_pcr_range_note(strategy: str, indicators: MarketIndicators) -> Optional[
             "Range trade vs OI PCR drift",
             "SOFT_FAIL",
             f"OI PCR slope {float(slope):+.2f}%/5min sustained {float(persist)*100:.0f}% — "
-            f"flow is directional; range suggestion still shown",
+            f"flow is directional on this range trade. "
+            f"Warning only; suggestion still shown",
         )
     return None
 
