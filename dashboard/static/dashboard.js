@@ -9071,6 +9071,7 @@ function renderTrade(t, expanded = false) {
   let legsHtml = '';
   if (hasLegDetails && legs.length) {
     legsHtml = `<div class="trade-legs-section">
+      <div class="close-trade-header sl-monitor-label">Legs</div>
       ${(() => {
         // Entry-order banner when there are still pending (un-executed) legs to fill.
         const pending = legs.filter(l => !l.executed);
@@ -9304,6 +9305,11 @@ function renderTrade(t, expanded = false) {
     })()}
     ${hasPendingClose ? `<div class="pending-close-alert">\u26a0 Exit fills not recorded \u2014 use Close Trade below to compute P&amp;L</div>` : ''}
     ${hasExecutedLegs ? `
+    <section class="close-trade-section" id="close-${escapeHtml(t.trade_id)}">
+      <div class="close-trade-header sl-monitor-label">Close Trade</div>
+      <div class="close-trade-content"><div class="muted">Loading…</div></div>
+    </section>` : ''}
+    ${hasExecutedLegs ? `
     <section class="gap-replay-section" id="gap-replay-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs} hidden>
       <div class="gap-replay-head" role="button" tabindex="0" aria-expanded="false">
         <span class="gap-replay-title">EOD replay (while monitor was off)</span>
@@ -9320,11 +9326,6 @@ function renderTrade(t, expanded = false) {
       <button class="btn btn-warn btn-complete-trade" data-trade-id="${escapeHtml(t.trade_id)}">
         Complete Trade</button>
     </div>` : ''}
-    ${hasExecutedLegs ? `
-    <section class="close-trade-section" id="close-${escapeHtml(t.trade_id)}">
-      <div class="close-trade-header sl-monitor-label">Close Trade</div>
-      <div class="close-trade-content"><div class="muted">Loading…</div></div>
-    </section>` : ''}
     <div class="btn-row trade-void-row" style="margin-top:12px">
       <button type="button" class="btn btn-danger btn-void-trade" data-trade-id="${escapeHtml(t.trade_id)}">
         Void Trade</button>
