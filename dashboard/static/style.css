@@ -2064,8 +2064,19 @@ details.collapsible-card.hist-card > .collapsible-summary .hist-card-head {
   padding-top: 10px;
   border-top: 1px solid #2a3744;
 }
-.close-trade-header {
+.close-trade-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
   margin-bottom: 8px;
+}
+.close-trade-header {
+  margin-bottom: 0;
+}
+.pending-close-alert.pending-close-inline {
+  margin: 0;
+  flex: 1 1 16rem;
 }
 .close-trade-content .close-two-col {
   margin-top: 0;
@@ -2127,7 +2138,7 @@ details.collapsible-card.hist-card > .collapsible-summary .hist-card-head {
 }
 .orig-sug-summary::-webkit-details-marker { display: none; }
 .orig-sug-summary::before { content: '▶ '; font-size: .7rem; }
-details[open] .orig-sug-summary::before { content: '▼ '; }
+details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 
 /* Muted/archive look — visually distinct from live trade, not clickable inputs */
 .orig-sug-body {
@@ -2159,8 +2170,6 @@ details[open] .orig-sug-summary::before { content: '▼ '; }
 .orig-sug-body .sr-label       { color: rgba(255,255,255,.3); }
 .orig-sug-body .legs-grid .leg-row { border-left-color: rgba(255,255,255,.12) !important; }
 
-  margin-top: 4px;
-}
 .orig-sug-rationale {
   font-size: .8rem;
   color: var(--text-dim);

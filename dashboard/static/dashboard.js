@@ -3074,6 +3074,16 @@ function bindCollapsibleCardInteractions(root) {
     el.dataset.collapseBound = '2';
     el.addEventListener('mousedown', e => e.stopPropagation());
   });
+  scope.querySelectorAll('details.orig-sug-details > summary.orig-sug-summary').forEach(el => {
+    if (el.dataset.origSugBound === '1') return;
+    el.dataset.origSugBound = '1';
+    el.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const det = el.parentElement;
+      if (det && det.tagName === 'DETAILS') det.open = !det.open;
+    });
+  });
 }
 
 function renderSuggestionList(list) {
@@ -9223,8 +9233,6 @@ function renderTrade(t, expanded = false) {
           </span>
         </span>
         </div>
-        ${hasExecutedLegs ? `<button type="button" class="btn btn-danger btn-close-trade card-head-btn" data-trade-id="${escapeHtml(t.trade_id)}">
-          Close Trade</button>` : ''}
       </div>
       <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
@@ -9303,10 +9311,12 @@ function renderTrade(t, expanded = false) {
     </div>`;
       return `<div class="risk-levels-pair">${liveProfitHtml}${slMonitorHtml}</div>`;
     })()}
-    ${hasPendingClose ? `<div class="pending-close-alert">\u26a0 Exit fills not recorded \u2014 use Close Trade below to compute P&amp;L</div>` : ''}
     ${hasExecutedLegs ? `
     <section class="close-trade-section" id="close-${escapeHtml(t.trade_id)}">
-      <div class="close-trade-header sl-monitor-label">Close Trade</div>
+      <div class="close-trade-head-row">
+        <div class="close-trade-header sl-monitor-label">Close Trade</div>
+        ${hasPendingClose ? `<div class="pending-close-alert pending-close-inline">\u26a0 Exit fills not recorded \u2014 use Close Trade below to compute P&amp;L</div>` : ''}
+      </div>
       <div class="close-trade-content"><div class="muted">Loading…</div></div>
     </section>` : ''}
     ${hasExecutedLegs ? `
