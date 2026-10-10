@@ -633,6 +633,40 @@ def _optional_closed_date_filters(
         params.append(td)
     return filters, params
 
+
+_EXIT_NOTIF_TYPES = (
+    "TARGET_HIT", "TAKE_PROFIT", "PROFIT_MILESTONE_HIT", "PROFIT_PCT_HIT",
+    "LOSS_LIMIT_HIT", "SL_TRIGGER", "PRE_BREACH_WARNING", "PROFIT_FLOOR_HIT",
+)
+
+
+def _latest_exit_signals(db: SQLServerConnection, trade_ids: list) -> dict:
+    """Last stop or target alert per trade. Missing table or rows means manual close."""
+    ids = [tid for tid in trade_ids if tid]
+    if not ids:
+        return {}
+    marks = ",".join("?" for _ in ids)
+    kinds = ",".join("?" for _ in _EXIT_NOTIF_TYPES)
+    try:
+        rows = db.fetch_all(
+            "SELECT related_trade_id, notif_type, created_at "
+            "FROM options_notifications "
+            f"WHERE related_trade_id IN ({marks}) "
+            f"  AND notif_type IN ({kinds}) "
+            "ORDER BY created_at",
+            [*ids, *_EXIT_NOTIF_TYPES],
+        )
+    except Exception:
+        logger.debug("exit-signal lookup failed", exc_info=True)
+        return {}
+    latest = {}
+    for row in rows or []:
+        tid = row.get("related_trade_id")
+        if tid:
+            latest[tid] = row.get("notif_type")
+    return latest
+
+
 _INDEX_LABELS: Dict[str, str] = {
     "NIFTY": "Nifty",
     "BANKNIFTY": "Bank Nifty",
@@ -3084,9 +3118,10 @@ def create_app() -> Flask:
         rows = db.fetch_all(
             "SELECT t.trade_id, t.net_pnl, t.gross_pnl, t.total_charges, "
             "       t.executed_on, t.closed_on, t.net_credit_actual, "
-            "       t.actual_max_profit, "
+            "       t.actual_max_profit, t.daily_status, "
             "       COALESCE(s.strategy, 'UNKNOWN') AS strategy, "
-            "       COALESCE(s.underlying, t.trade_name) AS underlying "
+            "       COALESCE(s.underlying, t.trade_name) AS underlying, "
+            "       s.dte, s.entry_quality_score, s.credit_grade, s.conditions_json "
             "FROM options_trades t "
             "LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
             f"WHERE {where} "
@@ -3216,10 +3251,27 @@ def create_app() -> Flask:
             "profit_factor": round(sum(overall_wins) / abs(sum(overall_losses)), 2)
                              if overall_losses and sum(overall_losses) != 0 else None,
         }
+        exit_signals = _latest_exit_signals(db, [r["trade_id"] for r in rows if r.get("trade_id")])
+        from engine.closed_trade_report import build_closed_trade_report
+        insights = build_closed_trade_report(
+            {
+                "net_pnl": r.get("net_pnl"),
+                "underlying": r.get("underlying"),
+                "dte": r.get("dte"),
+                "entry_quality_score": r.get("entry_quality_score"),
+                "credit_grade": r.get("credit_grade"),
+                "conditions_json": r.get("conditions_json"),
+                "daily_status": r.get("daily_status"),
+                "exit_signal": exit_signals.get(r.get("trade_id")),
+            }
+            for r in rows
+            if r.get("trade_id")
+        )
         return jsonify({
             "strategies": strategy_stats,
             "overall": overall,
             "channel": channel_f or "all",
+            "insights": insights,
         })
 
     @app.route("/api/history/paired")

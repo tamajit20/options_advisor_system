@@ -1911,6 +1911,15 @@ input:focus, select:focus, textarea:focus {
 .perf-kv span { font-size:.72rem; color:var(--text-dim); }
 .perf-kv strong { font-size:1rem; display:flex; flex-direction:column; align-items:flex-start; gap:2px; line-height:1.25; }
 .perf-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; }
+.insight-block { margin-top: 28px; }
+.insight-title { font-size: 1rem; margin: 0 0 6px; }
+.insight-block h3 { font-size: .82rem; margin: 16px 0 4px; }
+.insight-note { font-size: .75rem; color: var(--text-dim); margin: 0 0 8px; line-height: 1.4; }
+.insight-scroll { overflow-x: auto; }
+.insight-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+.insight-table th, .insight-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,.06); white-space: nowrap; }
+.insight-table th { color: var(--text-dim); font-weight: 600; }
+.insight-table td:first-child, .insight-table th:first-child { white-space: normal; }
 .perf-card { background:var(--surface-alt); border:1px solid rgba(255,255,255,.06); border-radius:10px; padding:14px; display:flex; flex-direction:column; gap:10px; min-width:0; overflow:hidden; }
 .perf-card--pos { border-left:3px solid rgba(34,197,94,.5); }
 .perf-card--neg { border-left:3px solid rgba(239,68,68,.4); }

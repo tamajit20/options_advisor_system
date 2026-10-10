@@ -9940,7 +9940,67 @@ function _renderPerfPage(data) {
     </div>`;
   }).join('');
 
-  return `${overallHtml}<div class="perf-cards">${stratCards}</div>`;
+  return `${overallHtml}<div class="perf-cards">${stratCards}</div>${_renderTradeInsights(data.insights)}`;
+}
+
+function _insightMoney(v) {
+  if (v == null) return '—';
+  return `<span class="${_perfColor(v)}">${_fmtSignedInr(v)}</span>`;
+}
+
+function _renderInsightTable(columns, rows) {
+  if (!rows || !rows.length) {
+    return '<p class="insight-note">Nothing to compare in this range.</p>';
+  }
+  const head = columns.map(c => `<th>${c.label}</th>`).join('');
+  const body = rows.map(row => `<tr>${columns.map(c => `<td>${c.cell(row)}</td>`).join('')}</tr>`).join('');
+  return `<div class="insight-scroll"><table class="insight-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function _renderSliceTable(title, rows) {
+  return `<h3>${title}</h3>${_renderInsightTable([
+    { label: 'Condition', cell: r => escapeHtml(r.name) },
+    { label: 'Trades', cell: r => `${r.wins}W / ${r.losses}L` },
+    { label: 'Win rate', cell: r => `${r.win_rate}%` },
+    { label: 'Avg P&L', cell: r => _insightMoney(r.avg_pnl) },
+    { label: 'Total P&L', cell: r => _insightMoney(r.total_pnl) },
+  ], rows)}`;
+}
+
+function _renderGateTable(title, hint, rows) {
+  return `<h3>${title}</h3><p class="insight-note">${hint}</p>${_renderInsightTable([
+    { label: 'Gate', cell: r => escapeHtml(r.label) },
+    { label: 'Passed on winners', cell: r => r.win_n ? `${r.win_pass}/${r.win_n}` : '—' },
+    { label: 'Passed on losers', cell: r => r.loss_n ? `${r.loss_pass}/${r.loss_n}` : '—' },
+    { label: 'Avg P&L when passed', cell: r => _insightMoney(r.avg_pnl_passed) },
+    { label: 'Avg P&L when it warned', cell: r => _insightMoney(r.avg_pnl_warned) },
+    { label: 'Read', cell: r => escapeHtml(r.read) },
+  ], rows)}`;
+}
+
+function _renderTradeInsights(insights) {
+  if (!insights || !insights.trade_count) return '';
+  return `<section class="insight-block">
+    <h2 class="insight-title">What lined up with the result</h2>
+    <p class="insight-note">${escapeHtml(insights.note || '')} ${insights.trade_count} closed trade${insights.trade_count === 1 ? '' : 's'} in this range.</p>
+    ${_renderGateTable(
+      'Gates',
+      'Hard and soft gates. A pass on every winner is only useful if losers failed it.',
+      insights.gates,
+    )}
+    ${_renderGateTable(
+      'Warnings',
+      'Advisory notes. They did not hide the card. Compare how often they were quiet on winners versus losers.',
+      insights.advisories,
+    )}
+    ${_renderSliceTable('By index', insights.by_underlying)}
+    ${_renderSliceTable('By days to expiry', insights.by_dte)}
+    ${_renderSliceTable('By IV rank', insights.by_iv_rank)}
+    ${_renderSliceTable('By credit grade', insights.by_credit_grade)}
+    ${_renderSliceTable('By entry quality', insights.by_entry_quality)}
+    ${_renderSliceTable('How the trade ended', insights.by_exit)}
+    ${_renderSliceTable('Event inside the hold', insights.by_event)}
+  </section>`;
 }
 
 function renderHistorySuggestion(s) {
