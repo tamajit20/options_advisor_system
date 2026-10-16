@@ -20,13 +20,14 @@ a { color: var(--accent); text-decoration: none; }
 .app-header {
   position: sticky; top: 0; z-index: 50;
   display: flex; align-items: center; justify-content: space-between;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 10px;
+  row-gap: 6px;
   padding: 10px 16px;
   background: var(--primary);
   color: white;
   box-shadow: 0 2px 6px rgba(0,0,0,.3);
-  overflow: hidden;
+  overflow: visible;
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
 .brand-dot {
@@ -37,11 +38,14 @@ a { color: var(--accent); text-decoration: none; }
 .header-center {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 6px;
+  order: 5;
+  flex: 1 1 100%;
+  width: 100%;
   min-width: 0;
-  margin: 0 10px;
-  overflow: hidden;
+  margin: 0;
+  overflow: visible;
 }
 .header-actions {
   display: flex;
@@ -434,6 +438,11 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
   background: rgba(245, 158, 11, .08);
   border: 1px solid rgba(245, 158, 11, .28);
 }
+.instrument-overlap-list {
+  margin: 6px 0 0;
+  padding-left: 1.1rem;
+}
+.leg-overlap-tag { margin-left: 6px; }
 .zerodha-readiness-hint--warn {
   border-left: 3px solid rgba(245, 158, 11, .85);
   background: rgba(245, 158, 11, .08);
@@ -1284,14 +1293,13 @@ input:focus, select:focus, textarea:focus {
 .index-spot-strip {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
-  flex: 1 1 auto;
+  flex: 1 1 100%;
+  width: 100%;
   min-width: 0;
-  max-width: none;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
+  max-width: 100%;
+  overflow: visible;
   padding: 0;
 }
 .index-spot-strip::-webkit-scrollbar { display: none; height: 0; }
@@ -1416,21 +1424,21 @@ input:focus, select:focus, textarea:focus {
 }
 .sys-banner-warn .btn:hover { background: rgba(0,0,0,.32); color: #fff; }
 
-/* Keep index strip on the same header row (no second row). Banners may scroll. */
+/* Index chips stay on their own full-width row so a crowded header cannot clip them. */
 @media (max-width: 900px) {
-  .app-header { flex-wrap: nowrap; overflow: hidden; }
+  .app-header { flex-wrap: wrap; overflow: visible; }
   .signal-rail { order: -1; }
   .header-center {
-    order: 0;
-    flex: 1 1 auto;
-    flex-basis: auto;
-    margin: 0 6px;
-    flex-wrap: nowrap;
-    overflow: hidden;
+    order: 5;
+    flex: 1 1 100%;
+    width: 100%;
+    margin: 0;
+    flex-wrap: wrap;
+    overflow: visible;
     min-width: 0;
   }
-  .index-spot-strip { max-width: none; flex: 1 1 auto; min-width: 0; }
-  .global-banners { flex: 0 1 auto; max-width: 28%; margin: 0; min-width: 0; }
+  .index-spot-strip { max-width: 100%; flex: 1 1 100%; width: 100%; overflow: visible; }
+  .global-banners { flex: 1 1 100%; max-width: 100%; margin: 0; min-width: 0; }
 }
 
 /* Phones: brand and actions stay on row 1; index chips wrap on a full-width

@@ -394,6 +394,34 @@ def _row(d: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _attach_instrument_overlaps(db: SQLServerConnection, suggestions: list) -> None:
+    """Mark pending cards that reuse a contract an open trade still holds."""
+    from lifecycle.open_instrument_overlap import load_open_contracts, overlaps_for_legs
+
+    open_rows = load_open_contracts(db)
+    for row in suggestions:
+        row["instrument_overlaps"] = overlaps_for_legs(
+            open_rows,
+            row.get("legs") or [],
+            exclude_suggestion_id=row.get("suggestion_id"),
+        )
+
+
+def _instrument_overlaps_for_suggestion(db: SQLServerConnection, suggestion_id: str) -> list:
+    from lifecycle.open_instrument_overlap import load_open_contracts, overlaps_for_legs
+
+    try:
+        legs = [_row(l) for l in SuggestionRepo(db).legs(suggestion_id)]
+    except Exception:
+        logger.exception("suggestion legs unavailable for overlap check %s", suggestion_id)
+        return []
+    return overlaps_for_legs(
+        load_open_contracts(db),
+        legs,
+        exclude_suggestion_id=suggestion_id,
+    )
+
+
 def _trade_premium_from_legs(db: SQLServerConnection, trade_id: str) -> tuple[float, str]:
     """Return (absolute premium ₹, 'received'|'paid') from executed leg fills."""
     legs = db.fetch_all(
@@ -2087,6 +2115,8 @@ def create_app() -> Flask:
             }
             out.append(r_out)
 
+        _attach_instrument_overlaps(db, out)
+
         pending_underlyings = {
             r.get("underlying") for r in out
             if r.get("underlying") and (r.get("status") or "").upper() == "PENDING"
@@ -2236,7 +2266,9 @@ def create_app() -> Flask:
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
-        return jsonify({"preview": preview.to_dict()})
+        preview_dict = preview.to_dict()
+        preview_dict["instrument_overlaps"] = _instrument_overlaps_for_suggestion(db, sid)
+        return jsonify({"preview": preview_dict})
 
     @app.route("/api/suggestion/<sid>/zerodha-execute", methods=["POST"])
     @_with_db

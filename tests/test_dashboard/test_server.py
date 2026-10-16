@@ -293,6 +293,44 @@ class TestApiSuggestionToday:
         assert len(s["legs"]) == 1
         assert "execution_gate" in s
         assert s["execution_gate"]["ok"] is True
+        assert s["instrument_overlaps"] == []
+
+    def test_flags_instrument_already_held_by_an_open_trade(self, client, mocker):
+        sug_row = {
+            "suggestion_id": "SUG-NEW", "underlying": "NIFTY",
+            "strategy": "BULL_PUT_SPREAD", "status": "PENDING",
+            "generated_on": datetime(2026, 10, 16, 10, 0),
+            "expiry_date": date(2026, 10, 27),
+            "net_credit_suggested": 40.0,
+        }
+        leg_row = {
+            "symbol": "NIFTY", "expiry_date": date(2026, 10, 27),
+            "leg_order": 1, "strike": 25000.0, "option_type": "PE",
+            "action": "SELL", "lots": 1, "lot_size": 65,
+            "suggested_price": 80.0,
+        }
+        mocker.patch("dashboard.server.SuggestionRepo.active_pending", return_value=[sug_row])
+        mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today", return_value=[])
+        mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[leg_row])
+        mocker.patch(
+            "lifecycle.open_instrument_overlap.load_open_contracts",
+            return_value=[{
+                "trade_id": "TRD-LIVE",
+                "trade_name": "Nifty put spread",
+                "suggestion_id": "SUG-OLD",
+                "symbol": "NIFTY",
+                "expiry_date": date(2026, 10, 27),
+                "strike": 25000,
+                "option_type": "PE",
+                "action": "SELL",
+            }],
+        )
+        resp = client.get("/api/suggestion/today")
+        assert resp.status_code == 200
+        overlaps = resp.get_json()["suggestions"][0]["instrument_overlaps"]
+        assert len(overlaps) == 1
+        assert overlaps[0]["trade_id"] == "TRD-LIVE"
+        assert overlaps[0]["label"] == "NIFTY 2026-10-27 25000 PE"
 
     def test_hides_sit_out_when_pending_exists_for_underlying(self, client, mocker):
         """Same-underlying NO_SUGGESTION is omitted while a PENDING card is live."""

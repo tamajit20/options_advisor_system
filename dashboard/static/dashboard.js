@@ -737,6 +737,7 @@ function _renderZerodhaPreviewTable(preview) {
       ${bandCells}
     </tr>`;
   }).join('');
+  const overlapWarn = !isClose ? _instrumentOverlapWarningHtml(preview.instrument_overlaps) : '';
   const warn = (!isClose && !preview.all_limits_in_band) ? `
     <div class="pending-close-alert" style="margin-bottom:10px">
       <strong>Outside suggestion price band.</strong>
@@ -755,7 +756,7 @@ function _renderZerodhaPreviewTable(preview) {
   const bandHeaders = showBand
     ? '<th class="num">Suggested band</th><th>Band check</th>'
     : '';
-  return `${warn}
+  return `${overlapWarn}${warn}
     ${meta ? `<div class="muted" style="font-size:.82rem;margin-bottom:8px">${meta}</div>` : ''}
     ${livePrem}
     ${funds}
@@ -7442,6 +7443,46 @@ function _suggestionAlreadyExecuted(card) {
  * Status / hard-block banners only. Soft live checks, scenario notes, EM
  * calibration, etc. live under Before you place — not duplicated here.
  */
+function _sameOptionContract(leg, overlap) {
+  if (!leg || !overlap) return false;
+  const exp = String(leg.expiry_date || '').slice(0, 10);
+  const oexp = String(overlap.expiry_date || '').slice(0, 10);
+  const strike = Number(leg.strike);
+  const ostrike = Number(overlap.strike);
+  return String(leg.symbol || '').toUpperCase() === String(overlap.symbol || '').toUpperCase()
+    && exp === oexp
+    && Number.isFinite(strike) && Number.isFinite(ostrike) && strike === ostrike
+    && String(leg.option_type || '').toUpperCase() === String(overlap.option_type || '').toUpperCase();
+}
+
+function _legOverlapTag(leg, overlaps) {
+  const hit = (overlaps || []).find(o => _sameOptionContract(leg, o));
+  if (!hit) return '';
+  const trade = hit.trade_name || hit.trade_id || 'a live trade';
+  return ` <span class="tag tag-warn tag-sm leg-overlap-tag">In live trade ${escapeHtml(trade)}</span>`;
+}
+
+function _instrumentOverlapWarningHtml(overlaps) {
+  const rows = Array.isArray(overlaps) ? overlaps : [];
+  if (!rows.length) return '';
+  const lines = rows.map(o => {
+    const inst = o.label || [o.symbol, o.expiry_date, o.strike, o.option_type].filter(Boolean).join(' ');
+    const trade = o.trade_name || o.trade_id || 'an open trade';
+    const idBit = (o.trade_id && o.trade_name) ? ` (${o.trade_id})` : '';
+    const held = o.open_action ? `, already ${o.open_action}` : '';
+    const next = o.suggestion_action ? `; this suggestion is ${o.suggestion_action}` : '';
+    return `${inst}${held}${next} — live trade ${trade}${idBit}`;
+  });
+  return `<div class="suggestion-gate-banner suggestion-gate-warn" role="status">
+    <div class="suggestion-gate-head">
+      <span class="tag tag-warn">Same instrument</span>
+      <strong>Already in a live trade</strong>
+    </div>
+    <p class="suggestion-gate-detail">Placing this adds another Zerodha order on a contract an open trade still holds. That trade's P&amp;L and close will no longer match its own position. Place stays available.</p>
+    <ul class="instrument-overlap-list">${lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>
+  </div>`;
+}
+
 function renderExecutionGateBanner(s, { showBlockedActions = false } = {}) {
   const status = (s.status || '').toUpperCase();
   if (status === 'EXECUTED') {
@@ -7569,7 +7610,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
         ${spreadBadge(s.legs, l)}
       </div>
       <div>
-        <div><strong>${escapeHtml(l.symbol)} ${escapeHtml(l.expiry_date || '')} ${l.strike} ${l.option_type}</strong></div>
+        <div><strong>${escapeHtml(l.symbol)} ${escapeHtml(l.expiry_date || '')} ${l.strike} ${l.option_type}</strong>${_legOverlapTag(l, s.instrument_overlaps)}</div>
         <div class="leg-meta">${legMetaHtml}</div>
         ${liveHtml}
         <div class="leg-hints">${thresholdHint} · ${closeHint}</div>
@@ -7625,10 +7666,12 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       ${`<span>Amount needed <strong class="econ-cap-req-compact">${capitalReq.rs != null ? `₹${fmt(capitalReq.rs)}` : '—'}</strong><span class="econ-z-margin-compact" data-econ-z-margin-compact hidden></span></span>`}
       <span>Max loss <strong>₹${fmt(econ.ml)}</strong></span>
       ${s.dte != null ? `<span>DTE <strong>${s.dte}</strong></span>` : ''}
+      ${(s.instrument_overlaps || []).length ? '<span class="tag tag-warn">Same instrument as a live trade</span>' : ''}
     </div>`;
   // attach live lot-count recalc after DOM insert — see bindSuggestionActions
   const bodyHtml = `
     ${gateBanner}
+    ${_instrumentOverlapWarningHtml(s.instrument_overlaps)}
     <div class="card-id-row">
       <span class="id-chip" title="Suggestion ID">${escapeHtml(s.suggestion_id || '—')}</span>
     </div>
