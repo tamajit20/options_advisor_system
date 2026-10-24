@@ -41,7 +41,7 @@ function Ensure-OsDiskStandardSsd {
     Write-Host "==> Ensure OS disk is Standard SSD (not Premium) for VM '$vm'"
     $diskName = & $AzCmd vm show -g $rg -n $vm --query "storageProfile.osDisk.name" -o tsv 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $diskName) {
-        Write-Host "WARNING: could not read OS disk — skip SKU ensure"
+        Write-Host "WARNING: could not read OS disk - skip SKU ensure"
         return
     }
     $currentSku = & $AzCmd disk show -g $rg -n $diskName --query "sku.name" -o tsv 2>$null
@@ -67,7 +67,7 @@ function Ensure-OsDiskStandardSsd {
 }
 
 Write-Host "============================================================"
-Write-Host " Options Advisor — new environment setup"
+Write-Host " Options Advisor - new environment setup"
 Write-Host "============================================================"
 Write-Host ""
 
@@ -83,7 +83,7 @@ if ($LASTEXITCODE -ne 0) { throw "setup-laptop.ps1 failed" }
 # --- Step 2: VM install ---
 if (-not $SkipVmInstall) {
     Write-Host ""
-    Write-Host "==> [2/5] VM install (Docker + app + self-signed HTTPS)"
+    Write-Host "==> [2/5] VM install (Docker + app + self-signed HTTPS + Tailscale)"
     $vmArgs = @{}
     if ($EnvFile) { $vmArgs.EnvFile = $EnvFile }
     elseif (Test-Path (Join-Path $RepoRoot ".env.docker")) { $vmArgs.EnvFile = (Join-Path $RepoRoot ".env.docker") }
@@ -101,7 +101,7 @@ if (-not $SkipVmUptime) {
     Write-Host "==> [3/5] VM uptime (Mon-Fri 08:55-15:45 IST) + OS disk Standard SSD"
     $az = "${env:ProgramFiles}\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
     if (-not (Test-Path $az)) {
-        Write-Host "WARNING: Azure CLI not found — skip VM uptime / disk SKU or install: winget install Microsoft.AzureCLI"
+        Write-Host "WARNING: Azure CLI not found - skip VM uptime / disk SKU or install: winget install Microsoft.AzureCLI"
     } else {
         & (Join-Path $DeployDir "VMUpTimeConfiguration.ps1")
         Ensure-OsDiskStandardSsd -AzCmd $az
@@ -148,8 +148,9 @@ Write-Host ""
 Write-Host " Next (manual, each trading morning on VM):"
 Write-Host "   Zerodha login via dashboard or: python main.py --zerodha-login"
 Write-Host ""
-Write-Host " Dashboard: https://$($script:VmHost)/  (self-signed — accept browser warning once)"
-Write-Host "            (public HTTP :5001 closed — HTTPS only)"
+. $LaptopConfig
+Write-Host " Dashboard: https://$($script:VmHost)/  (self-signed - accept browser warning once)"
+Write-Host "            Tailscale only. Public inbound 22/80/443/5001 are closed."
 Write-Host ""
 Write-Host " Automated weekly:"
 Write-Host "   VM Fri: archive + export | Laptop Mon-Fri 09:15: pull until ACK, then wait"

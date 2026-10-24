@@ -16,7 +16,7 @@ $RepoRoot = Split-Path -Parent (Split-Path -Parent $DeployDir)
 $ExampleConfig = Join-Path $DeployDir "laptop.config.ps1.example"
 $ConfigFile = Join-Path $DeployDir "laptop.config.ps1"
 
-Write-Host "==> Options Advisor — laptop setup"
+Write-Host "==> Options Advisor - laptop setup"
 Write-Host ""
 
 if (-not (Test-Path $ConfigFile)) {
@@ -29,6 +29,14 @@ if (-not (Test-Path $ConfigFile)) {
 }
 
 . $ConfigFile
+
+if ($script:TailscaleAuthKey -and $script:TailscaleAuthKey.Trim() -and $script:TailscaleAuthKey -ne "tskey-auth-REPLACE_ME") {
+    Write-Host "==> Joining this laptop to Tailscale..."
+    & (Join-Path $DeployDir "enable-tailscale.ps1") -LaptopOnly
+    if ($LASTEXITCODE -ne 0) { throw "Laptop Tailscale join failed" }
+} else {
+    Write-Host "TailscaleAuthKey is not set. Add it before setup-new-environment.ps1 closes public access."
+}
 
 $backupDir = if ($script:LocalBackupDir) { $script:LocalBackupDir } else { "D:\Backups\OptionsAdvisorDB" }
 $archiveDir = if ($script:LocalArchiveDir) { $script:LocalArchiveDir } else { Join-Path $backupDir "archive" }
@@ -49,7 +57,7 @@ if (-not $SkipVerify) {
     & (Join-Path $DeployDir "Test-EnvironmentSetup.ps1")
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
-        Write-Host "Some checks failed — fix laptop.config.ps1 or install missing tools, then re-run."
+        Write-Host "Some checks failed - fix laptop.config.ps1 or install missing tools, then re-run."
         exit 1
     }
 }

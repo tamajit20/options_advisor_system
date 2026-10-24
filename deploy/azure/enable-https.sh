@@ -68,24 +68,46 @@ case "$MODE" in
     mkdir -p deploy/caddy/certs
     CERT=deploy/caddy/certs/cert.pem
     KEY=deploy/caddy/certs/key.pem
-    if [[ ! -f "$CERT" || ! -f "$KEY" || ! -f deploy/caddy/certs/.for_ip || "$(cat deploy/caddy/certs/.for_ip 2>/dev/null)" != "$PUBLIC_IP" ]]; then
-      echo "==> Generating self-signed cert for IP ${PUBLIC_IP} (825 days)..."
+    TS_IP=""
+    if command -v tailscale >/dev/null 2>&1; then
+      TS_IP="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+      if [[ -z "$TS_IP" ]]; then
+        TS_IP="$(sudo tailscale ip -4 2>/dev/null | head -n1 || true)"
+      fi
+    fi
+    SAN="IP:${PUBLIC_IP},DNS:localhost"
+    CN="${PUBLIC_IP}"
+    if [[ -n "$TS_IP" && "$TS_IP" != "$PUBLIC_IP" ]]; then
+      SAN="IP:${TS_IP},${SAN}"
+      CN="${TS_IP}"
+    fi
+    STAMP="${PUBLIC_IP}|${TS_IP}"
+    if [[ ! -f "$CERT" || ! -f "$KEY" || ! -f deploy/caddy/certs/.for_ip || "$(cat deploy/caddy/certs/.for_ip 2>/dev/null)" != "$STAMP" ]]; then
+      echo "==> Generating self-signed cert for ${CN} (825 days)..."
       openssl req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes \
         -keyout "$KEY" -out "$CERT" \
-        -subj "/CN=${PUBLIC_IP}" \
-        -addext "subjectAltName=IP:${PUBLIC_IP},DNS:localhost" \
+        -subj "/CN=${CN}" \
+        -addext "subjectAltName=${SAN}" \
         2>/dev/null \
       || openssl req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes \
         -keyout "$KEY" -out "$CERT" \
-        -subj "/CN=${PUBLIC_IP}"
-      echo "$PUBLIC_IP" > deploy/caddy/certs/.for_ip
+        -subj "/CN=${CN}"
+      echo "$STAMP" > deploy/caddy/certs/.for_ip
       chmod 644 "$CERT"
       chmod 600 "$KEY"
     else
       echo "==> Reusing existing self-signed cert in deploy/caddy/certs/"
     fi
     cp -f deploy/caddy/Caddyfile.selfsigned deploy/caddy/Caddyfile
-    if [[ -z "$PUBLIC" ]]; then
+    if [[ -n "$TS_IP" ]]; then
+      case "$PUBLIC" in
+        ""|"https://${PUBLIC_IP}"|"https://${PUBLIC_IP}/")
+          PUBLIC="https://${TS_IP}"
+          _upsert_env OPT_PUBLIC_BASE_URL "$PUBLIC"
+          echo "==> Set OPT_PUBLIC_BASE_URL=${PUBLIC}"
+          ;;
+      esac
+    elif [[ -z "$PUBLIC" ]]; then
       PUBLIC="https://${PUBLIC_IP}"
       _upsert_env OPT_PUBLIC_BASE_URL "$PUBLIC"
       echo "==> Set OPT_PUBLIC_BASE_URL=${PUBLIC}"
@@ -155,12 +177,11 @@ set -a
 set +a
 export COMPOSE_PROFILES
 
-echo "==> Opening NSG / firewall for 80 and 443 (best effort)..."
-chmod +x deploy/azure/open-port-https.sh 2>/dev/null || true
-./deploy/azure/open-port-https.sh || {
-  echo "WARNING: Could not open 80/443 from the VM."
-  echo "         From your laptop run: .\\deploy\\azure\\open-port-https.ps1"
-}
+if [[ -f data/tailscale_lockdown ]]; then
+  echo "==> Tailscale lockdown is on. Public 80/443 stay closed."
+else
+  echo "==> Public 80/443 are not opened here. Finish with .\\deploy\\azure\\enable-tailscale.ps1"
+fi
 
 echo "==> Starting Caddy (mode=${MODE})..."
 # Keep Flask :5001 on localhost only — Caddy reaches it on the Docker network.
@@ -188,5 +209,5 @@ echo ""
 echo "Zerodha Kite redirect URL:"
 echo "  ${ACCESS_URL%/}/zerodha/callback"
 echo ""
-echo "Optional: restrict or close public :5001 in Azure NSG so only HTTPS is used."
+echo "Public inbound stays closed. Use Tailscale to open the dashboard."
 docker compose ps caddy options_advisor 2>/dev/null || true

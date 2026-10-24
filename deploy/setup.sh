@@ -74,6 +74,6 @@ echo "  HTTPS:  https://$(hostname -I 2>/dev/null | awk '{print $1}')/   (accept
 echo "  HTTP:   http://$(hostname -I 2>/dev/null | awk '{print $1}'):${OPT_DASHBOARD_PORT:-5001}"
 echo ""
 echo "Next steps:"
-echo "  1. NSG: 80+443 (and optionally 5001) — laptop: .\\deploy\\azure\\open-port-https.ps1"
+echo "  1. Tailscale + close public 22/80/443/5001 — laptop: .\\deploy\\azure\\enable-tailscale.ps1"
 echo "  2. Each trading morning: docker compose exec options_advisor python main.py --zerodha-login"
 echo "  3. Check health: docker compose ps && docker compose logs -f options_advisor"

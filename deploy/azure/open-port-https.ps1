@@ -9,10 +9,14 @@ param(
     [string]$SourceIp,
     [string]$AzureResourceGroup,
     [string]$AzureVmName,
-    [int]$PriorityBase = 1020
+    [int]$PriorityBase = 1020,
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $Force) {
+    throw "Public 80/443 stay closed. Reach the VM through Tailscale. Pass -Force only to reopen those ports on purpose."
+}
 $DeployDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigFile = Join-Path $DeployDir "laptop.config.ps1"
 if (Test-Path $ConfigFile) { . $ConfigFile }
@@ -50,7 +54,7 @@ if (-not $nsgId -or $nsgId -eq "null") {
     $nsgId = az network vnet subnet show --ids $subnetId --query "networkSecurityGroup.id" -o tsv
 }
 if (-not $nsgId -or $nsgId -eq "null") {
-    throw "Could not find NSG. Add ports 80 and 443 manually in Azure Portal → VM → Networking."
+    throw "Could not find NSG. Add ports 80 and 443 manually in Azure Portal -> VM -> Networking."
 }
 
 $nsgName = Split-Path $nsgId -Leaf

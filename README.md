@@ -1,6 +1,6 @@
 # Options Advisor - Complete Guide
 
-**Last updated:** 2026-10-05
+**Last updated:** 2026-10-24
 
 **Single document** for install, day-to-day ops, and architecture.  
 Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.
@@ -116,13 +116,13 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 
 | Step | Action                                                                                                                                                   |
 | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | Copy `deploy/azure/laptop.config.ps1.example` -> `laptop.config.ps1`; fill `VmHost`, `SshKeyPath`, Azure RG/VM, `LocalSqlServer`                         |
+| 1    | Copy `deploy/azure/laptop.config.ps1.example` -> `laptop.config.ps1`; fill `VmHost`, `SshKeyPath`, Azure RG/VM, `LocalSqlServer`, and `TailscaleAuthKey` (reusable auth key from the Tailscale admin console; never commit) |
 | 2    | Copy `.env.docker.example` -> `.env.docker`; fill `MSSQL_SA_PASSWORD`, `OPT_DB_PASSWORD` (same), Zerodha keys, `OPT_DASHBOARD_API_KEY`. **Never commit** |
 | 3    | `az login` if needed                                                                                                                                     |
-| 4    | `.\deploy\azure\setup-new-environment.ps1` (or `-RestoreFromBackup "PATH\to.bak"`; or `setup-laptop.ps1` only) — enables **self-signed HTTPS** automatically |
+| 4    | `.\deploy\azure\setup-new-environment.ps1` (or `-RestoreFromBackup "PATH\to.bak"`; or `setup-laptop.ps1` only) — self-signed HTTPS, joins laptop + VM to Tailscale, then closes public inbound 22/80/443/5001 |
 | 5    | `python scripts/validate_setup_sync.py` then `.\deploy\azure\Test-EnvironmentSetup.ps1` until exit 0                                                     |
 | 6    | On VM: `git pull` + `chmod +x deploy/*.sh ...` + `./deploy/vm-restart.sh`                                                                                |
-| 7    | Report: `https://<VmHost>/` (accept cert warning once), archive DB name, Zerodha login is still manual                                                   |
+| 7    | Report: `https://<VmHost>/` is the Tailscale address (accept cert warning once). Install the Tailscale app on the phone and sign in to the same tailnet. Set the Zerodha redirect to `https://<VmHost>/zerodha/callback`. Zerodha login is still manual |
 
 
 **VM-only alternative:** `.\deploy\azure\remote-vm-install.ps1`, or SSH + clone + `.env.docker` + `./deploy/vm-install-deploy.sh`.
@@ -139,10 +139,11 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 | `deploy/azure/setup-new-environment.ps1`                                          | Greenfield laptop + VM + uptime (+ Standard SSD OS disk) |
 | `deploy/azure/setup-laptop.ps1`                                                   | Laptop folders + archive task       |
 | `deploy/azure/Test-EnvironmentSetup.ps1`                                          | Verification checklist              |
-| `deploy/azure/remote-vm-install.ps1`                                              | VM Docker + app + self-signed HTTPS |
+| `deploy/azure/remote-vm-install.ps1`                                              | VM Docker + app + HTTPS, then Tailscale lockdown |
 | `deploy/azure/open-port-5001.ps1`                                                 | NSG :5001 (HTTP dashboard)          |
-| `deploy/azure/open-port-https.ps1` / `enable-https.sh` / `enable-https-remote.ps1` | NSG 80/443 + self-signed HTTPS (auto on install) |
-| `deploy/azure/close-port-5001.ps1`                                                | Remove public NSG :5001 (HTTPS-only)            |
+| `deploy/azure/open-port-https.ps1` / `enable-https.sh` / `enable-https-remote.ps1` | Self-signed HTTPS. Does not open public 80/443 |
+| `deploy/azure/enable-tailscale.ps1` / `install-tailscale.sh` / `close-public-inbound.ps1` | Join Tailscale, then delete public inbound 22/80/443/5001 |
+| `deploy/azure/close-port-5001.ps1`                                                | Remove public NSG :5001 (also done by the Tailscale lockdown) |
 | `deploy/azure/VMUpTimeConfiguration.ps1`                                          | Azure start/stop schedules          |
 | `deploy/azure/backup-database-to-laptop.ps1` / `restore-database-from-laptop.ps1` | Hot DB move                         |
 | `deploy/azure/pull-archive-and-merge.ps1` / `register-laptop-archive-task.ps1`    | Archive pull + ACK (retries every 15m until ACK or ~15:45) |
@@ -252,19 +253,20 @@ docker compose ps && git log -1 --oneline
 | Preserve `zerodha_session.json` | `git reset --hard` over a live session                   |
 
 
-Dashboard: `https://<VmHost>/` (self-signed; public `:5001` closed)
+Dashboard: `https://<VmHost>/` (self-signed). `VmHost` is the VM's Tailscale address after setup. Public inbound 22, 80, 443, and 5001 are closed. The Azure public IP stays so the VM can still call Zerodha.
 
-### HTTPS (free, same VM — no domain required)
+### HTTPS and who can connect
 
-**Default for new installs:** self-signed HTTPS is enabled automatically; public **:5001** stays closed (NSG + bind `127.0.0.1`). Use `https://<VmHost>/` only.
+**Default for new installs:** self-signed HTTPS, then `enable-tailscale.ps1` joins this laptop and the VM with `TailscaleAuthKey` and deletes the public inbound rules. Flask stays on `127.0.0.1:5001`; Caddy is reached through the tailnet. Install the Tailscale app on the phone and sign in to the same account.
 
-**Existing VM (one command from laptop):**
+**Existing VM (one command from the laptop, public SSH still open):**
 ```powershell
 az login   # if needed
-.\deploy\azure\enable-https-remote.ps1
-.\deploy\azure\close-port-5001.ps1
+.\deploy\azure\enable-tailscale.ps1
 ```
-Then open `https://<VmHost>/` → Advanced → Proceed (one-time warning).
+Then open `https://<VmHost>/` → Advanced → Proceed (one-time warning). Put that same host in the Zerodha app redirect: `https://<VmHost>/zerodha/callback`.
+
+Do not run `open-port-https.ps1` afterward. A later install sees `data/tailscale_lockdown` on the VM and does not reopen 80/443.
 
 ---
 
@@ -310,9 +312,9 @@ ACK refuses if `LAST_HOT_BACKUP.json` is missing or older than this export, `PEN
 | Symptom               | Check                                                                 |
 | --------------------- | --------------------------------------------------------------------- |
 | Setup drift           | `python scripts/validate_setup_sync.py` + `Test-EnvironmentSetup.ps1` |
-| SSH fails             | VM up? `VmHost` + `.pem` in `laptop.config.ps1`?                      |
-| Dashboard down        | Port 443 NSG (HTTPS), uptime schedule, `docker compose ps`            |
-| HTTPS / cert fail     | DNS A→VM? NSG 80+443? `docker logs options_caddy`; see A7 HTTPS       |
+| SSH fails             | VM up? This laptop on the same Tailscale account? `VmHost` is the 100.x address + `.pem` in `laptop.config.ps1` |
+| Dashboard down        | Tailscale connected? Uptime schedule, `docker compose ps` over SSH    |
+| HTTPS / cert fail     | `docker logs options_caddy`; cert includes the Tailscale IP; see A7   |
 | Archive stuck         | Laptop task; VM `git pull` + `vm-restart`; ACK conditions above. If merge fails with `\var\opt\mssql\...` paths, update `scripts/merge_archive_into_local.py` (RESTORE must WITH MOVE to local SQL data dir) |
 | Zerodha execute fails | `OPT_DASHBOARD_API_KEY` in VM `.env.docker`                           |
 
@@ -841,7 +843,7 @@ pytest tests/test_database/test_schema.py tests/test_scheduler/test_scheduler.py
 | Job                     | `SCHEDULER_CONFIG`, `JOB_FUNCS`, lifecycle `run_*`, dashboard job meta, README A5              |
 | Deploy / archive script | README A4 / A8; `setup-new-environment.ps1` / manifest if greenfield-visible                   |
 | VM OS disk cost         | Prefer Standard SSD at create; `setup-new-environment.ps1` converts Premium if needed         |
-| HTTPS on VM             | A7 HTTPS; default self-signed IP; or `HTTPS_MODE=acme` + sslip.io; `enable-https.sh` / open-port-https |
+| HTTPS / who can connect | A7; `enable-tailscale.ps1` joins Tailscale and closes public inbound 22/80/443/5001 |
 | Index lot-size revision | `options_lot_sizes`, `config.py` `default_lot_sizes`, `scripts/migrate_nse_lot_sizes.py`, README B4 |
 | New module / boundary   | README B1 / B6 / B12                                                                           |
 | Code-only ship          | [A7](#a7-code-deploy)                                                                          |

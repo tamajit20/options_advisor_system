@@ -111,4 +111,4 @@ if ($LASTEXITCODE -ne 0) { throw "Database restore failed on VM" }
 Write-Host ""
 Write-Host "Done. Database restored on VM: $DbName"
 Write-Host "(Application code, logs, and data/ on the VM were not changed.)"
-Write-Host "Dashboard: http://${VmHost}:5001"
+Write-Host "Dashboard: https://${VmHost}/"

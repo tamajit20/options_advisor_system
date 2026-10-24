@@ -13,6 +13,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
+if [[ -f data/tailscale_lockdown ]]; then
+  echo "==> Tailscale lockdown is on. Not opening public 80/443."
+  exit 0
+fi
+
 SOURCE="${AZURE_NSG_SOURCE:-*}"
 PRIORITY_BASE="${AZURE_NSG_HTTPS_PRIORITY:-1020}"
 

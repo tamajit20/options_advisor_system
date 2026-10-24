@@ -28,6 +28,8 @@ data/ws_status.json
 data/sl_fallback_state.json
 data/suggestion_ltp_state.json
 data/zerodha_session.json
+data/tailscale_ipv4
+data/tailscale_lockdown
 data/kite_order_updates.json
 
 # Test outputs

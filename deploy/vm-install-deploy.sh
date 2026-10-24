@@ -114,12 +114,8 @@ echo "    SQL Server is installed via Docker on first run."
 echo "    If a database already exists, you will be prompted: fresh vs keep existing."
 ./deploy/setup.sh "$@"
 
-echo "==> [5/5] Opening HTTPS ports 80/443 (public :5001 not opened)..."
-chmod +x deploy/azure/open-port-https.sh 2>/dev/null || true
-./deploy/azure/open-port-https.sh || {
-  echo "WARNING: Ports 80/443 were NOT opened in Azure NSG from the VM."
-  echo "         Laptop: .\\deploy\\azure\\open-port-https.ps1"
-}
+echo "==> [5/5] Public inbound stays closed. Laptop joins Tailscale and locks the NSG:"
+echo "         .\\deploy\\azure\\enable-tailscale.ps1"
 
 # setup.sh already enables self-signed HTTPS; ensure bashrc matches .env.docker
 if grep -q 'COMPOSE_PROFILES=.*https' .env.docker 2>/dev/null; then

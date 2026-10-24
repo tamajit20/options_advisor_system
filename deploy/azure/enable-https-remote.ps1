@@ -1,5 +1,5 @@
 # One-shot from Windows laptop: open NSG 80/443 and enable self-signed HTTPS on the VM.
-# No domain required. Browser will warn once → Advanced → Proceed.
+# No domain required. Browser will warn once -> Advanced -> Proceed.
 #
 # Usage (repo root, after az login):
 #   .\deploy\azure\enable-https-remote.ps1
@@ -66,14 +66,7 @@ foreach ($f in $files) {
 }
 & ssh @sshArgs $sshTarget "sed -i 's/\r$//' '$VmProjectDir/deploy/azure/enable-https.sh' '$VmProjectDir/deploy/azure/open-port-https.sh' '$VmProjectDir/deploy/load-compose-profiles.sh' '$VmProjectDir/deploy/caddy/Caddyfile' '$VmProjectDir/deploy/caddy/Caddyfile.selfsigned' '$VmProjectDir/deploy/caddy/Caddyfile.acme' 2>/dev/null; chmod +x '$VmProjectDir/deploy/azure/enable-https.sh' '$VmProjectDir/deploy/azure/open-port-https.sh'"
 
-if (-not $SkipPortOpen) {
-    Write-Host "==> [2/3] Opening Azure NSG ports 80 + 443..."
-    $portArgs = @{ VmHost = $VmHost }
-    if ($SourceIp) { $portArgs.SourceIp = $SourceIp }
-    & (Join-Path $DeployDir "open-port-https.ps1") @portArgs
-} else {
-    Write-Host "==> [2/3] Skipped NSG open (-SkipPortOpen)"
-}
+Write-Host "==> [2/3] Not opening public 80/443. Access is Tailscale (.\\deploy\\azure\\enable-tailscale.ps1)."
 
 Write-Host "==> [3/3] Enabling HTTPS on VM (mode=$Mode)..."
 $remote = @"
@@ -87,12 +80,5 @@ chmod +x deploy/azure/enable-https.sh
 & ssh @sshArgs $sshTarget $remote
 
 Write-Host ""
-Write-Host "Done. Open: https://${VmHost}/"
-Write-Host "Browser warning (self-signed): Advanced → Proceed."
-Write-Host "Kite redirect (if needed): https://${VmHost}/zerodha/callback"
-
-if (-not $SkipPortOpen) {
-    Write-Host "==> Closing public NSG :5001 (HTTPS-only)..."
-    $closeArgs = @{ VmHost = $VmHost }
-    & (Join-Path $DeployDir "close-port-5001.ps1") @closeArgs
-}
+Write-Host "Done. After Tailscale lockdown, open https://<tailscale-ipv4>/ (self-signed warning once)."
+Write-Host "Kite redirect must be that same host: https://<tailscale-ipv4>/zerodha/callback"
