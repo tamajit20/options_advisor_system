@@ -798,29 +798,23 @@ class LiveRiskMonitor:
                     if old_peak is not None and (
                             new_peak is None or old_peak > new_peak):
                         new_state.mtm_peak_rs = old_peak
-                    # Per-trade Fixed flags always come from DB — never copy
-                    # in-memory overlay lock/line over a saved sell line.
-                    if not new_state.profit_ms_fixed:
-                        if old.profit_ms_lock_count > new_state.profit_ms_lock_count:
-                            new_state.profit_ms_lock_count = old.profit_ms_lock_count
-                            new_state.profit_ms_line_rs = old.profit_ms_line_rs
-                        elif (
-                            old.profit_ms_line_rs is not None
-                            and (
-                                new_state.profit_ms_line_rs is None
-                                or old.profit_ms_line_rs > new_state.profit_ms_line_rs
-                            )
-                        ):
-                            new_state.profit_ms_line_rs = old.profit_ms_line_rs
-                    if (
-                        not new_state.profit_ms_fixed
-                        and old.profit_ms_plan and not new_state.profit_ms_plan
+                    # Fixed profit ₹ is an arm threshold from the DB row.
+                    # The sell line is still the giveback trail, so keep the
+                    # in-memory lock ahead of a stale reload.
+                    if old.profit_ms_lock_count > new_state.profit_ms_lock_count:
+                        new_state.profit_ms_lock_count = old.profit_ms_lock_count
+                        new_state.profit_ms_line_rs = old.profit_ms_line_rs
+                    elif (
+                        old.profit_ms_line_rs is not None
+                        and (
+                            new_state.profit_ms_line_rs is None
+                            or old.profit_ms_line_rs > new_state.profit_ms_line_rs
+                        )
                     ):
+                        new_state.profit_ms_line_rs = old.profit_ms_line_rs
+                    if old.profit_ms_plan and not new_state.profit_ms_plan:
                         new_state.profit_ms_plan = old.profit_ms_plan
-                    if (
-                        not new_state.profit_ms_fixed
-                        and old.profit_ms_plan_dirty
-                    ):
+                    if old.profit_ms_plan_dirty:
                         new_state.profit_ms_plan_dirty = True
                         if old.profit_ms_plan:
                             new_state.profit_ms_plan = old.profit_ms_plan
@@ -1229,53 +1223,58 @@ class LiveRiskMonitor:
                     loss_milestone_config().get("pct_of_premium") or 0.0
                 )
         charges_rs = self._estimated_close_charges_rs(state)
-        profit_giveback_rs, profit_ms_pct = profit_milestone_rs(
-            investment_rs=investment, charges_rs=charges_rs)
-        charges_floor_rs = profit_milestone_charges_floor_rs(charges_rs=charges_rs)
+        fixed_arm: Optional[float] = None
         if (
             state.profit_ms_fixed
             and state.profit_ms_fixed_rs is not None
             and state.profit_ms_fixed_rs >= 0
         ):
-            profit_line = float(state.profit_ms_fixed_rs)
-            lock_count = 1
-            line_frozen = True
-            plan = None
-            fresh_plan = False
+            fixed_arm = float(state.profit_ms_fixed_rs)
+        # A saved arm turns the giveback math on for this trade even when
+        # the overlay toggle is off. It cannot arm earlier than that step.
+        force_ms = fixed_arm is not None
+        profit_giveback_rs, profit_ms_pct = profit_milestone_rs(
+            investment_rs=investment, charges_rs=charges_rs, force=force_ms)
+        charges_floor_rs = profit_milestone_charges_floor_rs(charges_rs=charges_rs)
+        plan = parse_profit_milestone_plan(state.profit_ms_plan)
+        fresh_plan = False
+        if not profit_milestone_plan_matches_config(plan, force=force_ms):
+            plan = build_profit_milestone_plan(
+                investment_rs=investment, charges_rs=charges_rs, force=force_ms,
+            )
+            state.profit_ms_plan = plan
+            state.profit_ms_plan_dirty = True
+            fresh_plan = True
+        if plan:
+            # Config rebuild (or first stamp) must not inherit an old
+            # lock_count — pointer comes from peak vs the current M1..MN.
+            pointer = 0 if fresh_plan else state.profit_ms_lock_count
+            profit_line, lock_count, line_frozen = apply_profit_milestone_plan(
+                plan,
+                peak_rs=state.mtm_peak_rs,
+                pointer=pointer,
+            )
         else:
-            plan = parse_profit_milestone_plan(state.profit_ms_plan)
-            fresh_plan = False
-            if not profit_milestone_plan_matches_config(plan):
-                plan = build_profit_milestone_plan(
-                    investment_rs=investment, charges_rs=charges_rs,
-                )
-                state.profit_ms_plan = plan
-                state.profit_ms_plan_dirty = True
-                fresh_plan = True
-            if plan:
-                # Config rebuild (or first stamp) must not inherit an old
-                # lock_count — pointer comes from peak vs the current M1..MN.
-                pointer = 0 if fresh_plan else state.profit_ms_lock_count
-                profit_line, lock_count, line_frozen = apply_profit_milestone_plan(
-                    plan,
-                    peak_rs=state.mtm_peak_rs,
-                    pointer=pointer,
-                )
-            else:
-                raw_profit_line = profit_milestone_line_rs(
-                    peak_rs=state.mtm_peak_rs,
-                    giveback_rs=profit_giveback_rs,
-                    min_line_rs=charges_floor_rs,
-                )
-                profit_line, lock_count, line_frozen = advance_profit_milestone_locks(
-                    raw_line_rs=raw_profit_line,
-                    prev_line_rs=state.profit_ms_line_rs,
-                    lock_count=state.profit_ms_lock_count,
-                    max_locks=self._profit_milestone_max_locks,
-                    peak_rs=state.mtm_peak_rs,
-                    giveback_rs=profit_giveback_rs,
-                    min_line_rs=charges_floor_rs,
-                )
+            raw_profit_line = profit_milestone_line_rs(
+                peak_rs=state.mtm_peak_rs,
+                giveback_rs=profit_giveback_rs,
+                min_line_rs=charges_floor_rs,
+            )
+            profit_line, lock_count, line_frozen = advance_profit_milestone_locks(
+                raw_line_rs=raw_profit_line,
+                prev_line_rs=state.profit_ms_line_rs,
+                lock_count=state.profit_ms_lock_count,
+                max_locks=self._profit_milestone_max_locks,
+                peak_rs=state.mtm_peak_rs,
+                giveback_rs=profit_giveback_rs,
+                min_line_rs=charges_floor_rs,
+            )
+        peak_now = state.mtm_peak_rs
+        if (
+            fixed_arm is not None
+            and (peak_now is None or float(peak_now) + 1e-9 < fixed_arm)
+        ):
+            profit_line = None
         state.profit_ms_line_rs = profit_line
         state.profit_ms_lock_count = lock_count
         profit_pct_rs, profit_pct_val = profit_pct_auto_close_rs(
@@ -1466,9 +1465,11 @@ class LiveRiskMonitor:
                 else self._held_for_phrase(self._profit_milestone_confirm)
             )
             n_ms = len(plan["levels"]) if plan else None
-            if state.profit_ms_fixed:
+            if fixed_arm is not None:
                 reason = (
-                    f"Fixed profit sell line ₹{profit_line:,.0f}: "
+                    f"Fixed profit arm ₹{fixed_arm:,.0f} reached "
+                    f"(peak ₹{float(state.mtm_peak_rs or 0):,.0f}). "
+                    f"Sell line ₹{profit_line:,.0f}: "
                     f"MTM ₹{current_pnl:,.0f} ≤ that line {held}. {close_note}"
                 )
             else:

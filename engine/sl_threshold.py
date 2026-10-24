@@ -327,16 +327,21 @@ def _positive_float(val: Any) -> Optional[float]:
     return n if n > 0 else None
 
 
-def profit_milestone_rs(*, investment_rs: float, charges_rs: float = 0.0) -> Tuple[float, float]:
+def profit_milestone_rs(
+    *, investment_rs: float, charges_rs: float = 0.0, force: bool = False,
+) -> Tuple[float, float]:
     """Return (giveback_rs, pct_of_premium) when enabled; else (0.0, pct).
 
     Giveback is ``pct_of_premium`` of entry premium, but never smaller than
     estimated round-trip charges + ``charges_buffer_rs``. Used as the
     distance below peak for the trailing sell line.
+
+    ``force`` computes the step even when the overlay toggle is off, so a
+    per-trade Fixed arm can still use the same giveback.
     """
     cfg = profit_milestone_config()
     pct = cfg["pct_of_premium"]
-    if not cfg["enabled"] or investment_rs <= 0 or pct <= 0:
+    if (not cfg["enabled"] and not force) or investment_rs <= 0 or pct <= 0:
         return 0.0, pct
     configured = investment_rs * (pct / 100.0)
     try:
@@ -417,6 +422,7 @@ def build_profit_milestone_plan(
     *,
     investment_rs: float,
     charges_rs: float = 0.0,
+    force: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """M1..MN from current ``max_locks``. None when trailing is unlimited.
 
@@ -426,10 +432,10 @@ def build_profit_milestone_plan(
     """
     cfg = profit_milestone_config()
     n = cfg.get("max_locks")
-    if not cfg.get("enabled") or not n:
+    if (not cfg.get("enabled") and not force) or not n:
         return None
     giveback, pct = profit_milestone_rs(
-        investment_rs=investment_rs, charges_rs=charges_rs,
+        investment_rs=investment_rs, charges_rs=charges_rs, force=force,
     )
     if giveback <= 0:
         return None
@@ -470,12 +476,14 @@ def parse_profit_milestone_plan(raw: Any) -> Optional[Dict[str, Any]]:
     return data
 
 
-def profit_milestone_plan_matches_config(plan: Optional[Dict[str, Any]]) -> bool:
+def profit_milestone_plan_matches_config(
+    plan: Optional[Dict[str, Any]], *, force: bool = False,
+) -> bool:
     """True when *plan* was built from the live overlay (N / % / buffer)."""
     cfg = profit_milestone_config()
     parsed = parse_profit_milestone_plan(plan)
     n = cfg.get("max_locks")
-    if not cfg.get("enabled") or not n:
+    if (not cfg.get("enabled") and not force) or not n:
         return parsed is None
     if parsed is None:
         return False

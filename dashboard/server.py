@@ -2713,7 +2713,7 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/milestones", methods=["PATCH"])
     @_with_db
     def api_trade_milestones(db: SQLServerConnection, trade_id: str):
-        """Per-trade fixed profit sell-line / loss-line. Unchecked = overlay math."""
+        """Per-trade profit arm (peak ₹) or loss line. Unchecked = overlay math."""
         trd = TradeRepo(db)
         row = trd.get(trade_id)
         if row is None:

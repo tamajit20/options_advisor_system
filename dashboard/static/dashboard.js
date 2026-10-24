@@ -1413,13 +1413,22 @@ function _resolveLiveLevelThresholds(section, payload) {
     );
   }
   if (profitLine != null && isNaN(profitLine)) profitLine = null;
-  if (profitFixed && profitFixedRs != null) profitLine = profitFixedRs;
+  if (profitFixed && profitFixedRs != null) {
+    const prem = (!isNaN(premiumRs) && premiumRs > 0) ? premiumRs : null;
+    const arm = profitMilestoneArmRs(profitFixedRs, prem, chargesRs);
+    if (!profitMilestonePeakArmed(peakRs, arm)) {
+      profitLine = null;
+    } else if (profitLine == null) {
+      profitLine = profitMilestoneLineRs(peakRs, prem, chargesRs, true);
+    }
+  }
   if (lossFixed && lossFixedRs != null && lossFixedRs > 0) milestoneRs = lossFixedRs;
   if (targetRs == null && lossRs == null && milestoneRs == null && profitLine == null
       && !profitMilestoneEnabled() && !profitFixed && !lossFixed) return null;
   return {
     targetRs, lossRs, milestoneRs, profitLine, peakRs, chargesRs,
-    plan: profitFixed ? null : resolved,
+    plan: resolved,
+    profitFixedRs,
     pointer: applied.pointer, frozen: applied.frozen,
     profitFixed, lossFixed,
   };
@@ -1493,42 +1502,45 @@ function _updateLiveProfitLevels(tradeId, payload) {
       });
     }
     if (lineEl && (profitMilestoneEnabled() || profitFixed)) {
-      if (profitFixed && profitLine != null && !isNaN(profitLine)) {
+      const premRs = parseFloat(section.dataset.premiumRs);
+      const chargesRs = thresholds && thresholds.chargesRs;
+      const fixedArm = profitFixed ? (thresholds && thresholds.profitFixedRs) : null;
+      const armRs = profitFixed
+        ? profitMilestoneArmRs(
+            fixedArm,
+            (!isNaN(premRs) && premRs > 0) ? premRs : null,
+            chargesRs,
+          )
+        : null;
+      if (profitLine != null && !isNaN(profitLine)) {
         lineEl.textContent = '\u20b9' + fmt(profitLine);
         lineEl.classList.remove('muted');
         if (lineNote) {
-          lineNote.textContent = `Fixed sell line \u2014 auto-closes if MTM \u2264 \u20b9${fmt(profitLine)}${milestoneConfirmNote(profitMilestoneConfig())}`;
-        }
-        _syncProfitMsSteps(section, null, 0);
-      } else if (profitLine != null && !isNaN(profitLine)) {
-        lineEl.textContent = '\u20b9' + fmt(profitLine);
-        lineEl.classList.remove('muted');
-        if (lineNote) {
-          const premRs = parseFloat(section.dataset.premiumRs);
-          const chargesRs = thresholds && thresholds.chargesRs;
           const plan = thresholds && thresholds.plan;
           const pointer = (thresholds && thresholds.pointer != null)
             ? thresholds.pointer
             : payload.profit_ms_lock_count;
           const frozen = !!(thresholds && thresholds.frozen) || !!payload.profit_ms_frozen;
           const nLevels = plan && plan.levels ? plan.levels.length : null;
-          lineNote.textContent = `Auto-closes if MTM \u2264 sell line \u20b9${fmt(profitLine)} (peak \u20b9${fmt(peakRs)})${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}${profitMilestonePointerNote(pointer, frozen, nLevels)}`;
+          const armNote = (profitFixed && fixedArm != null)
+            ? `Fixed arm \u20b9${fmt(fixedArm)} reached. `
+            : '';
+          lineNote.textContent = `${armNote}Auto-closes if MTM \u2264 sell line \u20b9${fmt(profitLine)} (peak \u20b9${fmt(peakRs)})${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs, profitFixed)}${profitMilestonePointerNote(pointer, frozen, nLevels)}`;
           _syncProfitMsSteps(section, plan, pointer);
         }
-      } else if (profitMilestoneEnabled()) {
-        const premRs = parseFloat(section.dataset.premiumRs);
-        const chargesRs = thresholds && thresholds.chargesRs;
+      } else if (profitMilestoneEnabled() || profitFixed) {
         lineEl.textContent = 'Not armed';
         lineEl.classList.add('muted');
         if (lineNote) {
-          const giveback = profitMilestoneGivebackRs(
+          const giveback = armRs != null ? armRs : profitMilestoneGivebackRs(
             (!isNaN(premRs) && premRs > 0) ? premRs : null,
             chargesRs,
+            profitFixed,
           );
           const plan = thresholds && thresholds.plan;
           const nLevels = plan && plan.levels ? plan.levels.length : null;
           lineNote.textContent = giveback != null
-            ? `Arms after peak profit \u2265 \u20b9${fmt(giveback)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs)}${profitMilestonePointerNote(0, false, nLevels)}`
+            ? `Arms after peak profit \u2265 \u20b9${fmt(giveback)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote((!isNaN(premRs) && premRs > 0) ? premRs : null, chargesRs, profitFixed)}${profitMilestonePointerNote(0, false, nLevels)}`
             : 'Profit-side auto-close from peak MTM';
           _syncProfitMsSteps(section, plan, 0);
         }
@@ -1536,7 +1548,7 @@ function _updateLiveProfitLevels(tradeId, payload) {
         lineEl.textContent = 'Off';
         lineEl.classList.add('muted');
         if (lineNote) {
-          lineNote.textContent = 'Enable profit_milestone_alert or check Fixed to set a rupee sell line';
+          lineNote.textContent = 'Enable profit_milestone_alert or check Fixed and save the profit that must be reached';
         }
         _syncProfitMsSteps(section, null, 0);
       }
@@ -1544,7 +1556,7 @@ function _updateLiveProfitLevels(tradeId, payload) {
       lineEl.textContent = 'Off';
       lineEl.classList.add('muted');
       if (lineNote) {
-        lineNote.textContent = 'Enable profit_milestone_alert or check Fixed to set a rupee sell line';
+        lineNote.textContent = 'Enable profit_milestone_alert or check Fixed and save the profit that must be reached';
       }
       _syncProfitMsSteps(section, null, 0);
     }
@@ -2176,7 +2188,7 @@ const TERM_HELP = {
   },
   profit_milestone: {
     label: 'Profit milestone',
-    html: '<strong>Profit milestone</strong> — Overlay auto-closes after the confirm window (default 15s) using M1..MN from <code>max_locks</code>. Check <strong>Fixed</strong> and Save a sell-line ₹ to close this trade when MTM ≤ that amount (works even if overlay is off). Uncheck and Save to return to overlay. If profit falls to breakeven or a loss during the wait, it closes immediately. Hard SL stays on the loss side.',
+    html: '<strong>Profit milestone</strong> — Overlay auto-closes after the confirm window (default 15s) using M1..MN from <code>max_locks</code>. Check <strong>Fixed</strong> and Save a profit ₹ to wait until peak profit reaches that amount before the usual giveback sell line can arm (works even if overlay is off; a smaller amount does not arm earlier). Uncheck and Save to return to overlay. If profit falls to breakeven or a loss during the wait, it closes immediately. Hard SL stays on the loss side.',
   },
   profit_pct_auto_close: {
     label: 'Profit % auto-close',
@@ -3746,7 +3758,7 @@ function milestoneOverrideHtml(kind, t) {
   const on = _msFixedOn(t, kind);
   const rs = _msFixedRs(t, kind);
   const val = rs != null ? String(rs) : '';
-  const ph = kind === 'profit' ? 'sell line' : 'loss';
+  const ph = kind === 'profit' ? 'profit to reach' : 'loss';
   return `
     <div class="lpl-ms-override" data-ms-kind="${kind}">
       <label class="lpl-ms-fix-lab">
@@ -3792,7 +3804,7 @@ function wireMilestoneOverrides() {
       if (msg) {
         msg.hidden = false;
         msg.className = 'lpl-ms-save-msg is-err';
-        msg.textContent = kind === 'loss' ? 'Enter a loss ₹ > 0' : 'Enter a sell-line ₹';
+        msg.textContent = kind === 'loss' ? 'Enter a loss ₹ > 0' : 'Enter a profit ₹ ≥ 0';
       }
       return;
     }
@@ -4071,8 +4083,8 @@ function profitMilestoneChargesFloorRs(chargesRs) {
   return buffer;
 }
 
-function profitMilestoneGivebackRs(investmentRs, chargesRs) {
-  if (!profitMilestoneEnabled() || investmentRs == null || investmentRs <= 0) return null;
+function profitMilestoneGivebackRs(investmentRs, chargesRs, force) {
+  if ((!profitMilestoneEnabled() && !force) || investmentRs == null || investmentRs <= 0) return null;
   const pct = profitMilestonePct();
   if (pct == null) return null;
   const configured = investmentRs * (pct / 100);
@@ -4080,16 +4092,29 @@ function profitMilestoneGivebackRs(investmentRs, chargesRs) {
   return Math.max(configured, floor);
 }
 
-function profitMilestoneLineRs(peakRs, investmentRs, chargesRs) {
-  const giveback = profitMilestoneGivebackRs(investmentRs, chargesRs);
+function profitMilestoneLineRs(peakRs, investmentRs, chargesRs, force) {
+  const giveback = profitMilestoneGivebackRs(investmentRs, chargesRs, force);
   if (giveback == null || peakRs == null || isNaN(peakRs) || peakRs < giveback) return null;
   const floor = profitMilestoneChargesFloorRs(chargesRs);
   return Math.max(peakRs - giveback, floor);
 }
 
-function profitMilestoneGivebackFloorNote(investmentRs, chargesRs) {
+function profitMilestoneArmRs(fixedRs, investmentRs, chargesRs) {
+  const giveback = profitMilestoneGivebackRs(investmentRs, chargesRs, fixedRs != null);
+  if (fixedRs == null) return giveback;
+  if (giveback == null) return fixedRs;
+  return Math.max(fixedRs, giveback);
+}
+
+function profitMilestonePeakArmed(peakRs, armRs) {
+  if (armRs == null) return false;
+  const peak = parseFloat(peakRs);
+  return !isNaN(peak) && peak + 1e-9 >= armRs;
+}
+
+function profitMilestoneGivebackFloorNote(investmentRs, chargesRs, force) {
   const configuredPct = profitMilestonePct();
-  const giveback = profitMilestoneGivebackRs(investmentRs, chargesRs);
+  const giveback = profitMilestoneGivebackRs(investmentRs, chargesRs, force);
   if (giveback == null || configuredPct == null) return '';
   const configured = investmentRs * (configuredPct / 100);
   const charges = parseFloat(chargesRs);
@@ -4302,26 +4327,35 @@ function renderLiveProfitLevels(t) {
       : (persistedLine != null && !isNaN(persistedLine) ? persistedLine : rawProfitLine));
   const profitFixed = _msFixedOn(t, 'profit');
   const profitFixedRs = _msFixedRs(t, 'profit');
-  const profitLine = (profitFixed && profitFixedRs != null) ? profitFixedRs : overlayProfitLine;
+  const armRs = profitFixed
+    ? profitMilestoneArmRs(profitFixedRs, investmentRs, estCharges)
+    : givebackRs;
+  const forcedLine = profitFixed
+    ? (plan ? applied.line : profitMilestoneLineRs(peakRs, investmentRs, estCharges, true))
+    : overlayProfitLine;
+  const profitLine = (profitFixed && !profitMilestonePeakArmed(peakRs, armRs))
+    ? null
+    : (profitFixed ? forcedLine : overlayProfitLine);
   const profitMsEnabled = profitMilestoneEnabled();
   let profitMsValHtml;
   let profitMsNote;
-  if (profitFixed && profitFixedRs != null) {
-    profitMsValHtml = `<span class="lpl-val live-profit-ms-val">\u20b9${fmt(profitFixedRs)}</span>`;
-    profitMsNote = `Fixed sell line \u2014 auto-closes if MTM \u2264 \u20b9${fmt(profitFixedRs)}${milestoneConfirmNote(profitMilestoneConfig())}`;
-  } else if (!profitMsEnabled) {
+  if (!profitMsEnabled && !(profitFixed && profitFixedRs != null)) {
     profitMsValHtml = `<span class="lpl-val muted live-profit-ms-val">Off</span>`;
-    profitMsNote = 'Enable profit_milestone_alert or check Fixed to set a rupee sell line';
+    profitMsNote = 'Enable profit_milestone_alert or check Fixed and save the profit that must be reached';
   } else if (profitLine != null) {
+    const armNote = (profitFixed && profitFixedRs != null)
+      ? `Fixed arm \u20b9${fmt(profitFixedRs)} reached. `
+      : '';
     profitMsValHtml = `<span class="lpl-val live-profit-ms-val">\u20b9${fmt(profitLine)}</span>`;
-    profitMsNote = `Auto-closes if MTM \u2264 sell line \u20b9${fmt(profitLine)} (peak \u20b9${fmt(peakRs)})${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}${profitMilestonePointerNote(pointer, lineFrozen, maxLocks)}`;
+    profitMsNote = `${armNote}Auto-closes if MTM \u2264 sell line \u20b9${fmt(profitLine)} (peak \u20b9${fmt(peakRs)})${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges, profitFixed)}${profitMilestonePointerNote(pointer, lineFrozen, maxLocks)}`;
   } else {
     profitMsValHtml = `<span class="lpl-val muted live-profit-ms-val">Not armed</span>`;
-    profitMsNote = givebackRs != null
-      ? `Arms after peak profit \u2265 \u20b9${fmt(givebackRs)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges)}${profitMilestonePointerNote(0, false, maxLocks)}`
+    const waitRs = armRs != null ? armRs : givebackRs;
+    profitMsNote = waitRs != null
+      ? `Arms after peak profit \u2265 \u20b9${fmt(waitRs)}${milestoneConfirmNote(profitMilestoneConfig())}${profitMilestoneGivebackFloorNote(investmentRs, estCharges, profitFixed)}${profitMilestonePointerNote(0, false, maxLocks)}`
       : 'Arms after peak reaches the giveback level';
   }
-  const stepsHtml = (profitMsEnabled && !profitFixed) ? profitMsStepsHtml(plan, pointer) : '';
+  const stepsHtml = (profitMsEnabled || profitFixed) ? profitMsStepsHtml(plan, pointer) : '';
   const planAttr = plan
     ? ` data-profit-ms-plan="${escapeHtml(JSON.stringify(plan))}" data-profit-ms-pointer="${pointer}"`
     : '';

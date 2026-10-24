@@ -848,7 +848,9 @@ STRATEGY_CONFIG = {
     # Integer N = M1..MN (arm at i×giveback, sell at (i-1)×giveback /
     # charges floor). Runtime only advances a pointer. Overlay changes
     # to N / % / buffer rebuild the plan on open trades. Per-trade Fixed
-    # on My Trades overrides overlay (sell-line ₹ / loss ₹) until unchecked.
+    # profit ₹ is the peak that must be reached before this rule arms;
+    # the sell line stays peak − giveback. A Fixed amount below the
+    # usual step does not arm early. Loss Fixed is still “close at −₹X”.
     "profit_milestone_alert": {
         "enabled": True,
         "pct_of_premium": 5.0,

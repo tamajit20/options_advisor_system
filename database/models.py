@@ -1115,21 +1115,18 @@ class TradeRepo:
         fixed: bool,
         rs: Optional[float] = None,
     ) -> None:
-        """Per-trade fixed profit sell-line or loss-line override."""
+        """Per-trade profit arm (peak that must be reached) or loss-line override.
+
+        The profit amount is not the sell line. The monitor keeps
+        profit_ms_line_rs as the giveback line once that peak is reached.
+        """
         flag = 1 if fixed else 0
         if kind == "profit":
-            if fixed and rs is not None:
-                self.db.execute(
-                    "UPDATE options_trades SET profit_ms_fixed = ?, profit_ms_fixed_rs = ?, "
-                    "profit_ms_line_rs = ? WHERE trade_id = ?",
-                    [flag, rs, rs, trade_id],
-                ).close()
-            else:
-                self.db.execute(
-                    "UPDATE options_trades SET profit_ms_fixed = ?, profit_ms_fixed_rs = ? "
-                    "WHERE trade_id = ?",
-                    [flag, rs, trade_id],
-                ).close()
+            self.db.execute(
+                "UPDATE options_trades SET profit_ms_fixed = ?, profit_ms_fixed_rs = ? "
+                "WHERE trade_id = ?",
+                [flag, rs, trade_id],
+            ).close()
         elif kind == "loss":
             self.db.execute(
                 "UPDATE options_trades SET loss_ms_fixed = ?, loss_ms_fixed_rs = ? "

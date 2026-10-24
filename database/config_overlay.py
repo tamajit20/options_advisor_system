@@ -175,8 +175,10 @@ _DESCRIPTIONS: Dict[str, str] = {
         "peak. "
         "If MTM hits ₹0 or a loss during confirm, close immediately. SL stays "
         "on the loss side. charges_buffer_rs (default 50) covers estimate error. "
-        "My Trades: check Fixed + Save a sell-line ₹ to override overlay on that "
-        "trade (works even when this overlay is off); uncheck + Save to return.",
+        "My Trades: check Fixed + Save a profit ₹ to wait until peak MTM "
+        "reaches that amount before the usual giveback sell line can arm "
+        "(works even when this overlay is off; a smaller amount does not "
+        "arm earlier than the usual step). Uncheck + Save to return.",
     "profit_pct_auto_close":
         "Hard profit take: {enabled, pct_of_premium}. When MTM profit reaches "
         "that % of entry premium, auto-close immediately (no confirm window). "
