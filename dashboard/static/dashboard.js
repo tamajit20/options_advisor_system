@@ -3701,7 +3701,8 @@ function resolveLossMilestoneRs(storedOrLive, investmentRs) {
   if (parsed && parsed.fixed) {
     return lossMilestoneRs(investmentRs);
   }
-  if (lossMsPlanMatchesConfig(parsed)) {
+  // Disabled milestone + no stored plan reports a match, but there is no object to read.
+  if (parsed && lossMsPlanMatchesConfig(parsed)) {
     const rs = parseFloat(parsed.loss_rs);
     return (!isNaN(rs) && rs > 0) ? rs : null;
   }
