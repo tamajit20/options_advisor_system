@@ -45,8 +45,10 @@ class TestIndexRoute:
         assert "basis.js" not in html
         assert "Arb Monitor" not in html
         assert "Basis Monitor" not in html
-        assert 'id="perf-from"' in html
-        assert 'id="chart-from"' in html
+        assert 'id="hist-from"' in html
+        assert 'id="hist-range-all"' in html
+        assert 'id="perf-from"' not in html
+        assert 'id="chart-from"' not in html
 
 
 class TestHealth:

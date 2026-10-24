@@ -153,24 +153,26 @@
         <button class="hist-subtab" data-htab="performance">📊 Performance</button>
         <button class="hist-subtab" data-htab="charts">📈 Charts</button>
       </div>
-      <div class="filter-row hist-filter-bar">
+      <div class="filter-row hist-filter-bar hist-shared-filters">
+        <label class="hist-filter-label" title="Close or suggestion date. Same range on every History tab.">From
+          <input type="date" id="hist-from" class="hist-date-input">
+        </label>
+        <label class="hist-filter-label" title="Close or suggestion date. Same range on every History tab.">To
+          <input type="date" id="hist-to" class="hist-date-input">
+        </label>
         <select id="hist-channel" title="Zerodha broker vs manual/paper fills (applies to all History tabs)">
           <option value="">All channels</option>
           <option value="zerodha">Zerodha only</option>
           <option value="manual">Manual only</option>
         </select>
+        <button type="button" class="btn" id="hist-range-apply">Apply</button>
+        <button type="button" class="btn btn-ghost" id="hist-range-all" aria-pressed="false">All time</button>
       </div>
       <div id="chart-summary-row" class="chart-summary-row" aria-label="Closed trade totals"></div>
 
       <!-- Trades sub-tab -->
       <div id="hist-pane-trades">
         <div class="filter-row hist-filter-bar">
-          <label class="hist-filter-label" title="Filter by trade close date">From
-            <input type="date" id="hist-from" class="hist-date-input">
-          </label>
-          <label class="hist-filter-label" title="Filter by trade close date">To
-            <input type="date" id="hist-to" class="hist-date-input">
-          </label>
           <select id="hist-instrument">
             <option value="">All instruments</option>
           </select>
@@ -200,12 +202,6 @@
       <!-- Suggestions sub-tab -->
       <div id="hist-pane-suggestions" hidden>
         <div class="filter-row hist-filter-bar">
-          <label class="hist-filter-label">From
-            <input type="date" id="hsug-from" class="hist-date-input">
-          </label>
-          <label class="hist-filter-label">To
-            <input type="date" id="hsug-to" class="hist-date-input">
-          </label>
           <select id="hsug-instrument">
             <option value="">All instruments</option>
           </select>
@@ -235,16 +231,6 @@
 
       <!-- Charts sub-tab -->
       <div id="hist-pane-charts" hidden>
-        <div class="chart-toolbar">
-          <label class="hist-filter-label">From
-            <input type="date" id="chart-from" class="hist-date-input">
-          </label>
-          <label class="hist-filter-label">To
-            <input type="date" id="chart-to" class="hist-date-input">
-          </label>
-          <button class="btn" id="chart-refresh">Apply</button>
-          <button class="btn btn-ghost" id="chart-reset">All time</button>
-        </div>
         <div id="chart-cumulative" class="chart-wrap"></div>
         <div id="chart-strategy-bar" class="chart-wrap"></div>
         <div id="chart-tooltip" class="chart-tooltip" hidden></div>
@@ -252,16 +238,6 @@
 
       <!-- Performance sub-tab -->
       <div id="hist-pane-performance" hidden>
-        <div class="chart-toolbar">
-          <label class="hist-filter-label">From
-            <input type="date" id="perf-from" class="hist-date-input">
-          </label>
-          <label class="hist-filter-label">To
-            <input type="date" id="perf-to" class="hist-date-input">
-          </label>
-          <button class="btn" id="perf-refresh">Apply</button>
-          <button class="btn btn-ghost" id="perf-reset">All time</button>
-        </div>
         <div id="perf-container" class="loading">Loading…</div>
       </div>
     </article>

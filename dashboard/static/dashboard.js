@@ -9538,11 +9538,11 @@ function _paintClosedTradeSummary(data, gen) {
   if (host) host.innerHTML = _closedTradeSummaryHtml(data);
 }
 
-async function refreshClosedTradeSummary(fromEl, toEl, { allTime = false } = {}) {
+async function refreshClosedTradeSummary() {
   const host = $('#chart-summary-row');
   if (!host) return;
   const gen = ++_closedSummaryGen;
-  const qs = _dateRangeQuery(fromEl, toEl, { allTime, defaultDays: 30 });
+  const qs = _sharedHistRangeQuery();
   _histChannelParam(qs);
   try {
     const data = await API('/api/stats/pnl-timeline?' + qs);
@@ -9555,20 +9555,14 @@ async function refreshClosedTradeSummary(fromEl, toEl, { allTime = false } = {})
 
 function loadHistory() {
   if (_histActiveSubtab !== 'trades') return;
-  refreshClosedTradeSummary($('#hist-from'), $('#hist-to'));
+  refreshClosedTradeSummary();
   const c = $('#history-container');
   c.className='loading'; c.textContent='Loading…';
 
-  // Default dates: today and 30 days ago
-  const fromEl = $('#hist-from'), toEl = $('#hist-to'), instrEl = $('#hist-instrument');
+  const instrEl = $('#hist-instrument');
   const stratEl = $('#hist-strategy'), pnlEl = $('#hist-pnl'), qualEl = $('#hist-quality');
   const summaryEl = $('#hist-summary');
-  if (!fromEl.value) { const d = new Date(); d.setDate(d.getDate()-30); fromEl.value = _localDateStr(d); }
-  if (!toEl.value)   { toEl.value = _localDateStr(); }
-
-  const params = new URLSearchParams();
-  params.set('from_date', fromEl.value);
-  params.set('to_date', toEl.value);
+  const params = _sharedHistRangeQuery();
   if (instrEl.value) params.set('underlying', instrEl.value);
   if (stratEl.value) params.set('strategy', stratEl.value);
   if (pnlEl.value)   params.set('pnl', pnlEl.value);
@@ -9598,20 +9592,14 @@ function loadHistory() {
 
 async function loadHistorySuggestions() {
   if (_histActiveSubtab !== 'suggestions') return;
-  refreshClosedTradeSummary($('#hsug-from'), $('#hsug-to'));
+  refreshClosedTradeSummary();
   const c = $('#hsug-container');
   c.className='loading'; c.textContent='Loading…';
 
-  const fromEl = $('#hsug-from'), toEl = $('#hsug-to');
   const instrEl = $('#hsug-instrument'), statusEl = $('#hsug-status');
   const stratEl = $('#hsug-strategy'), qualEl = $('#hsug-quality');
   const summaryEl = $('#hsug-summary');
-  if (!fromEl.value) { const d = new Date(); d.setDate(d.getDate()-30); fromEl.value = _localDateStr(d); }
-  if (!toEl.value)   { toEl.value = _localDateStr(); }
-
-  const params = new URLSearchParams();
-  params.set('from_date', fromEl.value);
-  params.set('to_date',   toEl.value);
+  const params = _sharedHistRangeQuery();
   if (instrEl.value)  params.set('underlying', instrEl.value);
   if (statusEl.value) params.set('status',     statusEl.value);
   if (stratEl.value)  params.set('strategy',   stratEl.value);
@@ -9849,8 +9837,26 @@ function _dateRangeQuery(fromEl, toEl, { allTime = false, defaultDays = 30 } = {
   return qs;
 }
 
-let _chartAllTime = false;
-let _perfAllTime = false;
+let _histAllTime = false;
+
+function _syncHistAllTimeButton() {
+  const btn = $('#hist-range-all');
+  if (!btn) return;
+  btn.classList.toggle('is-active', _histAllTime);
+  btn.setAttribute('aria-pressed', _histAllTime ? 'true' : 'false');
+}
+
+function _sharedHistRangeQuery() {
+  return _dateRangeQuery($('#hist-from'), $('#hist-to'), {
+    allTime: _histAllTime, defaultDays: 30,
+  });
+}
+
+function _applySharedHistRange() {
+  _histAllTime = false;
+  _syncHistAllTimeButton();
+  _reloadActiveHistoryTab();
+}
 
 async function loadPnlCharts() {
   const cumEl  = $('#chart-cumulative');
@@ -9860,8 +9866,7 @@ async function loadPnlCharts() {
   cumEl.className = 'chart-wrap loading'; cumEl.textContent = 'Loading…';
   barEl.className = 'chart-wrap loading'; barEl.textContent = '';
 
-  const fromEl = $('#chart-from'), toEl = $('#chart-to');
-  const qs = _dateRangeQuery(fromEl, toEl, { allTime: _chartAllTime, defaultDays: 30 });
+  const qs = _sharedHistRangeQuery();
   _histChannelParam(qs);
 
   try {
@@ -9897,23 +9902,12 @@ async function loadPnlCharts() {
   }
 }
 
-$('#chart-refresh')?.addEventListener('click', () => { _chartAllTime = false; loadPnlCharts(); });
-$('#chart-reset')?.addEventListener('click', () => {
-  _chartAllTime = true;
-  $('#chart-from').value = '';
-  $('#chart-to').value   = '';
-  loadPnlCharts();
-});
-$('#chart-from')?.addEventListener('change', () => { _chartAllTime = false; loadPnlCharts(); });
-$('#chart-to')?.addEventListener('change', () => { _chartAllTime = false; loadPnlCharts(); });
-
-// ---------------- Performance sub-tab ----------------
 async function loadStrategyPerformance() {
   const c = $('#perf-container');
   if (!c) return;
-  refreshClosedTradeSummary($('#perf-from'), $('#perf-to'), { allTime: _perfAllTime });
+  refreshClosedTradeSummary();
   c.className = 'loading'; c.textContent = 'Loading…';
-  const qs = _dateRangeQuery($('#perf-from'), $('#perf-to'), { allTime: _perfAllTime, defaultDays: 30 });
+  const qs = _sharedHistRangeQuery();
   _histChannelParam(qs);
   try {
     const data = await API('/api/stats/strategy-performance?' + qs);
@@ -9927,17 +9921,7 @@ async function loadStrategyPerformance() {
   }
 }
 
-$('#perf-refresh')?.addEventListener('click', () => { _perfAllTime = false; loadStrategyPerformance(); });
-$('#perf-reset')?.addEventListener('click', () => {
-  _perfAllTime = true;
-  const fromEl = $('#perf-from'), toEl = $('#perf-to');
-  if (fromEl) fromEl.value = '';
-  if (toEl) toEl.value = '';
-  loadStrategyPerformance();
-});
-$('#perf-from')?.addEventListener('change', () => { _perfAllTime = false; loadStrategyPerformance(); });
-$('#perf-to')?.addEventListener('change', () => { _perfAllTime = false; loadStrategyPerformance(); });
-
+// ---------------- Performance sub-tab ----------------
 function _perfColor(v) {
   if (v == null) return '';
   return v > 0 ? 'pnl-pos' : v < 0 ? 'pnl-neg' : '';
@@ -10428,8 +10412,14 @@ $('#hist-instrument').addEventListener('change', loadHistory);
 $('#hist-strategy').addEventListener('change', loadHistory);
 $('#hist-pnl').addEventListener('change', loadHistory);
 $('#hist-quality').addEventListener('change', loadHistory);
-$('#hist-from').addEventListener('change', loadHistory);
-$('#hist-to').addEventListener('change', loadHistory);
+$('#hist-from').addEventListener('change', _applySharedHistRange);
+$('#hist-to').addEventListener('change', _applySharedHistRange);
+$('#hist-range-apply')?.addEventListener('click', _applySharedHistRange);
+$('#hist-range-all')?.addEventListener('click', () => {
+  _histAllTime = true;
+  _syncHistAllTimeButton();
+  _reloadActiveHistoryTab();
+});
 const _histChannel = $('#hist-channel');
 if (_histChannel) _histChannel.addEventListener('change', _reloadActiveHistoryTab);
 
@@ -10445,8 +10435,6 @@ $('#hsug-instrument').addEventListener('change', loadHistorySuggestions);
 $('#hsug-strategy').addEventListener('change', loadHistorySuggestions);
 $('#hsug-quality').addEventListener('change', loadHistorySuggestions);
 $('#hsug-status').addEventListener('change', loadHistorySuggestions);
-$('#hsug-from').addEventListener('change', loadHistorySuggestions);
-$('#hsug-to').addEventListener('change', loadHistorySuggestions);
 
 // ---------------- Tab 5: Config ----------------
 function _cfgEncode(item) {

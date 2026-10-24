@@ -1968,9 +1968,28 @@ input:focus, select:focus, textarea:focus {
   color: var(--text); padding: 5px 8px; font-size: .85rem; cursor: pointer;
   height: 32px; box-sizing: border-box;
 }
+.hist-shared-filters { margin-bottom: 12px; }
+.hist-shared-filters .hist-date-input {
+  min-width: 11.5rem;
+  height: 40px;
+  min-height: 40px;
+  font-size: .95rem;
+  color-scheme: dark;
+}
+.hist-date-input::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: .9;
+  filter: invert(1);
+  padding: 4px;
+}
+#hist-range-all.is-active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 .hist-date-input:focus,
 #hist-instrument:focus, #hsug-instrument:focus, #hsug-status:focus { outline: none; border-color: var(--primary); }
 .hist-filter-bar .btn { height: 32px; padding: 0 14px; }
+.hist-shared-filters .btn { height: 40px; min-height: 40px; padding: 0 16px; }
 .hist-card {
   background: var(--surface);
   border: 1px solid #2a3744;
