@@ -9514,8 +9514,48 @@ document.querySelectorAll('.hist-subtab').forEach(btn => {
   });
 });
 
+function _closedTradeSummaryHtml(data) {
+  const invested = Number(data && data.total_invested) || 0;
+  const pnl = Number(data && data.total_pnl) || 0;
+  const charges = Number(data && data.total_charges) || 0;
+  const n = (data && data.trades) ? data.trades.length : 0;
+  const pnlCls = pnl > 0 ? 'pnl-pos' : (pnl < 0 ? 'pnl-neg' : '');
+  const totalPrem = invested > 0 ? { rs: invested, kind: 'paid' } : null;
+  const ret = invested > 0 ? (pnl / invested * 100).toFixed(1) + '%' : '—';
+  return `
+      <div class="chart-kv"><span>Total net P&amp;L</span><strong class="${pnlCls}">${formatPnlWithPct(pnl, totalPrem, { aggregate: true })}</strong></div>
+      <div class="chart-kv"><span>Total premium deployed</span><strong>₹${fmt(invested)}</strong></div>
+      <div class="chart-kv"><span>Return on premium</span><strong class="${pnlCls}">${ret}</strong></div>
+      <div class="chart-kv"><span>Total charges paid</span><strong>₹${fmt(charges)}</strong></div>
+      <div class="chart-kv"><span>Trades</span><strong>${n}</strong></div>`;
+}
+
+let _closedSummaryGen = 0;
+
+function _paintClosedTradeSummary(data, gen) {
+  if (gen != null && gen !== _closedSummaryGen) return;
+  const host = $('#chart-summary-row');
+  if (host) host.innerHTML = _closedTradeSummaryHtml(data);
+}
+
+async function refreshClosedTradeSummary(fromEl, toEl, { allTime = false } = {}) {
+  const host = $('#chart-summary-row');
+  if (!host) return;
+  const gen = ++_closedSummaryGen;
+  const qs = _dateRangeQuery(fromEl, toEl, { allTime, defaultDays: 30 });
+  _histChannelParam(qs);
+  try {
+    const data = await API('/api/stats/pnl-timeline?' + qs);
+    _paintClosedTradeSummary(data, gen);
+  } catch (e) {
+    if (gen !== _closedSummaryGen) return;
+    host.innerHTML = '<div class="muted">Closed-trade totals unavailable.</div>';
+  }
+}
+
 function loadHistory() {
   if (_histActiveSubtab !== 'trades') return;
+  refreshClosedTradeSummary($('#hist-from'), $('#hist-to'));
   const c = $('#history-container');
   c.className='loading'; c.textContent='Loading…';
 
@@ -9558,6 +9598,7 @@ function loadHistory() {
 
 async function loadHistorySuggestions() {
   if (_histActiveSubtab !== 'suggestions') return;
+  refreshClosedTradeSummary($('#hsug-from'), $('#hsug-to'));
   const c = $('#hsug-container');
   c.className='loading'; c.textContent='Loading…';
 
@@ -9814,8 +9855,8 @@ let _perfAllTime = false;
 async function loadPnlCharts() {
   const cumEl  = $('#chart-cumulative');
   const barEl  = $('#chart-strategy-bar');
-  const sumEl  = $('#chart-summary-row');
   if (!cumEl) return;
+  const summaryGen = ++_closedSummaryGen;
   cumEl.className = 'chart-wrap loading'; cumEl.textContent = 'Loading…';
   barEl.className = 'chart-wrap loading'; barEl.textContent = '';
 
@@ -9825,22 +9866,12 @@ async function loadPnlCharts() {
 
   try {
     const data = await API('/api/stats/pnl-timeline?' + qs);
+    _paintClosedTradeSummary(data, summaryGen);
     if (!data.trades.length) {
       cumEl.className = 'chart-wrap'; cumEl.innerHTML = '<div class="empty">No closed trades in selected period.</div>';
       barEl.className = 'chart-wrap'; barEl.innerHTML = '';
-      sumEl.innerHTML = '';
       return;
     }
-
-    // Summary strip
-    const pnlCls = data.total_pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-    const totalPrem = data.total_invested > 0 ? { rs: data.total_invested, kind: 'paid' } : null;
-    sumEl.innerHTML = `
-      <div class="chart-kv"><span>Total net P&amp;L</span><strong class="${pnlCls}">${formatPnlWithPct(data.total_pnl, totalPrem, { aggregate: true })}</strong></div>
-      <div class="chart-kv"><span>Total premium deployed</span><strong>₹${fmt(data.total_invested)}</strong></div>
-      <div class="chart-kv"><span>Return on premium</span><strong class="${pnlCls}">${data.total_invested > 0 ? (data.total_pnl / data.total_invested * 100).toFixed(1) + '%' : '—'}</strong></div>
-      <div class="chart-kv"><span>Total charges paid</span><strong>₹${fmt(data.total_charges)}</strong></div>
-      <div class="chart-kv"><span>Trades</span><strong>${data.trades.length}</strong></div>`;
 
     cumEl.className = 'chart-wrap';
     cumEl.innerHTML = _buildLineChart(data.trades, data.strategies);
@@ -9880,6 +9911,7 @@ $('#chart-to')?.addEventListener('change', () => { _chartAllTime = false; loadPn
 async function loadStrategyPerformance() {
   const c = $('#perf-container');
   if (!c) return;
+  refreshClosedTradeSummary($('#perf-from'), $('#perf-to'), { allTime: _perfAllTime });
   c.className = 'loading'; c.textContent = 'Loading…';
   const qs = _dateRangeQuery($('#perf-from'), $('#perf-to'), { allTime: _perfAllTime, defaultDays: 30 });
   _histChannelParam(qs);
