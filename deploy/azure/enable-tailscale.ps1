@@ -13,6 +13,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Invoke-External {
+    param([scriptblock]$Command)
+    $ErrorActionPreference = "Continue"
+    $output = & $Command 2>&1
+    $code = $LASTEXITCODE
+    if ($null -eq $code) { $code = 0 }
+    return [pscustomobject]@{ Code = [int]$code; Output = $output }
+}
 $DeployDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $DeployDir)
 $ConfigFile = Join-Path $DeployDir "laptop.config.ps1"
@@ -106,8 +115,10 @@ if (-not $tsIp -or $tsIp -notmatch '^100\.') {
 }
 Write-Host "    VM Tailscale address: $tsIp"
 
+$publicIp = if ($script:PublicVmHost) { [string]$script:PublicVmHost } else { "" }
+if (-not $publicIp -and $VmHost -notmatch '^100\.') { $publicIp = $VmHost }
 Write-Host "==> Refreshing the dashboard certificate for the tailnet address..."
-$remoteHttps = "cd '$VmProjectDir' && chmod +x deploy/azure/enable-https.sh && ./deploy/azure/enable-https.sh"
+$remoteHttps = "cd '$VmProjectDir' && chmod +x deploy/azure/enable-https.sh && FORCE_PUBLIC_IP='$publicIp' ./deploy/azure/enable-https.sh"
 & ssh @sshArgs $sshTarget $remoteHttps
 if ($LASTEXITCODE -ne 0) { throw "enable-https.sh failed after Tailscale join" }
 
@@ -115,23 +126,23 @@ Write-Host "==> Checking SSH and HTTPS over Tailscale before closing public port
 $tsTarget = "${VmUser}@${tsIp}"
 $ready = $false
 foreach ($try in 1..8) {
-    & ssh @sshArgs $tsTarget "echo ts_ok" 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+    $sshResult = Invoke-External { & ssh @sshArgs $tsTarget "echo ts_ok" }
+    if ($sshResult.Code -eq 0) { $ready = $true; break }
     Start-Sleep -Seconds 3
 }
 if (-not $ready) {
     throw "SSH to ${tsIp} failed. Public ports were left open."
 }
-$code = (& curl.exe -k -s -o NUL -w "%{http_code}" --max-time 20 "https://${tsIp}/")
-if ($code) { $code = $code.ToString().Trim() }
-if ($LASTEXITCODE -ne 0 -or $code -notmatch '^[0-9]{3}$' -or $code -eq "000") {
-    throw "Dashboard over Tailscale did not answer (curl exit $LASTEXITCODE, HTTP $code). Public ports were left open."
+$httpResult = Invoke-External { & curl.exe -k -s -o NUL -w "%{http_code}" --max-time 20 "https://${tsIp}/" }
+$code = "$($httpResult.Output)".Trim()
+if ($httpResult.Code -ne 0 -or $code -notmatch '^[0-9]{3}$' -or $code -eq "000") {
+    throw "Dashboard over Tailscale did not answer (curl exit $($httpResult.Code), HTTP $code). Public ports were left open."
 }
 
 if (-not $SkipLockdown) {
     Write-Host "==> Marking the VM so later installs do not reopen public ports..."
-    & ssh @sshArgs $tsTarget "mkdir -p '$VmProjectDir/data' && printf '%s\n' locked > '$VmProjectDir/data/tailscale_lockdown'"
-    if ($LASTEXITCODE -ne 0) { throw "Could not write tailscale_lockdown marker" }
+    $markResult = Invoke-External { & ssh @sshArgs $tsTarget "mkdir -p '$VmProjectDir/data' && printf '%s\n' locked > '$VmProjectDir/data/tailscale_lockdown'" }
+    if ($markResult.Code -ne 0) { throw "Could not write tailscale_lockdown marker" }
 
     & (Join-Path $DeployDir "close-public-inbound.ps1")
     if ($LASTEXITCODE -ne 0) { throw "close-public-inbound.ps1 failed" }

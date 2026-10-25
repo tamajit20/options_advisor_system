@@ -122,7 +122,7 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 | 4    | `.\deploy\azure\setup-new-environment.ps1` (or `-RestoreFromBackup "PATH\to.bak"`; or `setup-laptop.ps1` only) — self-signed HTTPS, joins laptop + VM to Tailscale, then closes public inbound 22/80/443/5001 |
 | 5    | `python scripts/validate_setup_sync.py` then `.\deploy\azure\Test-EnvironmentSetup.ps1` until exit 0                                                     |
 | 6    | On VM: `git pull` + `chmod +x deploy/*.sh ...` + `./deploy/vm-restart.sh`                                                                                |
-| 7    | Report: `https://<VmHost>/` is the Tailscale address (accept cert warning once). Install the Tailscale app on the phone and sign in to the same tailnet. Set the Zerodha redirect to `https://<VmHost>/zerodha/callback`. Zerodha login is still manual |
+| 7    | Report: `https://<VmHost>/` is the Tailscale address (accept cert warning once). Install the Tailscale app on the phone and sign in to the same tailnet. Set the Zerodha redirect to `https://<tailscale-name>.ts.net/zerodha/callback` (the MagicDNS name, not the `100.x` address). Zerodha login is still manual |
 
 
 **VM-only alternative:** `.\deploy\azure\remote-vm-install.ps1`, or SSH + clone + `.env.docker` + `./deploy/vm-install-deploy.sh`.
@@ -264,7 +264,7 @@ Dashboard: `https://<VmHost>/` (self-signed). `VmHost` is the VM's Tailscale add
 az login   # if needed
 .\deploy\azure\enable-tailscale.ps1
 ```
-Then open `https://<VmHost>/` → Advanced → Proceed (one-time warning). Put that same host in the Zerodha app redirect: `https://<VmHost>/zerodha/callback`.
+Then open `https://<VmHost>/` → Advanced → Proceed (one-time warning). In the Zerodha app, set the redirect to the Tailscale name, for example `https://options-advisor.<tailnet>.ts.net/zerodha/callback`. Zerodha's form rejects the `100.x` address.
 
 Do not run `open-port-https.ps1` afterward. A later install sees `data/tailscale_lockdown` on the VM and does not reopen 80/443.
 

@@ -37,11 +37,24 @@ EMAIL="${CADDY_ACME_EMAIL:-}"
 PUBLIC="${OPT_PUBLIC_BASE_URL:-}"
 
 _detect_public_ip() {
-  curl -sf -H Metadata:true --max-time 2 \
+  local ip=""
+  ip="$(curl -sf -H Metadata:true --max-time 2 \
     "http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress?api-version=2021-02-01&format=text" \
-    2>/dev/null \
-    || curl -sf --max-time 3 https://api.ipify.org 2>/dev/null \
-    || hostname -I 2>/dev/null | awk '{print $1}'
+    2>/dev/null || true)"
+  ip="${ip//$'\r'/}"
+  ip="${ip//$'\n'/}"
+  ip="${ip// /}"
+  if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    printf '%s\n' "$ip"
+    return 0
+  fi
+  ip="$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  ip="${ip//$'\r'/}"
+  ip="${ip//$'\n'/}"
+  ip="${ip// /}"
+  if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    printf '%s\n' "$ip"
+  fi
 }
 
 _upsert_env() {
@@ -61,6 +74,27 @@ PUBLIC_IP="${PUBLIC_IP// /}"
 case "$MODE" in
   selfsigned|internal|ip)
     MODE=selfsigned
+    TS_IP=""
+    TS_DNS=""
+    if command -v tailscale >/dev/null 2>&1; then
+      TS_IP="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+      if [[ -z "$TS_IP" ]]; then
+        TS_IP="$(sudo tailscale ip -4 2>/dev/null | head -n1 || true)"
+      fi
+      TS_JSON="$(tailscale status --json 2>/dev/null || sudo tailscale status --json 2>/dev/null || true)"
+      TS_DNS="$(printf '%s' "$TS_JSON" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+name=((d.get("Self") or {}).get("DNSName") or "").strip().rstrip(".")
+if name:
+    print(name)
+' 2>/dev/null || true)"
+    fi
+    if [[ -z "$PUBLIC_IP" && -n "$TS_IP" ]]; then
+      PUBLIC_IP="$TS_IP"
+    fi
     if [[ -z "$PUBLIC_IP" ]]; then
       echo "ERROR: Could not detect public IP for self-signed cert. Set OPT_PUBLIC_BASE_URL=https://YOUR_IP"
       exit 1
@@ -68,20 +102,17 @@ case "$MODE" in
     mkdir -p deploy/caddy/certs
     CERT=deploy/caddy/certs/cert.pem
     KEY=deploy/caddy/certs/key.pem
-    TS_IP=""
-    if command -v tailscale >/dev/null 2>&1; then
-      TS_IP="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
-      if [[ -z "$TS_IP" ]]; then
-        TS_IP="$(sudo tailscale ip -4 2>/dev/null | head -n1 || true)"
-      fi
-    fi
     SAN="IP:${PUBLIC_IP},DNS:localhost"
     CN="${PUBLIC_IP}"
     if [[ -n "$TS_IP" && "$TS_IP" != "$PUBLIC_IP" ]]; then
       SAN="IP:${TS_IP},${SAN}"
       CN="${TS_IP}"
     fi
-    STAMP="${PUBLIC_IP}|${TS_IP}"
+    if [[ -n "$TS_DNS" ]]; then
+      SAN="DNS:${TS_DNS},${SAN}"
+      CN="${TS_DNS}"
+    fi
+    STAMP="${PUBLIC_IP}|${TS_IP}|${TS_DNS}"
     if [[ ! -f "$CERT" || ! -f "$KEY" || ! -f deploy/caddy/certs/.for_ip || "$(cat deploy/caddy/certs/.for_ip 2>/dev/null)" != "$STAMP" ]]; then
       echo "==> Generating self-signed cert for ${CN} (825 days)..."
       openssl req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes \
@@ -99,7 +130,15 @@ case "$MODE" in
       echo "==> Reusing existing self-signed cert in deploy/caddy/certs/"
     fi
     cp -f deploy/caddy/Caddyfile.selfsigned deploy/caddy/Caddyfile
-    if [[ -n "$TS_IP" ]]; then
+    if [[ -n "$TS_DNS" ]]; then
+      case "$PUBLIC" in
+        ""|"https://${PUBLIC_IP}"|"https://${PUBLIC_IP}/"|"https://${TS_IP}"|"https://${TS_IP}/")
+          PUBLIC="https://${TS_DNS}"
+          _upsert_env OPT_PUBLIC_BASE_URL "$PUBLIC"
+          echo "==> Set OPT_PUBLIC_BASE_URL=${PUBLIC}"
+          ;;
+      esac
+    elif [[ -n "$TS_IP" ]]; then
       case "$PUBLIC" in
         ""|"https://${PUBLIC_IP}"|"https://${PUBLIC_IP}/")
           PUBLIC="https://${TS_IP}"
