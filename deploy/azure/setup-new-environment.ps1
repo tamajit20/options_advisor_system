@@ -151,6 +151,7 @@ Write-Host ""
 . $LaptopConfig
 Write-Host " Dashboard: https://$($script:VmHost)/  (self-signed - accept browser warning once)"
 Write-Host "            Tailscale only. Public inbound 22/80/443/5001 are closed."
+Write-Host " Zerodha redirect: the .ts.net name from the Tailscale step. Zerodha rejects the 100.x address."
 Write-Host ""
 Write-Host " Automated weekly:"
 Write-Host "   VM Fri: archive + export | Laptop Mon-Fri 09:15: pull until ACK, then wait"
