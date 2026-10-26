@@ -3108,7 +3108,7 @@ function wrapCollapsibleCard(summaryHtml, bodyHtml, { open = false, className = 
 
 function bindCollapsibleCardInteractions(root) {
   const scope = root || document;
-  scope.querySelectorAll('.collapsible-card summary button, .collapsible-card summary a, .collapsible-card summary input, .collapsible-card summary select, .collapsible-card summary textarea, .collapsible-card summary label').forEach(el => {
+  scope.querySelectorAll('.collapsible-card summary button, .collapsible-card summary a, .collapsible-card summary input, .collapsible-card summary select, .collapsible-card summary textarea, .collapsible-card summary label, .collapsible-card summary .id-chip').forEach(el => {
     if (el.dataset.collapseBound === '1') return;
     el.dataset.collapseBound = '1';
     el.addEventListener('click', e => {
@@ -7695,6 +7695,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       </div>
       <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
+    ${s.suggestion_id ? `<div class="card-id-row">${_idChipsHtml(null, s.suggestion_id)}</div>` : ''}
     <div class="collapsible-preview">
       <span>PoP <strong>${fmtPct(econ.pop)}</strong></span>
       <span>Credit <strong>₹${fmt(econ.np)}</strong>/u</span>
@@ -7707,9 +7708,6 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
   const bodyHtml = `
     ${gateBanner}
     ${_instrumentOverlapWarningHtml(s.instrument_overlaps)}
-    <div class="card-id-row">
-      <span class="id-chip" title="Suggestion ID">${escapeHtml(s.suggestion_id || '—')}</span>
-    </div>
     ${renderStrategyRationale(s)}
     ${renderPlainEnglishStructured(s)}
     <div class="kv-grid">

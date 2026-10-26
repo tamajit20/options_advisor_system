@@ -347,6 +347,7 @@ a { color: var(--accent); text-decoration: none; }
   width: 2px; height: 8px;
 }
 .card-id-row { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.collapsible-summary .card-id-row { margin: 8px 0 0; }
 
 /* ---------- Collapsible suggestion / trade cards ---------- */
 details.collapsible-card > summary {

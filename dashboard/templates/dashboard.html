@@ -42,6 +42,13 @@
     <div id="index-spot-strip" class="index-spot-strip" aria-live="polite" aria-label="Index spot prices"></div>
     <div id="global-banners" class="global-banners" aria-live="polite" hidden></div>
   </div>
+  <nav class="options-subtabs" id="options-subtabs-bar" role="tablist" aria-label="Options Advisor sections">
+    <button type="button" class="options-subtab active" data-tab="suggestion">Suggestion</button>
+    <button type="button" class="options-subtab" data-tab="trades">Trades</button>
+    <button type="button" class="options-subtab" data-tab="learn">Learning</button>
+    <button type="button" class="options-subtab" data-tab="history">History</button>
+    <button type="button" class="options-subtab" data-tab="config">Config</button>
+  </nav>
   <div class="header-actions">
     <div id="zerodha-profile-chip" class="idx-chip idx-chip-live zerodha-funds-chip" hidden
          title="Available margin — updates every 30 minutes."
@@ -107,14 +114,6 @@
   </nav>
 
   <section class="tab-panels">
-    <nav class="options-subtabs" id="options-subtabs-bar" role="tablist" aria-label="Options Advisor sections" hidden>
-      <button type="button" class="options-subtab active" data-tab="suggestion">Suggestion</button>
-      <button type="button" class="options-subtab" data-tab="trades">Trades</button>
-      <button type="button" class="options-subtab" data-tab="learn">Learning</button>
-      <button type="button" class="options-subtab" data-tab="history">History</button>
-      <button type="button" class="options-subtab" data-tab="config">Config</button>
-    </nav>
-
     <article class="panel active" id="panel-suggestion" aria-hidden="false">
       <div class="suggestion-header">
         <h2 class="panel-title">Today's Suggestion</h2>
