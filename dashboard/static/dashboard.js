@@ -773,15 +773,28 @@ function _renderZerodhaPreviewTable(preview) {
     </div>`;
 }
 
+/** Peak / Avail / insufficient only on an unexecuted suggestion. Held trades show the amount alone. */
+function _showsPlacementFunds(card) {
+  if (!card) return false;
+  if (card.classList.contains('trade-zerodha-margin')) return false;
+  if (card.classList.contains('orig-sug-details') || card.closest('.orig-sug-details')) return false;
+  return true;
+}
+
 function _setSuggestionMarginStatus(card, text, { ok = false, warn = false } = {}) {
   const el = card.querySelector('[data-econ-z-margin]');
-  if (el) {
-    el.hidden = false;
-    el.removeAttribute('hidden');
-    el.textContent = text;
-    el.classList.toggle('cb-status-ok', !!ok);
-    el.classList.toggle('cb-status-warn', !!warn);
+  if (!el) return;
+  if (!_showsPlacementFunds(card)) {
+    el.hidden = true;
+    el.textContent = '';
+    el.classList.remove('cb-status-ok', 'cb-status-warn');
+    return;
   }
+  el.hidden = false;
+  el.removeAttribute('hidden');
+  el.textContent = text;
+  el.classList.toggle('cb-status-ok', !!ok);
+  el.classList.toggle('cb-status-warn', !!warn);
 }
 
 function _formatZerodhaMarginOnCard(preview) {
@@ -855,22 +868,28 @@ function _applyZerodhaMarginToCard(card, preview) {
   card.dataset.marginMessage = preview.margin_message
     ? String(preview.margin_message)
     : (info.blocked ? 'Not enough funds for peak margin + buffer' : '');
+  const showFunds = _showsPlacementFunds(card);
   const hint = card.querySelector('[data-econ-cap-hint]');
-  if (hint) {
-    hint.textContent = card.classList.contains('trade-zerodha-margin')
-      ? 'Zerodha Final is the margin already held for this trade. Peak is the most Zerodha held while the legs were placed.'
-      : 'Zerodha Final (full basket). Peak below is the highest margin while placing legs; orders need Peak + buffer in available cash.';
+  if (hint && showFunds) {
+    hint.textContent = 'Zerodha Final (full basket). Peak below is the highest margin while placing legs; orders need Peak + buffer in available cash.';
   }
-  _setSuggestionMarginStatus(card, info.line, {
-    ok: preview.margin_ok === true,
-    warn: !!info.blocked,
-  });
+  if (showFunds) {
+    _setSuggestionMarginStatus(card, info.line, {
+      ok: preview.margin_ok === true,
+      warn: !!info.blocked,
+    });
+  } else {
+    _setSuggestionMarginStatus(card, '');
+  }
   _refreshHeldMarginPnl(card, amountRs);
   const compact = card.querySelector('[data-econ-z-margin-compact]');
-  if (compact) {
+  if (compact && showFunds) {
     compact.hidden = false;
     compact.removeAttribute('hidden');
     compact.innerHTML = ` <span class="muted">(Peak \u20b9${fmt(info.peak)})</span>`;
+  } else if (compact) {
+    compact.hidden = true;
+    compact.textContent = '';
   }
   refreshPrePlaceReview(card);
 }
@@ -2290,7 +2309,7 @@ const TERM_HELP = {
   },
   amount_used: {
     label: 'Amount used',
-    html: '<strong>Amount used</strong> — Zerodha <em>Final</em> margin already held for this trade. The percent in brackets is net profit or loss divided by this amount. <em>Peak</em> is the most Zerodha held while the legs were placed.',
+    html: '<strong>Amount used</strong> — Zerodha <em>Final</em> margin already held for this trade. The percent in brackets is net profit or loss divided by this amount.',
   },
   capital_required: {
     label: 'Amount needed',
@@ -5404,8 +5423,6 @@ function renderTradeKvGrid(t, legs) {
       <div data-sug-id="${escapeHtml(t.suggestion_id)}" class="trade-zerodha-margin">
         ${kvLabel('Amount used', 'amount_used')}<br>
         <span class="v econ-cap-req">\u2014</span>
-        <span class="econ-z-margin muted" data-econ-z-margin style="font-size:.75rem;display:block;margin-top:2px">Fetching Zerodha Final / Peak\u2026</span>
-        <span class="muted" data-econ-cap-hint style="font-size:.75rem;display:block;margin-top:2px">Zerodha Final is the margin already held for this trade. Peak is the most Zerodha held while the legs were placed.</span>
       </div>` : '<div></div>';
   return `
       <div>${kvLabel('Entry date')}<br><span class="v">${fmtDt(t.executed_on)}</span></div>
@@ -7862,7 +7879,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     <div class="collapsible-preview">
       <span>PoP <strong>${fmtPct(econ.pop)}</strong></span>
       <span>Credit <strong>₹${fmt(econ.np)}</strong>/u</span>
-      ${`<span>${capitalReq.label} <strong class="econ-cap-req-compact">${capitalReq.rs != null ? `₹${fmt(capitalReq.rs)}` : '—'}</strong><span class="econ-z-margin-compact" data-econ-z-margin-compact hidden></span></span>`}
+      ${`<span>${capitalReq.label} <strong class="econ-cap-req-compact">${capitalReq.rs != null ? `₹${fmt(capitalReq.rs)}` : '—'}</strong>${readOnly ? '' : '<span class="econ-z-margin-compact" data-econ-z-margin-compact hidden></span>'}</span>`}
       <span>Max loss <strong>₹${fmt(econ.ml)}</strong></span>
       ${s.dte != null ? `<span>DTE <strong>${s.dte}</strong></span>` : ''}
       ${(s.instrument_overlaps || []).length ? '<span class="tag tag-warn">Same instrument as a live trade</span>' : ''}
@@ -7878,7 +7895,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       ${s.expiry_date ? `<div>${kvLabel('Options expiry', 'dte')}<br><span class="v">${fmtDate(s.expiry_date)}${s.dte != null ? ` <span class="muted">(${s.dte} DTE)</span>` : ''}</span></div>` : (s.dte != null ? `<div>${kvLabel('DTE', 'dte')}<br><span class="v">${s.dte}</span></div>` : '')}
       <div>${kvLabel('Net credit (per unit)', 'credit_per_unit')}<br><span class="v econ-np">₹${fmt(econ.np)}</span></div>
       <div>${kvLabel('Total credit')}<br><span class="v econ-tot-credit">₹${fmt(baseTotalCredit)}<span class="econ-qty-hint muted" style="font-size:.75rem"> (×${baseQty})</span></span></div>
-      <div>${kvLabel(capitalReq.label, capitalReq.key)}<br><span class="v econ-cap-req">${capitalReq.rs != null ? `₹${fmt(capitalReq.rs)}` : '—'}</span><span class="econ-z-margin muted" data-econ-z-margin style="font-size:.75rem;display:block;margin-top:2px">Fetching Zerodha Final / Peak…</span><span class="muted" style="font-size:.75rem;display:block;margin-top:2px" data-econ-cap-hint>${escapeHtml(capitalReq.hint || 'Engine estimate — replaced by Zerodha Final when the session quotes')}</span></div>
+      <div>${kvLabel(capitalReq.label, capitalReq.key)}<br><span class="v econ-cap-req">${capitalReq.rs != null ? `₹${fmt(capitalReq.rs)}` : '—'}</span>${readOnly ? '' : '<span class="econ-z-margin muted" data-econ-z-margin style="font-size:.75rem;display:block;margin-top:2px">Fetching Zerodha Final / Peak…</span>'}<span class="muted" style="font-size:.75rem;display:block;margin-top:2px" data-econ-cap-hint>${escapeHtml(capitalReq.hint || 'Engine estimate — replaced by Zerodha Final when the session quotes')}</span></div>
       <div>${kvLabel('Max profit', 'max_profit')}<br><span class="v econ-mp">₹${fmt(econ.mp)}</span></div>
       <div>${kvLabel('Max loss', 'max_loss')}<br><span class="v econ-ml">₹${fmt(econ.ml)}<span class="econ-ml-hint">${pctHint(econ.ml, econ.np, 'credit')}</span></span></div>
       <div>${kvLabel('PoP', 'pop')}<br><span class="v">${fmtPct(econ.pop)}</span></div>
