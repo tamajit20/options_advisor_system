@@ -1758,19 +1758,23 @@ function _snapshotClosePnl(panel, tradeId) {
 
 function _renderClosePnlBlock(pnl) {
   const row = pnl || {};
+  const tone = (amount) => (amount > 0 ? 'pnl-profit' : (amount < 0 ? 'pnl-loss' : ''));
   const money = (amount) => (amount == null || isNaN(amount) ? '\u2014' : _fmtSignedInr(amount));
+  const signed = (amount, pct) => {
+    const cls = tone(amount);
+    return `<strong class="${cls}">${money(amount)}</strong> <span class="${cls}">${pct || ''}</span>`;
+  };
   const premPct = (amount) => (amount != null && row.premium)
     ? pnlPctTextCompact(amount, row.premium) : '';
   const usedPct = (row.net != null && row.marginFinal > 0)
     ? pnlPctTextCompact(row.net, { rs: row.marginFinal }) : '';
-  const usedCls = row.net > 0 ? 'pnl-profit' : (row.net < 0 ? 'pnl-loss' : 'muted');
   const usedAmt = row.marginFinal > 0 ? `\u20b9${fmt(row.marginFinal)}` : '\u2014';
   return `
     <div style="margin:0 0 10px;padding:8px 10px;border:1px solid #2a3744;border-radius:6px">
-      <div>Gross <strong>${money(row.gross)}</strong> <span class="muted">${premPct(row.gross)}</span></div>
+      <div>Gross ${signed(row.gross, premPct(row.gross))}</div>
       <div class="muted" style="font-size:.82rem">Est. charges ${row.charges != null ? '\u20b9' + fmt(row.charges) : '\u2014'}</div>
-      <div>Net <strong>${money(row.net)}</strong> <span class="muted">${premPct(row.net)}</span></div>
-      <div>Amount used <strong>${usedAmt}</strong> <span class="${usedCls}">${usedPct}</span></div>
+      <div>Net ${signed(row.net, premPct(row.net))}</div>
+      <div>Amount used <strong>${usedAmt}</strong> <span class="${tone(row.net)}">${usedPct}</span></div>
     </div>`;
 }
 
