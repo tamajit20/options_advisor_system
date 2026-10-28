@@ -259,31 +259,29 @@
     width: 100%;
     margin-top: 4px;
     margin-left: 0;
-    flex-direction: column;
     align-items: stretch;
     gap: 8px;
     overflow: visible;
   }
   .card-head-badges {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    align-items: center;
+    justify-content: flex-start;
   }
   .card-head-pnl-row {
-    display: block;
-    width: 100%;
+    justify-content: stretch;
   }
   .card-head-pnl-row .tag-current-pnl {
     width: 100%;
     box-sizing: border-box;
-    justify-content: space-between;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    text-transform: none;
-    letter-spacing: 0;
+  }
+  .card-head-pnl-row .cpnl-metrics,
+  .card-head-pnl-row .cpnl-main,
+  .card-head-pnl-row .cpnl-pair-used {
+    width: 100%;
+    align-items: flex-start;
+  }
+  .card-head-pnl-row .cpnl-main {
+    flex-wrap: wrap;
+    row-gap: 4px;
   }
   .card-head-tags > .card-head-btn {
     width: 100%;

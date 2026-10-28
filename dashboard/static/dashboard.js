@@ -1710,10 +1710,11 @@ function _paintFillAmountUsed(container, net) {
     if (pctEl) pctEl.textContent = '';
     return;
   }
-  _setPnlLine(el, null, net, null);
+  el.textContent = `\u20b9${fmt(margin)}`;
+  el.className = (el.className || '').replace(/pnl-pos|pnl-neg/g, '').trim();
   if (pctEl) {
     pctEl.textContent = pnlPctTextCompact(net, { rs: margin });
-    pctEl.className = 'pnl-pct-bracket muted' + (net >= 0 ? ' pnl-pos' : ' pnl-neg');
+    pctEl.className = 'pnl-pct-bracket' + (net >= 0 ? ' pnl-pos' : ' pnl-neg');
   }
 }
 
@@ -1762,13 +1763,14 @@ function _renderClosePnlBlock(pnl) {
     ? pnlPctTextCompact(amount, row.premium) : '';
   const usedPct = (row.net != null && row.marginFinal > 0)
     ? pnlPctTextCompact(row.net, { rs: row.marginFinal }) : '';
-  const usedAmt = (row.net != null && row.marginFinal > 0) ? money(row.net) : '\u2014';
+  const usedCls = row.net > 0 ? 'pnl-profit' : (row.net < 0 ? 'pnl-loss' : 'muted');
+  const usedAmt = row.marginFinal > 0 ? `\u20b9${fmt(row.marginFinal)}` : '\u2014';
   return `
     <div style="margin:0 0 10px;padding:8px 10px;border:1px solid #2a3744;border-radius:6px">
       <div>Gross <strong>${money(row.gross)}</strong> <span class="muted">${premPct(row.gross)}</span></div>
       <div class="muted" style="font-size:.82rem">Est. charges ${row.charges != null ? '\u20b9' + fmt(row.charges) : '\u2014'}</div>
       <div>Net <strong>${money(row.net)}</strong> <span class="muted">${premPct(row.net)}</span></div>
-      <div>Amount used <strong>${usedAmt}</strong> <span class="muted">${usedPct}</span></div>
+      <div>Amount used <strong>${usedAmt}</strong> <span class="${usedCls}">${usedPct}</span></div>
     </div>`;
 }
 
@@ -1822,13 +1824,14 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
         const basis = net != null ? net : displayMtm;
         const marginBase = parseFloat(el.dataset.marginFinal);
         const haveBase = Number.isFinite(marginBase) && marginBase > 0;
-        marginEl.textContent = haveBase ? _fmtSignedInr(basis) : '\u2014';
-        marginEl.classList.toggle('mtm-pos', haveBase && basis > 0);
-        marginEl.classList.toggle('mtm-neg', haveBase && basis < 0);
+        marginEl.textContent = haveBase ? `\u20b9${fmt(marginBase)}` : '\u2014';
+        marginEl.classList.remove('mtm-pos', 'mtm-neg');
         if (marginPctEl) {
           marginPctEl.textContent = (haveBase && basis != null)
             ? pnlPctTextCompact(basis, { rs: marginBase })
             : '';
+          marginPctEl.classList.toggle('mtm-pos', haveBase && basis > 0);
+          marginPctEl.classList.toggle('mtm-neg', haveBase && basis < 0);
         }
       }
       el.classList.toggle('mtm-pos', colorSrc > 0);
@@ -1840,7 +1843,7 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
       const chTip = (!isNaN(charges) && charges >= 0)
         ? ` · est. charges \u20b9${fmt(charges)}`
         : '';
-      el.title = 'Net = live MTM minus estimated round-trip charges. Gross = raw MTM. Amount used % = net \u00f7 Zerodha Final (cash Zerodha already holds for this trade).'
+      el.title = 'Net = live MTM minus estimated round-trip charges. Gross = raw MTM. Amount used = Zerodha Final already held; the percent is net \u00f7 that amount.'
         + premTip + chTip + (asOf ? ' as of ' + asOf + ' IST' : '') + '. ' + feed.tip;
       return;
     }
@@ -2267,7 +2270,7 @@ const TERM_HELP = {
   },
   mtm: {
     label: 'MTM / P&L',
-    html: '<strong>MTM</strong> (mark-to-market) — Live profit/loss from current option prices vs your entry fills. Shows <em>Net</em> (MTM minus estimated round-trip charges) and <em>Gross</em> (raw MTM the engine uses), each with % of premium. <em>Amount used</em> is that same net divided by Zerodha Final — the cash Zerodha already holds for this trade. Changes every tick; not final until you close.',
+    html: '<strong>MTM</strong> (mark-to-market) — Live profit/loss from current option prices vs your entry fills. Shows <em>Net</em> (MTM minus estimated round-trip charges) and <em>Gross</em> (raw MTM the engine uses), each with % of premium. <em>Amount used</em> is the cash Zerodha already holds, with net profit or loss as a percent of that amount in brackets. Changes every tick; not final until you close.',
   },
   max_profit: {
     label: 'Max profit',
@@ -2283,7 +2286,7 @@ const TERM_HELP = {
   },
   amount_used: {
     label: 'Amount used',
-    html: '<strong>Amount used</strong> — Zerodha <em>Final</em> margin already held for this trade. <em>Peak</em> is the most Zerodha held while the legs were placed. The percent beside P&amp;L is net profit or loss divided by this amount.',
+    html: '<strong>Amount used</strong> — Zerodha <em>Final</em> margin already held for this trade. The percent in brackets is net profit or loss divided by this amount. <em>Peak</em> is the most Zerodha held while the legs were placed.',
   },
   capital_required: {
     label: 'Amount needed',
@@ -4409,23 +4412,24 @@ function renderLiveProfitLevels(t) {
           <span class="lpl-label">${labelWithHelp('Current P&amp;L', 'mtm')}</span>
           <span class="lpl-val-line">
             <span class="cpnl-metrics">
-              <span class="cpnl-pair">
-                <span class="cpnl-k">Net</span>
-                <strong class="cpnl-val cpnl-net-val lpl-current-val">${_fmtSignedInr(seedNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct lpl-current-pct muted">${seedNetPct}</span>
+              <span class="cpnl-main">
+                <span class="cpnl-pair">
+                  <span class="cpnl-k">Net</span>
+                  <strong class="cpnl-val cpnl-net-val lpl-current-val">${_fmtSignedInr(seedNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct lpl-current-pct muted">${seedNetPct}</span>
+                </span>
+                <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+                <span class="cpnl-pair">
+                  <span class="cpnl-k">Gross</span>
+                  <strong class="cpnl-gross-val${seedGrossCls}">${_fmtSignedInr(seedMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${seedGrossPct}</span>
+                </span>
               </span>
-              <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
-              <span class="cpnl-pair">
-                <span class="cpnl-k">Gross</span>
-                <strong class="cpnl-gross-val${seedGrossCls}">${_fmtSignedInr(seedMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${seedGrossPct}</span>
-              </span>
-              <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
-              <span class="cpnl-pair">
+              <span class="cpnl-pair cpnl-pair-used">
                 <span class="cpnl-k">Amount used</span>
                 <strong class="cpnl-margin-val">\u2014</strong><span class="cpnl-pct-bracket cpnl-margin-pct muted"></span>
               </span>
             </span>
           </span>
-          <span class="muted lpl-note">Net = MTM \u2212 est. charges \u00b7 Gross = raw MTM \u00b7 Amount used = net \u00f7 Zerodha Final</span>
+          <span class="muted lpl-note">Net = MTM \u2212 est. charges \u00b7 Gross = raw MTM \u00b7 Amount used = Zerodha Final (percent = net \u00f7 that amount)</span>
         </div>`;
   const mpRaw = t.actual_max_profit != null ? t.actual_max_profit
               : (sug.max_profit != null ? sug.max_profit : null);
@@ -9529,22 +9533,22 @@ function renderTrade(t, expanded = false) {
         ${_entryQualBadge}
         </div>
         <div class="card-head-pnl-row">
-        <span class="tag tag-current-pnl live-mtm${_headerMtmCls}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs}${_chargesAttr} title="Net = live MTM minus estimated round-trip charges. Gross = raw MTM. Amount used % = net \u00f7 Zerodha Final.">
-          <span class="cpnl-label">P&amp;L</span>
+        <span class="tag tag-current-pnl live-mtm${_headerMtmCls}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs}${_chargesAttr} title="Net = live MTM minus estimated round-trip charges. Gross = raw MTM. Amount used = Zerodha Final; percent = net \u00f7 that amount.">
           <span class="cpnl-metrics">
-            <span class="cpnl-pair">
-              <span class="cpnl-k">Net</span>
-              <strong class="cpnl-val cpnl-net-val">${_fmtSignedInr(_headerNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct muted">${_headerNetPct}</span>
+            <span class="cpnl-main">
+              <span class="cpnl-pair">
+                <span class="cpnl-k">Net</span>
+                <span class="cpnl-fig"><strong class="cpnl-val cpnl-net-val">${_fmtSignedInr(_headerNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct muted">${_headerNetPct}</span></span>
+              </span>
+              <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+              <span class="cpnl-pair">
+                <span class="cpnl-k">Gross</span>
+                <span class="cpnl-fig"><strong class="cpnl-gross-val${_headerGrossCls}">${_fmtSignedInr(_headerMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${_headerGrossPct}</span></span>
+              </span>
             </span>
-            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
-            <span class="cpnl-pair">
-              <span class="cpnl-k">Gross</span>
-              <strong class="cpnl-gross-val${_headerGrossCls}">${_fmtSignedInr(_headerMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${_headerGrossPct}</span>
-            </span>
-            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
-            <span class="cpnl-pair">
+            <span class="cpnl-pair cpnl-pair-used">
               <span class="cpnl-k">Amount used</span>
-              <strong class="cpnl-margin-val">\u2014</strong><span class="cpnl-pct-bracket cpnl-margin-pct muted"></span>
+              <span class="cpnl-fig"><strong class="cpnl-margin-val">\u2014</strong><span class="cpnl-pct-bracket cpnl-margin-pct muted"></span></span>
             </span>
           </span>
         </span>
@@ -10326,7 +10330,7 @@ function _marginPnlText(amount, baseRs) {
   const n = Number(amount);
   const base = Number(baseRs);
   if (!Number.isFinite(n) || !Number.isFinite(base) || base <= 0) return '\u2014';
-  return `${_fmtSignedInr(n)}${pnlPctTextCompact(n, { rs: base })}`;
+  return `\u20b9${fmt(base)} <span class="${n > 0 ? 'pnl-profit' : (n < 0 ? 'pnl-loss' : '')}">${pnlPctTextCompact(n, { rs: base })}</span>`;
 }
 
 async function _fillHistoryMarginPnl(row) {
@@ -10375,8 +10379,8 @@ async function _fillHistoryMarginPnl(row) {
       if (act) act.textContent = 'Zerodha Final unavailable';
       return;
     }
-    if (act) act.textContent = _marginPnlText(row.dataset.netPnl, fin);
-    if (sug) sug.textContent = row.dataset.sugNetPnl != null && row.dataset.sugNetPnl !== ''
+    if (act) act.innerHTML = _marginPnlText(row.dataset.netPnl, fin);
+    if (sug) sug.innerHTML = row.dataset.sugNetPnl != null && row.dataset.sugNetPnl !== ''
       ? _marginPnlText(row.dataset.sugNetPnl, fin)
       : '\u2014';
     row.dataset.marginHydrated = '1';
@@ -10494,7 +10498,7 @@ function renderHistoryTrade(t) {
       <div class="hcmp-row hist-margin-pnl" data-hist-margin-pnl="1" data-sug-id="${escapeHtml(t.suggestion_id)}"${pnl != null ? ` data-net-pnl="${pnl}"` : ''}${s.est_net_pnl != null ? ` data-sug-net-pnl="${s.est_net_pnl}"` : ''}${_historyTradeLots(t) != null ? ` data-lots="${_historyTradeLots(t)}"` : ''}>
         <span class="hcmp-key">${labelWithHelp('Amount used', 'amount_used')}</span>
         <span class="hcmp-sug hist-margin-sug">\u2014</span>
-        <span class="hcmp-act hist-margin-act ${pnlClass}">\u2014</span>
+        <span class="hcmp-act hist-margin-act">\u2014</span>
       </div>` : ''}
       ${cmp('Spot at entry',     s.spot != null ? fmt(s.spot) : '—',  t.spot_at_execution != null ? fmt(t.spot_at_execution) : '—')}
       ${cmp('Upper breakeven',   s.upper_be != null ? fmt(s.upper_be) : '—',  t.actual_upper_be != null ? fmt(t.actual_upper_be) : '—')}
