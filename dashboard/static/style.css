@@ -293,9 +293,14 @@ a { color: var(--accent); text-decoration: none; }
   justify-content: flex-end;
   min-height: 28px;
 }
-.card-head-badges,
-.card-head-pnl-row {
+.card-head-badges {
   display: contents;
+}
+.card-head-pnl-row {
+  display: flex;
+  flex: 1 0 100%;
+  justify-content: flex-end;
+  min-width: 0;
 }
 .card-head-tags .live-feed-tag {
   flex-shrink: 0;
@@ -552,16 +557,18 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
   align-items: center;
   gap: 4px;
   font-size: .78rem;
-  flex-wrap: nowrap;
-  white-space: nowrap;
-  flex-shrink: 0;
+  flex-wrap: wrap;
+  white-space: normal;
+  flex-shrink: 1;
   max-width: 100%;
 }
 .tag-current-pnl .cpnl-label { color:var(--text-dim); font-weight:500; flex-shrink: 0; }
 .tag-current-pnl .cpnl-metrics {
   display: inline-flex;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: 0;
+  row-gap: 2px;
   flex-shrink: 1;
   min-width: 0;
   font-variant-numeric: tabular-nums;
@@ -570,6 +577,7 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
   display: inline-flex;
   align-items: baseline;
   gap: 3px;
+  white-space: nowrap;
 }
 .tag-current-pnl .cpnl-k {
   font-size: .62rem;
@@ -587,15 +595,24 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
   font-weight: 700;
   display: inline-block;
   text-align: right;
+  font-variant-numeric: tabular-nums;
+  min-width: 8.5rem;
 }
-.tag-current-pnl .cpnl-gross-val {
+.tag-current-pnl .cpnl-gross-val,
+.tag-current-pnl .cpnl-margin-val {
   font-weight: 600;
   font-size: .78rem;
   opacity: .9;
+  font-variant-numeric: tabular-nums;
+  display: inline-block;
+  text-align: right;
+  min-width: 8.5rem;
 }
 .tag-current-pnl .cpnl-pct-bracket {
   display: inline-block;
   text-align: left;
+  font-variant-numeric: tabular-nums;
+  min-width: 5rem;
 }
 .tag-current-pnl .cpnl-pct-bracket,
 .pnl-pct-bracket { font-size:.68rem; font-weight:500; color:var(--text-dim); white-space:nowrap; }
@@ -611,6 +628,12 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
 .tag-current-pnl .cpnl-gross-val.mtm-neg + .cpnl-gross-pct { color:var(--err); }
 .tag-current-pnl .cpnl-gross-val.mtm-pos + .cpnl-gross-pct,
 .tag-current-pnl .cpnl-gross-val.mtm-neg + .cpnl-gross-pct { opacity:.85; }
+.tag-current-pnl .cpnl-margin-val.mtm-pos,
+.tag-current-pnl .cpnl-margin-val.mtm-pos + .cpnl-margin-pct { color:var(--ok); }
+.tag-current-pnl .cpnl-margin-val.mtm-neg,
+.tag-current-pnl .cpnl-margin-val.mtm-neg + .cpnl-margin-pct { color:var(--err); }
+.tag-current-pnl .cpnl-margin-val.mtm-pos + .cpnl-margin-pct,
+.tag-current-pnl .cpnl-margin-val.mtm-neg + .cpnl-margin-pct { opacity:.85; }
 .hist-card-pnl .pnl-pct-bracket { font-size:.82rem; font-weight:500; margin-left:2px; }
 .live-pnl-preview .pnl-pct-bracket,
 .fill-pnl-preview .pnl-pct-bracket { display:inline; font-size:.78rem; }
@@ -639,9 +662,10 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
   color: var(--text-dim);
   opacity: .55;
 }
-.lpl-current-row .cpnl-val { font-weight:700; font-size: .95rem; }
-.lpl-current-row .cpnl-gross-val { font-weight:600; font-size: .9rem; opacity: .95; }
-.lpl-current-row .cpnl-pct-bracket { font-size: .72rem; font-weight: 500; white-space: nowrap; }
+.lpl-current-row .cpnl-val { font-weight:700; font-size: .95rem; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; min-width: 7.5rem; }
+.lpl-current-row .cpnl-gross-val { font-weight:600; font-size: .9rem; opacity: .95; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; min-width: 7.5rem; }
+.lpl-current-row .cpnl-margin-val { font-weight:600; font-size: .9rem; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; min-width: 7.5rem; }
+.lpl-current-row .cpnl-pct-bracket { font-size: .72rem; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; display: inline-block; min-width: 4.5rem; }
 .lpl-current-row.mtm-pos .cpnl-val,
 .lpl-current-row.mtm-pos .cpnl-net-pct { color:var(--ok); }
 .lpl-current-row.mtm-neg .cpnl-val,
@@ -650,6 +674,10 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
 .lpl-current-row .cpnl-gross-val.mtm-pos + .cpnl-gross-pct { color:var(--ok); }
 .lpl-current-row .cpnl-gross-val.mtm-neg,
 .lpl-current-row .cpnl-gross-val.mtm-neg + .cpnl-gross-pct { color:var(--err); }
+.lpl-current-row .cpnl-margin-val.mtm-pos,
+.lpl-current-row .cpnl-margin-val.mtm-pos + .cpnl-margin-pct { color:var(--ok); }
+.lpl-current-row .cpnl-margin-val.mtm-neg,
+.lpl-current-row .cpnl-margin-val.mtm-neg + .cpnl-margin-pct { color:var(--err); }
 .live-feed-tag { font-size:.72rem; white-space:nowrap; }
 .live-feed-banner { font-size:.78rem; padding:6px 10px; border-radius:6px; margin-bottom:8px; line-height:1.35; }
 .live-feed-banner--login { background:rgba(239,68,68,.12); color:#fca5a5; border:1px solid rgba(239,68,68,.22); }
