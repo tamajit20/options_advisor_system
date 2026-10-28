@@ -259,7 +259,8 @@
     width: 100%;
     margin-top: 4px;
     margin-left: 0;
-    align-items: stretch;
+    flex-direction: column;
+    align-items: flex-start;
     gap: 8px;
     overflow: visible;
   }
@@ -267,21 +268,12 @@
     justify-content: flex-start;
   }
   .card-head-pnl-row {
-    justify-content: stretch;
+    justify-content: flex-start;
+    overflow-x: auto;
   }
   .card-head-pnl-row .tag-current-pnl {
-    width: 100%;
-    box-sizing: border-box;
-  }
-  .card-head-pnl-row .cpnl-metrics,
-  .card-head-pnl-row .cpnl-main,
-  .card-head-pnl-row .cpnl-pair-used {
-    width: 100%;
-    align-items: flex-start;
-  }
-  .card-head-pnl-row .cpnl-main {
-    flex-wrap: wrap;
-    row-gap: 4px;
+    width: auto;
+    max-width: none;
   }
   .card-head-tags > .card-head-btn {
     width: 100%;

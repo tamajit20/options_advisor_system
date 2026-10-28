@@ -287,8 +287,10 @@ a { color: var(--accent); text-decoration: none; }
 }
 .card-head-tags {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   min-width: 0;
   max-width: 100%;
@@ -303,7 +305,8 @@ a { color: var(--accent); text-decoration: none; }
 .card-head-pnl-row {
   display: flex;
   justify-content: flex-end;
-  width: 100%;
+  flex: 0 1 auto;
+  width: auto;
   min-width: 0;
 }
 .card-head-tags .live-feed-tag {
@@ -557,8 +560,8 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
 .tag-warn  { background: rgba(245,158,11,.15); color: var(--warn); }
 .tag-err   { background: rgba(239,68,68,.15);  color: var(--err); }
 .card-head-pnl-row .tag-current-pnl {
-  display: flex;
-  align-items: stretch;
+  display: inline-flex;
+  align-items: baseline;
   gap: 0;
   font-size: .78rem;
   flex-wrap: nowrap;
@@ -566,40 +569,33 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
   text-transform: none;
   letter-spacing: 0;
   font-weight: 500;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 2px 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
   max-width: 100%;
 }
 .card-head-pnl-row .cpnl-metrics {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 0;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.card-head-pnl-row .cpnl-main {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  white-space: nowrap;
-}
 .card-head-pnl-row .cpnl-pair {
-  display: flex;
+  display: inline-flex;
   flex-direction: row;
   align-items: baseline;
   gap: 4px;
-  min-width: 0;
-}
-.card-head-pnl-row .cpnl-pair-used {
-  justify-content: flex-end;
+  white-space: nowrap;
 }
 .card-head-pnl-row .cpnl-fig {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
-  justify-content: flex-end;
   gap: 4px;
+  white-space: nowrap;
 }
 .tag-current-pnl .cpnl-k {
   font-size: .62rem;
@@ -650,40 +646,45 @@ details.collapsible-card[open] .collapsible-preview { display: none; }
 .live-pnl-preview .pnl-pct-bracket,
 .fill-pnl-preview .pnl-pct-bracket { display:inline; font-size:.78rem; }
 .close-loss-warn .pnl-pct-bracket { font-size:inherit; }
+.lpl-current-row .lpl-val-line { flex-wrap: nowrap; align-items: start; }
 .lpl-current-row .cpnl-metrics {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: max-content max-content max-content;
+  column-gap: 10px;
+  row-gap: 2px;
+  align-items: baseline;
+  justify-items: start;
   font-variant-numeric: tabular-nums;
 }
-.lpl-current-row .cpnl-main {
-  display: inline-flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0;
-}
-.lpl-current-row .cpnl-pair {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-}
+.lpl-current-row .cpnl-pair { display: contents; }
 .lpl-current-row .cpnl-k {
+  justify-self: start;
   font-size: .62rem;
   font-weight: 700;
   letter-spacing: .04em;
   text-transform: uppercase;
   color: var(--text-dim);
 }
-.lpl-current-row .cpnl-sep {
-  margin: 0 8px;
-  color: var(--text-dim);
-  opacity: .55;
+.lpl-current-row .cpnl-val,
+.lpl-current-row .cpnl-gross-val,
+.lpl-current-row .cpnl-margin-val {
+  font-weight: 700;
+  font-size: .9rem;
+  opacity: 1;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  justify-self: end;
+  min-width: 8.5rem;
 }
-.lpl-current-row .cpnl-val { font-weight:700; font-size: .95rem; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; min-width: 7.5rem; }
-.lpl-current-row .cpnl-gross-val { font-weight:600; font-size: .9rem; opacity: .95; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; min-width: 7.5rem; }
-.lpl-current-row .cpnl-margin-val { font-weight:600; font-size: .9rem; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; min-width: 7.5rem; }
-.lpl-current-row .cpnl-pct-bracket { font-size: .72rem; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; display: inline-block; min-width: 4.5rem; }
+.lpl-current-row .cpnl-pct-bracket {
+  font-size: .72rem;
+  font-weight: 500;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  justify-self: start;
+  min-width: 4.2rem;
+}
 .lpl-current-row.mtm-pos .cpnl-val,
 .lpl-current-row.mtm-pos .cpnl-net-pct { color:var(--ok); }
 .lpl-current-row.mtm-neg .cpnl-val,

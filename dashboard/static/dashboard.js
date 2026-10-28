@@ -857,7 +857,7 @@ function _applyZerodhaMarginToCard(card, preview) {
     : (info.blocked ? 'Not enough funds for peak margin + buffer' : '');
   const hint = card.querySelector('[data-econ-cap-hint]');
   if (hint) {
-    hint.textContent = (card.classList.contains('trade-zerodha-margin') || card.classList.contains('orig-sug-details'))
+    hint.textContent = card.classList.contains('trade-zerodha-margin')
       ? 'Zerodha Final is the margin already held for this trade. Peak is the most Zerodha held while the legs were placed.'
       : 'Zerodha Final (full basket). Peak below is the highest margin while placing legs; orders need Peak + buffer in available cash.';
   }
@@ -4412,20 +4412,20 @@ function renderLiveProfitLevels(t) {
           <span class="lpl-label">${labelWithHelp('Current P&amp;L', 'mtm')}</span>
           <span class="lpl-val-line">
             <span class="cpnl-metrics">
-              <span class="cpnl-main">
-                <span class="cpnl-pair">
-                  <span class="cpnl-k">Net</span>
-                  <strong class="cpnl-val cpnl-net-val lpl-current-val">${_fmtSignedInr(seedNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct lpl-current-pct muted">${seedNetPct}</span>
-                </span>
-                <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
-                <span class="cpnl-pair">
-                  <span class="cpnl-k">Gross</span>
-                  <strong class="cpnl-gross-val${seedGrossCls}">${_fmtSignedInr(seedMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${seedGrossPct}</span>
-                </span>
+              <span class="cpnl-pair">
+                <span class="cpnl-k">Net</span>
+                <strong class="cpnl-val cpnl-net-val lpl-current-val">${_fmtSignedInr(seedNet)}</strong>
+                <span class="cpnl-pct-bracket cpnl-net-pct lpl-current-pct muted">${seedNetPct}</span>
               </span>
-              <span class="cpnl-pair cpnl-pair-used">
+              <span class="cpnl-pair">
+                <span class="cpnl-k">Gross</span>
+                <strong class="cpnl-gross-val${seedGrossCls}">${_fmtSignedInr(seedMtm)}</strong>
+                <span class="cpnl-pct-bracket cpnl-gross-pct muted">${seedGrossPct}</span>
+              </span>
+              <span class="cpnl-pair">
                 <span class="cpnl-k">Amount used</span>
-                <strong class="cpnl-margin-val">\u2014</strong><span class="cpnl-pct-bracket cpnl-margin-pct muted"></span>
+                <strong class="cpnl-margin-val">\u2014</strong>
+                <span class="cpnl-pct-bracket cpnl-margin-pct muted"></span>
               </span>
             </span>
           </span>
@@ -7837,8 +7837,6 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     : renderExecutionGateBanner(s, {
       showBlockedActions: !readOnly && canExecuteAtSuggested,
     });
-  const amountLabel = readOnly ? 'Amount used' : capitalReq.label;
-  const amountKey = readOnly ? 'amount_used' : capitalReq.key;
   const summaryHtml = `
     <div class="card-head collapsible-card-head">
         <div class="card-head-title">
@@ -7860,7 +7858,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     <div class="collapsible-preview">
       <span>PoP <strong>${fmtPct(econ.pop)}</strong></span>
       <span>Credit <strong>₹${fmt(econ.np)}</strong>/u</span>
-      ${`<span>${amountLabel} <strong class="econ-cap-req-compact">${capitalReq.rs != null ? `₹${fmt(capitalReq.rs)}` : '—'}</strong><span class="econ-z-margin-compact" data-econ-z-margin-compact hidden></span></span>`}
+      ${`<span>${capitalReq.label} <strong class="econ-cap-req-compact">${capitalReq.rs != null ? `₹${fmt(capitalReq.rs)}` : '—'}</strong><span class="econ-z-margin-compact" data-econ-z-margin-compact hidden></span></span>`}
       <span>Max loss <strong>₹${fmt(econ.ml)}</strong></span>
       ${s.dte != null ? `<span>DTE <strong>${s.dte}</strong></span>` : ''}
       ${(s.instrument_overlaps || []).length ? '<span class="tag tag-warn">Same instrument as a live trade</span>' : ''}
@@ -7876,7 +7874,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
       ${s.expiry_date ? `<div>${kvLabel('Options expiry', 'dte')}<br><span class="v">${fmtDate(s.expiry_date)}${s.dte != null ? ` <span class="muted">(${s.dte} DTE)</span>` : ''}</span></div>` : (s.dte != null ? `<div>${kvLabel('DTE', 'dte')}<br><span class="v">${s.dte}</span></div>` : '')}
       <div>${kvLabel('Net credit (per unit)', 'credit_per_unit')}<br><span class="v econ-np">₹${fmt(econ.np)}</span></div>
       <div>${kvLabel('Total credit')}<br><span class="v econ-tot-credit">₹${fmt(baseTotalCredit)}<span class="econ-qty-hint muted" style="font-size:.75rem"> (×${baseQty})</span></span></div>
-      <div>${kvLabel(amountLabel, amountKey)}<br><span class="v econ-cap-req">${capitalReq.rs != null ? `₹${fmt(capitalReq.rs)}` : '—'}</span><span class="econ-z-margin muted" data-econ-z-margin style="font-size:.75rem;display:block;margin-top:2px">Fetching Zerodha Final / Peak…</span><span class="muted" style="font-size:.75rem;display:block;margin-top:2px" data-econ-cap-hint>${escapeHtml(readOnly ? 'Zerodha Final is the margin already held for this trade. Peak is the most Zerodha held while the legs were placed.' : (capitalReq.hint || 'Engine estimate — replaced by Zerodha Final when the session quotes'))}</span></div>
+      <div>${kvLabel(capitalReq.label, capitalReq.key)}<br><span class="v econ-cap-req">${capitalReq.rs != null ? `₹${fmt(capitalReq.rs)}` : '—'}</span><span class="econ-z-margin muted" data-econ-z-margin style="font-size:.75rem;display:block;margin-top:2px">Fetching Zerodha Final / Peak…</span><span class="muted" style="font-size:.75rem;display:block;margin-top:2px" data-econ-cap-hint>${escapeHtml(capitalReq.hint || 'Engine estimate — replaced by Zerodha Final when the session quotes')}</span></div>
       <div>${kvLabel('Max profit', 'max_profit')}<br><span class="v econ-mp">₹${fmt(econ.mp)}</span></div>
       <div>${kvLabel('Max loss', 'max_loss')}<br><span class="v econ-ml">₹${fmt(econ.ml)}<span class="econ-ml-hint">${pctHint(econ.ml, econ.np, 'credit')}</span></span></div>
       <div>${kvLabel('PoP', 'pop')}<br><span class="v">${fmtPct(econ.pop)}</span></div>
@@ -9535,18 +9533,17 @@ function renderTrade(t, expanded = false) {
         <div class="card-head-pnl-row">
         <span class="tag tag-current-pnl live-mtm${_headerMtmCls}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs}${_chargesAttr} title="Net = live MTM minus estimated round-trip charges. Gross = raw MTM. Amount used = Zerodha Final; percent = net \u00f7 that amount.">
           <span class="cpnl-metrics">
-            <span class="cpnl-main">
-              <span class="cpnl-pair">
-                <span class="cpnl-k">Net</span>
-                <span class="cpnl-fig"><strong class="cpnl-val cpnl-net-val">${_fmtSignedInr(_headerNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct muted">${_headerNetPct}</span></span>
-              </span>
-              <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
-              <span class="cpnl-pair">
-                <span class="cpnl-k">Gross</span>
-                <span class="cpnl-fig"><strong class="cpnl-gross-val${_headerGrossCls}">${_fmtSignedInr(_headerMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${_headerGrossPct}</span></span>
-              </span>
+            <span class="cpnl-pair">
+              <span class="cpnl-k">Net</span>
+              <span class="cpnl-fig"><strong class="cpnl-val cpnl-net-val">${_fmtSignedInr(_headerNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct muted">${_headerNetPct}</span></span>
             </span>
-            <span class="cpnl-pair cpnl-pair-used">
+            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+            <span class="cpnl-pair">
+              <span class="cpnl-k">Gross</span>
+              <span class="cpnl-fig"><strong class="cpnl-gross-val${_headerGrossCls}">${_fmtSignedInr(_headerMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${_headerGrossPct}</span></span>
+            </span>
+            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+            <span class="cpnl-pair">
               <span class="cpnl-k">Amount used</span>
               <span class="cpnl-fig"><strong class="cpnl-margin-val">\u2014</strong><span class="cpnl-pct-bracket cpnl-margin-pct muted"></span></span>
             </span>
@@ -10026,9 +10023,14 @@ function _buildBarChart(trades, strategies, W = 700, H = 220) {
 function _fillDefaultDateRange(fromEl, toEl, days = 30) {
   if (!fromEl || !toEl) return;
   if (!fromEl.value) {
-    const d = new Date();
-    d.setDate(d.getDate() - days);
-    fromEl.value = _localDateStr(d);
+    if (days === 'month') {
+      const now = new Date();
+      fromEl.value = _localDateStr(new Date(now.getFullYear(), now.getMonth(), 1));
+    } else {
+      const d = new Date();
+      d.setDate(d.getDate() - days);
+      fromEl.value = _localDateStr(d);
+    }
   }
   if (!toEl.value) toEl.value = _localDateStr();
   if (fromEl.value && toEl.value && fromEl.value > toEl.value) {
@@ -10038,10 +10040,10 @@ function _fillDefaultDateRange(fromEl, toEl, days = 30) {
   }
 }
 
-function _dateRangeQuery(fromEl, toEl, { allTime = false, defaultDays = 30 } = {}) {
+function _dateRangeQuery(fromEl, toEl, { allTime = false, defaultDays = 30, monthStart = false } = {}) {
   const qs = new URLSearchParams();
   if (allTime) return qs;
-  _fillDefaultDateRange(fromEl, toEl, defaultDays);
+  _fillDefaultDateRange(fromEl, toEl, monthStart ? 'month' : defaultDays);
   if (fromEl && fromEl.value) qs.set('from_date', fromEl.value);
   if (toEl && toEl.value) qs.set('to_date', toEl.value);
   return qs;
@@ -10058,7 +10060,7 @@ function _syncHistAllTimeButton() {
 
 function _sharedHistRangeQuery() {
   return _dateRangeQuery($('#hist-from'), $('#hist-to'), {
-    allTime: _histAllTime, defaultDays: 30,
+    allTime: _histAllTime, monthStart: true,
   });
 }
 
@@ -10714,6 +10716,7 @@ $('#hist-pnl').addEventListener('change', loadHistory);
 $('#hist-quality').addEventListener('change', loadHistory);
 $('#hist-from').addEventListener('change', _applySharedHistRange);
 $('#hist-to').addEventListener('change', _applySharedHistRange);
+_fillDefaultDateRange($('#hist-from'), $('#hist-to'), 'month');
 $('#hist-range-apply')?.addEventListener('click', _applySharedHistRange);
 $('#hist-range-all')?.addEventListener('click', () => {
   _histAllTime = true;
