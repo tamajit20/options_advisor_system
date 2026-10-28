@@ -9771,8 +9771,24 @@ function _paintClosedTradeSummary(data, gen) {
   if (host) host.innerHTML = _closedTradeSummaryHtml(data);
 }
 
+async function refreshClosedTradeSummary() {
+  const host = $('#chart-summary-row');
+  if (!host) return;
+  const gen = ++_closedSummaryGen;
+  const qs = _sharedHistRangeQuery();
+  _histChannelParam(qs);
+  try {
+    const data = await API('/api/stats/pnl-timeline?' + qs);
+    _paintClosedTradeSummary(data, gen);
+  } catch (e) {
+    if (gen !== _closedSummaryGen) return;
+    host.innerHTML = '<div class="muted">Closed-trade totals unavailable.</div>';
+  }
+}
+
 function loadHistory() {
   if (_histActiveSubtab !== 'trades') return;
+  refreshClosedTradeSummary();
   const c = $('#history-container');
   c.className='loading'; c.textContent='Loading…';
 
@@ -9804,6 +9820,7 @@ function loadHistory() {
 
 async function loadHistorySuggestions() {
   if (_histActiveSubtab !== 'suggestions') return;
+  refreshClosedTradeSummary();
   const c = $('#hsug-container');
   c.className='loading'; c.textContent='Loading…';
 
@@ -10101,6 +10118,7 @@ async function loadPnlCharts() {
 async function loadStrategyPerformance() {
   const c = $('#perf-container');
   if (!c) return;
+  refreshClosedTradeSummary();
   c.className = 'loading'; c.textContent = 'Loading…';
   const qs = _sharedHistRangeQuery();
   _histChannelParam(qs);
