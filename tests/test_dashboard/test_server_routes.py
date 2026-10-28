@@ -46,7 +46,9 @@ class TestIndexRoute:
         assert "Arb Monitor" not in html
         assert "Basis Monitor" not in html
         assert 'id="hist-from"' in html
-        assert 'id="hist-range-all"' in html
+        assert 'id="hist-refresh"' in html
+        assert 'id="hist-range-all"' not in html
+        assert 'id="hist-range-apply"' not in html
         assert 'id="perf-from"' not in html
         assert 'id="chart-from"' not in html
 

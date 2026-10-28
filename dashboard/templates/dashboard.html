@@ -152,7 +152,7 @@
         <button class="hist-subtab" data-htab="performance">📊 Performance</button>
         <button class="hist-subtab" data-htab="charts">📈 Charts</button>
       </div>
-      <div class="filter-row hist-filter-bar hist-shared-filters">
+      <div class="filter-row hist-filter-bar">
         <label class="hist-filter-label" title="Close or suggestion date. Same range on every History tab.">From
           <input type="date" id="hist-from" class="hist-date-input">
         </label>
@@ -164,14 +164,7 @@
           <option value="zerodha" selected>Zerodha only</option>
           <option value="manual">Manual only</option>
         </select>
-        <button type="button" class="btn" id="hist-range-apply">Apply</button>
-        <button type="button" class="btn btn-ghost" id="hist-range-all" aria-pressed="false">All time</button>
-      </div>
-      <div id="chart-summary-row" class="chart-summary-row" aria-label="Closed trade totals"></div>
-
-      <!-- Trades sub-tab -->
-      <div id="hist-pane-trades">
-        <div class="filter-row hist-filter-bar">
+        <span class="hist-pane-filters" data-hist-filters="trades">
           <select id="hist-instrument">
             <option value="">All instruments</option>
           </select>
@@ -192,15 +185,8 @@
             <option value="weak">Weak (35–49)</option>
             <option value="poor">Poor (&lt;35)</option>
           </select>
-          <button class="btn" id="hist-refresh">Refresh</button>
-        </div>
-        <div id="hist-summary" class="hist-summary muted"></div>
-        <div id="history-container" class="loading">Loading…</div>
-      </div>
-
-      <!-- Suggestions sub-tab -->
-      <div id="hist-pane-suggestions" hidden>
-        <div class="filter-row hist-filter-bar">
+        </span>
+        <span class="hist-pane-filters" data-hist-filters="suggestions" hidden>
           <select id="hsug-instrument">
             <option value="">All instruments</option>
           </select>
@@ -222,14 +208,23 @@
             <option value="weak">Weak (35–49)</option>
             <option value="poor">Poor (&lt;35)</option>
           </select>
-          <button class="btn" id="hsug-refresh">Refresh</button>
-        </div>
-        <div id="hsug-summary" class="hist-summary muted"></div>
+        </span>
+        <button class="btn" id="hist-refresh" type="button">Refresh</button>
+      </div>
+
+      <!-- Trades sub-tab -->
+      <div id="hist-pane-trades">
+        <div id="history-container" class="loading">Loading…</div>
+      </div>
+
+      <!-- Suggestions sub-tab -->
+      <div id="hist-pane-suggestions" hidden>
         <div id="hsug-container" class="loading">Loading…</div>
       </div>
 
       <!-- Charts sub-tab -->
       <div id="hist-pane-charts" hidden>
+        <div id="chart-summary-row" class="chart-summary-row" aria-label="Closed trade totals"></div>
         <div id="chart-cumulative" class="chart-wrap"></div>
         <div id="chart-strategy-bar" class="chart-wrap"></div>
         <div id="chart-tooltip" class="chart-tooltip" hidden></div>

@@ -2006,6 +2006,8 @@ input:focus, select:focus, textarea:focus {
 /* ---------- History redesigned cards ---------- */
 .hist-filter-bar { align-items: flex-end; flex-wrap: wrap; gap: 8px 10px; }
 .hist-filter-bar select { max-width: 11rem; }
+.hist-pane-filters { display: contents; }
+.hist-pane-filters[hidden] { display: none; }
 .hist-summary { font-size: .82rem; margin: 4px 0 10px; min-height: 1.1em; }
 .hist-filter-label { font-size: .8rem; color: var(--text-dim); display: flex; flex-direction: column; gap: 2px; }
 .hist-date-input,
@@ -2014,12 +2016,8 @@ input:focus, select:focus, textarea:focus {
   color: var(--text); padding: 5px 8px; font-size: .85rem; cursor: pointer;
   height: 32px; box-sizing: border-box;
 }
-.hist-shared-filters { margin-bottom: 12px; }
-.hist-shared-filters .hist-date-input {
+.hist-date-input {
   min-width: 11.5rem;
-  height: 40px;
-  min-height: 40px;
-  font-size: .95rem;
   color-scheme: dark;
 }
 .hist-date-input::-webkit-calendar-picker-indicator {
@@ -2028,14 +2026,9 @@ input:focus, select:focus, textarea:focus {
   filter: invert(1);
   padding: 4px;
 }
-#hist-range-all.is-active {
-  color: var(--accent);
-  border-color: var(--accent);
-}
 .hist-date-input:focus,
 #hist-instrument:focus, #hsug-instrument:focus, #hsug-status:focus { outline: none; border-color: var(--primary); }
 .hist-filter-bar .btn { height: 32px; padding: 0 14px; }
-.hist-shared-filters .btn { height: 40px; min-height: 40px; padding: 0 16px; }
 .hist-card {
   background: var(--surface);
   border: 1px solid #2a3744;
