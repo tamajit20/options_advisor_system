@@ -1693,6 +1693,7 @@ function _refreshHeldMarginPnl(host, finalRs) {
   document.querySelectorAll(`.live-mtm[data-trade-id="${CSS.escape(tid)}"]`).forEach(el => {
     el.dataset.marginFinal = String(n);
   });
+  _paintOpenTradesTotals();
   const cached = _lastMtmByTrade[tid];
   if (cached && cached.mtm != null) _updateCurrentPnlBadge(tid, cached.mtm, cached.as_of, false);
   const fill = document.getElementById(`fill-pnl-${tid}`);
@@ -1889,9 +1890,74 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
   _updateFeedTag(tradeId);
   _syncCardSignal(tradeId);
   _refreshPnlSignalRail();
+  _paintOpenTradesTotals();
   try {
     document.dispatchEvent(new CustomEvent('trade-mtm-updated', { detail: { tradeId, mtm: displayMtm } }));
   } catch (_) { /* ignore */ }
+}
+
+function _paintOpenTradesTotals() {
+  const host = document.getElementById('trades-totals');
+  if (!host) return;
+  const cards = document.querySelectorAll('#trades-container .collapsible-card[data-trade-id]');
+  if (!cards.length) {
+    host.hidden = true;
+    host.innerHTML = '';
+    return;
+  }
+  let invested = 0;
+  let haveInvested = false;
+  let margin = 0;
+  let marginForPct = 0;
+  let netOnMargin = 0;
+  let haveMargin = false;
+  let net = 0;
+  let gross = 0;
+  let havePnl = false;
+  let premium = 0;
+  cards.forEach(card => {
+    const inv = parseFloat(card.dataset.investedRs);
+    if (Number.isFinite(inv) && inv > 0) {
+      invested += inv;
+      haveInvested = true;
+    }
+    const el = card.querySelector('.tag-current-pnl.live-mtm');
+    if (!el) return;
+    const cached = _lastMtmByTrade[el.dataset.tradeId];
+    const mtm = cached && cached.mtm != null ? Number(cached.mtm) : NaN;
+    const charges = parseFloat(el.dataset.chargesRs);
+    const prem = parseFloat(el.dataset.premiumRs);
+    const mar = parseFloat(el.dataset.marginFinal);
+    const ch = (Number.isFinite(charges) && charges >= 0) ? charges : 0;
+    const rowNet = Number.isFinite(mtm) ? mtm - ch : null;
+    if (Number.isFinite(prem) && prem > 0) premium += prem;
+    if (Number.isFinite(mar) && mar > 0) {
+      margin += mar;
+      haveMargin = true;
+      if (rowNet != null) {
+        marginForPct += mar;
+        netOnMargin += rowNet;
+      }
+    }
+    if (rowNet != null) {
+      gross += mtm;
+      net += rowNet;
+      havePnl = true;
+    }
+  });
+  const tone = (n) => (n > 0 ? 'pnl-profit' : (n < 0 ? 'pnl-loss' : ''));
+  const rupee = (n, have) => (have ? `\u20b9${fmt(n)}` : '\u2014');
+  const signed = (n, have) => (have ? _fmtSignedInr(n) : '\u2014');
+  const pct = (n, base) => (
+    Number.isFinite(n) && base > 0 ? pnlPctTextCompact(n, { rs: base }) : ''
+  );
+  const usedPct = (haveMargin && marginForPct > 0) ? pct(netOnMargin, marginForPct) : '';
+  host.hidden = false;
+  host.innerHTML = `
+    <div class="chart-kv" title="Sum of each open trade's max loss. This is the capital inside the structure, not the cash Zerodha holds."><span>Total invested</span><strong>${rupee(invested, haveInvested)}</strong></div>
+    <div class="chart-kv" title="Sum of Zerodha Final already held. The percent is total net divided by that amount."><span>Total amount used</span><strong>${rupee(margin, haveMargin)} <span class="${tone(netOnMargin)}">${usedPct}</span></strong></div>
+    <div class="chart-kv" title="Sum of live net profit. The percent is versus total premium received or paid."><span>Total net</span><strong class="${havePnl ? tone(net) : ''}">${signed(net, havePnl)}${havePnl ? pct(net, premium) : ''}</strong></div>
+    <div class="chart-kv" title="Sum of live gross profit. The percent is versus total premium received or paid."><span>Total gross</span><strong class="${havePnl ? tone(gross) : ''}">${signed(gross, havePnl)}${havePnl ? pct(gross, premium) : ''}</strong></div>`;
 }
 
 function _refreshAllFeedTags() {
@@ -2056,6 +2122,17 @@ function legPremiumFromLeg(l) {
   const total = sign * parseFloat(l.fill_price) * qty;
   if (!total) return null;
   return { rs: Math.abs(total), kind: total > 0 ? 'received' : 'paid' };
+}
+
+/** Capital inside the structure: max loss, not the Zerodha margin hold. */
+function tradeInvestedRs(t) {
+  if (!t) return null;
+  const ml = t.actual_max_loss != null ? Number(t.actual_max_loss)
+    : (t.suggestion && t.suggestion.max_loss != null ? Number(t.suggestion.max_loss) : NaN);
+  if (Number.isFinite(ml) && ml > 0) return ml;
+  const prem = tradePremiumFromLegs(t.legs || []);
+  if (prem && prem.kind === 'paid' && prem.rs > 0) return prem.rs;
+  return null;
 }
 
 function premiumInfoFromTrade(t) {
@@ -8593,6 +8670,7 @@ async function loadTrades() {
       }
       c.className=''; c.innerHTML = '<div class="empty">No open trades match the selected filter.</div>';
       _pruneMtmCache([]);
+      _paintOpenTradesTotals();
       return;
     }
     if (summaryEl) {
@@ -8600,6 +8678,7 @@ async function loadTrades() {
       summaryEl.textContent = _histFilterSummary(data.count ?? data.trades.length, 'open trade') + label;
     }
     c.className=''; c.innerHTML = data.trades.map(t => renderTrade(t, false)).join('');
+    _paintOpenTradesTotals();
     try {
       const snap = await API('/api/live/mtm/snapshot');
       _bootstrapLiveLevelsForTrades(data.trades, snap);
@@ -8666,6 +8745,7 @@ async function loadTrades() {
   } catch (e) {
     if (summaryEl) summaryEl.textContent = '';
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
+    _paintOpenTradesTotals();
   }
 }
 
@@ -9682,7 +9762,7 @@ function renderTrade(t, expanded = false) {
     ${isPartial ? `<div class="supplement-panel" id="supp-${escapeHtml(t.trade_id)}" hidden></div>` : ''}`;
   return wrapCollapsibleCard(summaryHtml, bodyHtml, {
     open: expanded,
-    attrs: `id="trade-card-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}" data-net-credit-actual="${t.net_credit_actual != null ? escapeHtml(String(t.net_credit_actual)) : ''}" data-daily-status="${escapeHtml(t.daily_status || '')}" data-exit-instruction="${escapeHtml(t.exit_instruction || '')}" data-risk-notif="${escapeHtml((t.risk_alert && t.risk_alert.notif_type) || '')}"`,
+    attrs: `id="trade-card-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}" data-net-credit-actual="${t.net_credit_actual != null ? escapeHtml(String(t.net_credit_actual)) : ''}"${(() => { const inv = tradeInvestedRs(t); return inv != null ? ` data-invested-rs="${inv}"` : ''; })()} data-daily-status="${escapeHtml(t.daily_status || '')}" data-exit-instruction="${escapeHtml(t.exit_instruction || '')}" data-risk-notif="${escapeHtml((t.risk_alert && t.risk_alert.notif_type) || '')}"`,
   });
 }
 
