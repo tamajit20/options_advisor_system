@@ -3350,12 +3350,12 @@ function wrapCollapsibleCard(summaryHtml, bodyHtml, { open = false, className = 
 
 function bindCollapsibleCardInteractions(root) {
   const scope = root || document;
-  scope.querySelectorAll('.collapsible-card summary button, .collapsible-card summary a, .collapsible-card summary input, .collapsible-card summary select, .collapsible-card summary textarea, .collapsible-card summary label, .collapsible-card summary .id-chip').forEach(el => {
+  scope.querySelectorAll('.collapsible-card summary button, .collapsible-card summary a, .collapsible-card summary input, .collapsible-card summary select, .collapsible-card summary textarea, .collapsible-card summary label, .collapsible-card summary .id-chip, .collapsible-card summary .term-help').forEach(el => {
     if (el.dataset.collapseBound === '1') return;
     el.dataset.collapseBound = '1';
     el.addEventListener('click', e => {
       e.stopPropagation();
-      if (el.classList.contains('strategy-guide-btn')) e.preventDefault();
+      if (el.classList.contains('strategy-guide-btn') || el.classList.contains('term-help')) e.preventDefault();
     });
   });
   scope.querySelectorAll('.collapsible-card summary .btn, .collapsible-card summary .card-head-btn').forEach(el => {
@@ -9468,6 +9468,22 @@ function bindGapReplayPanels() {
   });
 }
 
+function tradeHeaderWhenHtml(t) {
+  const parts = [];
+  if (t.executed_on) {
+    parts.push(`<span>Entry date <strong>${escapeHtml(fmtDt(t.executed_on))}</strong></span>`);
+  }
+  const sug = t.suggestion || {};
+  const expiry = sug.expiry_date
+    || (t.legs || []).map(l => l.expiry_date || l.expiry).find(Boolean);
+  if (expiry) {
+    const left = dteFromExpiry(expiry);
+    const text = `${fmtDate(expiry)}${left != null ? ` (${left} left)` : ''}`;
+    parts.push(`<span>Options expiry${termHelpIcon('dte')} <strong>${escapeHtml(text)}</strong></span>`);
+  }
+  return parts.join('');
+}
+
 function renderTrade(t, expanded = false) {
   const broken = t.broken_state_json ? JSON.parse(t.broken_state_json) : null;
   const brokenHtml = broken && broken.options && broken.options.length ? `
@@ -9656,6 +9672,7 @@ function renderTrade(t, expanded = false) {
     </div>
     <div class="collapsible-preview">
       ${_tradePremium ? `<span>${_tradePremium.kind === 'received' ? 'Premium received' : 'Premium paid'} <strong>\u20b9${fmt(_tradePremium.rs)}</strong></span>` : (t.net_credit_actual != null ? `<span>Entry <strong>\u20b9${fmt(t.net_credit_actual)}</strong></span>` : '')}
+      ${tradeHeaderWhenHtml(t)}
     </div>`;
   const bodyHtml = `
     ${renderTradeActionPanel(t)}
