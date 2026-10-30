@@ -544,6 +544,8 @@ sequenceDiagram
 | Live directional, today's tape disagrees | Sit out (no flip)        |
 | Live directional, spot within 1× 1-day EM of the fighting OI wall (put vs bearish, call vs bullish) | Sit out |
 
+**Pending recheck:** each suggestion run re-applies that tape and OI-wall sit-out to PENDING cards for the same underlying and expiry type. A card that would no longer be placed is marked IGNORED (with a stale notification). Neutral structures stay. Iron-condor and iron-butterfly wing companions are not saved when the same check refuses them. Age alone does not ignore a card. PENDING cards whose entry date is already past are ignored as well.
+
 **Sideways:** one strategy via `select_strategy` (same as directional) — no range+breakout pair cards.
 
 **Sit-out cards:** every configured underlying gets a per-symbol card on a gate veto or true data gap (no spot / empty chain / no future expiry). **SOFT** = 9 counted gates (need ≥6, including DTE). **HARD** = ATM spread. **ADVISORY** = extras (event, traj, quiet tape, long-vol notes, mid-IV, range vs OI-PCR drift, FII options skew, max-pain vs short strikes, volume burst, HIGH-impact event inside the hold on short premium) — not in the vote; quiet tape still demotes expansion picks. Live credit suggestions with a full bid/ask book are not saved when sell-at-bid / buy-at-ask credit minus a round trip of charges is below the credit-to-width floor; missing depth does not veto. The hold-event note and the range-vs-OI note warn only — they do not hide the card or block Place. Strike placement nudges expected move by the realised/expected cohort (`em_calibration_strike_scale`, clamped 0.92–1.12) when enough settled expiries exist; thin history leaves strikes on raw EM.
@@ -565,7 +567,7 @@ Suggestion statuses vs trade statuses (separate tables):
 stateDiagram-v2
   [*] --> PENDING: options_suggestions
   PENDING --> EXECUTED: trade_executor / Zerodha
-  PENDING --> IGNORED: user / validator
+  PENDING --> IGNORED: user / validator / tape recheck
   PENDING --> EXPIRED: live regen supersede
   EXECUTED --> ACTIVE: creates options_trades
   ACTIVE --> CLOSED: exit / SL / milestone
@@ -690,6 +692,7 @@ Scheduler, Jobs tab, or Suggestions **Run live engine** calls the lifecycle entr
        |              |
        |              +-- load chain/spot (LIVE: providers/zerodha; EOD: database)
        |              +-- engine/indicators.py          build_indicators()
+       |              +-- retire PENDING that fail today's tape / nearby OI wall
        |              |       includes engine/trend_model.py   (BULLISH|BEARISH|SIDEWAYS|MIXED)
        |              +-- engine/confidence.py          evaluate()
        |              |       fail / MIXED  -->  NoSuggestion

@@ -629,3 +629,108 @@ class TestIcIbCompanions:
             assert c.kwargs.get("assemble_kw", {}).get("companion_mode") is True
             assert "lots" not in c.kwargs.get("assemble_kw", {})
 
+    def test_skips_companion_when_today_tape_disagrees(self, mocker):
+        from dataclasses import replace
+
+        from tests.test_engine.test_strategy_selector import _ind
+
+        mocker.patch("lifecycle.suggestion_engine._attach_em_calibration_warning")
+        sized = mocker.patch(
+            "lifecycle.suggestion_engine._assemble_sized_suggestion",
+            return_value=MagicMock(trade_name="N-BPS"),
+        )
+        repo = MagicMock()
+        repo.next_suggestion_id.return_value = "SUG-C1"
+        indicators = replace(
+            _ind(),
+            trend_today="BULLISH",
+            expected_move_1d=200.0,
+            oi_walls_call=[],
+            oi_walls_put=[],
+        )
+        out = []
+        se._append_ic_ib_companions(
+            primary=MagicMock(
+                strategy="IRON_CONDOR",
+                trade_name="N-IC",
+                underlying="NIFTY",
+                expiry_date=date(2026, 11, 9),
+            ),
+            suggestions=out,
+            existing_names=["N-IC"],
+            assemble_kw={"underlying": "NIFTY", "indicators": indicators},
+            sug_repo=repo,
+            id_date=date(2026, 10, 30),
+            provenance=None,
+            db=MagicMock(),
+        )
+        overrides = [c.kwargs.get("strategy_override") for c in sized.call_args_list]
+        assert overrides == ["BULL_PUT_SPREAD"]
+        assert [s.trade_name for s in out] == ["N-BPS"]
+
+
+class TestRetirePendingNotPlaceable:
+    def _indicators(self, trend_today):
+        from dataclasses import replace
+
+        from tests.test_engine.test_strategy_selector import _ind
+
+        return replace(
+            _ind(),
+            trend_today=trend_today,
+            expected_move_1d=200.0,
+            oi_walls_call=[],
+            oi_walls_put=[],
+        )
+
+    def test_ignores_directional_card_when_tape_flips(self, mock_db, mocker):
+        mocker.patch("lifecycle.suggestion_engine.NotificationRepo")
+        mock_db.fetch_all.return_value = [
+            {
+                "suggestion_id": "SUG-BEAR",
+                "strategy": "BEAR_CALL_SPREAD",
+                "trade_name": "NIFTY-BCS",
+            },
+            {
+                "suggestion_id": "SUG-BULL",
+                "strategy": "BULL_CALL_SPREAD",
+                "trade_name": "NIFTY-BCAL",
+            },
+            {
+                "suggestion_id": "SUG-IC",
+                "strategy": "IRON_CONDOR",
+                "trade_name": "NIFTY-CONDOR",
+            },
+        ]
+        n = se._retire_pending_not_placeable(
+            mock_db,
+            underlying="NIFTY",
+            expiry_type="Weekly",
+            entry_day=date(2026, 10, 30),
+            indicators=self._indicators("BULLISH"),
+        )
+        assert n == 1
+        ignored = [
+            c.args[1][1]
+            for c in mock_db.execute.call_args_list
+            if "IGNORED" in c.args[0]
+        ]
+        assert ignored == ["SUG-BEAR"]
+
+    def test_leaves_card_when_tape_still_agrees(self, mock_db, mocker):
+        mocker.patch("lifecycle.suggestion_engine.NotificationRepo")
+        mock_db.fetch_all.return_value = [{
+            "suggestion_id": "SUG-BULL",
+            "strategy": "BULL_CALL_SPREAD",
+            "trade_name": "NIFTY-BCAL",
+        }]
+        n = se._retire_pending_not_placeable(
+            mock_db,
+            underlying="NIFTY",
+            expiry_type="Weekly",
+            entry_day=date(2026, 10, 30),
+            indicators=self._indicators("BULLISH"),
+        )
+        assert n == 0
+        mock_db.execute.assert_not_called()
+

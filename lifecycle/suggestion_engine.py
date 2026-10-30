@@ -61,7 +61,11 @@ from engine.market_data_provenance import (
 )
 from engine.iv_calculator import implied_vol
 from engine.iv_rank import iv_rank as compute_iv_rank, pick_atm_iv
-from engine.strategy_selector import assemble_suggestion, select_strategy
+from engine.strategy_selector import (
+    assemble_suggestion,
+    enforce_directional_tape_and_wall,
+    select_strategy,
+)
 from exceptions import StrategyVeto
 from lifecycle.chain_aggregator import load_trajectory
 from lifecycle.session_spot import build_session_bar
@@ -227,6 +231,11 @@ def _append_ic_ib_companions(
         return
     for companion_strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
         try:
+            # Same tape / OI-wall sit-out as a primary directional pick.
+            # Companions skip select_strategy, so this is the only check.
+            indicators = assemble_kw.get("indicators")
+            if indicators is not None:
+                enforce_directional_tape_and_wall(companion_strategy, indicators)
             comp_id = sug_repo.next_suggestion_id(id_date)
             # Bug 8: size + max-loss cap via the same path as primaries — do not
             # copy primary lots into assemble_suggestion (skips risk budget).
@@ -640,6 +649,86 @@ def _compute_live_atm_iv_rank(
     return atm_iv, iv_rank_val
 
 
+def _retire_prior_day_pending(db: SQLServerConnection, today: date) -> int:
+    """Ignore PENDING cards whose entry day has already passed."""
+    reason = f"entry date is before {today.isoformat()} — not placeable"
+    cur = db.execute(
+        """UPDATE options_suggestions
+           SET status = 'IGNORED', no_suggestion_reason = ?
+           WHERE status = 'PENDING'
+             AND entry_date IS NOT NULL
+             AND entry_date < ?""",
+        [reason, today],
+    )
+    try:
+        n = int(cur.rowcount or 0)
+        if n < 0:
+            n = 0
+    finally:
+        cur.close()
+    if n:
+        logger.info("Ignored %d PENDING suggestion(s) with entry_date before %s", n, today)
+    return n
+
+
+def _retire_pending_not_placeable(
+    db: SQLServerConnection,
+    *,
+    underlying: str,
+    expiry_type: str,
+    entry_day: date,
+    indicators: MarketIndicators,
+) -> int:
+    """Ignore today's PENDING cards that the current tape or OI wall would refuse.
+
+    Neutral structures (condor, butterfly, calendar, straddle) pass the check
+    and stay. Age alone does not retire a card.
+    """
+    rows = db.fetch_all(
+        """SELECT suggestion_id, strategy, trade_name
+           FROM options_suggestions
+           WHERE status = 'PENDING'
+             AND underlying = ?
+             AND expiry_type = ?
+             AND entry_date = ?""",
+        [underlying, expiry_type, entry_day],
+    )
+    if not rows:
+        return 0
+    notif_repo = NotificationRepo(db)
+    n = 0
+    for row in rows:
+        strategy = str(row.get("strategy") or "")
+        try:
+            enforce_directional_tape_and_wall(strategy, indicators)
+        except StrategyVeto as veto:
+            reason = f"No longer placeable: {veto}"
+            sid = row["suggestion_id"]
+            cur = db.execute(
+                """UPDATE options_suggestions
+                   SET status = 'IGNORED', no_suggestion_reason = ?
+                   WHERE suggestion_id = ? AND status = 'PENDING'""",
+                [reason, sid],
+            )
+            cur.close()
+            logger.info(
+                "Retired %s %s %s — %s", sid, underlying, strategy, reason,
+            )
+            try:
+                notif_repo.insert(Notification(
+                    created_at=now_ist(),
+                    notif_type="SUGGESTION_STALE",
+                    severity="WARNING",
+                    title=f"{row.get('trade_name') or sid} no longer placeable",
+                    body=reason,
+                    related_suggestion_id=sid,
+                ))
+            except Exception:
+                logger.exception("notify retire failed for %s", sid)
+            n += 1
+    return n
+
+
 def _evaluate_underlying(
     db: SQLServerConnection,
     symbol: str,
@@ -649,6 +738,8 @@ def _evaluate_underlying(
     *,
     chain_provider=None,
     live_today: Optional[date] = None,
+    revalidate_only: bool = False,
+    retire_counter: Optional[list] = None,
 ) -> tuple[list[Suggestion], list[NoSuggestion]]:
     """Evaluate one underlying for all expiry types in the DTE band.
 
@@ -883,6 +974,25 @@ def _evaluate_underlying(
             live_mode=_live_mode,
         )
         _apply_em_strike_scale(db, indicators, symbol, entry_dte)
+
+        try:
+            retired_n = _retire_pending_not_placeable(
+                db,
+                underlying=symbol,
+                expiry_type=expiry_type,
+                entry_day=entry_day,
+                indicators=indicators,
+            )
+            if retire_counter is not None:
+                retire_counter.append(retired_n)
+        except Exception:
+            logger.exception(
+                "Could not revalidate pending suggestions for %s %s",
+                symbol, expiry_type,
+            )
+
+        if revalidate_only:
+            continue
 
         confidence = evaluate_confidence(
             iv_rank=iv_rank,
@@ -1367,6 +1477,10 @@ def run_suggestion_engine(
     # Morning catchup: entry is today — we are generating before the open using
     # prior-session bhav (Mon 09:00 + Fri bhav → Mon entry, not Tue).
     _today = now_ist().date()
+    try:
+        _retire_prior_day_pending(db, _today)
+    except Exception:
+        logger.exception("Could not retire prior-day pending suggestions")
     from lifecycle.eod_session import is_morning_catchup
     if is_morning_catchup():
         entry_day = _today
@@ -1439,6 +1553,11 @@ def run_live_suggestion_engine(
         logger.info("Live suggestion engine: not a trading day (%s) — skipping", live_today)
         return 0
 
+    try:
+        _retire_prior_day_pending(db, live_today)
+    except Exception:
+        logger.exception("Could not retire prior-day pending suggestions")
+
     # Use the latest available FO date for structural queries (expiry list,
     # spot history, FII, lot sizes).  Today's bhav isn't available yet during
     # market hours.
@@ -1478,3 +1597,53 @@ def run_live_suggestion_engine(
         trigger_type="LIVE_RUN",
         force_replace=True,
     )
+
+
+def revalidate_pending_suggestions(
+    db: SQLServerConnection,
+    *,
+    provider=None,
+) -> int:
+    """Ignore PENDING suggestions that are no longer good to place.
+
+    Uses the same today's-tape and nearby-OI-wall sit-out as a new directional
+    pick. Does not create suggestions. Commits.
+    """
+    from providers.registry import get_market_data
+
+    p = provider or get_market_data()
+    if not p.capabilities().supports_live_quotes:
+        logger.info(
+            "Revalidate suggestions: provider '%s' has no live quotes — skipping",
+            p.name,
+        )
+        return 0
+
+    live_today = today_ist()
+    if live_today.weekday() >= 5:
+        logger.info("Revalidate suggestions: not a trading day (%s) — skipping", live_today)
+        return 0
+
+    fo_trade_date = FoEodRepo(db).latest_trade_date()
+    if fo_trade_date is None:
+        logger.warning("Revalidate suggestions: no FO data in DB — aborting")
+        return 0
+
+    retired = _retire_prior_day_pending(db, live_today)
+    counts: list[int] = []
+    for symbol in STRATEGY_CONFIG["underlyings"]:
+        try:
+            _evaluate_underlying(
+                db, symbol, fo_trade_date, live_today,
+                "Market is open — execute now at current market price",
+                chain_provider=p,
+                live_today=live_today,
+                revalidate_only=True,
+                retire_counter=counts,
+            )
+        except Exception:
+            logger.exception("Revalidate suggestions failed for %s", symbol)
+    retired += sum(counts)
+    db.commit()
+    logger.info("Revalidate suggestions: ignored %d pending card(s)", retired)
+    return retired
