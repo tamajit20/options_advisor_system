@@ -9,6 +9,8 @@ from providers.zerodha.execution_checks import (
     build_order_margin_params,
     check_exposure_conflicts,
     check_margin_for_orders,
+    hedged_sell_block_reason,
+    wait_until_hedged_sell_fits,
 )
 from providers.zerodha.instruments import Instrument
 from datetime import date
@@ -120,6 +122,117 @@ def test_margin_ok_when_usable_covers_required_plus_buffer():
     assert out.peak_required == 20000.0
     assert out.final_required == 20000.0
     assert out.available == 25000.0
+
+
+def test_margin_preview_uses_hedged_final_not_naked_initial():
+    """Place stays allowed when the finished spread fits. The naked sell bill is a race, not this gate."""
+    facade = MagicMock()
+
+    def _basket(orders, **_kwargs):
+        if len(orders) == 1:
+            return {
+                "initial": {"total": 23270.0, "option_premium": 23270.0},
+                "final": {"total": 23270.0, "option_premium": 23270.0},
+            }
+        return {
+            "initial": {"total": 287849.86, "option_premium": 23270.0},
+            "final": {"total": 41550.89, "option_premium": 11245.0},
+        }
+
+    facade.basket_order_margins.side_effect = _basket
+    facade.margins.return_value = {
+        "equity": {
+            "net": 278704.60,
+            "available": {"live_balance": 44738.17, "cash": 44738.17},
+        },
+    }
+    params = [
+        {
+            "variety": "regular", "exchange": "NFO", "tradingsymbol": "NIFTY26NOV23300CE",
+            "transaction_type": "BUY", "quantity": 65, "product": "NRML",
+            "order_type": "LIMIT", "price": 358.0, "leg_order": 1,
+        },
+        {
+            "variety": "regular", "exchange": "NFO", "tradingsymbol": "NIFTY26NOV23650CE",
+            "transaction_type": "SELL", "quantity": 65, "product": "NRML",
+            "order_type": "LIMIT", "price": 185.0, "leg_order": 2,
+        },
+    ]
+    out = check_margin_for_orders(facade, params)
+    assert out.ok
+    assert out.peak_required == 41550.89
+    assert out.final_required == 41550.89
+    assert out.available == 44738.17
+
+
+def test_hedged_sell_waits_until_margin_picture_includes_the_long():
+    facade = MagicMock()
+    facade.positions.return_value = {
+        "net": [{"tradingsymbol": "NIFTY26NOV23300CE", "quantity": 65}],
+    }
+    facade.basket_order_margins.side_effect = [
+        {"initial": {"total": 287849.86}, "final": {"total": 287849.86}},
+        {"initial": {"total": 18280.0}, "final": {"total": 18280.0}},
+    ]
+    facade.margins.return_value = {
+        "equity": {"net": 278704.60, "available": {"live_balance": 44738.17}},
+    }
+    sell = {
+        "variety": "regular", "exchange": "NFO",
+        "tradingsymbol": "NIFTY26NOV23650CE", "transaction_type": "SELL",
+        "quantity": 65, "product": "NRML", "order_type": "LIMIT", "price": 185.0,
+    }
+    clock = {"t": 0.0}
+
+    def monotonic():
+        return clock["t"]
+
+    def sleep(_sec):
+        clock["t"] += 1.0
+
+    reason = wait_until_hedged_sell_fits(
+        facade, sell, {"NIFTY26NOV23300CE": 65},
+        wait_sec=5, poll_sec=1, sleep_fn=sleep, monotonic_fn=monotonic,
+    )
+    assert reason is None
+    assert facade.basket_order_margins.call_count == 2
+
+
+def test_hedged_sell_reports_naked_bill_when_the_long_never_appears():
+    facade = MagicMock()
+    facade.positions.return_value = {
+        "net": [{"tradingsymbol": "NIFTY26NOV23300CE", "quantity": 65}],
+    }
+    facade.basket_order_margins.return_value = {
+        "initial": {"total": 287849.86}, "final": {"total": 287849.86},
+    }
+    facade.margins.return_value = {
+        "equity": {"net": 278704.60, "available": {"live_balance": 44738.17}},
+    }
+    sell = {"variety": "regular", "tradingsymbol": "NIFTY26NOV23650CE", "transaction_type": "SELL"}
+    reason = hedged_sell_block_reason(facade, sell, {"NIFTY26NOV23300CE": 65})
+    assert reason is not None
+    assert "287,849.86" in reason
+    assert "278,704.60" in reason
+
+
+def test_margin_blocks_when_cash_cannot_pay_option_premium():
+    facade = MagicMock()
+    facade.basket_order_margins.return_value = {
+        "initial": {"total": 40000.0, "option_premium": 40000.0},
+        "final": {"total": 40000.0, "option_premium": 40000.0},
+    }
+    facade.margins.return_value = {
+        "equity": {
+            "net": 300000.0,
+            "available": {"live_balance": 5000.0},
+        },
+    }
+    out = check_margin_for_orders(facade, [{"variety": "regular"}])
+    assert not out.ok
+    assert out.peak_required == 40000.0
+    assert out.available == 5000.0
+    assert "option premium" in out.message
 
 
 def test_margin_gates_on_path_peak_not_final():

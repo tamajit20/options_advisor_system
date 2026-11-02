@@ -53,6 +53,7 @@ from providers.zerodha.execution_checks import (
     check_exposure_conflicts,
     check_margin_for_orders,
     find_external_exit_fills,
+    wait_until_hedged_sell_fits,
     is_structure_flat_on_broker,
     reconcile_positions_after_fill,
 )
@@ -388,6 +389,33 @@ def _normalize_side(action: str, *, leg_order: int) -> str:
             f"leg {leg_order}: invalid action {action!r} (must be BUY or SELL)"
         )
     return txn
+
+
+def _filled_hedge_qty_for_sell(
+    completed: List[LegFillOutcome],
+    legs_by_order: Dict[int, dict],
+    inst_map: Dict[int, Instrument],
+    sell_inst: Instrument,
+) -> Dict[str, int]:
+    """Filled buys of the same option type and expiry that hedge this sell."""
+    qty_by_sym: Dict[str, int] = {}
+    sell_type = str(sell_inst.instrument_type or "").upper()
+    for fill in completed:
+        leg = legs_by_order.get(fill.leg_order)
+        inst = inst_map.get(fill.leg_order)
+        if leg is None or inst is None:
+            continue
+        if _transaction_type_for_leg(leg, "entry") != "BUY":
+            continue
+        if str(inst.instrument_type or "").upper() != sell_type:
+            continue
+        if inst.expiry != sell_inst.expiry:
+            continue
+        sym = str(inst.tradingsymbol or "")
+        if not sym:
+            continue
+        qty_by_sym[sym] = qty_by_sym.get(sym, 0) + int(fill.filled_quantity or 0)
+    return {sym: qty for sym, qty in qty_by_sym.items() if qty > 0}
 
 
 def _transaction_type_for_leg(leg: dict, mode: str) -> str:
@@ -1915,6 +1943,43 @@ def execute_suggestion_in_zerodha(
                     )
                 user_lim = (leg_limits or {}).get(lo)
                 qmap = fetch_quote_map(facade, [_kite_symbol_key(inst_map[lo])])
+                if txn == "SELL":
+                    hedges = _filled_hedge_qty_for_sell(
+                        completed, legs_by_order, inst_map, inst_map[lo],
+                    )
+                    if hedges:
+                        if execution_job_id is not None:
+                            update_job_progress(
+                                db, execution_job_id,
+                                current_leg_order=lo,
+                                filled_legs=len(completed),
+                                message=(
+                                    f"Waiting for Zerodha to count the hedge before leg {lo}…"
+                                ),
+                            )
+                        cfg = ZERODHA_EXECUTION_CONFIG
+                        sell_params = build_order_margin_params(
+                            [leg], inst_map,
+                            transaction_fn=lambda lg: _transaction_type_for_leg(lg, "entry"),
+                            limit_fn=lambda _lo, inst, side: _resolve_limit_price(
+                                ltp, side, inst, user_lim,
+                                quote_row=qmap.get(_kite_symbol_key(inst)),
+                                profile=profile_for("entry"),
+                                attempt=0,
+                            ),
+                            product=str(cfg.get("product", "NRML")),
+                            variety=str(cfg.get("variety", "regular")),
+                        )[0]
+                        reason = wait_until_hedged_sell_fits(
+                            facade, sell_params, hedges,
+                            wait_sec=float(cfg.get("hedge_margin_wait_sec", 20)),
+                            poll_sec=float(cfg.get("hedge_margin_poll_sec", 1)),
+                        )
+                        if reason:
+                            raise ZerodhaExecutionError(
+                                f"leg {lo}: Zerodha has not counted the hedge yet ({reason}). "
+                                "The filled buy will be flattened."
+                            )
                 outcome = _place_and_monitor_leg(
                     db, facade,
                     operation="ENTRY",

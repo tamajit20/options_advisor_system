@@ -1166,6 +1166,11 @@ ZERODHA_EXECUTION_CONFIG = {
     "close_allow_market": _env_bool("OPT_ZERODHA_CLOSE_ALLOW_MARKET", False),
     "margin_check_enabled": _env_bool("OPT_ZERODHA_MARGIN_CHECK", True),
     "margin_buffer_pct": float(_env("OPT_ZERODHA_MARGIN_BUFFER_PCT", "5")),
+    # After a hedge buy fills, wait until Kite's live sell-margin check
+    # includes that long before sending the short. The order can be COMPLETE
+    # while the margin picture still prices the short as naked.
+    "hedge_margin_wait_sec": float(_env("OPT_ZERODHA_HEDGE_MARGIN_WAIT_SEC", "20")),
+    "hedge_margin_poll_sec": float(_env("OPT_ZERODHA_HEDGE_MARGIN_POLL_SEC", "1")),
     "exposure_check_enabled": _env_bool("OPT_ZERODHA_EXPOSURE_CHECK", True),
     # Before EXIT / auto-close / flatten-rollback: require matching Kite inventory
     # so a close cannot open new exposure when the live position is missing.

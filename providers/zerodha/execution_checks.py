@@ -5,6 +5,7 @@ Pre-trade margin / exposure checks and post-fill position reconciliation.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -25,6 +26,15 @@ class MarginCheckResult:
     peak_required: float = 0.0
     buffer_pct: float = 0.0
     path_steps: List[dict] = field(default_factory=list)
+
+
+@dataclass
+class _BasketQuote:
+    """Place-time margin (initial) and margin left after hedge benefit (final)."""
+
+    initial: float
+    final: float
+    option_premium: Optional[float] = None
 
 
 @dataclass
@@ -350,7 +360,7 @@ def assert_exit_fill_reflected_for_reopen(
 
 
 def _available_cash(margins: dict) -> Optional[float]:
-    """Usable equity funds — same preference as account_snapshot (live_balance)."""
+    """Cash that can pay option premium — live_balance, then cash."""
     eq = margins.get("equity") or {}
     avail = eq.get("available") or {}
     for key in ("live_balance", "cash"):
@@ -360,13 +370,78 @@ def _available_cash(margins: dict) -> Optional[float]:
                 return float(val)
             except (TypeError, ValueError):
                 continue
+    return None
+
+
+def _available_order_margin(margins: dict) -> Optional[float]:
+    """Funds Zerodha's order check calls available.
+
+    The reject text "Margin available" matches equity ``net`` (cash plus
+    collateral). Cash alone is too small for a short option and too large
+    a gate for a debit that collateral can fund.
+    """
+    eq = margins.get("equity") or {}
     net = eq.get("net")
     if net is not None:
         try:
             return float(net)
         except (TypeError, ValueError):
             pass
+    return _available_cash(margins)
+
+
+def _block_total(block: Any) -> Optional[float]:
+    if isinstance(block, dict) and block.get("total") is not None:
+        try:
+            return float(block["total"])
+        except (TypeError, ValueError):
+            return None
     return None
+
+
+def _basket_quote_from_response(resp: Any) -> Optional[_BasketQuote]:
+    """Split a Kite basket payload into place-time and post-hedge margin.
+
+    ``initial.total`` is what Zerodha requires to accept the orders.
+    ``final.total`` is what stays blocked once the hedge benefit applies.
+    A payload with only one of them uses that figure for both. A list of
+    per-order totals (order-margins fallback) has no hedge split.
+    """
+    if resp is None:
+        return None
+    if isinstance(resp, list):
+        total = _required_from_margin_response(resp)
+        if total is None:
+            return None
+        return _BasketQuote(initial=total, final=total)
+    if not isinstance(resp, dict):
+        return None
+    data = resp.get("data")
+    payload = data if isinstance(data, dict) and (
+        "final" in data or "initial" in data or "total" in data
+    ) else resp
+    if not isinstance(payload, dict):
+        return None
+    initial_block = payload.get("initial") if isinstance(payload.get("initial"), dict) else None
+    final_block = payload.get("final") if isinstance(payload.get("final"), dict) else None
+    initial = _block_total(initial_block)
+    final = _block_total(final_block)
+    if initial is None and final is None:
+        total = _required_from_margin_response(payload)
+        if total is None:
+            return None
+        initial = final = total
+    elif initial is None:
+        initial = final
+    elif final is None:
+        final = initial
+    premium: Optional[float] = None
+    if initial_block is not None and initial_block.get("option_premium") is not None:
+        try:
+            premium = abs(float(initial_block["option_premium"]))
+        except (TypeError, ValueError):
+            premium = None
+    return _BasketQuote(initial=float(initial), final=float(final), option_premium=premium)
 
 
 def _required_from_margin_response(resp: Any) -> Optional[float]:
@@ -427,24 +502,26 @@ def _params_for_kite(order_params: List[dict]) -> List[dict]:
     return out
 
 
-def _estimate_basket_required(
+def _estimate_basket_quote(
     facade: Any,
     order_params: List[dict],
     *,
     errors: List[str],
-) -> Optional[float]:
+) -> Optional[_BasketQuote]:
     kite_params = _params_for_kite(order_params)
     if hasattr(facade, "basket_order_margins"):
         try:
-            return _required_from_margin_response(
+            quote = _basket_quote_from_response(
                 facade.basket_order_margins(kite_params)
             )
+            if quote is not None:
+                return quote
         except Exception as exc:
             errors.append(f"basket_order_margins: {exc}")
             logger.warning("basket_order_margins failed: %s", exc)
     if len(kite_params) == 1 and hasattr(facade, "order_margins"):
         try:
-            return _required_from_margin_response(
+            return _basket_quote_from_response(
                 facade.order_margins(kite_params)
             )
         except Exception as exc:
@@ -480,11 +557,14 @@ def check_margin_for_orders(
     *,
     fallback_required: Optional[float] = None,
 ) -> MarginCheckResult:
-    """Estimate margin along the execution path; gate on peak, not only final.
+    """Estimate margin along the execution path; gate on the hedged peak.
 
     For multi-leg orders we call Kite basket margins on each prefix of the
-    planned sequence (same order as placement). Peak = max(cumulative);
-    final = full basket. Available cash must cover peak × (1 + buffer).
+    planned sequence (same order as placement). Peak and Final use the
+    basket ``final`` total (margin once the hedge is counted). Available
+    cash must cover peak × (1 + buffer). Option premium, when Zerodha
+    reports it, must also fit in cash. A sell that follows a filled buy is
+    held separately until the live order-margin check sees that hedge.
     """
     if not order_params:
         return MarginCheckResult(ok=True)
@@ -492,23 +572,27 @@ def check_margin_for_orders(
         return MarginCheckResult(ok=True)
 
     errors: List[str] = []
-    cumulatives: List[float] = []
+    quotes: List[_BasketQuote] = []
     for i in range(1, len(order_params) + 1):
-        req = _estimate_basket_required(
+        quote = _estimate_basket_quote(
             facade, order_params[:i], errors=errors,
         )
-        if req is None:
+        if quote is None:
             break
-        cumulatives.append(float(req))
+        quotes.append(quote)
 
     final_required: Optional[float] = None
     peak_required: Optional[float] = None
+    cash_required: Optional[float] = None
     path_steps: List[dict] = []
 
-    if len(cumulatives) == len(order_params):
-        final_required = cumulatives[-1]
-        peak_required = max(cumulatives)
-        path_steps = _build_margin_path_steps(order_params, cumulatives)
+    if len(quotes) == len(order_params):
+        place_totals = [q.final for q in quotes]
+        final_required = quotes[-1].final
+        peak_required = max(place_totals)
+        premiums = [q.option_premium for q in quotes if q.option_premium]
+        cash_required = max(premiums) if premiums else None
+        path_steps = _build_margin_path_steps(order_params, place_totals)
     elif fallback_required is not None:
         try:
             final_required = abs(float(fallback_required))
@@ -542,6 +626,7 @@ def check_margin_for_orders(
             ),
         )
     available = _available_cash(margins)
+    cash = available
     if available is None:
         return MarginCheckResult(
             ok=False,
@@ -553,7 +638,23 @@ def check_margin_for_orders(
         )
     buffer_pct = float(ZERODHA_EXECUTION_CONFIG.get("margin_buffer_pct", 5)) / 100.0
     need = peak_required * (1.0 + buffer_pct)
+    shortfalls: List[str] = []
     if available < need:
+        shortfalls.append(
+            f"need ~₹{need:,.0f} at peak "
+            f"(peak ₹{peak_required:,.0f} + {buffer_pct * 100:.0f}% buffer; "
+            f"final structure ₹{final_required:,.0f}), "
+            f"available margin ₹{available:,.0f}"
+        )
+    if cash_required is not None and cash is not None:
+        cash_need = cash_required * (1.0 + buffer_pct)
+        if cash < cash_need:
+            shortfalls.append(
+                f"option premium needs ~₹{cash_need:,.0f} cash "
+                f"(₹{cash_required:,.0f} + {buffer_pct * 100:.0f}% buffer), "
+                f"cash ₹{cash:,.0f}"
+            )
+    if shortfalls:
         return MarginCheckResult(
             ok=False,
             required=peak_required,
@@ -562,12 +663,7 @@ def check_margin_for_orders(
             available=available,
             buffer_pct=buffer_pct * 100.0,
             path_steps=path_steps,
-            message=(
-                f"Insufficient funds in Zerodha: need ~₹{need:,.0f} at peak "
-                f"(peak ₹{peak_required:,.0f} + {buffer_pct * 100:.0f}% buffer; "
-                f"final structure ₹{final_required:,.0f}), "
-                f"available ₹{available:,.0f}"
-            ),
+            message="Insufficient funds in Zerodha: " + "; ".join(shortfalls),
         )
     return MarginCheckResult(
         ok=True,
@@ -583,6 +679,73 @@ def check_margin_for_orders(
             f"(+{buffer_pct * 100:.0f}% buffer on peak)"
         ),
     )
+
+
+def hedged_sell_block_reason(
+    facade: Any,
+    sell_order: dict,
+    hedge_qty_by_symbol: Dict[str, int],
+) -> Optional[str]:
+    """None when this sell can be sent against hedges that already filled.
+
+    The single-order margin call sees current positions. Until Zerodha's
+    margin picture includes the long, that call still returns the naked
+    short margin and this returns a reason to keep waiting.
+    """
+    if not hedge_qty_by_symbol:
+        return None
+    held = _broker_net_by_symbol(facade)
+    for sym, qty in hedge_qty_by_symbol.items():
+        have = int(held.get(sym) or 0)
+        need = int(qty)
+        if have < need:
+            return f"{sym} position {have} is below filled hedge {need}"
+    errors: List[str] = []
+    quote = _estimate_basket_quote(facade, [sell_order], errors=errors)
+    if quote is None:
+        detail = "; ".join(errors) if errors else "empty margin response"
+        return f"could not read sell margin ({detail})"
+    try:
+        margins = facade.margins()
+    except Exception as exc:
+        return f"could not read available margin ({exc})"
+    available = _available_order_margin(margins)
+    if available is None:
+        return "Zerodha did not report available margin"
+    required = float(quote.initial)
+    if available < required:
+        return (
+            f"sell still needs ₹{required:,.2f} against available ₹{available:,.2f}"
+        )
+    return None
+
+
+def wait_until_hedged_sell_fits(
+    facade: Any,
+    sell_order: dict,
+    hedge_qty_by_symbol: Dict[str, int],
+    *,
+    wait_sec: float,
+    poll_sec: float,
+    sleep_fn=time.sleep,
+    monotonic_fn=time.monotonic,
+) -> Optional[str]:
+    """Poll until the sell's live margin fits. Reason string if it never does."""
+    if not hedge_qty_by_symbol:
+        return None
+    deadline = monotonic_fn() + max(0.0, float(wait_sec))
+    poll = max(0.2, float(poll_sec))
+    last = "hedge not confirmed"
+    while True:
+        try:
+            last = hedged_sell_block_reason(facade, sell_order, hedge_qty_by_symbol)
+        except Exception as exc:
+            last = str(exc)
+        if last is None:
+            return None
+        if monotonic_fn() >= deadline:
+            return last
+        sleep_fn(poll)
 
 
 def build_order_margin_params(
