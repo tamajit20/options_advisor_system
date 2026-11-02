@@ -4777,16 +4777,6 @@ function _fitStop(value, role, zone) {
   </div>`;
 }
 
-function _fitNowLine() {
-  return `<div class="lo-nowline">
-    <span class="lo-stop-k">Now</span>
-    <strong class="lo-spot-now">\u2014</strong>
-    <span class="lo-fit-where"></span>
-    <span class="lo-spot-chg muted"></span>
-    <span class="lo-spot-entry-note muted"></span>
-  </div>`;
-}
-
 function _fitLevels(t) {
   const legs = (t && t.legs) || [];
   const strat = ((t.suggestion && t.suggestion.strategy) || '').toUpperCase();
@@ -4894,7 +4884,6 @@ function _renderFitBoard(t) {
   }
   return `
     <div class="lo-fit" ${_fitDataAttrs(lv)} aria-label="Expiry levels">
-      ${_fitNowLine()}
       ${ranges ? `<div class="lo-fit-ranges">${ranges}</div>` : ''}
     </div>`;
 }
@@ -4908,7 +4897,7 @@ function renderLiveOutlook(t) {
       </div>
       <div class="lo-help-sheet" hidden>
         <p><strong>Win chance</strong> — model odds of profit at expiry from spot, DTE, and IV (band = \u00b115% IV stress). Shows current vs entry %, plus recent graph. Not a historical hit rate.</p>
-        <p><strong>At expiry</strong> — the expiry date, today\u2019s index, and two ranges: full profit between the sold strikes, and in profit out to the breakevens.</p>
+        <p><strong>At expiry</strong> — two ranges only. Today\u2019s index and the move versus entry are on At today.</p>
         <p><strong>Near-expiry EV</strong> — average total P&amp;L if held to expiry (win% \u00d7 max profit + loss% \u00d7 \u2212max loss); gross and net of est. charges. Not extra profit on top of MTM.</p>
         <p><strong>Gross vs hold</strong> — compares Current P&amp;L Gross (lock in now) vs modeled hold-to-expiry outcome.</p>
         <p class="muted" style="margin-top:.35rem">Per-row \u24d8 for a short popup. Live MTM is under <em>Current P&amp;L</em> above \u2014 not in this panel.</p>
@@ -5130,8 +5119,18 @@ function _renderLoSpotStrip(el, payload) {
   if (todayNow) {
     todayNow.textContent = (spot != null && !isNaN(spot)) ? `\u20b9${fmt(spot)}` : '\u2014';
   }
-  if (todayChg) todayChg.textContent = chgEl ? chgEl.textContent : '';
-  if (todayChg && chgEl) todayChg.className = chgEl.className.replace('lo-spot-chg', 'lo-today-chg');
+  if (todayChg) {
+    if (chg != null && !isNaN(chg) && entry != null && !isNaN(entry)) {
+      const sign = chg > 0 ? '+' : '';
+      todayChg.textContent = `${sign}${fmt(chg)} vs entry`;
+      todayChg.classList.remove('pnl-profit', 'pnl-loss');
+      if (chg > 0) todayChg.classList.add('pnl-profit');
+      else if (chg < 0) todayChg.classList.add('pnl-loss');
+    } else {
+      todayChg.textContent = '';
+      todayChg.classList.remove('pnl-profit', 'pnl-loss');
+    }
+  }
   if (todayEntry && entry != null && !isNaN(entry)) {
     todayEntry.textContent = `Entry \u20b9${fmt(entry)}`;
   }
