@@ -753,7 +753,7 @@ function _renderZerodhaPreviewTable(preview) {
   ].filter(Boolean).join(' \u00b7 ');
   const funds = _renderZerodhaFundsBlock(preview);
   const livePrem = _renderZerodhaLivePremiumBlock(preview);
-  const closePnl = isClose ? _renderClosePnlBlock(preview.close_pnl) : '';
+  const closePnl = isClose ? _renderClosePnlBlock(preview.close_pnl, preview.trade_id) : '';
   const bandHeaders = showBand
     ? '<th class="num">Suggested band</th><th>Band check</th>'
     : '';
@@ -1720,12 +1720,42 @@ function _tradeMarginFinal(tradeId) {
   return n;
 }
 
+function _headerAmountUsed(tradeId) {
+  if (!tradeId) return null;
+  const root = document.querySelector(
+    `.tag-current-pnl.live-mtm[data-trade-id="${CSS.escape(tradeId)}"]`,
+  );
+  if (!root) return null;
+  const val = root.querySelector('.cpnl-margin-val');
+  const pct = root.querySelector('.cpnl-margin-pct');
+  const text = val && val.textContent ? val.textContent.trim() : '';
+  if (!text || text === '\u2014') return null;
+  return {
+    text,
+    pct: pct && pct.textContent ? pct.textContent : '',
+    pos: !!(pct && pct.classList.contains('mtm-pos')),
+    neg: !!(pct && pct.classList.contains('mtm-neg')),
+  };
+}
+
 function _paintFillAmountUsed(container, net) {
   const el = container && container.querySelector('.fill-pnl-used');
   const pctEl = container && container.querySelector('.fill-pnl-used-pct');
   if (!el) return;
   const tid = container.id && container.id.startsWith('fill-pnl-')
     ? container.id.slice('fill-pnl-'.length) : '';
+  const header = _headerAmountUsed(tid);
+  if (header) {
+    el.textContent = header.text;
+    el.className = (el.className || '').replace(/pnl-pos|pnl-neg/g, '').trim();
+    if (pctEl) {
+      pctEl.textContent = header.pct;
+      pctEl.className = 'pnl-pct-bracket'
+        + (header.pos ? ' pnl-pos' : '')
+        + (header.neg ? ' pnl-neg' : '');
+    }
+    return;
+  }
   const margin = _tradeMarginFinal(tid);
   if (net == null || isNaN(net) || !(margin > 0)) {
     el.textContent = '\u2014';
@@ -1782,7 +1812,7 @@ function _snapshotClosePnl(panel, tradeId) {
   };
 }
 
-function _renderClosePnlBlock(pnl) {
+function _renderClosePnlBlock(pnl, tradeId) {
   const row = pnl || {};
   const tone = (amount) => (amount > 0 ? 'pnl-profit' : (amount < 0 ? 'pnl-loss' : ''));
   const money = (amount) => (amount == null || isNaN(amount) ? '\u2014' : _fmtSignedInr(amount));
@@ -1792,15 +1822,23 @@ function _renderClosePnlBlock(pnl) {
   };
   const premPct = (amount) => (amount != null && row.premium)
     ? pnlPctTextCompact(amount, row.premium) : '';
-  const usedPct = (row.net != null && row.marginFinal > 0)
-    ? pnlPctTextCompact(row.net, { rs: row.marginFinal }) : '';
-  const usedAmt = row.marginFinal > 0 ? `\u20b9${fmt(row.marginFinal)}` : '\u2014';
+  const header = _headerAmountUsed(tradeId);
+  const usedPct = header
+    ? header.pct
+    : ((row.net != null && row.marginFinal > 0)
+      ? pnlPctTextCompact(row.net, { rs: row.marginFinal }) : '');
+  const usedAmt = header
+    ? header.text
+    : (row.marginFinal > 0 ? `\u20b9${fmt(row.marginFinal)}` : '\u2014');
+  const usedCls = header
+    ? (header.pos ? 'pnl-profit' : (header.neg ? 'pnl-loss' : ''))
+    : tone(row.net);
   return `
     <div style="margin:0 0 10px;padding:8px 10px;border:1px solid #2a3744;border-radius:6px">
       <div>Net ${signed(row.net, premPct(row.net))}</div>
       <div>Gross ${signed(row.gross, premPct(row.gross))}</div>
       <div class="muted" style="font-size:.82rem">Est. charges ${row.charges != null ? '\u20b9' + fmt(row.charges) : '\u2014'}</div>
-      <div>Amount used <strong>${usedAmt}</strong> <span class="${tone(row.net)}">${usedPct}</span></div>
+      <div>Amount used <strong>${usedAmt}</strong> <span class="${usedCls}">${usedPct}</span></div>
     </div>`;
 }
 
@@ -1875,6 +1913,8 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
         : '';
       el.title = 'Net = live MTM minus estimated round-trip charges. Gross = raw MTM. Amount used = Zerodha Final already held; the percent is net \u00f7 that amount.'
         + premTip + chTip + (asOf ? ' as of ' + asOf + ' IST' : '') + '. ' + feed.tip;
+      const fill = document.getElementById(`fill-pnl-${tradeId}`);
+      if (fill) _paintFillAmountUsed(fill, parseFloat(fill.dataset.fillNet));
       return;
     }
     const valEl = el.querySelector('.cpnl-val') || el.querySelector('.lpl-current-val');
