@@ -1701,7 +1701,6 @@ function _refreshHeldMarginPnl(host, finalRs) {
     _paintFillAmountUsed(
       fill,
       parseFloat(fill.dataset.fillNet),
-      parseFloat(fill.dataset.fillGross),
     );
   }
 }
@@ -1721,51 +1720,27 @@ function _tradeMarginFinal(tradeId) {
   return n;
 }
 
-function _pnlPctPlain(amount, premiumInfo) {
-  if (amount == null || isNaN(amount) || !premiumInfo || !(premiumInfo.rs > 0)) return '';
-  const pct = (amount / premiumInfo.rs) * 100;
-  const sign = pct >= 0 ? '+' : '';
-  return `${sign}${pct.toFixed(1)}%`;
-}
-
-function _amountUsedPctHtml(net, gross, premiumInfo) {
-  const parts = [];
-  if (net != null && !isNaN(net)) {
-    const txt = _pnlPctPlain(net, premiumInfo);
-    if (txt) {
-      const cls = net > 0 ? 'pnl-pos' : (net < 0 ? 'pnl-neg' : '');
-      parts.push(`<span class="${cls}">Net ${txt}</span>`);
-    }
-  }
-  if (gross != null && !isNaN(gross)) {
-    const txt = _pnlPctPlain(gross, premiumInfo);
-    if (txt) {
-      const cls = gross > 0 ? 'pnl-pos' : (gross < 0 ? 'pnl-neg' : '');
-      parts.push(`<span class="${cls}">Gross ${txt}</span>`);
-    }
-  }
-  return parts.length ? ` (${parts.join(' \u00b7 ')})` : '';
-}
-
-function _paintFillAmountUsed(container, net, gross) {
+function _paintFillAmountUsed(container, net) {
   const el = container && container.querySelector('.fill-pnl-used');
   const pctEl = container && container.querySelector('.fill-pnl-used-pct');
   if (!el) return;
   const tid = container.id && container.id.startsWith('fill-pnl-')
     ? container.id.slice('fill-pnl-'.length) : '';
   const margin = _tradeMarginFinal(tid);
-  if (!(margin > 0)) {
+  if (net == null || isNaN(net) || !(margin > 0)) {
     el.textContent = '\u2014';
     el.className = (el.className || '').replace(/pnl-pos|pnl-neg/g, '').trim();
-    if (pctEl) pctEl.innerHTML = '';
+    if (pctEl) {
+      pctEl.textContent = '';
+      pctEl.className = 'pnl-pct-bracket';
+    }
     return;
   }
   el.textContent = `\u20b9${fmt(margin)}`;
   el.className = (el.className || '').replace(/pnl-pos|pnl-neg/g, '').trim();
   if (pctEl) {
-    const g = (gross == null || isNaN(gross)) ? parseFloat(container.dataset.fillGross) : gross;
-    pctEl.innerHTML = _amountUsedPctHtml(net, g, _premiumFromDataset(container));
-    pctEl.className = 'pnl-pct-bracket';
+    pctEl.textContent = pnlPctTextCompact(net, { rs: margin });
+    pctEl.className = 'pnl-pct-bracket' + (net > 0 ? ' pnl-pos' : (net < 0 ? ' pnl-neg' : ''));
   }
 }
 
@@ -1817,14 +1792,15 @@ function _renderClosePnlBlock(pnl) {
   };
   const premPct = (amount) => (amount != null && row.premium)
     ? pnlPctTextCompact(amount, row.premium) : '';
-  const usedPct = _amountUsedPctHtml(row.net, row.gross, row.premium);
+  const usedPct = (row.net != null && row.marginFinal > 0)
+    ? pnlPctTextCompact(row.net, { rs: row.marginFinal }) : '';
   const usedAmt = row.marginFinal > 0 ? `\u20b9${fmt(row.marginFinal)}` : '\u2014';
   return `
     <div style="margin:0 0 10px;padding:8px 10px;border:1px solid #2a3744;border-radius:6px">
       <div>Net ${signed(row.net, premPct(row.net))}</div>
       <div>Gross ${signed(row.gross, premPct(row.gross))}</div>
       <div class="muted" style="font-size:.82rem">Est. charges ${row.charges != null ? '\u20b9' + fmt(row.charges) : '\u2014'}</div>
-      <div>Amount used <strong>${usedAmt}</strong> <span class="pnl-pct-bracket">${usedPct}</span></div>
+      <div>Amount used <strong>${usedAmt}</strong> <span class="${tone(row.net)}">${usedPct}</span></div>
     </div>`;
 }
 
@@ -2092,7 +2068,7 @@ function _applyLegLtpsToClosePanel(tradeId, legLtps) {
       _setPnlLine(fillPreview.querySelector('.fill-pnl-value'), fillPreview.querySelector('.fill-pnl-pct'), net, prem);
       fillPreview.dataset.fillNet = String(net);
       fillPreview.dataset.fillGross = String(fGross);
-      _paintFillAmountUsed(fillPreview, net, fGross);
+      _paintFillAmountUsed(fillPreview, net);
     }
   }
   return anyUpdated;
@@ -9154,7 +9130,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
         _setPnlLine(netEl, netPctEl, null, prem);
         delete container.dataset.fillNet;
         delete container.dataset.fillGross;
-        _paintFillAmountUsed(container, null, null);
+        _paintFillAmountUsed(container, null);
         container.querySelectorAll('.close-loss-warn').forEach(el => el.remove());
         return;
       }
@@ -9164,7 +9140,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       _setPnlLine(netEl, netPctEl, net, prem);
       container.dataset.fillNet = String(net);
       container.dataset.fillGross = String(gross);
-      _paintFillAmountUsed(container, net, gross);
+      _paintFillAmountUsed(container, net);
       let warnEl = container.querySelector('.close-loss-warn');
       if (net < 0) {
         if (!warnEl) { warnEl = document.createElement('div'); warnEl.className = 'close-loss-warn'; container.appendChild(warnEl); }
