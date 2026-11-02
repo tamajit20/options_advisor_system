@@ -10611,6 +10611,8 @@ function renderHistoryTrade(t) {
       ${t.exit_instruction ? cmp('Exit reason', '—', `<span class="muted">${escapeHtml(t.exit_instruction)}</span>`) : ''}
     </div>
 
+    ${renderOriginalSuggestion(s, t.trade_id)}
+
     ${legRows ? `
     <div class="hist-legs-wrap">
       <div class="hist-legs-title">Legs — Suggested vs Executed</div>

@@ -3362,6 +3362,64 @@ def create_app() -> Flask:
             })
         return jsonify({"pairs": pairs})
 
+    def _history_suggestion_payload(sug_repo, row, sug_legs, seen_full):
+        """Full suggestion for the history card, plus the short aliases the comparison grid uses."""
+        if not row.get("underlying"):
+            return None
+        sid = row.get("suggestion_id")
+        full = None
+        if sid:
+            if sid not in seen_full:
+                got = sug_repo.get(sid)
+                seen_full[sid] = _row(got) if got else None
+            full = seen_full.get(sid)
+        if full:
+            suggestion = dict(full)
+            if "net_credit_suggested" in suggestion:
+                suggestion["net_credit"] = suggestion.pop("net_credit_suggested")
+            suggestion["legs"] = sug_legs
+            suggestion["confidence"] = suggestion.get("confidence_score")
+            suggestion["spot"] = suggestion.get("spot_at_generation")
+            suggestion["upper_be"] = suggestion.get("upper_breakeven")
+            suggestion["lower_be"] = suggestion.get("lower_breakeven")
+            suggestion["stop_loss"] = suggestion.get("stop_loss_level")
+            suggestion["pop"] = suggestion.get("probability_of_profit")
+            suggestion["est_charges"] = suggestion.get("estimated_charges_total")
+            suggestion["est_net_pnl"] = suggestion.get("estimated_net_pnl")
+            suggestion["expiry"] = suggestion.get("expiry_date")
+            return suggestion
+        return {
+            "suggestion_id": sid,
+            "trade_name":  row.get("sug_trade_name"),
+            "underlying":  row.get("underlying"),
+            "strategy":    row.get("strategy"),
+            "generated_on": row.get("sug_generated_on"),
+            "net_credit":  row.get("sug_net_credit"),
+            "confidence":  row.get("sug_confidence"),
+            "confidence_score": row.get("sug_confidence"),
+            "spot":        row.get("sug_spot"),
+            "spot_at_generation": row.get("sug_spot"),
+            "upper_be":    row.get("upper_breakeven"),
+            "lower_be":    row.get("lower_breakeven"),
+            "upper_breakeven": row.get("upper_breakeven"),
+            "lower_breakeven": row.get("lower_breakeven"),
+            "stop_loss":   row.get("stop_loss_level"),
+            "stop_loss_level": row.get("stop_loss_level"),
+            "max_profit":  row.get("sug_max_profit"),
+            "max_loss":    row.get("sug_max_loss"),
+            "pop":         row.get("sug_pop"),
+            "probability_of_profit": row.get("sug_pop"),
+            "est_charges": row.get("sug_est_charges"),
+            "estimated_charges_total": row.get("sug_est_charges"),
+            "est_net_pnl": row.get("sug_est_net_pnl"),
+            "estimated_net_pnl": row.get("sug_est_net_pnl"),
+            "expiry":      row.get("sug_expiry"),
+            "expiry_date": row.get("sug_expiry"),
+            "dte":         row.get("sug_dte"),
+            "entry_quality_score": row.get("sug_entry_quality"),
+            "legs":        sug_legs,
+        }
+
     @app.route("/api/history/closed-trades")
     @_with_db
     def api_history_closed_trades(db: SQLServerConnection):
@@ -3421,6 +3479,7 @@ def create_app() -> Flask:
 
         out = []
         seen_sug = {}
+        seen_full = {}
         for r in rows:
             r = _row(r)
             trade_legs = [_row(lg) for lg in trd_repo.legs_with_suggestion_info(r["trade_id"])]
@@ -3428,6 +3487,7 @@ def create_app() -> Flask:
             if sid and sid not in seen_sug:
                 seen_sug[sid] = [_row(lg) for lg in sug_repo.legs(sid)]
             sug_legs = seen_sug.get(sid, [])
+            suggestion = _history_suggestion_payload(sug_repo, r, sug_legs, seen_full)
             item = {
                 "trade_id":          r["trade_id"],
                 "suggestion_id":     r.get("suggestion_id"),
@@ -3450,26 +3510,7 @@ def create_app() -> Flask:
                 "actual_stop_loss":  r["actual_stop_loss_level"],
                 "entry_quality_score": r.get("sug_entry_quality"),
                 "legs":              trade_legs,
-                "suggestion": {
-                    "underlying":  r.get("underlying"),
-                    "strategy":    r.get("strategy"),
-                    "generated_on":r.get("sug_generated_on"),
-                    "net_credit":  r.get("sug_net_credit"),
-                    "confidence":  r.get("sug_confidence"),
-                    "spot":        r.get("sug_spot"),
-                    "upper_be":    r.get("upper_breakeven"),
-                    "lower_be":    r.get("lower_breakeven"),
-                    "stop_loss":   r.get("stop_loss_level"),
-                    "max_profit":  r.get("sug_max_profit"),
-                    "max_loss":    r.get("sug_max_loss"),
-                    "pop":         r.get("sug_pop"),
-                    "est_charges": r.get("sug_est_charges"),
-                    "est_net_pnl": r.get("sug_est_net_pnl"),
-                    "expiry":      r.get("sug_expiry"),
-                    "dte":         r.get("sug_dte"),
-                    "entry_quality_score": r.get("sug_entry_quality"),
-                    "legs":        sug_legs,
-                } if r.get("underlying") else None,
+                "suggestion":        suggestion,
             }
             _enrich_trade_execution_channel(db, item)
             out.append(item)
