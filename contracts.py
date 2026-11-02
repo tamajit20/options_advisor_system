@@ -298,6 +298,8 @@ class Suggestion:
     regime_pair_preference_reason:  Optional[str] = None
     # Entry-gate veto that did not prevent constructing legs (inspect + optional execute).
     strategy_veto_reason:           Optional[str] = None
+    # JSON calendar of full-profit / in-profit ranges, one row per day. Frozen at generation.
+    mark_band_calendar:             Optional[str] = None
 
 
 @dataclass

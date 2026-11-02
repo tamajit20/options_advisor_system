@@ -934,6 +934,14 @@ _TABLE_DDL: List[str] = [
     )
     ALTER TABLE options_suggestions ADD em_calibration_warning NVARCHAR(500) NULL
     """,
+    # Day-by-day full-profit and in-profit ranges, frozen at suggestion time.
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'mark_band_calendar'
+    )
+    ALTER TABLE options_suggestions ADD mark_band_calendar NVARCHAR(MAX) NULL
+    """,
     """
     IF NOT EXISTS (
         SELECT 1 FROM sys.columns

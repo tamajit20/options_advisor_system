@@ -1069,6 +1069,20 @@ def assemble_suggestion(
     plain_english = _explain(strategy, underlying, indicators, iv_rank, dte, economics,
                              execution_window)
 
+    import json as _json
+    from engine.live_expectation import mark_band_calendar
+    _cal = mark_band_calendar(
+        legs=legs,
+        start=entry_date or (generated_on or now_ist()).date(),
+        expiry=expiry,
+        atm_iv=atm_iv,
+        strategy=strategy,
+        lower_be=economics.lower_breakeven,
+        upper_be=economics.upper_breakeven,
+        underlying=underlying,
+    )
+    mark_band_json = _json.dumps(_cal) if _cal and _cal.get("rows") else None
+
     confidence = _merge_confidence_checks(
         confidence,
         list(build_strategy_entry_gate_checks(
@@ -1110,6 +1124,7 @@ def assemble_suggestion(
         oi_pcr_change=oi_pcr_change,
         entry_quality_score=entry_quality_score,
         strategy_veto_reason="; ".join(collected_vetoes) if collected_vetoes else None,
+        mark_band_calendar=mark_band_json,
     )
 
 

@@ -10,6 +10,7 @@ from utils import now_ist
 from engine.leg_builder import estimate_pop
 from contracts import SuggestionLeg
 from engine.live_expectation import (
+    mark_band_calendar,
     assess_direction_fit,
     enrich_trade_outlook,
     expiry_ev_note,
@@ -620,3 +621,39 @@ class TestTodayMarkBands:
         assert out["in_lo"] < out["full_lo"]
         assert out["in_hi"] > out["full_hi"]
         assert out["in_lo"] < 22450 < out["in_hi"]
+
+    def test_calendar_freezes_each_day_and_expiry_row(self):
+        exp = date(2026, 11, 9)
+        legs = [
+            {"action": "SELL", "strike": 22450, "option_type": "PE", "suggested_price": 67.85,
+             "lots": 1, "lot_size": 65, "expiry_date": exp},
+            {"action": "BUY", "strike": 22200, "option_type": "PE", "suggested_price": 36.05,
+             "lots": 1, "lot_size": 65, "expiry_date": exp},
+            {"action": "SELL", "strike": 23500, "option_type": "CE", "suggested_price": 48.70,
+             "lots": 1, "lot_size": 65, "expiry_date": exp},
+            {"action": "BUY", "strike": 23750, "option_type": "CE", "suggested_price": 19.60,
+             "lots": 1, "lot_size": 65, "expiry_date": exp},
+        ]
+        cal = mark_band_calendar(
+            legs=legs,
+            start=date(2026, 11, 2),
+            expiry=exp,
+            atm_iv=0.12,
+            strategy="IRON_CONDOR",
+            lower_be=22389.1,
+            upper_be=23560.9,
+            underlying="NIFTY",
+        )
+        assert cal is not None
+        assert len(cal["rows"]) == 8
+        assert cal["rows"][0]["date"] == "2026-11-02"
+        assert cal["rows"][-1]["date"] == "2026-11-09"
+        assert cal["rows"][-1]["full_lo"] == 22450
+        assert cal["rows"][-1]["full_hi"] == 23500
+        assert cal["rows"][-1]["in_lo"] == 22389
+        assert cal["rows"][-1]["in_hi"] == 23561
+        assert cal["rows"][0]["full_hi"] < cal["rows"][-1]["full_hi"]
+        assert mark_band_calendar(
+            legs=legs, start=date(2026, 11, 2), expiry=exp, atm_iv=None,
+            strategy="IRON_CONDOR", lower_be=22389.1, upper_be=23560.9,
+        ) is None

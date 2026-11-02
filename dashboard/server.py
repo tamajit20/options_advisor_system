@@ -2304,6 +2304,82 @@ def create_app() -> Flask:
             },
         })
 
+    @app.route("/api/suggestion/<sid>/mark-bands")
+    @_with_db
+    def api_suggestion_mark_bands(db: SQLServerConnection, sid: str):
+        """Day-by-day profit ranges saved with the suggestion.
+
+        Older rows that predate the column are built once from the stored
+        legs and the latest ATM IV, then written so the next open is a read.
+        """
+        from database.models import AtmIvTimeseriesRepo
+        from engine.live_expectation import mark_band_calendar
+
+        repo = SuggestionRepo(db)
+        row = repo.get(sid)
+        if not row:
+            return jsonify({"error": "Not found"}), 404
+        raw = row.get("mark_band_calendar")
+        cal = None
+        if raw:
+            try:
+                cal = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                cal = None
+        if not cal or not cal.get("rows"):
+            expiry = row.get("expiry_date")
+            if isinstance(expiry, datetime):
+                expiry = expiry.date()
+            elif isinstance(expiry, str):
+                try:
+                    expiry = date.fromisoformat(expiry[:10])
+                except ValueError:
+                    expiry = None
+            iv = None
+            if row.get("underlying") and isinstance(expiry, date):
+                iv = AtmIvTimeseriesRepo(db).latest_atm_iv(row["underlying"], expiry)
+            start = row.get("entry_date") or row.get("generated_on")
+            cal = mark_band_calendar(
+                legs=repo.legs(sid),
+                start=start,
+                expiry=expiry,
+                atm_iv=iv,
+                strategy=str(row.get("strategy") or ""),
+                lower_be=row.get("lower_breakeven"),
+                upper_be=row.get("upper_breakeven"),
+                underlying=str(row.get("underlying") or ""),
+            )
+            if not cal or not cal.get("rows"):
+                return jsonify({"error": "Day ranges are not available for this suggestion."}), 404
+            repo.save_mark_band_calendar(sid, json.dumps(cal))
+        spot = None
+        expiry = row.get("expiry_date")
+        if isinstance(expiry, datetime):
+            expiry = expiry.date()
+        elif isinstance(expiry, str):
+            try:
+                expiry = date.fromisoformat(expiry[:10])
+            except ValueError:
+                expiry = None
+        if row.get("underlying") and isinstance(expiry, date):
+            snap = AtmIvTimeseriesRepo(db).latest_snapshot(row["underlying"], expiry)
+            if snap and snap.get("spot") is not None:
+                try:
+                    spot = float(snap["spot"])
+                except (TypeError, ValueError):
+                    spot = None
+        entry = row.get("spot_at_generation")
+        try:
+            entry_f = float(entry) if entry is not None else None
+        except (TypeError, ValueError):
+            entry_f = None
+        return jsonify({
+            "suggestion_id": sid,
+            "entry_spot": entry_f,
+            "spot": spot,
+            "calendar": cal,
+        })
+
     @app.route("/api/suggestion/live-ltp/snapshot")
     def api_suggestion_live_ltp_snapshot():
         """WS-backed LTPs for all pending suggestion cards (no Kite REST)."""

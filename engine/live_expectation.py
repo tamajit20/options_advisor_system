@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any, Mapping, Optional, Sequence
 
 from contracts import SuggestionLeg
@@ -1348,6 +1348,154 @@ def today_mark_bands(
         "full_hi": full_hi,
         "in_lo": in_lo,
         "in_hi": in_hi,
+    }
+
+
+def _coerce_date(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value)[:10]
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _leg_strike(legs: Sequence[Any], action: str, option_type: str) -> Optional[float]:
+    for leg in legs or []:
+        getter = leg.get if isinstance(leg, Mapping) else lambda k, d=None, src=leg: getattr(src, k, d)
+        if str(getter("action") or "").upper() != action:
+            continue
+        if str(getter("option_type") or "").upper() != option_type:
+            continue
+        strike = _as_float(getter("strike"))
+        if strike is not None and strike > 0:
+            return strike
+    return None
+
+
+def expiry_structural_bands(
+    *,
+    legs: Sequence[Any],
+    strategy: str,
+    lower_be: Optional[float],
+    upper_be: Optional[float],
+) -> dict:
+    """Expiry ranges that match the trade page: sold strikes, then breakevens."""
+    short_put = _leg_strike(legs, "SELL", "PE")
+    short_call = _leg_strike(legs, "SELL", "CE")
+    strat = (strategy or "").upper()
+    row = {
+        "full_lo": None,
+        "full_hi": None,
+        "in_lo": None,
+        "in_hi": None,
+        "in_side": None,
+        "expiry": True,
+    }
+    credit_range = (
+        short_put is not None and short_call is not None
+        and strat not in ("BULL_CALL_SPREAD", "BEAR_PUT_SPREAD")
+    )
+    if credit_range:
+        row["full_lo"] = round(min(short_put, short_call))
+        row["full_hi"] = round(max(short_put, short_call))
+        if lower_be is not None and upper_be is not None:
+            row["in_lo"] = round(min(lower_be, upper_be))
+            row["in_hi"] = round(max(lower_be, upper_be))
+        return row
+    if strat in ("BULL_PUT_SPREAD", "JADE_LIZARD") or (short_put is not None and short_call is None):
+        if lower_be is not None:
+            row["in_lo"] = round(lower_be)
+            row["in_side"] = "above"
+        return row
+    if strat == "BEAR_CALL_SPREAD" or (
+        short_call is not None and short_put is None
+        and strat not in ("BULL_CALL_SPREAD", "LONG_CALL")
+    ):
+        if upper_be is not None:
+            row["in_hi"] = round(upper_be)
+            row["in_side"] = "below"
+        return row
+    if strat in ("BULL_CALL_SPREAD", "LONG_CALL"):
+        be = upper_be if upper_be is not None else lower_be
+        if be is not None:
+            row["in_lo"] = round(be)
+            row["in_side"] = "above"
+        return row
+    if strat in ("BEAR_PUT_SPREAD", "LONG_PUT"):
+        be = lower_be if lower_be is not None else upper_be
+        if be is not None:
+            row["in_hi"] = round(be)
+            row["in_side"] = "below"
+        return row
+    return row
+
+
+def mark_band_calendar(
+    *,
+    legs: Sequence[Any],
+    start: Optional[date],
+    expiry: Optional[date],
+    atm_iv: Optional[float],
+    strategy: str,
+    lower_be: Optional[float],
+    upper_be: Optional[float],
+    underlying: str = "",
+) -> Optional[dict]:
+    """One row per calendar day from the trade date through expiry.
+
+    Prices and IV are the ones passed in. Later days are not recomputed, so
+    the result can be stored once with the suggestion.
+    """
+    start_d = _coerce_date(start)
+    expiry_d = _coerce_date(expiry)
+    if start_d is None or expiry_d is None:
+        return None
+    if start_d > expiry_d:
+        start_d = expiry_d
+    if (expiry_d - start_d).days > 80:
+        start_d = expiry_d - timedelta(days=80)
+    iv = normalize_atm_iv(atm_iv)
+    if iv is None and start_d < expiry_d:
+        return None
+    band_legs: Sequence[Any] = legs
+    if legs and isinstance(legs[0], Mapping):
+        band_legs = legs_from_fills(legs, underlying=underlying or "IDX", expiry=expiry_d)
+    rows = []
+    day = start_d
+    while day <= expiry_d:
+        if day == expiry_d:
+            row = expiry_structural_bands(
+                legs=band_legs,
+                strategy=strategy,
+                lower_be=_as_float(lower_be),
+                upper_be=_as_float(upper_be),
+            )
+        else:
+            bands = today_mark_bands(legs=band_legs, dte=(expiry_d - day).days, atm_iv=iv)
+            row = {
+                "full_lo": bands.get("full_lo"),
+                "full_hi": bands.get("full_hi"),
+                "in_lo": bands.get("in_lo"),
+                "in_hi": bands.get("in_hi"),
+                "in_side": None,
+                "expiry": False,
+            }
+        row["date"] = day.isoformat()
+        rows.append(row)
+        day += timedelta(days=1)
+    if not rows:
+        return None
+    return {
+        "iv": round(iv, 4) if iv is not None else None,
+        "start": start_d.isoformat(),
+        "expiry": expiry_d.isoformat(),
+        "rows": rows,
     }
 
 

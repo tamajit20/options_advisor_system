@@ -2409,7 +2409,7 @@ const TERM_HELP = {
   },
   spots_and_fit: {
     label: 'At expiry',
-    html: '<strong>At expiry</strong> — Levels on the expiry date in the title. <em>Full profit</em> is between the two sold strikes. <em>In profit</em> is the wider breakeven range. The first line is today\u2019s index, whether that sits in full profit, part profit, or a loss, and the move since entry.',
+    html: '<strong>At expiry</strong> — Levels on the expiry date in the title. <em>Full profit</em> is between the two sold strikes. <em>In profit</em> is the wider breakeven range. Today\u2019s index is on At today. <em>All dates</em> opens the saved day-by-day ranges.',
   },
   fit_lower_side: {
     label: 'Lower side',
@@ -4934,6 +4934,9 @@ function renderLiveOutlook(t) {
             <div class="lo-fit-wrap">
               <div class="lo-structure-head">
                 <span class="lpl-label">${labelWithHelp(`At today (${_fitTodayLabel()})`, 'spots_today')}</span>
+                ${(t.suggestion_id || (t.suggestion && t.suggestion.suggestion_id))
+                  ? `<button type="button" class="btn btn-ghost lo-bands-btn" data-sug-id="${escapeHtml(t.suggestion_id || t.suggestion.suggestion_id)}">All dates</button>`
+                  : ''}
               </div>
               <div class="lo-fit lo-fit-today" aria-label="Today mark levels">
                 <div class="lo-nowline lo-today-nowline">
@@ -4976,6 +4979,141 @@ function renderLiveOutlook(t) {
       </div>
     </div>`;
 }
+
+function _todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function _bandRangeText(row, kind) {
+  if (!row) return '\u2014';
+  if (kind === 'in' && row.in_side === 'above' && row.in_lo != null) return `above ${_fitIdx(row.in_lo)}`;
+  if (kind === 'in' && row.in_side === 'below' && row.in_hi != null) return `below ${_fitIdx(row.in_hi)}`;
+  const lo = kind === 'full' ? row.full_lo : row.in_lo;
+  const hi = kind === 'full' ? row.full_hi : row.in_hi;
+  if (lo == null || hi == null) return '\u2014';
+  return _fitRange(Number(lo), Number(hi));
+}
+
+function _bandStatus(row, spot) {
+  if (!row || spot == null || isNaN(spot)) return { text: '', cls: '' };
+  const inside = (lo, hi) => lo != null && hi != null && spot >= Number(lo) && spot <= Number(hi);
+  if (inside(row.full_lo, row.full_hi)) return { text: 'Full profit', cls: 'pnl-profit' };
+  if (row.in_side === 'above' && row.in_lo != null && spot >= Number(row.in_lo)) {
+    return { text: 'In profit', cls: 'pnl-profit' };
+  }
+  if (row.in_side === 'below' && row.in_hi != null && spot <= Number(row.in_hi)) {
+    return { text: 'In profit', cls: 'pnl-profit' };
+  }
+  if (inside(row.in_lo, row.in_hi)) return { text: 'Part profit', cls: 'lo-fit-part' };
+  if (row.in_lo != null || row.in_hi != null) return { text: 'Loss', cls: 'pnl-loss' };
+  return { text: '', cls: '' };
+}
+
+function _ensureBandCalendarModal() {
+  let modal = document.getElementById('band-calendar-modal');
+  if (modal) return modal;
+  modal = document.createElement('div');
+  modal.id = 'band-calendar-modal';
+  modal.className = 'sg-modal';
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="sg-modal-backdrop" data-band-close="1"></div>
+    <div class="sg-modal-panel" role="dialog" aria-modal="true" aria-labelledby="band-calendar-title">
+      <button type="button" class="sg-modal-close" data-band-close="1" aria-label="Close">\u00d7</button>
+      <h3 id="band-calendar-title" style="margin:0 0 .5rem 0">Day ranges</h3>
+      <div id="band-calendar-body"></div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-band-close]')) {
+      modal.hidden = true;
+      document.body.classList.remove('sg-modal-open');
+    }
+  });
+  return modal;
+}
+
+function _paintBandCalendar(payload, live) {
+  const cal = payload && payload.calendar;
+  const rows = (cal && cal.rows) || [];
+  const today = _todayIso();
+  const todayRow = rows.find(r => String(r.date).slice(0, 10) === today) || null;
+  let nowHtml = '';
+  if (live && live.now) {
+    nowHtml = `<div class="lo-nowline ${live.cls || ''}">
+      <span class="lo-stop-k">Now</span>
+      <strong>${escapeHtml(live.now)}</strong>
+      <span class="${escapeHtml(live.whereCls || '')}">${escapeHtml(live.where || '')}</span>
+      <span class="${escapeHtml(live.chgCls || '')}">${escapeHtml(live.chg || '')}</span>
+      <span class="muted">${escapeHtml(live.entry || '')}</span>
+    </div>`;
+  } else {
+    const entry = payload.entry_spot != null ? Number(payload.entry_spot) : null;
+    const spot = payload.spot != null ? Number(payload.spot) : entry;
+    const chg = (spot != null && entry != null) ? spot - entry : null;
+    const st = _bandStatus(todayRow, spot);
+    const chgTxt = chg == null ? '' : `${chg > 0 ? '+' : ''}${fmt(chg)} vs entry`;
+    const chgCls = chg > 0 ? 'pnl-profit' : (chg < 0 ? 'pnl-loss' : 'muted');
+    nowHtml = `<div class="lo-nowline ${st.cls}">
+      <span class="lo-stop-k">Now</span>
+      <strong class="${st.cls}">${spot != null && !isNaN(spot) ? '\u20b9' + fmt(spot) : '\u2014'}</strong>
+      <span class="${st.cls}">${escapeHtml(st.text)}</span>
+      <span class="${chgCls}">${escapeHtml(chgTxt)}</span>
+      <span class="muted">${entry != null && !isNaN(entry) ? `Entry \u20b9${fmt(entry)}` : ''}</span>
+    </div>`;
+  }
+  const body = rows.map(r => {
+    const iso = String(r.date || '').slice(0, 10);
+    const mark = iso === today ? ' class="is-today"' : '';
+    return `<tr${mark}>
+      <td>${escapeHtml(_fitDayLabel(iso) || iso)}</td>
+      <td>${escapeHtml(_bandRangeText(r, 'full'))}</td>
+      <td>${escapeHtml(_bandRangeText(r, 'in'))}</td>
+    </tr>`;
+  }).join('');
+  return `
+    <div class="band-cal-head">${nowHtml}</div>
+    <p class="muted band-cal-note">Saved when this suggestion was created. Each row uses that volatility and the suggested prices, so it stays put.</p>
+    <table class="band-cal-table">
+      <thead><tr><th>Date</th><th>Full profit</th><th>In profit</th></tr></thead>
+      <tbody>${body || '<tr><td colspan="3">No rows</td></tr>'}</tbody>
+    </table>`;
+}
+
+async function _openBandCalendar(btn) {
+  const sid = btn && btn.dataset ? btn.dataset.sugId : '';
+  if (!sid) return;
+  const outlook = btn.closest('.live-outlook');
+  const live = outlook ? {
+    now: (outlook.querySelector('.lo-today-now') || {}).textContent || '',
+    where: (outlook.querySelector('.lo-today-where') || {}).textContent || '',
+    whereCls: (outlook.querySelector('.lo-today-where') || {}).className || '',
+    chg: (outlook.querySelector('.lo-today-chg') || {}).textContent || '',
+    chgCls: (outlook.querySelector('.lo-today-chg') || {}).className || '',
+    entry: (outlook.querySelector('.lo-today-entry') || {}).textContent || '',
+    cls: (outlook.querySelector('.lo-today-nowline') || {}).className || '',
+  } : null;
+  const modal = _ensureBandCalendarModal();
+  const host = document.getElementById('band-calendar-body');
+  if (host) host.innerHTML = '<p class="muted">Loading\u2026</p>';
+  modal.hidden = false;
+  document.body.classList.add('sg-modal-open');
+  try {
+    const payload = await API(`/api/suggestion/${encodeURIComponent(sid)}/mark-bands`);
+    if (host) host.innerHTML = _paintBandCalendar(payload, live && live.now && live.now !== '\u2014' ? live : null);
+  } catch (err) {
+    if (host) host.innerHTML = `<p class="muted">${escapeHtml(err.message || 'Could not load day ranges')}</p>`;
+  }
+}
+
+document.addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.lo-bands-btn, .sug-bands-btn');
+  if (!btn) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  _openBandCalendar(btn);
+});
 
 function _loDataSourceLabel(source, asOf) {
   if (source === 'live') return 'Live';
@@ -8249,6 +8387,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     ${_instrumentOverlapWarningHtml(s.instrument_overlaps)}
     ${renderStrategyRationale(s)}
     ${renderPlainEnglishStructured(s)}
+    ${s.suggestion_id ? `<div class="sug-bands-row"><button type="button" class="btn btn-ghost sug-bands-btn" data-sug-id="${escapeHtml(s.suggestion_id)}">All dates</button></div>` : ''}
     <div class="kv-grid">
       ${s.generated_on ? `<div>${kvLabel('Suggested on')}<br><span class="v">${fmtDate(s.generated_on)}</span></div>` : ''}
       ${s.expiry_date ? `<div>${kvLabel('Options expiry', 'dte')}<br><span class="v">${fmtDate(s.expiry_date)}${s.dte != null ? ` <span class="muted">(${s.dte} DTE)</span>` : ''}</span></div>` : (s.dte != null ? `<div>${kvLabel('DTE', 'dte')}<br><span class="v">${s.dte}</span></div>` : '')}

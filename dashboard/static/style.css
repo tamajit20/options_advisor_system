@@ -2584,7 +2584,19 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
   padding-right: 10px;
   border-right: 1px solid rgba(14, 165, 233, .18);
 }
-.lo-structure-head { margin: 0 0 4px; }
+.lo-structure-head {
+  margin: 0 0 4px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.lo-bands-btn, .sug-bands-btn {
+  font-size: .72rem;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.sug-bands-row { margin: 0 0 8px; }
 .lo-fit-wrap { margin-top: 8px; }
 .lo-fit-date {
   font-size: .78rem;
@@ -2593,16 +2605,34 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 }
 .lo-fit-ranges {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 16px;
   margin-top: 4px;
 }
 .lo-fit-range {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  white-space: nowrap;
 }
+.band-cal-head { margin: 0 0 8px; }
+.band-cal-note { margin: 0 0 10px; font-size: .75rem; }
+.band-cal-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.band-cal-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: .72rem;
+  color: var(--muted, #94a3b8);
+  padding: 4px 8px;
+}
+.band-cal-table td {
+  padding: 5px 8px;
+  border-top: 1px solid rgba(148, 163, 184, .22);
+  font-variant-numeric: tabular-nums;
+}
+.band-cal-table tr.is-today td { background: rgba(14, 165, 233, .14); font-weight: 700; }
 .lo-fit-range strong {
   font-size: .84rem;
   font-variant-numeric: tabular-nums;

@@ -613,10 +613,11 @@ class SuggestionRepo:
                execution_window, plain_english,
                data_date, entry_date, spot_data_date, fii_data_date, vix_data_date,
                oi_pcr_change, edge_score, credit_grade, em_calibration_warning,
-               entry_quality_score, trigger_reason, no_suggestion_reason)
+               entry_quality_score, trigger_reason, no_suggestion_reason,
+               mark_band_calendar)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING',
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 s.suggestion_id, s.trade_name, s.generated_on, s.strategy, s.strategy_type,
@@ -634,6 +635,7 @@ class SuggestionRepo:
                 getattr(s, "entry_quality_score", None),
                 None,
                 getattr(s, "strategy_veto_reason", None),
+                getattr(s, "mark_band_calendar", None),
             ],
         ).close()
 
@@ -790,6 +792,12 @@ class SuggestionRepo:
             "SELECT * FROM options_suggestion_legs WHERE suggestion_id = ? ORDER BY leg_order",
             [suggestion_id],
         )
+
+    def save_mark_band_calendar(self, suggestion_id: str, payload: str) -> None:
+        self.db.execute(
+            "UPDATE options_suggestions SET mark_band_calendar = ? WHERE suggestion_id = ?",
+            [payload, suggestion_id],
+        ).close()
 
     def update_status(self, suggestion_id: str, status: str) -> None:
         self.db.execute(
