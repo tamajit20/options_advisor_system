@@ -2403,6 +2403,10 @@ const TERM_HELP = {
     label: 'Structural fit',
     html: '<strong>Structural fit</strong> — Is the index where this strategy needs it to be (inside breakevens, near strike, etc.)? You can show green MTM while fit is poor — time decay can help marks before expiry structure fails.',
   },
+  spots_today: {
+    label: 'At today',
+    html: '<strong>At today</strong> — Same list as expiry, but the ranges are for the time still left. <em>Full profit</em> is where today\u2019s mark is within 3% of its best spot. <em>In profit</em> is where that mark is above zero. These bands are narrower than the expiry bands while days remain.',
+  },
   spots_and_fit: {
     label: 'At expiry',
     html: '<strong>At expiry</strong> — Levels on the expiry date in the title. <em>Full profit</em> is between the two sold strikes. <em>In profit</em> is the wider breakeven range. The first line is today\u2019s index, whether that sits in full profit, part profit, or a loss, and the move since entry.',
@@ -4829,6 +4833,12 @@ function _fitLevels(t) {
   };
 }
 
+function _fitTodayLabel() {
+  const d = new Date();
+  const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return _fitDayLabel(iso);
+}
+
 function _fitDayLabel(raw) {
   const m = String(raw || '').match(/(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return raw ? fmtDate(raw) : '';
@@ -4932,6 +4942,30 @@ function renderLiveOutlook(t) {
         </div>
         <div class="lo-col lo-col-structure">
           <div class="lo-structure-block">
+            <div class="lo-fit-wrap">
+              <div class="lo-structure-head">
+                <span class="lpl-label">${labelWithHelp(`At today (${_fitTodayLabel()})`, 'spots_today')}</span>
+              </div>
+              <div class="lo-fit lo-fit-today" aria-label="Today mark levels">
+                <div class="lo-nowline lo-today-nowline">
+                  <span class="lo-stop-k">Now</span>
+                  <strong class="lo-today-now">\u2014</strong>
+                  <span class="lo-today-where"></span>
+                  <span class="lo-today-chg muted"></span>
+                  <span class="lo-today-entry muted"></span>
+                </div>
+                <div class="lo-fit-ranges">
+                  <div class="lo-fit-range"><span class="lo-stop-k">Full profit</span><strong class="lo-today-full">\u2014</strong></div>
+                  <div class="lo-fit-range"><span class="lo-stop-k">In profit</span><strong class="lo-today-in">\u2014</strong></div>
+                </div>
+              </div>
+            </div>
+            <div class="lo-fit-wrap">
+              <div class="lo-structure-head">
+                <span class="lpl-label">${labelWithHelp(_fitLevels(t).expiryLabel ? `At expiry (${_fitLevels(t).expiryLabel})` : 'At expiry', 'spots_and_fit')}</span>
+              </div>
+              ${_renderFitBoard(t)}
+            </div>
             <div class="lo-row lo-row-market">
               <span class="lpl-label">${labelWithHelp('Market', 'market_outlook')}</span>
               <span class="lpl-val-line"><span class="lo-market">Loading\u2026</span></span>
@@ -4939,12 +4973,6 @@ function renderLiveOutlook(t) {
             </div>
           </div>
         </div>
-      </div>
-      <div class="lo-fit-wrap">
-        <div class="lo-structure-head">
-          <span class="lpl-label">${labelWithHelp(_fitLevels(t).expiryLabel ? `At expiry (${_fitLevels(t).expiryLabel})` : 'At expiry', 'spots_and_fit')}</span>
-        </div>
-        ${_renderFitBoard(t)}
       </div>
       <div class="lo-extra muted">
         <span class="lo-hold-close"></span>
@@ -5087,10 +5115,58 @@ function _renderLoSpotStrip(el, payload) {
     whereEl.textContent = st.text || '';
     whereEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part');
     if (st.cls) whereEl.classList.add(st.cls);
-    const nowStop = el.querySelector('.lo-nowline');
+    const nowStop = fit.querySelector('.lo-nowline');
     if (nowStop) {
       nowStop.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part');
       if (st.cls) nowStop.classList.add(st.cls);
+    }
+  }
+  const todayNow = el.querySelector('.lo-today-now');
+  const todayWhere = el.querySelector('.lo-today-where');
+  const todayChg = el.querySelector('.lo-today-chg');
+  const todayEntry = el.querySelector('.lo-today-entry');
+  const todayFull = el.querySelector('.lo-today-full');
+  const todayIn = el.querySelector('.lo-today-in');
+  if (todayNow) {
+    todayNow.textContent = (spot != null && !isNaN(spot)) ? `\u20b9${fmt(spot)}` : '\u2014';
+  }
+  if (todayChg) todayChg.textContent = chgEl ? chgEl.textContent : '';
+  if (todayChg && chgEl) todayChg.className = chgEl.className.replace('lo-spot-chg', 'lo-today-chg');
+  if (todayEntry && entry != null && !isNaN(entry)) {
+    todayEntry.textContent = `Entry \u20b9${fmt(entry)}`;
+  }
+  const band = (a, b) => {
+    const lo = a != null ? parseFloat(a) : null;
+    const hi = b != null ? parseFloat(b) : null;
+    if (lo == null || hi == null || isNaN(lo) || isNaN(hi)) return '\u2014';
+    return `${_fitIdx(lo)} \u2013 ${_fitIdx(hi)}`;
+  };
+  if (todayFull) todayFull.textContent = band(payload.today_full_lo, payload.today_full_hi);
+  if (todayIn) todayIn.textContent = band(payload.today_in_lo, payload.today_in_hi);
+  if (todayWhere) {
+    const flo = payload.today_full_lo != null ? parseFloat(payload.today_full_lo) : null;
+    const fhi = payload.today_full_hi != null ? parseFloat(payload.today_full_hi) : null;
+    const ilo = payload.today_in_lo != null ? parseFloat(payload.today_in_lo) : null;
+    const ihi = payload.today_in_hi != null ? parseFloat(payload.today_in_hi) : null;
+    let text = '';
+    let cls = '';
+    if (spot != null && !isNaN(spot) && flo != null && fhi != null && spot >= flo && spot <= fhi) {
+      text = 'Full profit';
+      cls = 'pnl-profit';
+    } else if (spot != null && !isNaN(spot) && ilo != null && ihi != null && spot >= ilo && spot <= ihi) {
+      text = 'Part profit';
+      cls = 'lo-fit-part';
+    } else if (ilo != null && ihi != null && spot != null && !isNaN(spot)) {
+      text = 'Loss';
+      cls = 'pnl-loss';
+    }
+    todayWhere.textContent = text;
+    todayWhere.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part');
+    if (cls) todayWhere.classList.add(cls);
+    const line = el.querySelector('.lo-today-nowline');
+    if (line) {
+      line.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part');
+      if (cls) line.classList.add(cls);
     }
   }
 }

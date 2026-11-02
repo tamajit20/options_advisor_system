@@ -1261,6 +1261,96 @@ def enrich_trade_outlook(
     return out
 
 
+def today_mark_bands(
+    *,
+    legs: Sequence[Any],
+    dte: int,
+    atm_iv: Optional[float],
+) -> dict:
+    """Spot bands where today's mark is in profit, and near its best.
+
+    Full profit is where mark-to-market is within 3% of the best spot for the
+    time still left. In profit is where that mark is above zero. At zero DTE
+    these collapse to the expiry short-strike band and the breakevens.
+    """
+    from config import STRATEGY_CONFIG
+    from engine.iv_calculator import _bs_price
+
+    empty = {"full_lo": None, "full_hi": None, "in_lo": None, "in_hi": None}
+    rows = []
+    for leg in legs or []:
+        strike = _as_float(getattr(leg, "strike", None))
+        fill = _as_float(getattr(leg, "suggested_price", None))
+        opt = str(getattr(leg, "option_type", "") or "").upper()
+        action = str(getattr(leg, "action", "") or "").upper()
+        try:
+            qty = int(getattr(leg, "lots", 0) or 0) * int(getattr(leg, "lot_size", 0) or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            qty = int(getattr(leg, "lots", 0) or 1)
+        if strike is None or strike <= 0 or fill is None or opt not in ("CE", "PE"):
+            continue
+        rows.append((strike, opt, action, qty, fill))
+    if len(rows) < 2:
+        return empty
+    iv = normalize_atm_iv(atm_iv)
+    dte_i = max(int(dte or 0), 0)
+    if dte_i > 0 and iv is None:
+        return empty
+    r = float(STRATEGY_CONFIG.get("risk_free_rate") or 0.0)
+    t = dte_i / 365.0
+    strikes = [row[0] for row in rows]
+    lo = min(strikes) - 500.0
+    hi = max(strikes) + 500.0
+    step = 10.0
+    spots = []
+    pnls = []
+    spot = lo
+    while spot <= hi + 0.1:
+        pnl = 0.0
+        for strike, opt, action, qty, fill in rows:
+            mark = _bs_price(spot, strike, t, r, iv or 0.0, opt)
+            pnl += (fill - mark) * qty if action == "SELL" else (mark - fill) * qty
+        spots.append(spot)
+        pnls.append(pnl)
+        spot += step
+    if not pnls:
+        return empty
+    peak = max(pnls)
+
+    def _span(pred) -> tuple[Optional[float], Optional[float]]:
+        best = None
+        start = None
+        for i, pnl in enumerate(pnls):
+            ok = pred(pnl)
+            if ok and start is None:
+                start = i
+            elif not ok and start is not None:
+                seg = (spots[start], spots[i - 1])
+                if best is None or seg[1] - seg[0] > best[1] - best[0]:
+                    best = seg
+                start = None
+        if start is not None:
+            seg = (spots[start], spots[-1])
+            if best is None or seg[1] - seg[0] > best[1] - best[0]:
+                best = seg
+        if best is None:
+            return None, None
+        return round(best[0]), round(best[1])
+
+    in_lo, in_hi = _span(lambda pnl: pnl > 1.0)
+    full_lo = full_hi = None
+    if peak > 1.0:
+        full_lo, full_hi = _span(lambda pnl: pnl >= peak * 0.97)
+    return {
+        "full_lo": full_lo,
+        "full_hi": full_hi,
+        "in_lo": in_lo,
+        "in_hi": in_hi,
+    }
+
+
 def live_trade_outlook(
     *,
     legs: Sequence[Mapping[str, Any] | Any],
@@ -1403,6 +1493,11 @@ def live_trade_outlook(
         live_pop_hi=live_pop_hi,
     )
 
+    today_bands = today_mark_bands(
+        legs=pop_legs,
+        dte=dte_i,
+        atm_iv=iv,
+    )
     result = {
         "live_pop": live_pop,
         "live_pop_lo": live_pop_lo,
@@ -1437,6 +1532,10 @@ def live_trade_outlook(
         "data_as_of": data_as_of,
         "uses_live_marks": uses_live_marks,
         "pop_uses_skew": pop_uses_skew,
+        "today_full_lo": today_bands.get("full_lo"),
+        "today_full_hi": today_bands.get("full_hi"),
+        "today_in_lo": today_bands.get("in_lo"),
+        "today_in_hi": today_bands.get("in_hi"),
     }
     if horizon.get("far_dte") is not None and (strategy or "").upper() == "CALENDAR_SPREAD":
         result["ev_horizon_note"] = (

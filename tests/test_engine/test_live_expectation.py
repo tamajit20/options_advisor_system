@@ -17,6 +17,7 @@ from engine.live_expectation import (
     legs_from_fills,
     live_trade_outlook,
     normalize_atm_iv,
+    today_mark_bands,
     outlook_horizon,
     parse_entry_regime,
     resolve_market_inputs,
@@ -597,3 +598,25 @@ class TestEnrichTradeOutlook:
         assert reg["iv_rank"] == 42.5
         assert reg["vix_regime"] == "NORMAL"
         assert reg["trend"] == "SIDEWAYS"
+
+
+class TestTodayMarkBands:
+    def test_expiry_bands_match_short_strikes_and_breakevens(self):
+        exp = date(2026, 11, 9)
+        raw = [
+            {"action": "SELL", "strike": 22450, "option_type": "PE", "fill_price": 67.85,
+             "lots": 1, "lot_size": 65, "expiry_date": exp},
+            {"action": "BUY", "strike": 22200, "option_type": "PE", "fill_price": 36.05,
+             "lots": 1, "lot_size": 65, "expiry_date": exp},
+            {"action": "SELL", "strike": 23500, "option_type": "CE", "fill_price": 48.70,
+             "lots": 1, "lot_size": 65, "expiry_date": exp},
+            {"action": "BUY", "strike": 23750, "option_type": "CE", "fill_price": 19.60,
+             "lots": 1, "lot_size": 65, "expiry_date": exp},
+        ]
+        legs = legs_from_fills(raw, underlying="NIFTY", expiry=exp)
+        out = today_mark_bands(legs=legs, dte=0, atm_iv=0.15)
+        assert out["full_lo"] is not None and out["in_lo"] is not None
+        assert out["full_lo"] >= 22400 and out["full_hi"] <= 23550
+        assert out["in_lo"] < out["full_lo"]
+        assert out["in_hi"] > out["full_hi"]
+        assert out["in_lo"] < 22450 < out["in_hi"]
