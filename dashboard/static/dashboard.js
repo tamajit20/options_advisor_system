@@ -9978,7 +9978,9 @@ function loadHistory() {
       c.className=''; c.innerHTML='<div class="empty">No closed trades match the selected filters.</div>'; return;
     }
     c.className='';
-    c.innerHTML = data.trades.map(renderHistoryTrade).join('');
+    c.innerHTML = data.trades.map(t => (
+      t.is_reversal ? renderHistoryReversal(t) : renderHistoryTrade(t)
+    )).join('');
     bindCollapsibleCardInteractions(c);
     wireTermHelpToggle(c);
     _bindHistoryMarginPnl(c);
@@ -10643,6 +10645,75 @@ function renderTradeCloseSnapshot(t) {
       ${t.exit_instruction ? `<p class="muted" style="margin:8px 0 0">Exit: ${escapeHtml(t.exit_instruction)}</p>` : ''}
     </div>
   </details>`;
+}
+
+function renderHistoryReversal(t) {
+  const s = t.suggestion || {};
+  const pnl = t.net_pnl;
+  const pnlClass = pnl != null ? (pnl >= 0 ? 'pnl-profit' : 'pnl-loss') : '';
+  const legs = t.reversal_legs || [];
+  const legRows = legs.map(l => {
+    const g = l.gross_pnl;
+    const lpc = g != null ? (g >= 0 ? 'pnl-profit' : 'pnl-loss') : '';
+    return `<tr>
+      <td class="num">${l.leg_order ?? ''}</td>
+      <td><span class="tag tag-${l.entry_side === 'SELL' ? 'err' : 'ok'} tag-sm">${escapeHtml(l.entry_side || '')}</span></td>
+      <td>${escapeHtml(l.symbol || '')}</td>
+      <td class="num">${l.entry_price != null ? '₹' + fmt(l.entry_price) : '—'}</td>
+      <td class="num">${l.exit_price != null ? '₹' + fmt(l.exit_price) : '—'}</td>
+      <td class="num">${l.quantity ?? ''}</td>
+      <td class="num ${lpc}">${g != null ? formatPnlWithPct(g, null) : '—'}</td>
+    </tr>`;
+  }).join('');
+  const when = fmtDt(t.closed_on || t.executed_on);
+  return wrapCollapsibleCard(`
+    <div class="hist-card-head collapsible-card-head">
+      <div class="hist-card-title">
+        <strong class="hist-instr">${escapeHtml(s.underlying || 'Revert')}</strong>
+        ${s.strategy ? `<span class="tag tag-accent">${escapeHtml(s.strategy)}</span>` : ''}
+        <span class="tag tag-warn">REVERTED</span>
+        ${_idChipsHtml(null, t.suggestion_id)}
+      </div>
+      <div class="hist-card-pnl ${pnlClass}">${pnl != null ? formatPnlWithPct(pnl, null) : '—'}</div>
+      <span class="collapsible-chevron" aria-hidden="true"></span>
+    </div>
+    <div class="collapsible-preview">
+      <span>${escapeHtml(t.trade_name || 'Execution revert')}</span>
+      <span>${escapeHtml(t.reversal_label || 'Execution revert')}</span>
+      ${when ? `<span>${escapeHtml(when)}</span>` : ''}
+    </div>`, `
+    <div class="hist-card-meta muted">
+      ${escapeHtml(t.reversal_label || 'Execution revert')}
+      ${when ? ' &nbsp;·&nbsp; ' + escapeHtml(when) : ''}
+      ${t.notes ? ' &nbsp;·&nbsp; ' + escapeHtml(t.notes) : ''}
+    </div>
+    <div class="hcmp-grid">
+      <div class="hcmp-header">
+        <span>Parameter</span><span></span><span class="hcmp-col-head">Actual</span>
+      </div>
+      <div class="hcmp-row"><span class="hcmp-key">Gross P&amp;L</span><span></span><span class="hcmp-act">${t.gross_pnl != null ? formatPnlWithPct(t.gross_pnl, null) : '—'}</span></div>
+      <div class="hcmp-row"><span class="hcmp-key">Charges / tax</span><span></span><span class="hcmp-act">${t.total_charges != null ? '₹' + fmt(t.total_charges) : '—'}</span></div>
+      <div class="hcmp-row"><span class="hcmp-key">Net P&amp;L</span><span></span><span class="hcmp-act ${pnlClass} hcmp-bold">${pnl != null ? formatPnlWithPct(pnl, null) : '—'}</span></div>
+    </div>
+    ${legRows ? `
+    <div class="hist-legs-wrap">
+      <div class="hist-legs-title">Flattened legs</div>
+      <div class="hist-legs-scroll">
+        <table class="hist-legs-tbl">
+          <thead><tr>
+            <th class="num">#</th><th>Side</th><th>Contract</th>
+            <th class="num">Entry</th><th class="num">Exit</th><th class="num">Qty</th><th class="num">Gross</th>
+          </tr></thead>
+          <tbody>${legRows}</tbody>
+        </table>
+      </div>
+    </div>` : ''}
+    ${(t.zerodha_executions || []).length ? `
+    <div class="hist-zerodha-log">
+      <div class="hist-legs-title">Zerodha execution log <span class="muted" style="font-weight:500">(in order)</span></div>
+      ${(t.zerodha_executions || []).map(g => renderZerodhaExecGroup(g, { nested: true })).join('')}
+    </div>` : ''}
+  `, { open: false, className: 'hist-card' });
 }
 
 function renderHistoryTrade(t) {

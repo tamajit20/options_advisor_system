@@ -594,6 +594,59 @@ class TestHistoryRoutes:
         assert drop.get_json()["count"] == 0
         assert drop.get_json()["channel"] == "zerodha"
 
+    def test_history_closed_trades_includes_execution_revert(self, client, mocker):
+        reversal = {
+            "id": 7,
+            "suggestion_id": "SUG-20261102-029",
+            "trade_id": None,
+            "reason": "ENTRY_ROLLBACK",
+            "created_at": "2026-11-02 12:07:30",
+            "gross_pnl": -48.75,
+            "total_charges": 88.64,
+            "net_pnl": -137.39,
+            "matched_qty": 65,
+            "notes": "ENTRY flattened",
+            "legs_json": '[{"leg_order":1,"symbol":"NIFTY26NOV23300CE","entry_side":"BUY","entry_price":358.0,"exit_price":357.25,"quantity":65,"gross_pnl":-48.75}]',
+            "underlying": "NIFTY",
+            "strategy": "BULL_CALL_SPREAD",
+            "sug_trade_name": "NIFTY-BCAL-NOV4-26",
+        }
+        fake = MagicMock()
+        fake.connect = MagicMock()
+        fake.close = MagicMock()
+
+        def _fetch_all(sql, params=None):
+            text = str(sql)
+            if "options_execution_reversals" in text:
+                return [reversal]
+            return []
+
+        fake.fetch_all = MagicMock(side_effect=_fetch_all)
+        mocker.patch("dashboard.server.SQLServerConnection", return_value=fake)
+        mocker.patch("dashboard.server.TradeRepo")
+        mocker.patch("dashboard.server.SuggestionRepo")
+        mocker.patch(
+            "database.broker_order_repo.BrokerOrderRepo.list_for_trades_or_suggestions",
+            return_value=[],
+        )
+        new_app = server.create_app()
+        new_app.config["TESTING"] = True
+        c = new_app.test_client()
+        shown = c.get("/api/history/closed-trades?from_date=2026-11-01&to_date=2026-11-02&channel=zerodha")
+        body = shown.get_json()
+        assert body["count"] == 1
+        card = body["trades"][0]
+        assert card["is_reversal"] is True
+        assert card["status"] == "REVERTED"
+        assert card["suggestion_id"] == "SUG-20261102-029"
+        assert card["net_pnl"] == -137.39
+        assert card["reversal_legs"][0]["symbol"] == "NIFTY26NOV23300CE"
+        assert "NIFTY" in body["underlyings"]
+        hidden = c.get("/api/history/closed-trades?from_date=2026-11-01&to_date=2026-11-02&channel=manual")
+        assert hidden.get_json()["count"] == 0
+        profit = c.get("/api/history/closed-trades?from_date=2026-11-01&to_date=2026-11-02&channel=zerodha&pnl=profit")
+        assert profit.get_json()["count"] == 0
+
     def test_history_simulation(self, client, mocker):
         mocker.patch("dashboard.server.SimulationRepo.get_summary", return_value=None)
         mocker.patch("dashboard.server.SimulationRepo.get_legs", return_value=[])

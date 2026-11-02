@@ -214,6 +214,153 @@ def _enrich_trade_execution_channel(db: SQLServerConnection, row: dict) -> dict:
     return row
 
 
+def _flt(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _reversal_pnl_matches(net: Optional[float], pnl_f: str) -> bool:
+    pnl_f = (pnl_f or "").strip().lower()
+    if not pnl_f:
+        return True
+    if pnl_f == "unknown" or net is None:
+        return False
+    if pnl_f == "profit":
+        return net > 0
+    if pnl_f == "loss":
+        return net < 0
+    if pnl_f == "breakeven":
+        return net == 0
+    return True
+
+
+_REVERSAL_LABELS = {
+    "ENTRY_ROLLBACK": "Entry flattened",
+    "EXIT_ROLLBACK": "Close flattened",
+}
+
+
+def _reversal_legs(raw: Any) -> list:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    legs = []
+    for leg in data:
+        if not isinstance(leg, dict):
+            continue
+        legs.append({
+            "leg_order": leg.get("leg_order"),
+            "symbol": leg.get("symbol"),
+            "entry_side": leg.get("entry_side"),
+            "entry_price": _flt(leg.get("entry_price")),
+            "exit_price": _flt(leg.get("exit_price")),
+            "quantity": leg.get("quantity"),
+            "gross_pnl": _flt(leg.get("gross_pnl")),
+        })
+    return legs
+
+
+def _history_reversal_cards(
+    db: SQLServerConnection,
+    from_date: str,
+    to_date: str,
+    *,
+    underlying: str,
+    strategy: str,
+    pnl_f: str,
+    quality_band: str,
+    channel_f: Optional[str],
+    skip_trade_ids: set,
+) -> tuple[list, set, set]:
+    """Zerodha flatten round-trips that never became a closed trade.
+
+    These already sit in the history P&L strip. Return matching cards plus
+    the underlyings and strategies seen in the date window (for filters).
+    """
+    if channel_f == "manual" or quality_band:
+        return [], set(), set()
+    try:
+        rows = db.fetch_all(
+            "SELECT r.id, r.suggestion_id, r.trade_id, r.reason, r.created_at, "
+            "       r.gross_pnl, r.total_charges, r.net_pnl, r.matched_qty, "
+            "       r.notes, r.legs_json, "
+            "       s.underlying, s.strategy, s.trade_name AS sug_trade_name "
+            "FROM options_execution_reversals r "
+            "LEFT JOIN options_suggestions s ON s.suggestion_id = r.suggestion_id "
+            "WHERE CONVERT(date, r.created_at) >= ? "
+            "  AND CONVERT(date, r.created_at) <= ? "
+            "ORDER BY r.created_at DESC",
+            [from_date, to_date],
+        ) or []
+    except Exception:
+        logger.debug("history execution reversals unavailable", exc_info=True)
+        return [], set(), set()
+
+    underlyings: set = set()
+    strategies: set = set()
+    cards = []
+    for raw in rows:
+        row = _row(raw)
+        inst = (row.get("underlying") or "").strip()
+        strat = (row.get("strategy") or "").strip()
+        if inst:
+            underlyings.add(inst)
+        if strat:
+            strategies.add(strat)
+        tid = row.get("trade_id")
+        if tid and tid in skip_trade_ids:
+            continue
+        if underlying and inst != underlying:
+            continue
+        if strategy and strat != strategy:
+            continue
+        net = _flt(row.get("net_pnl"))
+        if not _reversal_pnl_matches(net, pnl_f):
+            continue
+        when = row.get("created_at")
+        reason = str(row.get("reason") or "")
+        suggestion = None
+        if inst or strat or row.get("suggestion_id"):
+            suggestion = {
+                "suggestion_id": row.get("suggestion_id"),
+                "underlying": inst or None,
+                "strategy": strat or None,
+                "trade_name": row.get("sug_trade_name"),
+            }
+        cards.append({
+            "trade_id": None,
+            "suggestion_id": row.get("suggestion_id"),
+            "trade_name": row.get("sug_trade_name") or "Execution revert",
+            "executed_on": when,
+            "closed_on": when,
+            "status": "REVERTED",
+            "is_reversal": True,
+            "execution_channel": "zerodha",
+            "execution_provider": "zerodha",
+            "gross_pnl": _flt(row.get("gross_pnl")),
+            "total_charges": _flt(row.get("total_charges")),
+            "net_pnl": net,
+            "matched_qty": row.get("matched_qty"),
+            "reversal_reason": reason,
+            "reversal_label": _REVERSAL_LABELS.get(reason, "Execution revert"),
+            "notes": row.get("notes"),
+            "reversal_legs": _reversal_legs(row.get("legs_json")),
+            "suggestion": suggestion,
+            "legs": [],
+            "zerodha_executions": [],
+        })
+    return cards, underlyings, strategies
+
+
 def _normalize_execution_channel_filter(raw: Any) -> Optional[str]:
     """``all``/empty → None; ``zerodha`` / ``manual`` → lowercase channel."""
     from lifecycle.zerodha_executor import (
@@ -3517,6 +3664,17 @@ def create_app() -> Flask:
 
         out = _filter_trades_by_execution_channel(out, channel_f)
 
+        rev_cards, rev_underlyings, rev_strategies = _history_reversal_cards(
+            db, from_date_str, to_date_str,
+            underlying=underlying,
+            strategy=strategy_f,
+            pnl_f=pnl_f,
+            quality_band=quality_band,
+            channel_f=channel_f,
+            skip_trade_ids={t.get("trade_id") for t in out if t.get("trade_id")},
+        )
+        out.extend(rev_cards)
+
         try:
             _attach_history_zerodha_executions(db, out)
         except Exception:
@@ -3534,8 +3692,16 @@ def create_app() -> Flask:
             "  AND s.underlying IS NOT NULL"
         )
         facet_rows = db.fetch_all(facet_sql, [from_date_str, to_date_str])
-        underlyings = sorted({u["underlying"] for u in facet_rows if u.get("underlying")})
-        strategies = sorted({u["strategy"] for u in facet_rows if u.get("strategy")})
+        underlyings = sorted(
+            {u["underlying"] for u in facet_rows if u.get("underlying")} | rev_underlyings
+        )
+        strategies = sorted(
+            {u["strategy"] for u in facet_rows if u.get("strategy")} | rev_strategies
+        )
+        out.sort(
+            key=lambda t: t.get("closed_on") or t.get("executed_on") or "",
+            reverse=True,
+        )
         return jsonify({
             "trades": out,
             "underlyings": underlyings,
