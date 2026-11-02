@@ -2584,57 +2584,71 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
   padding-right: 10px;
   border-right: 1px solid rgba(14, 165, 233, .18);
 }
-.lo-structure-head { margin: 0 0 2px; }
-.lo-fit {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 4px 8px;
-  padding: 2px 0 4px;
-}
-.lo-fit-range {
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: start;
-}
-.lo-fit-side-k {
-  font-size: .65rem;
-  font-weight: 700;
-  letter-spacing: .03em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 2px;
-}
-.lo-fit-pair {
+.lo-structure-head { margin: 0 0 4px; }
+.lo-fit-wrap { margin-top: 8px; }
+.lo-nowline {
   display: flex;
+  align-items: baseline;
   flex-wrap: wrap;
-  gap: 4px 10px;
+  gap: 6px 10px;
+  margin-bottom: 6px;
 }
-.lo-fit-cell strong,
-.lo-fit-be strong,
-.lo-fit-now strong {
-  font-size: .84rem;
+.lo-nowline .lo-spot-now {
+  font-size: 1.05rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.lo-nowline .lo-fit-where { font-size: .78rem; font-weight: 700; }
+.lo-nowline .lo-spot-chg { font-size: .68rem; font-weight: 600; }
+.lo-nowline.pnl-profit .lo-spot-now,
+.lo-nowline.pnl-profit .lo-fit-where { color: var(--ok); }
+.lo-nowline.lo-fit-part .lo-spot-now,
+.lo-nowline.lo-fit-part .lo-fit-where { color: var(--warn); }
+.lo-nowline.pnl-loss .lo-spot-now,
+.lo-nowline.pnl-loss .lo-fit-where { color: var(--err); }
+.lo-scale {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.lo-stop {
+  flex: 1 0 4.5rem;
+  min-width: 4.5rem;
+  text-align: center;
+  padding: 6px 2px 4px;
+  border-top: 3px solid rgba(148, 163, 184, .4);
+  background: rgba(255, 255, 255, .025);
+  border-radius: 0 0 4px 4px;
+}
+.lo-stop-loss { border-top-color: #ef4444; }
+.lo-stop-part { border-top-color: #f59e0b; }
+.lo-stop-full { border-top-color: #22c55e; }
+.lo-stop-now { background: rgba(255, 255, 255, .05); }
+.lo-stop-now.pnl-profit { background: rgba(34, 197, 94, .16); border-top-color: #22c55e; }
+.lo-stop-now.lo-fit-part { background: rgba(245, 158, 11, .16); border-top-color: #f59e0b; }
+.lo-stop-now.pnl-loss { background: rgba(239, 68, 68, .16); border-top-color: #ef4444; }
+.lo-stop-px {
+  display: block;
+  font-size: .8rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
-.lo-fit-be {
-  margin-top: 3px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-.lo-fit-now {
-  text-align: center;
-  min-width: 5.6rem;
-  padding: 0 2px;
-}
-.lo-fit-where,
-.lo-spot-entry-note {
+.lo-stop-now .lo-stop-px { font-size: .92rem; }
+.lo-stop-k,
+.lo-stop .lo-spot-chg {
   display: block;
-  font-size: .68rem;
-  font-weight: 700;
+  font-size: .62rem;
+  font-weight: 600;
   line-height: 1.2;
+  color: var(--text-dim);
+  text-transform: none;
+  letter-spacing: 0;
 }
-.lo-spot-entry-note { font-weight: 500; }
+.lo-stop-now.pnl-profit .lo-fit-where { color: var(--ok); }
+.lo-stop-now.lo-fit-part .lo-fit-where { color: var(--warn); }
+.lo-stop-now.pnl-loss .lo-fit-where { color: var(--err); }
 .lo-fit-part { color: var(--warn); }
 .lo-spot-strip {
   display: grid;
@@ -2704,8 +2718,7 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 }
 @media (max-width: 420px) {
   .lo-spot-strip { grid-template-columns: 1fr; gap: 6px; }
-  .lo-fit-range { grid-template-columns: 1fr; }
-  .lo-fit-now { text-align: left; }
+  .lo-stop { flex-basis: 4.2rem; min-width: 4.2rem; }
 }
 
 /* Trade action instruction panel */

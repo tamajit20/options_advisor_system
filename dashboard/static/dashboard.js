@@ -2404,8 +2404,8 @@ const TERM_HELP = {
     html: '<strong>Structural fit</strong> — Is the index where this strategy needs it to be (inside breakevens, near strike, etc.)? You can show green MTM while fit is poor — time decay can help marks before expiry structure fails.',
   },
   spots_and_fit: {
-    label: 'Spots & fit',
-    html: '<strong>Spots &amp; fit</strong> — Sold strikes are where the credit is collected. Bought strikes, further out, cap the loss. <em>Full profit</em> is expiry between the two sold strikes. <em>Part profit</em> is between a sold strike and the loss line. <em>Loss</em> is outside that line. These are index levels at expiry, not today\u2019s mark.',
+    label: 'At expiry',
+    html: '<strong>At expiry</strong> — Read left to right, low to high. <em>Bought</em> is the wing that caps the loss. <em>Loss below / Loss above</em> is where the credit runs out. <em>Sold</em> strikes are the full-profit band. <em>Now</em> is today\u2019s index, placed in that order. Full profit only if expiry finishes between the two sold strikes.',
   },
   fit_lower_side: {
     label: 'Lower side',
@@ -4761,12 +4761,24 @@ function _fitNum(v) {
 }
 
 function _fitIdx(v) {
-  return v == null ? '\u2014' : `\u20b9${fmt(v)}`;
+  if (v == null || isNaN(v)) return '\u2014';
+  return '\u20b9' + Math.round(v).toLocaleString('en-IN');
 }
 
-function _fitCell(kicker, value) {
+function _fitStop(value, role, zone) {
   if (value == null) return '';
-  return `<div class="lo-fit-cell"><span class="lo-spot-k">${kicker}</span><strong>${_fitIdx(value)}</strong></div>`;
+  return `<div class="lo-stop lo-stop-${zone}">
+    <strong class="lo-stop-px">${_fitIdx(value)}</strong>
+    <span class="lo-stop-k">${role}</span>
+  </div>`;
+}
+
+function _fitNowLine() {
+  return `<div class="lo-nowline">
+    <strong class="lo-spot-now">\u2014</strong>
+    <span class="lo-fit-where">Now</span>
+    <span class="lo-spot-chg muted"></span>
+  </div>`;
 }
 
 function _fitLevels(t) {
@@ -4825,67 +4837,47 @@ function _fitDataAttrs(lv) {
 
 function _renderFitBoard(t) {
   const lv = _fitLevels(t || {});
-  const entryNote = lv.entry != null
-    ? `<span class="lo-spot-entry-note muted">Entry ${_fitIdx(lv.entry)}</span>`
-    : '<span class="lo-spot-entry-note muted"></span>';
-  const now = `
-    <div class="lo-fit-now">
-      <span class="lo-spot-k">Now</span>
-      <strong class="lo-spot-now">\u2014</strong>
-      <span class="lo-spot-chg muted"></span>
-      <span class="lo-fit-where"></span>
-      ${entryNote}
-    </div>`;
+  let stops = [];
   if (lv.mode === 'range') {
-    const lower = [
-      _fitCell('Bought', lv.longPut),
-      _fitCell('Sold', lv.shortPut),
-    ].filter(Boolean).join('');
-    const upper = [
-      _fitCell('Sold', lv.shortCall),
-      _fitCell('Bought', lv.longCall),
-    ].filter(Boolean).join('');
-    return `
-      <div class="lo-fit lo-fit-range" ${_fitDataAttrs(lv)} aria-label="Strikes and loss lines">
-        <div class="lo-fit-side">
-          <div class="lo-fit-side-k">${labelWithHelp('Lower', 'fit_lower_side')}</div>
-          <div class="lo-fit-pair">${lower}</div>
-          ${lv.lowerBE != null ? `<div class="lo-fit-be"><span class="lo-spot-k">Loss below</span><strong>${_fitIdx(lv.lowerBE)}</strong></div>` : ''}
-        </div>
-        ${now}
-        <div class="lo-fit-side">
-          <div class="lo-fit-side-k">${labelWithHelp('Upper', 'fit_upper_side')}</div>
-          <div class="lo-fit-pair">${upper}</div>
-          ${lv.upperBE != null ? `<div class="lo-fit-be"><span class="lo-spot-k">Loss above</span><strong>${_fitIdx(lv.upperBE)}</strong></div>` : ''}
-        </div>
-      </div>`;
-  }
-  const bits = [];
-  if (lv.longPut != null) bits.push(_fitCell('Bought put', lv.longPut));
-  if (lv.shortPut != null) bits.push(_fitCell('Sold put', lv.shortPut));
-  if (lv.longCall != null) bits.push(_fitCell('Bought call', lv.longCall));
-  if (lv.shortCall != null) bits.push(_fitCell('Sold call', lv.shortCall));
-  let line = '';
-  if (lv.mode === 'loss-below' && lv.lowerBE != null) line = `Loss below ${_fitIdx(lv.lowerBE)}`;
-  else if (lv.mode === 'loss-above' && lv.upperBE != null) line = `Loss above ${_fitIdx(lv.upperBE)}`;
-  else if (lv.mode === 'above') {
+    stops = [
+      _fitStop(lv.longPut, 'Bought put', 'loss'),
+      _fitStop(lv.lowerBE, 'Loss below', 'loss'),
+      _fitStop(lv.shortPut, 'Sold put', 'full'),
+      _fitStop(lv.shortCall, 'Sold call', 'full'),
+      _fitStop(lv.upperBE, 'Loss above', 'loss'),
+      _fitStop(lv.longCall, 'Bought call', 'loss'),
+    ];
+  } else if (lv.mode === 'loss-below') {
+    stops = [
+      _fitStop(lv.longPut, 'Bought put', 'loss'),
+      _fitStop(lv.lowerBE, 'Loss below', 'loss'),
+      _fitStop(lv.shortPut, 'Sold put', 'full'),
+    ];
+  } else if (lv.mode === 'loss-above') {
+    stops = [
+      _fitStop(lv.shortCall, 'Sold call', 'full'),
+      _fitStop(lv.upperBE, 'Loss above', 'loss'),
+      _fitStop(lv.longCall, 'Bought call', 'loss'),
+    ];
+  } else if (lv.mode === 'above') {
     const be = lv.upperBE != null ? lv.upperBE : lv.lowerBE;
-    if (be != null) line = `Profit above ${_fitIdx(be)}`;
+    stops = [
+      _fitStop(lv.longCall, 'Bought call', 'full'),
+      _fitStop(lv.shortCall, 'Sold call', 'full'),
+      _fitStop(be, 'Profit above', 'full'),
+    ];
   } else if (lv.mode === 'below') {
     const be = lv.lowerBE != null ? lv.lowerBE : lv.upperBE;
-    if (be != null) line = `Profit below ${_fitIdx(be)}`;
-  }
-  if (!bits.length && !line) {
-    return `
-      <div class="lo-fit" ${_fitDataAttrs(lv)} aria-label="Spot">
-        ${now}
-      </div>`;
+    stops = [
+      _fitStop(be, 'Profit below', 'full'),
+      _fitStop(lv.shortPut, 'Sold put', 'full'),
+      _fitStop(lv.longPut, 'Bought put', 'loss'),
+    ];
   }
   return `
-    <div class="lo-fit" ${_fitDataAttrs(lv)} aria-label="Strikes and profit line">
-      <div class="lo-fit-pair">${bits.join('')}</div>
-      ${line ? `<div class="lo-fit-be"><strong>${line}</strong></div>` : ''}
-      ${now}
+    <div class="lo-fit" ${_fitDataAttrs(lv)} aria-label="Expiry levels from low to high">
+      ${_fitNowLine()}
+      <div class="lo-scale">${stops.filter(Boolean).join('')}</div>
     </div>`;
 }
 
@@ -4898,7 +4890,7 @@ function renderLiveOutlook(t) {
       </div>
       <div class="lo-help-sheet" hidden>
         <p><strong>Win chance</strong> — model odds of profit at expiry from spot, DTE, and IV (band = \u00b115% IV stress). Shows current vs entry %, plus recent graph. Not a historical hit rate.</p>
-        <p><strong>Spots &amp; fit</strong> — Sold strikes, bought wings, and the two loss lines. Full profit is between the sold strikes. Part profit is between a sold strike and its loss line.</p>
+        <p><strong>At expiry</strong> — one row, low to high. Green marks are the full-profit band between the sold strikes. Red marks are the wings and the loss lines.</p>
         <p><strong>Near-expiry EV</strong> — average total P&amp;L if held to expiry (win% \u00d7 max profit + loss% \u00d7 \u2212max loss); gross and net of est. charges. Not extra profit on top of MTM.</p>
         <p><strong>Gross vs hold</strong> — compares Current P&amp;L Gross (lock in now) vs modeled hold-to-expiry outcome.</p>
         <p class="muted" style="margin-top:.35rem">Per-row \u24d8 for a short popup. Live MTM is under <em>Current P&amp;L</em> above \u2014 not in this panel.</p>
@@ -4932,10 +4924,6 @@ function renderLiveOutlook(t) {
         </div>
         <div class="lo-col lo-col-structure">
           <div class="lo-structure-block">
-            <div class="lo-structure-head">
-              <span class="lpl-label">${labelWithHelp('Spots &amp; fit', 'spots_and_fit')}</span>
-            </div>
-            ${_renderFitBoard(t)}
             <div class="lo-row lo-row-market">
               <span class="lpl-label">${labelWithHelp('Market', 'market_outlook')}</span>
               <span class="lpl-val-line"><span class="lo-market">Loading\u2026</span></span>
@@ -4943,6 +4931,12 @@ function renderLiveOutlook(t) {
             </div>
           </div>
         </div>
+      </div>
+      <div class="lo-fit-wrap">
+        <div class="lo-structure-head">
+          <span class="lpl-label">${labelWithHelp('At expiry', 'spots_and_fit')}</span>
+        </div>
+        ${_renderFitBoard(t)}
       </div>
       <div class="lo-extra muted">
         <span class="lo-hold-close"></span>
@@ -5082,9 +5076,14 @@ function _renderLoSpotStrip(el, payload) {
   }
   if (whereEl && fit) {
     const st = _fitStatus(fit, spot);
-    whereEl.textContent = st.text;
+    whereEl.textContent = st.text ? `Now \u00b7 ${st.text}` : 'Now';
     whereEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part');
     if (st.cls) whereEl.classList.add(st.cls);
+    const nowStop = el.querySelector('.lo-nowline');
+    if (nowStop) {
+      nowStop.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part');
+      if (st.cls) nowStop.classList.add(st.cls);
+    }
   }
 }
 
