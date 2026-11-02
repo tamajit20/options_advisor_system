@@ -5074,7 +5074,9 @@ function _paintBandCalendar(payload, live) {
   }).join('');
   return `
     <div class="band-cal-head">${nowHtml}</div>
-    <p class="muted band-cal-note">Saved when this suggestion was created. Each row uses that volatility and the suggested prices, so it stays put.</p>
+    <p class="muted band-cal-note">${payload && payload.fresh
+      ? 'Rebuilt just now from current volatility and the suggested prices. The expiry row stays fixed. Earlier rows move when volatility changes.'
+      : 'Saved when this suggestion was created. Each row uses that volatility and the suggested prices, so it stays put.'}</p>
     <table class="band-cal-table">
       <thead><tr><th>Date</th><th>Full profit</th><th>In profit</th></tr></thead>
       <tbody>${body || '<tr><td colspan="3">No rows</td></tr>'}</tbody>
@@ -5100,7 +5102,8 @@ async function _openBandCalendar(btn) {
   modal.hidden = false;
   document.body.classList.add('sg-modal-open');
   try {
-    const payload = await API(`/api/suggestion/${encodeURIComponent(sid)}/mark-bands`);
+    const fresh = outlook ? '?fresh=1' : '';
+    const payload = await API(`/api/suggestion/${encodeURIComponent(sid)}/mark-bands${fresh}`);
     if (host) host.innerHTML = _paintBandCalendar(payload, live && live.now && live.now !== '\u2014' ? live : null);
   } catch (err) {
     if (host) host.innerHTML = `<p class="muted">${escapeHtml(err.message || 'Could not load day ranges')}</p>`;

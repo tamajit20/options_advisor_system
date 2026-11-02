@@ -2307,51 +2307,68 @@ def create_app() -> Flask:
     @app.route("/api/suggestion/<sid>/mark-bands")
     @_with_db
     def api_suggestion_mark_bands(db: SQLServerConnection, sid: str):
-        """Day-by-day profit ranges saved with the suggestion.
+        """Day-by-day profit ranges.
 
-        Older rows that predate the column are built once from the stored
-        legs and the latest ATM IV, then written so the next open is a read.
+        The suggestion page reads the copy saved at generation. A trade popup
+        passes fresh=1 and rebuilds from the latest ATM IV on every open.
+        That rebuild is not written back over the saved copy.
         """
         from database.models import AtmIvTimeseriesRepo
         from engine.live_expectation import mark_band_calendar
 
-        repo = SuggestionRepo(db)
-        row = repo.get(sid)
-        if not row:
-            return jsonify({"error": "Not found"}), 404
-        raw = row.get("mark_band_calendar")
-        cal = None
-        if raw:
-            try:
-                cal = json.loads(raw) if isinstance(raw, str) else raw
-            except (TypeError, ValueError):
-                cal = None
-        if not cal or not cal.get("rows"):
-            expiry = row.get("expiry_date")
+        def _expiry_of(src):
+            expiry = src.get("expiry_date")
             if isinstance(expiry, datetime):
-                expiry = expiry.date()
-            elif isinstance(expiry, str):
+                return expiry.date()
+            if isinstance(expiry, date):
+                return expiry
+            if isinstance(expiry, str):
                 try:
-                    expiry = date.fromisoformat(expiry[:10])
+                    return date.fromisoformat(expiry[:10])
                 except ValueError:
-                    expiry = None
-            iv = None
-            if row.get("underlying") and isinstance(expiry, date):
-                iv = AtmIvTimeseriesRepo(db).latest_atm_iv(row["underlying"], expiry)
-            start = row.get("entry_date") or row.get("generated_on")
-            cal = mark_band_calendar(
+                    return None
+            return None
+
+        def _build(iv):
+            return mark_band_calendar(
                 legs=repo.legs(sid),
-                start=start,
-                expiry=expiry,
+                start=row.get("entry_date") or row.get("generated_on"),
+                expiry=_expiry_of(row),
                 atm_iv=iv,
                 strategy=str(row.get("strategy") or ""),
                 lower_be=row.get("lower_breakeven"),
                 upper_be=row.get("upper_breakeven"),
                 underlying=str(row.get("underlying") or ""),
             )
+
+        repo = SuggestionRepo(db)
+        row = repo.get(sid)
+        if not row:
+            return jsonify({"error": "Not found"}), 404
+        fresh = (request.args.get("fresh") or "").strip().lower() in ("1", "true", "yes")
+        raw = row.get("mark_band_calendar")
+        stored = None
+        if raw:
+            try:
+                stored = json.loads(raw) if isinstance(raw, str) else raw
+            except (TypeError, ValueError):
+                stored = None
+        expiry = _expiry_of(row)
+        latest_iv = None
+        if row.get("underlying") and isinstance(expiry, date):
+            latest_iv = AtmIvTimeseriesRepo(db).latest_atm_iv(row["underlying"], expiry)
+        if fresh:
+            iv = latest_iv if latest_iv is not None else (stored or {}).get("iv")
+            cal = _build(iv)
+            if not cal or not cal.get("rows"):
+                return jsonify({"error": "Day ranges are not available for this suggestion."}), 404
+        elif not stored or not stored.get("rows"):
+            cal = _build(latest_iv)
             if not cal or not cal.get("rows"):
                 return jsonify({"error": "Day ranges are not available for this suggestion."}), 404
             repo.save_mark_band_calendar(sid, json.dumps(cal))
+        else:
+            cal = stored
         spot = None
         expiry = row.get("expiry_date")
         if isinstance(expiry, datetime):
@@ -2377,6 +2394,7 @@ def create_app() -> Flask:
             "suggestion_id": sid,
             "entry_spot": entry_f,
             "spot": spot,
+            "fresh": fresh,
             "calendar": cal,
         })
 
