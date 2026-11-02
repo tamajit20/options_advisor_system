@@ -2232,6 +2232,16 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
   position: relative;
 }
 /* "ARCHIVED" watermark so it's obviously read-only context */
+.trade-snap-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: .78rem;
+  margin: 8px 0;
+  color: var(--text-dim);
+}
+.trade-snap-meta strong { color: var(--text); font-weight: 600; }
+.trade-snap-body .cpnl-metrics { display: inline-flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
 .orig-sug-body::before {
   content: 'ORIGINAL SUGGESTION';
   position: absolute;
@@ -2243,6 +2253,7 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
   text-transform: uppercase;
   pointer-events: none;
 }
+.orig-sug-body.trade-snap-body::before { content: 'TRADE AT CLOSE'; }
 /* Subdue all headings/tags inside the archived panel */
 .orig-sug-body .card-head h3   { color: rgba(255,255,255,.45); font-size: .9rem; }
 .orig-sug-body .tag            { opacity: .6; }

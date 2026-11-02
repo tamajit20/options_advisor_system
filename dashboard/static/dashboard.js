@@ -4389,6 +4389,23 @@ function liveRiskMonitor() {
   return PNL_RULES.live_risk_monitor || {};
 }
 
+function _dteAsOf(expiryDateStr, asOfStr) {
+  if (!expiryDateStr) return null;
+  const parts = String(expiryDateStr).slice(0, 10).split('-');
+  if (parts.length !== 3) return null;
+  const exp = new Date(+parts[0], +parts[1] - 1, +parts[2]);
+  let day;
+  if (asOfStr) {
+    const a = String(asOfStr).slice(0, 10).split('-');
+    if (a.length === 3) day = new Date(+a[0], +a[1] - 1, +a[2]);
+  }
+  if (!day || Number.isNaN(day.getTime())) {
+    const now = new Date();
+    day = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  }
+  return Math.max(0, Math.round((exp - day) / 86400000));
+}
+
 function dteFromExpiry(expiryDateStr) {
   if (!expiryDateStr) return null;
   const s = String(expiryDateStr).slice(0, 10);
@@ -5470,7 +5487,7 @@ function renderTradeProfitZone(t, legs) {
   return `${maxLine}${beLine}`;
 }
 
-function renderTradeKvGrid(t, legs) {
+function renderTradeKvGrid(t, legs, opts) {
   const premium = tradePremiumFromLegs(legs);
   const estMp = t.actual_max_profit != null ? t.actual_max_profit
               : (t.suggestion && t.suggestion.max_profit != null ? t.suggestion.max_profit : null);
@@ -5478,11 +5495,17 @@ function renderTradeKvGrid(t, legs) {
               : (t.suggestion && t.suggestion.max_loss != null ? t.suggestion.max_loss : null);
   const estPop = t.suggestion && t.suggestion.probability_of_profit != null
                ? t.suggestion.probability_of_profit : null;
+  const snapshot = !!(opts && opts.snapshot);
   const estDte = t.suggestion && t.suggestion.dte != null ? t.suggestion.dte : null;
-  const dteLeft = t.suggestion && t.suggestion.expiry_date
-    ? dteFromExpiry(t.suggestion.expiry_date) : null;
-  const dteDisplay = t.suggestion && t.suggestion.expiry_date
-    ? `${fmtDate(t.suggestion.expiry_date)}${dteLeft != null ? ` (${dteLeft} left)` : ''}${estDte != null && dteLeft == null ? ` · ${estDte} DTE at entry` : ''}`
+  const expiryStr = t.suggestion && (t.suggestion.expiry_date || t.suggestion.expiry);
+  const dteLeft = expiryStr
+    ? (snapshot ? _dteAsOf(expiryStr, t.closed_on || t.executed_on) : dteFromExpiry(expiryStr))
+    : null;
+  const dteLeftLabel = dteLeft != null
+    ? (snapshot ? ` (${dteLeft} left at close)` : ` (${dteLeft} left)`)
+    : '';
+  const dteDisplay = expiryStr
+    ? `${fmtDate(expiryStr)}${dteLeftLabel}${estDte != null && dteLeft == null ? ` · ${estDte} DTE at entry` : ''}`
     : (estDte != null
     ? `${estDte}${dteLeft != null ? ` (${dteLeft} left)` : ''}`
       : (dteLeft != null ? `${dteLeft} left` : null));
@@ -5509,7 +5532,7 @@ function renderTradeKvGrid(t, legs) {
       ${estMp != null ? `<div>${kvLabel('Est. max profit', 'max_profit')}<br><span class="v pnl-profit">\u20b9${fmt(estMp)}</span></div>` : '<div></div>'}
       ${estMl != null ? `<div>${kvLabel('Est. max loss', 'max_loss')}<br><span class="v pnl-loss">\u20b9${fmt(estMl)}<span class="econ-ml-hint">${pctHint(estMl, t.net_credit_actual, 'credit')}</span></span></div>` : '<div></div>'}
       ${estPop != null ? `<div>${kvLabel('Entry PoP', 'pop_entry')}<br><span class="v">${fmtPct(estPop)}</span></div>` : '<div></div>'}
-      <div class="live-pop-kv" data-trade-id="${escapeHtml(t.trade_id)}">${kvLabel('Live PoP', 'pop_live')}<br><span class="v">\u2014</span></div>
+      ${snapshot ? '' : `<div class="live-pop-kv" data-trade-id="${escapeHtml(t.trade_id)}">${kvLabel('Live PoP', 'pop_live')}<br><span class="v">\u2014</span></div>`}
       ${pnlCell || zerodhaMarginCell}
       ${estChg != null ? `<div>${kvLabel('Est. charges (from fills)', 'est_charges')}<br><span class="v">\u20b9${fmt(estChg)}</span></div>` : '<div></div>'}
       ${estNetPnl != null ? `<div>${kvLabel('Est. net at max profit', 'est_net_max_profit')}<br><span class="v ${estNetPnl >= 0 ? 'pnl-profit' : 'pnl-loss'}">${formatPnlWithPct(estNetPnl, premium, { useGrossSign: false })}</span></div>` : '<div></div>'}
@@ -10480,6 +10503,12 @@ async function _fillHistoryMarginPnl(row) {
       return;
     }
     if (act) act.innerHTML = _marginPnlText(row.dataset.netPnl, fin);
+    const snapCard = row.closest('details.collapsible-card');
+    if (snapCard) {
+      snapCard.querySelectorAll('.trade-snap-margin, .trade-snap-body .econ-cap-req').forEach(el => {
+        el.innerHTML = _marginPnlText(row.dataset.netPnl, fin);
+      });
+    }
     if (sug) sug.innerHTML = row.dataset.sugNetPnl != null && row.dataset.sugNetPnl !== ''
       ? _marginPnlText(row.dataset.sugNetPnl, fin)
       : '\u2014';
@@ -10500,6 +10529,71 @@ function _bindHistoryMarginPnl(root) {
       if (card.open) _fillHistoryMarginPnl(row);
     });
   });
+}
+
+function renderTradeCloseSnapshot(t) {
+  const sug = t.suggestion || {};
+  const legs = (t.legs || []).map(l => ({
+    ...l,
+    executed: l.executed || l.fill_price != null,
+  }));
+  const premium = tradePremiumFromLegs(legs);
+  const net = t.net_pnl;
+  const gross = t.gross_pnl;
+  const netCls = net > 0 ? 'pnl-profit' : (net < 0 ? 'pnl-loss' : '');
+  const grossCls = gross > 0 ? 'pnl-profit' : (gross < 0 ? 'pnl-loss' : '');
+  const netPct = (net != null && premium) ? pnlPctTextCompact(net, premium) : '';
+  const grossPct = (gross != null && premium) ? pnlPctTextCompact(gross, premium) : '';
+  const expiry = sug.expiry_date || sug.expiry
+    || legs.map(l => l.expiry_date || l.expiry).find(Boolean);
+  const left = expiry ? _dteAsOf(expiry, t.closed_on || t.executed_on) : null;
+  const legRows = legs.filter(l => l.symbol || l.strike != null).map(l => {
+    const lotsUsed = l.lots_actual || l.lots || 0;
+    const closed = l.exit_price != null
+      ? `<span class="leg-exit-info">\u21b3 Closed @ \u20b9${fmt(l.exit_price)}${l.leg_pnl != null ? ` &nbsp;${formatLegPnlHtml(l)}` : ''}</span>`
+      : '';
+    return `<div class="trade-leg-row leg-done leg-exited action-${escapeHtml(l.action || '')}">
+      <div class="leg-action-col"><span class="tag ${(l.action || '') === 'SELL' ? 'tag-err' : 'tag-ok'}">${escapeHtml(l.action || '')}</span>${spreadBadge(legs, l)}</div>
+      <div class="tl-info">
+        <span class="tl-instrument">${formatLegInstrument(l)}</span>
+        <div class="muted" style="font-size:.8rem">${escapeHtml(legRoleNote(l.strategy || sug.strategy, l))}</div>
+        <span class="leg-status-done">\u2713 Filled @ \u20b9${l.fill_price != null ? fmt(l.fill_price) : '\u2014'} \u00b7 ${lotsUsed} lot${lotsUsed !== 1 ? 's' : ''}</span>
+        ${closed}
+      </div>
+    </div>`;
+  }).join('');
+  const strat = sug.strategy || '';
+  return `<details class="orig-sug-details trade-snap-details">
+    <summary class="orig-sug-summary">Trade at close</summary>
+    <div class="orig-sug-body trade-snap-body">
+      <div class="card-head">
+        <div class="card-head-title">
+          <h3>${escapeHtml(t.trade_name || t.trade_id || '')}</h3>
+          ${strategyGuideInfoBtn(strat)}
+        </div>
+        <div class="card-head-tags">
+          ${strat ? `<span class="tag tag-accent">${escapeHtml(strat)}</span>` : ''}
+          <span class="tag ${t.status === 'EXPIRED' ? 'tag-warn' : 'tag-ok'}">${escapeHtml(t.status || 'CLOSED')}</span>
+          <span class="cpnl-metrics">
+            <span class="cpnl-pair"><span class="cpnl-k">Net</span> <strong class="${netCls}">${_fmtSignedInr(net)}</strong> <span class="${netCls}">${netPct}</span></span>
+            <span class="muted">\u00b7</span>
+            <span class="cpnl-pair"><span class="cpnl-k">Gross</span> <strong class="${grossCls}">${_fmtSignedInr(gross)}</strong> <span class="${grossCls}">${grossPct}</span></span>
+            <span class="muted">\u00b7</span>
+            <span class="cpnl-pair"><span class="cpnl-k">Amount used</span> <strong class="trade-snap-margin">\u2014</strong></span>
+          </span>
+        </div>
+      </div>
+      <div class="trade-snap-meta">
+        ${premium ? `<span>${premium.kind === 'received' ? 'Premium received' : 'Premium paid'} <strong>\u20b9${fmt(premium.rs)}</strong></span>` : ''}
+        ${t.executed_on ? `<span>Entry date <strong>${escapeHtml(fmtDt(t.executed_on))}</strong></span>` : ''}
+        ${t.closed_on ? `<span>Closed <strong>${escapeHtml(fmtDt(t.closed_on))}</strong></span>` : ''}
+        ${expiry ? `<span>Options expiry${termHelpIcon('dte')} <strong>${escapeHtml(fmtDate(expiry))}${left != null ? ` (${left} left at close)` : ''}</strong></span>` : ''}
+      </div>
+      <div class="kv-grid kv-grid-trade">${renderTradeKvGrid(t, legs, { snapshot: true })}</div>
+      ${legRows ? `<div class="trade-legs-section"><div class="close-trade-header sl-monitor-label">Legs</div><div class="trade-legs-grid">${legRows}</div>${creditBreakdownHtml(legs.filter(l => l.executed), 'trade')}</div>` : ''}
+      ${t.exit_instruction ? `<p class="muted" style="margin:8px 0 0">Exit: ${escapeHtml(t.exit_instruction)}</p>` : ''}
+    </div>
+  </details>`;
 }
 
 function renderHistoryTrade(t) {
@@ -10611,6 +10705,7 @@ function renderHistoryTrade(t) {
       ${t.exit_instruction ? cmp('Exit reason', '—', `<span class="muted">${escapeHtml(t.exit_instruction)}</span>`) : ''}
     </div>
 
+    ${renderTradeCloseSnapshot(t)}
     ${renderOriginalSuggestion(s, t.trade_id)}
 
     ${legRows ? `
