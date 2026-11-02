@@ -2586,6 +2586,26 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 }
 .lo-structure-head { margin: 0 0 4px; }
 .lo-fit-wrap { margin-top: 8px; }
+.lo-fit-date {
+  font-size: .78rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.lo-fit-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-bottom: 8px;
+}
+.lo-fit-range {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.lo-fit-range strong {
+  font-size: .84rem;
+  font-variant-numeric: tabular-nums;
+}
 .lo-nowline {
   display: flex;
   align-items: baseline;
