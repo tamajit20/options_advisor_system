@@ -2405,7 +2405,7 @@ const TERM_HELP = {
   },
   spots_and_fit: {
     label: 'At expiry',
-    html: '<strong>At expiry</strong> — The heading is the expiry date. <em>Full profit</em> is the band between the sold strikes. <em>In profit</em> is the wider band out to the breakevens. <em>Now</em> is today\u2019s index and whether that sits in full profit, part profit, or a loss. <em>Entry</em> is the index when the trade was opened.',
+    html: '<strong>At expiry</strong> — Levels on the expiry date in the title. <em>Full profit</em> is between the two sold strikes. <em>In profit</em> is the wider breakeven range. The first line is today\u2019s index, whether that sits in full profit, part profit, or a loss, and the move since entry.',
   },
   fit_lower_side: {
     label: 'Lower side',
@@ -4775,9 +4775,11 @@ function _fitStop(value, role, zone) {
 
 function _fitNowLine() {
   return `<div class="lo-nowline">
+    <span class="lo-stop-k">Now</span>
     <strong class="lo-spot-now">\u2014</strong>
-    <span class="lo-fit-where">Now</span>
+    <span class="lo-fit-where"></span>
     <span class="lo-spot-chg muted"></span>
+    <span class="lo-spot-entry-note muted"></span>
   </div>`;
 }
 
@@ -4823,8 +4825,18 @@ function _fitLevels(t) {
   return {
     strat, mode, shortPut, longPut, shortCall, longCall, lowerBE, upperBE,
     entry: _fitNum(t.spot_at_execution),
-    expiryLabel: expiryRaw ? fmtDate(expiryRaw) : '',
+    expiryLabel: _fitDayLabel(expiryRaw),
   };
+}
+
+function _fitDayLabel(raw) {
+  const m = String(raw || '').match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return raw ? fmtDate(raw) : '';
+  const day = parseInt(m[3], 10);
+  const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(m[2], 10) - 1];
+  const teen = day % 100;
+  const suf = (teen >= 11 && teen <= 13) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[day % 10] || 'th');
+  return `${day}${suf} ${mon}`;
 }
 
 function _fitDataAttrs(lv) {
@@ -4846,59 +4858,34 @@ function _fitRange(lo, hi) {
   return `${_fitIdx(a)} \u2013 ${_fitIdx(b)}`;
 }
 
-function _fitAtLabel(expiryLabel) {
-  if (!expiryLabel) return 'At expiry';
-  const m = String(expiryLabel).match(/^0?(\d{1,2})\s+([A-Za-z]+)/);
-  if (!m) return `At ${expiryLabel}`;
-  const day = parseInt(m[1], 10);
-  const n = day % 100;
-  const suf = (n >= 11 && n <= 13) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[day % 10] || 'th');
-  const year = (String(expiryLabel).match(/(\d{4})/) || [])[1];
-  return `At ${day}${suf} ${m[2]}${year ? ' ' + year : ''}`;
-}
-
-function _fitLine(label, valueHtml) {
-  if (!valueHtml) return '';
-  return `<div class="lo-fit-line"><span>${label}</span><span class="lo-fit-line-val"><strong>${valueHtml}</strong></span></div>`;
+function _fitRangeRow(label, text) {
+  if (!text) return '';
+  return `<div class="lo-fit-range"><span class="lo-stop-k">${label}</span><strong>${text}</strong></div>`;
 }
 
 function _renderFitBoard(t) {
   const lv = _fitLevels(t || {});
-  let rows = '';
+  let ranges = '';
   if (lv.mode === 'range') {
-    rows = [
-      _fitLine('Full profit', _fitRange(lv.shortPut, lv.shortCall)),
-      _fitLine('In profit', _fitRange(lv.lowerBE, lv.upperBE)),
+    ranges = [
+      _fitRangeRow('Full profit', _fitRange(lv.shortPut, lv.shortCall)),
+      _fitRangeRow('In profit', _fitRange(lv.lowerBE, lv.upperBE)),
     ].join('');
   } else if (lv.mode === 'loss-below') {
-    rows = _fitLine('In profit', lv.lowerBE != null ? `above ${_fitIdx(lv.lowerBE)}` : '');
+    ranges = _fitRangeRow('In profit', lv.lowerBE != null ? `above ${_fitIdx(lv.lowerBE)}` : '');
   } else if (lv.mode === 'loss-above') {
-    rows = _fitLine('In profit', lv.upperBE != null ? `below ${_fitIdx(lv.upperBE)}` : '');
+    ranges = _fitRangeRow('In profit', lv.upperBE != null ? `below ${_fitIdx(lv.upperBE)}` : '');
   } else if (lv.mode === 'above') {
     const be = lv.upperBE != null ? lv.upperBE : lv.lowerBE;
-    rows = _fitLine('In profit', be != null ? `above ${_fitIdx(be)}` : '');
+    ranges = _fitRangeRow('In profit', be != null ? `above ${_fitIdx(be)}` : '');
   } else if (lv.mode === 'below') {
     const be = lv.lowerBE != null ? lv.lowerBE : lv.upperBE;
-    rows = _fitLine('In profit', be != null ? `below ${_fitIdx(be)}` : '');
+    ranges = _fitRangeRow('In profit', be != null ? `below ${_fitIdx(be)}` : '');
   }
-  const entry = lv.entry != null ? _fitIdx(lv.entry) : '\u2014';
   return `
-    <div class="lo-fit" ${_fitDataAttrs(lv)} aria-label="${escapeHtml(_fitAtLabel(lv.expiryLabel))}">
-      <div class="lo-fit-lines">
-        ${rows}
-        <div class="lo-fit-line lo-nowline">
-          <span>Now</span>
-          <span class="lo-fit-line-val">
-            <strong class="lo-spot-now">\u2014</strong>
-            <span class="lo-fit-where"></span>
-            <span class="lo-spot-chg muted"></span>
-          </span>
-        </div>
-        <div class="lo-fit-line">
-          <span>Entry</span>
-          <span class="lo-fit-line-val"><strong class="lo-spot-entry-note">${entry}</strong></span>
-        </div>
-      </div>
+    <div class="lo-fit" ${_fitDataAttrs(lv)} aria-label="Expiry levels">
+      ${_fitNowLine()}
+      ${ranges ? `<div class="lo-fit-ranges">${ranges}</div>` : ''}
     </div>`;
 }
 
@@ -4911,7 +4898,7 @@ function renderLiveOutlook(t) {
       </div>
       <div class="lo-help-sheet" hidden>
         <p><strong>Win chance</strong> — model odds of profit at expiry from spot, DTE, and IV (band = \u00b115% IV stress). Shows current vs entry %, plus recent graph. Not a historical hit rate.</p>
-        <p><strong>At expiry</strong> — dated heading, then full-profit range, in-profit range, today\u2019s index, and entry.</p>
+        <p><strong>At expiry</strong> — the expiry date, today\u2019s index, and two ranges: full profit between the sold strikes, and in profit out to the breakevens.</p>
         <p><strong>Near-expiry EV</strong> — average total P&amp;L if held to expiry (win% \u00d7 max profit + loss% \u00d7 \u2212max loss); gross and net of est. charges. Not extra profit on top of MTM.</p>
         <p><strong>Gross vs hold</strong> — compares Current P&amp;L Gross (lock in now) vs modeled hold-to-expiry outcome.</p>
         <p class="muted" style="margin-top:.35rem">Per-row \u24d8 for a short popup. Live MTM is under <em>Current P&amp;L</em> above \u2014 not in this panel.</p>
@@ -4955,7 +4942,7 @@ function renderLiveOutlook(t) {
       </div>
       <div class="lo-fit-wrap">
         <div class="lo-structure-head">
-          <span class="lpl-label">${labelWithHelp(_fitAtLabel(_fitLevels(t).expiryLabel), 'spots_and_fit')}</span>
+          <span class="lpl-label">${labelWithHelp(_fitLevels(t).expiryLabel ? `At expiry (${_fitLevels(t).expiryLabel})` : 'At expiry', 'spots_and_fit')}</span>
         </div>
         ${_renderFitBoard(t)}
       </div>
@@ -5093,7 +5080,7 @@ function _renderLoSpotStrip(el, payload) {
     }
   }
   if (entryNote && entry != null && !isNaN(entry)) {
-    entryNote.textContent = `\u20b9${fmt(entry)}`;
+    entryNote.textContent = `Entry \u20b9${fmt(entry)}`;
   }
   if (whereEl && fit) {
     const st = _fitStatus(fit, spot);

@@ -2586,26 +2586,34 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 }
 .lo-structure-head { margin: 0 0 4px; }
 .lo-fit-wrap { margin-top: 8px; }
-.lo-fit-lines { display: flex; flex-direction: column; gap: 3px; }
-.lo-fit-line {
-  display: grid;
-  grid-template-columns: 6.2rem minmax(0, 1fr);
-  gap: 2px 8px;
-  align-items: baseline;
+.lo-fit-date {
+  font-size: .78rem;
+  font-weight: 700;
+  margin-bottom: 4px;
 }
-.lo-fit-line > span:first-child {
-  font-size: .72rem;
-  font-weight: 600;
-  color: var(--text-dim);
-}
-.lo-fit-line-val {
+.lo-fit-ranges {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 4px;
+}
+.lo-fit-range {
+  display: flex;
   align-items: baseline;
-  gap: 4px 8px;
+  gap: 8px;
+}
+.lo-fit-range strong {
+  font-size: .84rem;
   font-variant-numeric: tabular-nums;
 }
-.lo-fit-line-val strong { font-size: .9rem; font-weight: 700; }
+.lo-nowline {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-bottom: 6px;
+}
 .lo-nowline .lo-spot-now {
   font-size: 1.05rem;
   font-weight: 800;
