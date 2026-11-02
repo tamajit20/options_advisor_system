@@ -2405,7 +2405,15 @@ const TERM_HELP = {
   },
   spots_and_fit: {
     label: 'Spots & fit',
-    html: '<strong>Spots &amp; fit</strong> — <em>Entry</em> / <em>Current</em> / <em>Profit zone</em> index levels. Under Current: change vs entry. Under Profit zone: how far spot must move (+ up, \u2212 down). Plus market context (data source, EM, DTE).',
+    html: '<strong>Spots &amp; fit</strong> — Sold strikes are where the credit is collected. Bought strikes, further out, cap the loss. <em>Full profit</em> is expiry between the two sold strikes. <em>Part profit</em> is between a sold strike and the loss line. <em>Loss</em> is outside that line. These are index levels at expiry, not today\u2019s mark.',
+  },
+  fit_lower_side: {
+    label: 'Lower side',
+    html: '<strong>Lower side</strong> — two puts. <em>Sold</em> collects premium. <em>Bought</em> is further down and stops the loss. <em>Loss below</em> = sold strike minus the credit. Between those two numbers the profit is only partial.',
+  },
+  fit_upper_side: {
+    label: 'Upper side',
+    html: '<strong>Upper side</strong> — two calls. <em>Sold</em> collects premium. <em>Bought</em> is further up and stops the loss. <em>Loss above</em> = sold strike plus the credit. Between those two numbers the profit is only partial.',
   },
   profit_zone: {
     label: 'Profit zone',
@@ -4747,6 +4755,140 @@ function renderLiveProfitLevels(t) {
     </div>`;
 }
 
+function _fitNum(v) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function _fitIdx(v) {
+  return v == null ? '\u2014' : `\u20b9${fmt(v)}`;
+}
+
+function _fitCell(kicker, value) {
+  if (value == null) return '';
+  return `<div class="lo-fit-cell"><span class="lo-spot-k">${kicker}</span><strong>${_fitIdx(value)}</strong></div>`;
+}
+
+function _fitLevels(t) {
+  const legs = (t && t.legs) || [];
+  const strat = ((t.suggestion && t.suggestion.strategy) || '').toUpperCase();
+  const find = (action, type) => legs.find(l => l.action === action && l.option_type === type);
+  const strike = (leg) => _fitNum(leg && leg.strike);
+  const shortPut = strike(find('SELL', 'PE'));
+  const longPut = strike(find('BUY', 'PE'));
+  const shortCall = strike(find('SELL', 'CE'));
+  const longCall = strike(find('BUY', 'CE'));
+  let credit = 0;
+  let filled = false;
+  legs.forEach(l => {
+    if (!l.executed || l.fill_price == null) return;
+    filled = true;
+    credit += (l.action === 'SELL' ? 1 : -1) * parseFloat(l.fill_price);
+  });
+  let lowerBE = _fitNum(t.actual_lower_breakeven);
+  let upperBE = _fitNum(t.actual_upper_breakeven);
+  const creditRange = shortPut != null && shortCall != null
+    && strat !== 'BULL_CALL_SPREAD' && strat !== 'BEAR_PUT_SPREAD';
+  if (filled && creditRange) {
+    lowerBE = shortPut - credit;
+    upperBE = shortCall + credit;
+  } else if (filled && strat === 'BULL_PUT_SPREAD' && shortPut != null) {
+    lowerBE = shortPut - credit;
+  } else if (filled && strat === 'BEAR_CALL_SPREAD' && shortCall != null) {
+    upperBE = shortCall + credit;
+  }
+  let mode = '';
+  if (shortPut != null && shortCall != null) mode = 'range';
+  else if (strat === 'BULL_PUT_SPREAD' || strat === 'JADE_LIZARD') mode = 'loss-below';
+  else if (strat === 'BEAR_CALL_SPREAD') mode = 'loss-above';
+  else if (strat === 'BULL_CALL_SPREAD' || strat === 'LONG_CALL') mode = 'above';
+  else if (strat === 'BEAR_PUT_SPREAD' || strat === 'LONG_PUT') mode = 'below';
+  else if (shortPut != null) mode = 'loss-below';
+  else if (shortCall != null) mode = 'loss-above';
+  return {
+    strat, mode, shortPut, longPut, shortCall, longCall, lowerBE, upperBE,
+    entry: _fitNum(t.spot_at_execution),
+  };
+}
+
+function _fitDataAttrs(lv) {
+  const put = (k, v) => (v == null ? '' : ` data-${k}="${v}"`);
+  return `data-fit-mode="${lv.mode}"`
+    + put('short-put', lv.shortPut)
+    + put('long-put', lv.longPut)
+    + put('short-call', lv.shortCall)
+    + put('long-call', lv.longCall)
+    + put('lower-be', lv.lowerBE)
+    + put('upper-be', lv.upperBE)
+    + put('entry-spot', lv.entry);
+}
+
+function _renderFitBoard(t) {
+  const lv = _fitLevels(t || {});
+  const entryNote = lv.entry != null
+    ? `<span class="lo-spot-entry-note muted">Entry ${_fitIdx(lv.entry)}</span>`
+    : '<span class="lo-spot-entry-note muted"></span>';
+  const now = `
+    <div class="lo-fit-now">
+      <span class="lo-spot-k">Now</span>
+      <strong class="lo-spot-now">\u2014</strong>
+      <span class="lo-spot-chg muted"></span>
+      <span class="lo-fit-where"></span>
+      ${entryNote}
+    </div>`;
+  if (lv.mode === 'range') {
+    const lower = [
+      _fitCell('Bought', lv.longPut),
+      _fitCell('Sold', lv.shortPut),
+    ].filter(Boolean).join('');
+    const upper = [
+      _fitCell('Sold', lv.shortCall),
+      _fitCell('Bought', lv.longCall),
+    ].filter(Boolean).join('');
+    return `
+      <div class="lo-fit lo-fit-range" ${_fitDataAttrs(lv)} aria-label="Strikes and loss lines">
+        <div class="lo-fit-side">
+          <div class="lo-fit-side-k">${labelWithHelp('Lower', 'fit_lower_side')}</div>
+          <div class="lo-fit-pair">${lower}</div>
+          ${lv.lowerBE != null ? `<div class="lo-fit-be"><span class="lo-spot-k">Loss below</span><strong>${_fitIdx(lv.lowerBE)}</strong></div>` : ''}
+        </div>
+        ${now}
+        <div class="lo-fit-side">
+          <div class="lo-fit-side-k">${labelWithHelp('Upper', 'fit_upper_side')}</div>
+          <div class="lo-fit-pair">${upper}</div>
+          ${lv.upperBE != null ? `<div class="lo-fit-be"><span class="lo-spot-k">Loss above</span><strong>${_fitIdx(lv.upperBE)}</strong></div>` : ''}
+        </div>
+      </div>`;
+  }
+  const bits = [];
+  if (lv.longPut != null) bits.push(_fitCell('Bought put', lv.longPut));
+  if (lv.shortPut != null) bits.push(_fitCell('Sold put', lv.shortPut));
+  if (lv.longCall != null) bits.push(_fitCell('Bought call', lv.longCall));
+  if (lv.shortCall != null) bits.push(_fitCell('Sold call', lv.shortCall));
+  let line = '';
+  if (lv.mode === 'loss-below' && lv.lowerBE != null) line = `Loss below ${_fitIdx(lv.lowerBE)}`;
+  else if (lv.mode === 'loss-above' && lv.upperBE != null) line = `Loss above ${_fitIdx(lv.upperBE)}`;
+  else if (lv.mode === 'above') {
+    const be = lv.upperBE != null ? lv.upperBE : lv.lowerBE;
+    if (be != null) line = `Profit above ${_fitIdx(be)}`;
+  } else if (lv.mode === 'below') {
+    const be = lv.lowerBE != null ? lv.lowerBE : lv.upperBE;
+    if (be != null) line = `Profit below ${_fitIdx(be)}`;
+  }
+  if (!bits.length && !line) {
+    return `
+      <div class="lo-fit" ${_fitDataAttrs(lv)} aria-label="Spot">
+        ${now}
+      </div>`;
+  }
+  return `
+    <div class="lo-fit" ${_fitDataAttrs(lv)} aria-label="Strikes and profit line">
+      <div class="lo-fit-pair">${bits.join('')}</div>
+      ${line ? `<div class="lo-fit-be"><strong>${line}</strong></div>` : ''}
+      ${now}
+    </div>`;
+}
+
 function renderLiveOutlook(t) {
   return `
     <div class="live-outlook" data-trade-id="${escapeHtml(t.trade_id)}">
@@ -4756,7 +4898,7 @@ function renderLiveOutlook(t) {
       </div>
       <div class="lo-help-sheet" hidden>
         <p><strong>Win chance</strong> — model odds of profit at expiry from spot, DTE, and IV (band = \u00b115% IV stress). Shows current vs entry %, plus recent graph. Not a historical hit rate.</p>
-        <p><strong>Spots &amp; fit</strong> — Entry / current / profit-zone index levels (zone line shows how far spot must move), plus market context (source, EM, DTE).</p>
+        <p><strong>Spots &amp; fit</strong> — Sold strikes, bought wings, and the two loss lines. Full profit is between the sold strikes. Part profit is between a sold strike and its loss line.</p>
         <p><strong>Near-expiry EV</strong> — average total P&amp;L if held to expiry (win% \u00d7 max profit + loss% \u00d7 \u2212max loss); gross and net of est. charges. Not extra profit on top of MTM.</p>
         <p><strong>Gross vs hold</strong> — compares Current P&amp;L Gross (lock in now) vs modeled hold-to-expiry outcome.</p>
         <p class="muted" style="margin-top:.35rem">Per-row \u24d8 for a short popup. Live MTM is under <em>Current P&amp;L</em> above \u2014 not in this panel.</p>
@@ -4793,22 +4935,7 @@ function renderLiveOutlook(t) {
             <div class="lo-structure-head">
               <span class="lpl-label">${labelWithHelp('Spots &amp; fit', 'spots_and_fit')}</span>
             </div>
-            <div class="lo-spot-strip" aria-label="Entry, current, and profit-zone spot">
-              <div class="lo-spot-cell">
-                <span class="lo-spot-k">Entry</span>
-                <strong class="lo-spot-entry">\u2014</strong>
-              </div>
-              <div class="lo-spot-cell lo-spot-cell-now">
-                <span class="lo-spot-k">Current</span>
-                <strong class="lo-spot-now">\u2014</strong>
-                <span class="lo-spot-chg muted"></span>
-              </div>
-              <div class="lo-spot-cell">
-                <span class="lo-spot-k">${labelWithHelp('Profit zone', 'profit_zone')}</span>
-                <strong class="lo-spot-zone">\u2014</strong>
-                <span class="lo-spot-zone-dist muted"></span>
-              </div>
-            </div>
+            ${_renderFitBoard(t)}
             <div class="lo-row lo-row-market">
               <span class="lpl-label">${labelWithHelp('Market', 'market_outlook')}</span>
               <span class="lpl-val-line"><span class="lo-market">Loading\u2026</span></span>
@@ -4879,43 +5006,64 @@ function _renderLoEntryPop(el, payload) {
   }
 }
 
-function _loProfitZoneLabel(payload) {
-  const note = (payload.profit_zone_note || '').trim();
-  if (note) {
-    // Strip leading "Zone " so the cell value stays compact: "₹x–₹y" / "Above ₹x"
-    return note.replace(/^Zone\s+/i, '');
+function _fitRead(el, name) {
+  if (!el) return null;
+  const n = parseFloat(el.dataset[name]);
+  return Number.isFinite(n) ? n : null;
+}
+
+function _fitStatus(el, spot) {
+  const mode = el.dataset.fitMode || '';
+  const sp = _fitRead(el, 'shortPut');
+  const sc = _fitRead(el, 'shortCall');
+  const lb = _fitRead(el, 'lowerBe');
+  const ub = _fitRead(el, 'upperBe');
+  if (spot == null || isNaN(spot)) return { text: '', cls: '' };
+  if (mode === 'range' && sp != null && sc != null) {
+    if (spot >= sp && spot <= sc) return { text: 'Full profit', cls: 'pnl-profit' };
+    if (lb != null && spot < lb) return { text: 'Loss', cls: 'pnl-loss' };
+    if (ub != null && spot > ub) return { text: 'Loss', cls: 'pnl-loss' };
+    return { text: 'Part profit', cls: 'lo-fit-part' };
   }
-  const lb = payload.lower_be != null ? parseFloat(payload.lower_be) : null;
-  const ub = payload.upper_be != null ? parseFloat(payload.upper_be) : null;
-  if (lb != null && !isNaN(lb) && ub != null && !isNaN(ub) && lb < ub) {
-    return `\u20b9${fmt(lb)}\u2013\u20b9${fmt(ub)}`;
+  if (mode === 'loss-below') {
+    if (lb != null && spot < lb) return { text: 'Loss', cls: 'pnl-loss' };
+    if (sp != null && spot < sp) return { text: 'Part profit', cls: 'lo-fit-part' };
+    return { text: 'Full profit', cls: 'pnl-profit' };
   }
-  if (lb != null && !isNaN(lb)) return `\u20b9${fmt(lb)}`;
-  if (ub != null && !isNaN(ub)) return `\u20b9${fmt(ub)}`;
-  return '\u2014';
+  if (mode === 'loss-above') {
+    if (ub != null && spot > ub) return { text: 'Loss', cls: 'pnl-loss' };
+    if (sc != null && spot > sc) return { text: 'Part profit', cls: 'lo-fit-part' };
+    return { text: 'Full profit', cls: 'pnl-profit' };
+  }
+  if (mode === 'above') {
+    const line = ub != null ? ub : lb;
+    if (line == null) return { text: '', cls: '' };
+    return spot >= line
+      ? { text: 'In profit', cls: 'pnl-profit' }
+      : { text: 'Below line', cls: 'pnl-loss' };
+  }
+  if (mode === 'below') {
+    const line = lb != null ? lb : ub;
+    if (line == null) return { text: '', cls: '' };
+    return spot <= line
+      ? { text: 'In profit', cls: 'pnl-profit' }
+      : { text: 'Above line', cls: 'pnl-loss' };
+  }
+  return { text: '', cls: '' };
 }
 
 function _renderLoSpotStrip(el, payload) {
   if (!el || !payload) return;
-  const entryEl = el.querySelector('.lo-spot-entry');
+  const fit = el.querySelector('.lo-fit');
   const nowEl = el.querySelector('.lo-spot-now');
   const chgEl = el.querySelector('.lo-spot-chg');
-  const zoneEl = el.querySelector('.lo-spot-zone');
-  const strip = el.querySelector('.lo-spot-strip');
+  const whereEl = el.querySelector('.lo-fit-where');
+  const entryNote = el.querySelector('.lo-spot-entry-note');
   const entry = payload.entry_spot != null ? parseFloat(payload.entry_spot) : null;
   const spot = payload.spot != null ? parseFloat(payload.spot) : null;
   const chg = payload.spot_change != null ? parseFloat(payload.spot_change) : null;
-  if (entryEl) {
-    entryEl.textContent = (entry != null && !isNaN(entry)) ? `\u20b9${fmt(entry)}` : '\u2014';
-  }
   if (nowEl) {
     nowEl.textContent = (spot != null && !isNaN(spot)) ? `\u20b9${fmt(spot)}` : '\u2014';
-    nowEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-dir-neutral');
-    if (chg != null && !isNaN(chg)) {
-      if (chg > 0) nowEl.classList.add('pnl-profit');
-      else if (chg < 0) nowEl.classList.add('pnl-loss');
-      else nowEl.classList.add('lo-dir-neutral');
-    }
   }
   if (chgEl) {
     if (chg != null && !isNaN(chg) && entry != null && !isNaN(entry)) {
@@ -4929,32 +5077,14 @@ function _renderLoSpotStrip(el, payload) {
       chgEl.classList.remove('pnl-profit', 'pnl-loss');
     }
   }
-  if (zoneEl) {
-    zoneEl.textContent = _loProfitZoneLabel(payload);
-    zoneEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-dir-neutral');
-    const side = payload.profit_zone_side || payload.be_side || '';
-    if (side === 'inside') zoneEl.classList.add('pnl-profit');
-    else if (side) zoneEl.classList.add('pnl-loss');
+  if (entryNote && entry != null && !isNaN(entry)) {
+    entryNote.textContent = `Entry \u20b9${fmt(entry)}`;
   }
-  const zoneDistEl = el.querySelector('.lo-spot-zone-dist');
-  if (zoneDistEl) {
-    let dist = (payload.profit_zone_text || payload.be_distance_text || '').trim();
-    // Compact: "Spot needs −545 for profit zone" → "Spot needs −545"
-    dist = dist.replace(/\s+for profit zone\.?$/i, '');
-    const side = payload.profit_zone_side || payload.be_side || '';
-    zoneDistEl.textContent = dist;
-    zoneDistEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-dir-neutral');
-    if (dist) {
-      if (side === 'inside') zoneDistEl.classList.add('pnl-profit');
-      else if (side) zoneDistEl.classList.add('pnl-loss');
-    }
-  }
-  if (strip) {
-    strip.hidden = !(
-      (entry != null && !isNaN(entry))
-      || (spot != null && !isNaN(spot))
-      || (payload.lower_be != null || payload.upper_be != null || payload.profit_zone_note)
-    );
+  if (whereEl && fit) {
+    const st = _fitStatus(fit, spot);
+    whereEl.textContent = st.text;
+    whereEl.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part');
+    if (st.cls) whereEl.classList.add(st.cls);
   }
 }
 
