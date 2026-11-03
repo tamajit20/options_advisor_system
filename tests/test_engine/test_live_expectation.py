@@ -615,7 +615,7 @@ class TestTodayMarkBands:
              "lots": 1, "lot_size": 65, "expiry_date": exp},
         ]
         legs = legs_from_fills(raw, underlying="NIFTY", expiry=exp)
-        out = today_mark_bands(legs=legs, dte=0, atm_iv=0.15)
+        out = today_mark_bands(legs=legs, dte=0, atm_iv=0.15, strategy="IRON_CONDOR")
         assert out["full_lo"] is not None and out["in_lo"] is not None
         assert out["full_lo"] >= 22400 and out["full_hi"] <= 23550
         assert out["in_lo"] < out["full_lo"]
@@ -667,7 +667,9 @@ class TestTodayMarkBands:
              "lots": 1, "lot_size": 30, "expiry_date": exp},
         ]
         filled = legs_from_fills(legs, underlying="BANKNIFTY", expiry=exp)
-        mid = today_mark_bands(legs=filled, dte=20, atm_iv=0.148)
+        mid = today_mark_bands(
+            legs=filled, dte=20, atm_iv=0.148, strategy="BEAR_CALL_SPREAD",
+        )
         assert mid["in_side"] == "below"
         assert mid["in_hi"] is not None
         assert mid["in_lo"] is None
@@ -695,3 +697,40 @@ class TestTodayMarkBands:
                 assert row.get("full_lo") is None
         assert cal["rows"][-1]["full_hi"] == 55400
         assert cal["rows"][-1]["in_hi"] == 55615
+
+    def test_bull_call_uses_above_not_below(self):
+        exp = date(2026, 11, 23)
+        legs = [
+            {"action": "BUY", "strike": 23700, "option_type": "CE", "fill_price": 316.2,
+             "lots": 1, "lot_size": 65, "expiry_date": exp},
+            {"action": "SELL", "strike": 24050, "option_type": "CE", "fill_price": 154.5,
+             "lots": 1, "lot_size": 65, "expiry_date": exp},
+        ]
+        filled = legs_from_fills(legs, underlying="NIFTY", expiry=exp)
+        mid = today_mark_bands(
+            legs=filled, dte=20, atm_iv=0.12, strategy="BULL_CALL_SPREAD",
+        )
+        assert mid["in_side"] == "above"
+        assert mid["in_lo"] is not None
+        assert mid["in_hi"] is None
+        assert mid["in_lo"] > 23000
+        cal = mark_band_calendar(
+            legs=legs,
+            start=date(2026, 11, 3),
+            expiry=exp,
+            atm_iv=0.12,
+            strategy="BULL_CALL_SPREAD",
+            lower_be=None,
+            upper_be=23861.7,
+            underlying="NIFTY",
+        )
+        assert cal is not None
+        for row in cal["rows"]:
+            if row.get("in_hi") is not None or row.get("in_lo") is not None:
+                assert row.get("in_side") == "above"
+                assert row.get("in_hi") is None
+            if row.get("full_hi") is not None or row.get("full_lo") is not None:
+                assert row.get("full_side") == "above"
+                assert row.get("full_hi") is None
+        assert cal["rows"][-1]["full_lo"] == 24050
+        assert cal["rows"][-1]["in_lo"] == 23862

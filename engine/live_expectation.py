@@ -1261,17 +1261,51 @@ def enrich_trade_outlook(
     return out
 
 
+def _one_sided_profit_side(
+    strategy: Optional[str],
+    rows: Sequence[tuple],
+) -> Optional[str]:
+    """Return 'above' / 'below' for one-sided strategies, else None.
+
+    Driven by strategy first. Legs are only a fallback when strategy is missing.
+    """
+    strat = (strategy or "").upper()
+    if strat in ("BULL_CALL_SPREAD", "BULL_PUT_SPREAD", "JADE_LIZARD", "LONG_CALL"):
+        return "above"
+    if strat in ("BEAR_CALL_SPREAD", "BEAR_PUT_SPREAD", "LONG_PUT"):
+        return "below"
+    if strat in ("IRON_CONDOR", "IRON_BUTTERFLY", "SHORT_STRANGLE", "LONG_STRADDLE",
+                 "LONG_STRANGLE", "CALENDAR_SPREAD", "SHORT_STRADDLE"):
+        return None
+    calls = [r for r in rows if r[1] == "CE"]
+    puts = [r for r in rows if r[1] == "PE"]
+    if calls and not puts:
+        buy = min((r[0] for r in calls if r[2] == "BUY"), default=None)
+        sell = min((r[0] for r in calls if r[2] == "SELL"), default=None)
+        if buy is not None and sell is not None:
+            return "above" if buy < sell else "below"
+    if puts and not calls:
+        buy = min((r[0] for r in puts if r[2] == "BUY"), default=None)
+        sell = min((r[0] for r in puts if r[2] == "SELL"), default=None)
+        if buy is not None and sell is not None:
+            # Bull put: short put above long put. Bear put: long put above short.
+            return "above" if sell > buy else "below"
+    return None
+
+
 def today_mark_bands(
     *,
     legs: Sequence[Any],
     dte: int,
     atm_iv: Optional[float],
+    strategy: Optional[str] = None,
 ) -> dict:
     """Spot bands where today's mark is in profit, and near its best.
 
     Full profit is where mark-to-market is within 3% of the best spot for the
     time still left. In profit is where that mark is above zero. At zero DTE
     these collapse to the expiry short-strike band and the breakevens.
+    One-sided strategies keep an open side (above / below) from the strategy.
     """
     import math
 
@@ -1314,8 +1348,7 @@ def today_mark_bands(
     # index pad. 3σ of the time left is enough to find the mark zero-crossing.
     em = mid * (iv or 0.0) * math.sqrt(t) if t > 0 else 0.0
     pad = max(wing * 2.0, 3.0 * em)
-    has_call = any(opt == "CE" for _, opt, *_ in rows)
-    has_put = any(opt == "PE" for _, opt, *_ in rows)
+    side = _one_sided_profit_side(strategy, rows)
 
     def _pnl_at(spot: float) -> float:
         pnl = 0.0
@@ -1338,9 +1371,8 @@ def today_mark_bands(
 
     lo = lo_strike - pad
     hi = hi_strike + pad
-    # One-sided credit/debit keeps its best mark outside the short strike.
-    # Grow that side until the peak is no longer glued to the edge, or the
-    # mark has crossed from profit into loss inside the window.
+    # Grow the profitable side until the peak leaves the edge, or the mark
+    # crosses from profit into loss inside the window.
     spots, pnls, step = _sweep(lo, hi)
     for _ in range(6):
         if not pnls:
@@ -1350,14 +1382,14 @@ def today_mark_bands(
         has_loss = any(p <= 1.0 for p in pnls)
         peak_on_left = peak_i == 0
         peak_on_right = peak_i == len(pnls) - 1
-        if has_call and not has_put and peak_on_left:
+        if side == "below" and peak_on_left:
             if has_profit and has_loss:
                 break
             width = hi - lo
             lo -= max(width, pad)
             spots, pnls, step = _sweep(lo, hi)
             continue
-        if has_put and not has_call and peak_on_right:
+        if side == "above" and peak_on_right:
             if has_profit and has_loss:
                 break
             width = hi - lo
@@ -1400,12 +1432,10 @@ def today_mark_bands(
     def _open_side(lo_v, hi_v) -> tuple[Optional[float], Optional[float], Optional[str]]:
         if lo_v is None and hi_v is None:
             return None, None, None
-        # Call-only / put-only trades are one-sided forever (bear call, bull put,
-        # etc.). Keep every day as "below X" / "above X", never a closed range.
-        if has_call and not has_put:
+        if side == "below":
             edge = hi_v if hi_v is not None else lo_v
             return None, edge, "below"
-        if has_put and not has_call:
+        if side == "above":
             edge = lo_v if lo_v is not None else hi_v
             return edge, None, "above"
         return lo_v, hi_v, None
@@ -1504,12 +1534,22 @@ def expiry_structural_bands(
             row["in_side"] = "below"
         return row
     if strat in ("BULL_CALL_SPREAD", "LONG_CALL"):
+        long_call = _leg_strike(legs, "BUY", "CE")
+        full_level = short_call if short_call is not None else long_call
+        if full_level is not None:
+            row["full_lo"] = round(full_level)
+            row["full_side"] = "above"
         be = upper_be if upper_be is not None else lower_be
         if be is not None:
             row["in_lo"] = round(be)
             row["in_side"] = "above"
         return row
     if strat in ("BEAR_PUT_SPREAD", "LONG_PUT"):
+        long_put = _leg_strike(legs, "BUY", "PE")
+        full_level = short_put if short_put is not None else long_put
+        if full_level is not None:
+            row["full_hi"] = round(full_level)
+            row["full_side"] = "below"
         be = lower_be if lower_be is not None else upper_be
         if be is not None:
             row["in_hi"] = round(be)
@@ -1559,7 +1599,12 @@ def mark_band_calendar(
                 upper_be=_as_float(upper_be),
             )
         else:
-            bands = today_mark_bands(legs=band_legs, dte=(expiry_d - day).days, atm_iv=iv)
+            bands = today_mark_bands(
+                legs=band_legs,
+                dte=(expiry_d - day).days,
+                atm_iv=iv,
+                strategy=strategy,
+            )
             row = {
                 "full_lo": bands.get("full_lo"),
                 "full_hi": bands.get("full_hi"),
@@ -1728,6 +1773,7 @@ def live_trade_outlook(
         legs=pop_legs,
         dte=dte_i,
         atm_iv=iv,
+        strategy=strategy,
     )
     result = {
         "live_pop": live_pop,

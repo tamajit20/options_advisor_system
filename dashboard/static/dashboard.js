@@ -4891,10 +4891,18 @@ function _renderFitBoard(t) {
     ].join('');
   } else if (lv.mode === 'above') {
     const be = lv.upperBE != null ? lv.upperBE : lv.lowerBE;
-    ranges = _fitRangeRow('In profit', be != null ? `above ${_fitIdx(be)}` : '');
+    const full = lv.shortCall != null ? lv.shortCall : lv.longCall;
+    ranges = [
+      _fitRangeRow('Full profit', full != null ? `above ${_fitIdx(full)}` : ''),
+      _fitRangeRow('In profit', be != null ? `above ${_fitIdx(be)}` : ''),
+    ].join('');
   } else if (lv.mode === 'below') {
     const be = lv.lowerBE != null ? lv.lowerBE : lv.upperBE;
-    ranges = _fitRangeRow('In profit', be != null ? `below ${_fitIdx(be)}` : '');
+    const full = lv.shortPut != null ? lv.shortPut : lv.longPut;
+    ranges = [
+      _fitRangeRow('Full profit', full != null ? `below ${_fitIdx(full)}` : ''),
+      _fitRangeRow('In profit', be != null ? `below ${_fitIdx(be)}` : ''),
+    ].join('');
   }
   return `
     <div class="lo-fit" ${_fitDataAttrs(lv)} aria-label="Expiry levels">
