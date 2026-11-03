@@ -2329,23 +2329,41 @@ def create_app() -> Flask:
                     return None
             return None
 
-        def _build(iv):
-            return mark_band_calendar(
-                legs=repo.legs(sid),
-                start=row.get("entry_date") or row.get("generated_on"),
-                expiry=_expiry_of(row),
-                atm_iv=iv,
-                strategy=str(row.get("strategy") or ""),
-                lower_be=row.get("lower_breakeven"),
-                upper_be=row.get("upper_breakeven"),
-                underlying=str(row.get("underlying") or ""),
-            )
-
         repo = SuggestionRepo(db)
         row = repo.get(sid)
         if not row:
             return jsonify({"error": "Not found"}), 404
         fresh = (request.args.get("fresh") or "").strip().lower() in ("1", "true", "yes")
+        trade_id = (request.args.get("trade_id") or "").strip()
+        legs = repo.legs(sid)
+        start = row.get("entry_date") or row.get("generated_on")
+        lower_be = row.get("lower_breakeven")
+        upper_be = row.get("upper_breakeven")
+        entry = row.get("spot_at_generation")
+        if fresh and trade_id:
+            trade = TradeRepo(db).get(trade_id)
+            if trade and str(trade.get("suggestion_id") or "") == str(sid):
+                legs = TradeRepo(db).legs_with_suggestion_info(trade_id) or legs
+                start = trade.get("executed_on") or start
+                if trade.get("actual_lower_breakeven") is not None:
+                    lower_be = trade.get("actual_lower_breakeven")
+                if trade.get("actual_upper_breakeven") is not None:
+                    upper_be = trade.get("actual_upper_breakeven")
+                if trade.get("spot_at_execution") is not None:
+                    entry = trade.get("spot_at_execution")
+
+        def _build(iv):
+            return mark_band_calendar(
+                legs=legs,
+                start=start,
+                expiry=_expiry_of(row),
+                atm_iv=iv,
+                strategy=str(row.get("strategy") or ""),
+                lower_be=lower_be,
+                upper_be=upper_be,
+                underlying=str(row.get("underlying") or ""),
+            )
+
         raw = row.get("mark_band_calendar")
         stored = None
         if raw:
@@ -2370,14 +2388,6 @@ def create_app() -> Flask:
         else:
             cal = stored
         spot = None
-        expiry = row.get("expiry_date")
-        if isinstance(expiry, datetime):
-            expiry = expiry.date()
-        elif isinstance(expiry, str):
-            try:
-                expiry = date.fromisoformat(expiry[:10])
-            except ValueError:
-                expiry = None
         if row.get("underlying") and isinstance(expiry, date):
             snap = AtmIvTimeseriesRepo(db).latest_snapshot(row["underlying"], expiry)
             if snap and snap.get("spot") is not None:
@@ -2385,13 +2395,13 @@ def create_app() -> Flask:
                     spot = float(snap["spot"])
                 except (TypeError, ValueError):
                     spot = None
-        entry = row.get("spot_at_generation")
         try:
             entry_f = float(entry) if entry is not None else None
         except (TypeError, ValueError):
             entry_f = None
         return jsonify({
             "suggestion_id": sid,
+            "trade_id": trade_id or None,
             "entry_spot": entry_f,
             "spot": spot,
             "fresh": fresh,

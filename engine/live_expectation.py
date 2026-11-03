@@ -1273,10 +1273,15 @@ def today_mark_bands(
     time still left. In profit is where that mark is above zero. At zero DTE
     these collapse to the expiry short-strike band and the breakevens.
     """
+    import math
+
     from config import STRATEGY_CONFIG
     from engine.iv_calculator import _bs_price
 
-    empty = {"full_lo": None, "full_hi": None, "in_lo": None, "in_hi": None}
+    empty = {
+        "full_lo": None, "full_hi": None, "in_lo": None, "in_hi": None,
+        "full_side": None, "in_side": None,
+    }
     rows = []
     for leg in legs or []:
         strike = _as_float(getattr(leg, "strike", None))
@@ -1301,20 +1306,73 @@ def today_mark_bands(
     r = float(STRATEGY_CONFIG.get("risk_free_rate") or 0.0)
     t = dte_i / 365.0
     strikes = [row[0] for row in rows]
-    lo = min(strikes) - 500.0
-    hi = max(strikes) + 500.0
-    step = 10.0
-    spots = []
-    pnls = []
-    spot = lo
-    while spot <= hi + 0.1:
+    lo_strike = min(strikes)
+    hi_strike = max(strikes)
+    wing = max(hi_strike - lo_strike, 1.0)
+    mid = (lo_strike + hi_strike) / 2.0
+    # Search window from the structure + remaining expected move — not a fixed
+    # index pad. 3σ of the time left is enough to find the mark zero-crossing.
+    em = mid * (iv or 0.0) * math.sqrt(t) if t > 0 else 0.0
+    pad = max(wing * 2.0, 3.0 * em)
+    has_call = any(opt == "CE" for _, opt, *_ in rows)
+    has_put = any(opt == "PE" for _, opt, *_ in rows)
+
+    def _pnl_at(spot: float) -> float:
         pnl = 0.0
         for strike, opt, action, qty, fill in rows:
             mark = _bs_price(spot, strike, t, r, iv or 0.0, opt)
             pnl += (fill - mark) * qty if action == "SELL" else (mark - fill) * qty
-        spots.append(spot)
-        pnls.append(pnl)
-        spot += step
+        return pnl
+
+    def _sweep(lo: float, hi: float) -> tuple[list[float], list[float], float]:
+        width = hi - lo
+        step = 10.0 if width <= 4000 else (25.0 if width <= 10000 else 50.0)
+        spots: list[float] = []
+        pnls: list[float] = []
+        spot = lo
+        while spot <= hi + 0.1:
+            spots.append(spot)
+            pnls.append(_pnl_at(spot))
+            spot += step
+        return spots, pnls, step
+
+    lo = lo_strike - pad
+    hi = hi_strike + pad
+    # One-sided credit/debit keeps its best mark outside the short strike.
+    # Grow that side until the peak is no longer glued to the edge, or the
+    # mark has crossed from profit into loss inside the window.
+    spots, pnls, step = _sweep(lo, hi)
+    for _ in range(6):
+        if not pnls:
+            break
+        peak_i = max(range(len(pnls)), key=lambda i: pnls[i])
+        has_profit = any(p > 1.0 for p in pnls)
+        has_loss = any(p <= 1.0 for p in pnls)
+        peak_on_left = peak_i == 0
+        peak_on_right = peak_i == len(pnls) - 1
+        if has_call and not has_put and peak_on_left:
+            if has_profit and has_loss:
+                break
+            width = hi - lo
+            lo -= max(width, pad)
+            spots, pnls, step = _sweep(lo, hi)
+            continue
+        if has_put and not has_call and peak_on_right:
+            if has_profit and has_loss:
+                break
+            width = hi - lo
+            hi += max(width, pad)
+            spots, pnls, step = _sweep(lo, hi)
+            continue
+        if peak_on_left or peak_on_right:
+            width = hi - lo
+            if peak_on_left:
+                lo -= max(width * 0.5, pad)
+            if peak_on_right:
+                hi += max(width * 0.5, pad)
+            spots, pnls, step = _sweep(lo, hi)
+            continue
+        break
     if not pnls:
         return empty
     peak = max(pnls)
@@ -1339,15 +1397,32 @@ def today_mark_bands(
             return None, None
         return round(best[0]), round(best[1])
 
+    def _open_side(lo_v, hi_v) -> tuple[Optional[float], Optional[float], Optional[str]]:
+        if lo_v is None and hi_v is None:
+            return None, None, None
+        # Call-only / put-only trades are one-sided forever (bear call, bull put,
+        # etc.). Keep every day as "below X" / "above X", never a closed range.
+        if has_call and not has_put:
+            edge = hi_v if hi_v is not None else lo_v
+            return None, edge, "below"
+        if has_put and not has_call:
+            edge = lo_v if lo_v is not None else hi_v
+            return edge, None, "above"
+        return lo_v, hi_v, None
+
     in_lo, in_hi = _span(lambda pnl: pnl > 1.0)
     full_lo = full_hi = None
     if peak > 1.0:
         full_lo, full_hi = _span(lambda pnl: pnl >= peak * 0.97)
+    in_lo, in_hi, in_side = _open_side(in_lo, in_hi)
+    full_lo, full_hi, full_side = _open_side(full_lo, full_hi)
     return {
         "full_lo": full_lo,
         "full_hi": full_hi,
         "in_lo": in_lo,
         "in_hi": in_hi,
+        "full_side": full_side,
+        "in_side": in_side,
     }
 
 
@@ -1394,6 +1469,7 @@ def expiry_structural_bands(
         "full_hi": None,
         "in_lo": None,
         "in_hi": None,
+        "full_side": None,
         "in_side": None,
         "expiry": True,
     }
@@ -1409,6 +1485,9 @@ def expiry_structural_bands(
             row["in_hi"] = round(max(lower_be, upper_be))
         return row
     if strat in ("BULL_PUT_SPREAD", "JADE_LIZARD") or (short_put is not None and short_call is None):
+        if short_put is not None:
+            row["full_lo"] = round(short_put)
+            row["full_side"] = "above"
         if lower_be is not None:
             row["in_lo"] = round(lower_be)
             row["in_side"] = "above"
@@ -1417,6 +1496,9 @@ def expiry_structural_bands(
         short_call is not None and short_put is None
         and strat not in ("BULL_CALL_SPREAD", "LONG_CALL")
     ):
+        if short_call is not None:
+            row["full_hi"] = round(short_call)
+            row["full_side"] = "below"
         if upper_be is not None:
             row["in_hi"] = round(upper_be)
             row["in_side"] = "below"
@@ -1483,7 +1565,8 @@ def mark_band_calendar(
                 "full_hi": bands.get("full_hi"),
                 "in_lo": bands.get("in_lo"),
                 "in_hi": bands.get("in_hi"),
-                "in_side": None,
+                "full_side": bands.get("full_side"),
+                "in_side": bands.get("in_side"),
                 "expiry": False,
             }
         row["date"] = day.isoformat()
@@ -1684,6 +1767,8 @@ def live_trade_outlook(
         "today_full_hi": today_bands.get("full_hi"),
         "today_in_lo": today_bands.get("in_lo"),
         "today_in_hi": today_bands.get("in_hi"),
+        "today_full_side": today_bands.get("full_side"),
+        "today_in_side": today_bands.get("in_side"),
     }
     if horizon.get("far_dte") is not None and (strategy or "").upper() == "CALENDAR_SPREAD":
         result["ev_horizon_note"] = (

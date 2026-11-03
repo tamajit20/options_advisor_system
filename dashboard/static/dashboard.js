@@ -2497,15 +2497,15 @@ const TERM_HELP = {
   },
   loss_limit: {
     label: 'Loss limit',
-    html: '<strong>Loss limit</strong> — Hard MTM stop: exit alert when loss reaches this rupee amount (often a % of max loss). Separate from Nifty spot stop levels.',
+    html: '<strong>Loss limit</strong> — Hard MTM stop: exit alert when loss reaches this rupee amount (often a % of max loss). Separate from the index spot stop level.',
   },
   spot_sl: {
-    label: 'Nifty SL level',
+    label: 'Spot SL level',
     html: '<strong>Spot stop loss</strong> — Index price that triggers an alert to close (or one side of a spread). Based on structure, not MTM alone.',
   },
   spot_at_entry: {
     label: 'Spot at entry',
-    html: '<strong>Spot at entry</strong> — Nifty (or index) level when you executed. Compare with live spot to see how far price has moved.',
+    html: '<strong>Spot at entry</strong> — Underlying index level when you executed. Compare with live spot to see how far price has moved.',
   },
   live_outlook: {
     label: 'Live outlook',
@@ -2724,6 +2724,14 @@ function _indexChipLabel(item) {
   if (sym === 'VIX') return 'VIX';
   if (sym === 'NIFTY') return 'Nifty';
   return item?.label || item?.symbol || '';
+}
+
+function _underlyingDisplayName(sym) {
+  const s = String(sym || '').toUpperCase();
+  if (s === 'BANKNIFTY') return 'Bank Nifty';
+  if (s === 'FINNIFTY') return 'Fin Nifty';
+  if (s === 'NIFTY') return 'Nifty';
+  return s || 'Index';
 }
 
 /** Compact ticker change: ▲0.13% (full abs+pct stays in title tooltip). */
@@ -4872,9 +4880,15 @@ function _renderFitBoard(t) {
       _fitRangeRow('In profit', _fitRange(lv.lowerBE, lv.upperBE)),
     ].join('');
   } else if (lv.mode === 'loss-below') {
-    ranges = _fitRangeRow('In profit', lv.lowerBE != null ? `above ${_fitIdx(lv.lowerBE)}` : '');
+    ranges = [
+      _fitRangeRow('Full profit', lv.shortPut != null ? `above ${_fitIdx(lv.shortPut)}` : ''),
+      _fitRangeRow('In profit', lv.lowerBE != null ? `above ${_fitIdx(lv.lowerBE)}` : ''),
+    ].join('');
   } else if (lv.mode === 'loss-above') {
-    ranges = _fitRangeRow('In profit', lv.upperBE != null ? `below ${_fitIdx(lv.upperBE)}` : '');
+    ranges = [
+      _fitRangeRow('Full profit', lv.shortCall != null ? `below ${_fitIdx(lv.shortCall)}` : ''),
+      _fitRangeRow('In profit', lv.upperBE != null ? `below ${_fitIdx(lv.upperBE)}` : ''),
+    ].join('');
   } else if (lv.mode === 'above') {
     const be = lv.upperBE != null ? lv.upperBE : lv.lowerBE;
     ranges = _fitRangeRow('In profit', be != null ? `above ${_fitIdx(be)}` : '');
@@ -4935,7 +4949,7 @@ function renderLiveOutlook(t) {
               <div class="lo-structure-head">
                 <span class="lpl-label">${labelWithHelp(`At today (${_fitTodayLabel()})`, 'spots_today')}</span>
                 ${(t.suggestion_id || (t.suggestion && t.suggestion.suggestion_id))
-                  ? `<button type="button" class="btn btn-ghost lo-bands-btn" data-sug-id="${escapeHtml(t.suggestion_id || t.suggestion.suggestion_id)}">All dates</button>`
+                  ? `<button type="button" class="btn btn-ghost lo-bands-btn" data-sug-id="${escapeHtml(t.suggestion_id || t.suggestion.suggestion_id)}" data-trade-id="${escapeHtml(t.trade_id || '')}">All dates</button>`
                   : ''}
               </div>
               <div class="lo-fit lo-fit-today" aria-label="Today mark levels">
@@ -4985,19 +4999,35 @@ function _todayIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function _bandOpenText(side, lo, hi) {
+  if (side === 'above' && lo != null) return `above ${_fitIdx(lo)}`;
+  if (side === 'below' && hi != null) return `below ${_fitIdx(hi)}`;
+  return '';
+}
+
 function _bandRangeText(row, kind) {
   if (!row) return '\u2014';
-  if (kind === 'in' && row.in_side === 'above' && row.in_lo != null) return `above ${_fitIdx(row.in_lo)}`;
-  if (kind === 'in' && row.in_side === 'below' && row.in_hi != null) return `below ${_fitIdx(row.in_hi)}`;
-  const lo = kind === 'full' ? row.full_lo : row.in_lo;
-  const hi = kind === 'full' ? row.full_hi : row.in_hi;
-  if (lo == null || hi == null) return '\u2014';
-  return _fitRange(Number(lo), Number(hi));
+  if (kind === 'full') {
+    const open = _bandOpenText(row.full_side, row.full_lo, row.full_hi);
+    if (open) return open;
+    if (row.full_lo == null || row.full_hi == null) return '\u2014';
+    return _fitRange(Number(row.full_lo), Number(row.full_hi));
+  }
+  const open = _bandOpenText(row.in_side, row.in_lo, row.in_hi);
+  if (open) return open;
+  if (row.in_lo == null || row.in_hi == null) return '\u2014';
+  return _fitRange(Number(row.in_lo), Number(row.in_hi));
 }
 
 function _bandStatus(row, spot) {
   if (!row || spot == null || isNaN(spot)) return { text: '', cls: '' };
   const inside = (lo, hi) => lo != null && hi != null && spot >= Number(lo) && spot <= Number(hi);
+  if (row.full_side === 'above' && row.full_lo != null && spot >= Number(row.full_lo)) {
+    return { text: 'Full profit', cls: 'pnl-profit' };
+  }
+  if (row.full_side === 'below' && row.full_hi != null && spot <= Number(row.full_hi)) {
+    return { text: 'Full profit', cls: 'pnl-profit' };
+  }
   if (inside(row.full_lo, row.full_hi)) return { text: 'Full profit', cls: 'pnl-profit' };
   if (row.in_side === 'above' && row.in_lo != null && spot >= Number(row.in_lo)) {
     return { text: 'In profit', cls: 'pnl-profit' };
@@ -5006,7 +5036,7 @@ function _bandStatus(row, spot) {
     return { text: 'In profit', cls: 'pnl-profit' };
   }
   if (inside(row.in_lo, row.in_hi)) return { text: 'Part profit', cls: 'lo-fit-part' };
-  if (row.in_lo != null || row.in_hi != null) return { text: 'Loss', cls: 'pnl-loss' };
+  if (row.in_lo != null || row.in_hi != null || row.in_side) return { text: 'Loss', cls: 'pnl-loss' };
   return { text: '', cls: '' };
 }
 
@@ -5102,8 +5132,12 @@ async function _openBandCalendar(btn) {
   modal.hidden = false;
   document.body.classList.add('sg-modal-open');
   try {
-    const fresh = outlook ? '?fresh=1' : '';
-    const payload = await API(`/api/suggestion/${encodeURIComponent(sid)}/mark-bands${fresh}`);
+    const tid = (btn.dataset.tradeId || '').trim();
+    let qs = '';
+    if (outlook) {
+      qs = `?fresh=1${tid ? `&trade_id=${encodeURIComponent(tid)}` : ''}`;
+    }
+    const payload = await API(`/api/suggestion/${encodeURIComponent(sid)}/mark-bands${qs}`);
     if (host) host.innerHTML = _paintBandCalendar(payload, live && live.now && live.now !== '\u2014' ? live : null);
   } catch (err) {
     if (host) host.innerHTML = `<p class="muted">${escapeHtml(err.message || 'Could not load day ranges')}</p>`;
@@ -5275,38 +5309,22 @@ function _renderLoSpotStrip(el, payload) {
   if (todayEntry && entry != null && !isNaN(entry)) {
     todayEntry.textContent = `Entry \u20b9${fmt(entry)}`;
   }
-  const band = (a, b) => {
-    const lo = a != null ? parseFloat(a) : null;
-    const hi = b != null ? parseFloat(b) : null;
-    if (lo == null || hi == null || isNaN(lo) || isNaN(hi)) return '\u2014';
-    return `${_fitIdx(lo)} \u2013 ${_fitIdx(hi)}`;
+  const todayBand = {
+    full_lo: payload.today_full_lo, full_hi: payload.today_full_hi,
+    in_lo: payload.today_in_lo, in_hi: payload.today_in_hi,
+    full_side: payload.today_full_side, in_side: payload.today_in_side,
   };
-  if (todayFull) todayFull.textContent = band(payload.today_full_lo, payload.today_full_hi);
-  if (todayIn) todayIn.textContent = band(payload.today_in_lo, payload.today_in_hi);
+  if (todayFull) todayFull.textContent = _bandRangeText(todayBand, 'full');
+  if (todayIn) todayIn.textContent = _bandRangeText(todayBand, 'in');
   if (todayWhere) {
-    const flo = payload.today_full_lo != null ? parseFloat(payload.today_full_lo) : null;
-    const fhi = payload.today_full_hi != null ? parseFloat(payload.today_full_hi) : null;
-    const ilo = payload.today_in_lo != null ? parseFloat(payload.today_in_lo) : null;
-    const ihi = payload.today_in_hi != null ? parseFloat(payload.today_in_hi) : null;
-    let text = '';
-    let cls = '';
-    if (spot != null && !isNaN(spot) && flo != null && fhi != null && spot >= flo && spot <= fhi) {
-      text = 'Full profit';
-      cls = 'pnl-profit';
-    } else if (spot != null && !isNaN(spot) && ilo != null && ihi != null && spot >= ilo && spot <= ihi) {
-      text = 'Part profit';
-      cls = 'lo-fit-part';
-    } else if (ilo != null && ihi != null && spot != null && !isNaN(spot)) {
-      text = 'Loss';
-      cls = 'pnl-loss';
-    }
-    todayWhere.textContent = text;
+    const st = _bandStatus(todayBand, spot);
+    todayWhere.textContent = st.text || '';
     todayWhere.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part');
-    if (cls) todayWhere.classList.add(cls);
+    if (st.cls) todayWhere.classList.add(st.cls);
     const line = el.querySelector('.lo-today-nowline');
     if (line) {
       line.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part');
-      if (cls) line.classList.add(cls);
+      if (st.cls) line.classList.add(st.cls);
     }
   }
 }
@@ -10144,6 +10162,9 @@ function renderTrade(t, expanded = false) {
           const slStrat = (t.suggestion && t.suggestion.strategy) || '';
           const slMl = t.actual_max_loss != null ? parseFloat(t.actual_max_loss)
                      : (t.suggestion && t.suggestion.max_loss != null ? parseFloat(t.suggestion.max_loss) : null);
+          const ulName = _underlyingDisplayName(
+            (t.suggestion && t.suggestion.underlying) || t.underlying || '',
+          );
           if (debitSpreadSl) {
             const mtmSl = slMl != null ? effectiveSlRs(slStrat, slMl) : null;
             const dir = slStrat === 'BEAR_PUT_SPREAD'
@@ -10152,11 +10173,11 @@ function renderTrade(t, expanded = false) {
             return `<div class="sl-field" style="grid-column:1/-1">
               <label class="sl-label">Stop loss (MTM)</label>
               <span class="sl-prem-val">${mtmSl != null ? `\u20b9${fmt(mtmSl)} loss${slLossPctHint(slStrat, slMl)}` : `${Math.round((strategySlConfig(slStrat).loss_fraction || 0.5) * 100)}% of max debit`}</span>
-              <span class="muted sl-prem-note">No Nifty spot trigger \u2014 ${dir}. Ignore legacy spot level if shown in old trades.</span>
+              <span class="muted sl-prem-note">No ${escapeHtml(ulName)} spot trigger \u2014 ${dir}. Ignore legacy spot level if shown in old trades.</span>
             </div>`;
           }
           return `<div class="sl-field">
-            <label class="sl-label">${labelWithHelp('Nifty SL level', 'spot_sl')}</label>
+            <label class="sl-label">${labelWithHelp(`${ulName} SL level`, 'spot_sl')}</label>
             <span class="sl-prem-val">${t.actual_stop_loss_level != null ? `\u20b9${fmt(t.actual_stop_loss_level)}${slLossPctHint(slStrat, slMl)}` : '\u2014 not set'}</span>
           </div>`;
         })()}

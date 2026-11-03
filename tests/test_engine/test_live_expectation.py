@@ -657,3 +657,41 @@ class TestTodayMarkBands:
             legs=legs, start=date(2026, 11, 2), expiry=exp, atm_iv=None,
             strategy="IRON_CONDOR", lower_be=22389.1, upper_be=23560.9,
         ) is None
+
+    def test_bear_call_keeps_open_sided_bands_with_time_left(self):
+        exp = date(2026, 11, 23)
+        legs = [
+            {"action": "SELL", "strike": 55400, "option_type": "CE", "fill_price": 462.7,
+             "lots": 1, "lot_size": 30, "expiry_date": exp},
+            {"action": "BUY", "strike": 56200, "option_type": "CE", "fill_price": 247.6,
+             "lots": 1, "lot_size": 30, "expiry_date": exp},
+        ]
+        filled = legs_from_fills(legs, underlying="BANKNIFTY", expiry=exp)
+        mid = today_mark_bands(legs=filled, dte=20, atm_iv=0.148)
+        assert mid["in_side"] == "below"
+        assert mid["in_hi"] is not None
+        assert mid["in_lo"] is None
+        assert mid["in_hi"] < 55400
+        if mid["full_hi"] is not None:
+            assert mid["full_side"] == "below"
+            assert mid["full_lo"] is None
+        cal = mark_band_calendar(
+            legs=legs,
+            start=date(2026, 10, 28),
+            expiry=exp,
+            atm_iv=0.148,
+            strategy="BEAR_CALL_SPREAD",
+            lower_be=None,
+            upper_be=55615.1,
+            underlying="BANKNIFTY",
+        )
+        assert cal is not None
+        for row in cal["rows"]:
+            if row.get("in_hi") is not None or row.get("in_lo") is not None:
+                assert row.get("in_side") == "below"
+                assert row.get("in_lo") is None
+            if row.get("full_hi") is not None or row.get("full_lo") is not None:
+                assert row.get("full_side") == "below"
+                assert row.get("full_lo") is None
+        assert cal["rows"][-1]["full_hi"] == 55400
+        assert cal["rows"][-1]["in_hi"] == 55615
