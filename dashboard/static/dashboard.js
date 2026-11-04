@@ -5013,8 +5013,21 @@ function _bandOpenText(side, lo, hi) {
   return '';
 }
 
+function _bandLossText(row) {
+  if (!row) return '\u2014';
+  const below = row.loss_below != null ? Number(row.loss_below) : null;
+  const above = row.loss_above != null ? Number(row.loss_above) : null;
+  if (below != null && above != null && !isNaN(below) && !isNaN(above)) {
+    return `below ${_fitIdx(below)} \u00b7 above ${_fitIdx(above)}`;
+  }
+  if (below != null && !isNaN(below)) return `below ${_fitIdx(below)}`;
+  if (above != null && !isNaN(above)) return `above ${_fitIdx(above)}`;
+  return '\u2014';
+}
+
 function _bandRangeText(row, kind) {
   if (!row) return '\u2014';
+  if (kind === 'loss') return _bandLossText(row);
   if (kind === 'full') {
     const open = _bandOpenText(row.full_side, row.full_lo, row.full_hi);
     if (open) return open;
@@ -5025,6 +5038,89 @@ function _bandRangeText(row, kind) {
   if (open) return open;
   if (row.in_lo == null || row.in_hi == null) return '\u2014';
   return _fitRange(Number(row.in_lo), Number(row.in_hi));
+}
+
+/** % move from spot to enter a zone. Returns { text, cls } or null. */
+function _bandReachFromSpot(spot, row, kind) {
+  if (spot == null || isNaN(spot) || spot <= 0 || !row) return null;
+  const pct = (target) => {
+    if (target == null || isNaN(target)) return null;
+    return ((Number(target) - spot) / spot) * 100;
+  };
+  const fmtReach = (p) => {
+    if (p == null || isNaN(p)) return null;
+    if (Math.abs(p) < 0.05) return { text: 'in', cls: 'band-reach-in' };
+    const arrow = p > 0 ? '\u2191' : '\u2193';
+    return { text: `${Math.abs(p).toFixed(1)}%${arrow}`, cls: p > 0 ? 'band-reach-up' : 'band-reach-dn' };
+  };
+  const nearest = (targets) => {
+    let best = null;
+    targets.forEach((t) => {
+      if (t == null || isNaN(t)) return;
+      const p = pct(t);
+      if (p == null) return;
+      if (best == null || Math.abs(p) < Math.abs(best)) best = p;
+    });
+    return fmtReach(best);
+  };
+
+  if (kind === 'loss') {
+    const below = row.loss_below != null ? Number(row.loss_below) : null;
+    const above = row.loss_above != null ? Number(row.loss_above) : null;
+    if (below != null && spot <= below) return { text: 'in', cls: 'band-reach-in' };
+    if (above != null && spot >= above) return { text: 'in', cls: 'band-reach-in' };
+    const targets = [];
+    if (below != null && spot > below) targets.push(below);
+    if (above != null && spot < above) targets.push(above);
+    return nearest(targets);
+  }
+
+  if (kind === 'full') {
+    if (row.full_side === 'above' && row.full_lo != null) {
+      if (spot >= Number(row.full_lo)) return { text: 'in', cls: 'band-reach-in' };
+      return fmtReach(pct(row.full_lo));
+    }
+    if (row.full_side === 'below' && row.full_hi != null) {
+      if (spot <= Number(row.full_hi)) return { text: 'in', cls: 'band-reach-in' };
+      return fmtReach(pct(row.full_hi));
+    }
+    const lo = row.full_lo != null ? Number(row.full_lo) : null;
+    const hi = row.full_hi != null ? Number(row.full_hi) : null;
+    if (lo != null && hi != null) {
+      if (spot >= lo && spot <= hi) return { text: 'in', cls: 'band-reach-in' };
+      if (spot < lo) return fmtReach(pct(lo));
+      return fmtReach(pct(hi));
+    }
+    return null;
+  }
+
+  // in profit
+  if (row.in_side === 'above' && row.in_lo != null) {
+    if (spot >= Number(row.in_lo)) return { text: 'in', cls: 'band-reach-in' };
+    return fmtReach(pct(row.in_lo));
+  }
+  if (row.in_side === 'below' && row.in_hi != null) {
+    if (spot <= Number(row.in_hi)) return { text: 'in', cls: 'band-reach-in' };
+    return fmtReach(pct(row.in_hi));
+  }
+  const lo = row.in_lo != null ? Number(row.in_lo) : null;
+  const hi = row.in_hi != null ? Number(row.in_hi) : null;
+  if (lo != null && hi != null) {
+    if (spot >= lo && spot <= hi) return { text: 'in', cls: 'band-reach-in' };
+    if (spot < lo) return fmtReach(pct(lo));
+    return fmtReach(pct(hi));
+  }
+  return null;
+}
+
+function _bandCellHtml(row, kind, spot) {
+  const label = _bandRangeText(row, kind);
+  if (!label || label === '\u2014') return '\u2014';
+  const reach = _bandReachFromSpot(spot, row, kind);
+  const reachHtml = reach
+    ? ` <span class="band-reach ${escapeHtml(reach.cls)}">${escapeHtml(reach.text)}</span>`
+    : '';
+  return `${escapeHtml(label)}${reachHtml}`;
 }
 
 function _bandStatus(row, spot) {
@@ -5057,7 +5153,7 @@ function _ensureBandCalendarModal() {
   modal.hidden = true;
   modal.innerHTML = `
     <div class="sg-modal-backdrop" data-band-close="1"></div>
-    <div class="sg-modal-panel" role="dialog" aria-modal="true" aria-labelledby="band-calendar-title">
+    <div class="sg-modal-panel band-cal-panel" role="dialog" aria-modal="true" aria-labelledby="band-calendar-title">
       <button type="button" class="sg-modal-close" data-band-close="1" aria-label="Close">\u00d7</button>
       <h3 id="band-calendar-title" style="margin:0 0 .5rem 0">Day ranges</h3>
       <div id="band-calendar-body"></div>
@@ -5077,8 +5173,12 @@ function _paintBandCalendar(payload, live) {
   const rows = (cal && cal.rows) || [];
   const today = _todayIso();
   const todayRow = rows.find(r => String(r.date).slice(0, 10) === today) || null;
+  const entry = payload.entry_spot != null ? Number(payload.entry_spot) : null;
+  let spot = payload.spot != null ? Number(payload.spot) : entry;
   let nowHtml = '';
   if (live && live.now) {
+    const liveSpot = parseFloat(String(live.now).replace(/[^\d.-]/g, ''));
+    if (!isNaN(liveSpot)) spot = liveSpot;
     nowHtml = `<div class="lo-nowline ${live.cls || ''}">
       <span class="lo-stop-k">Now</span>
       <strong>${escapeHtml(live.now)}</strong>
@@ -5087,8 +5187,6 @@ function _paintBandCalendar(payload, live) {
       <span class="muted">${escapeHtml(live.entry || '')}</span>
     </div>`;
   } else {
-    const entry = payload.entry_spot != null ? Number(payload.entry_spot) : null;
-    const spot = payload.spot != null ? Number(payload.spot) : entry;
     const chg = (spot != null && entry != null) ? spot - entry : null;
     const st = _bandStatus(todayRow, spot);
     const chgTxt = chg == null ? '' : `${chg > 0 ? '+' : ''}${fmt(chg)} vs entry`;
@@ -5106,18 +5204,20 @@ function _paintBandCalendar(payload, live) {
     const mark = iso === today ? ' class="is-today"' : '';
     return `<tr${mark}>
       <td>${escapeHtml(_fitDayLabel(iso) || iso)}</td>
-      <td>${escapeHtml(_bandRangeText(r, 'full'))}</td>
-      <td>${escapeHtml(_bandRangeText(r, 'in'))}</td>
+      <td>${_bandCellHtml(r, 'full', spot)}</td>
+      <td>${_bandCellHtml(r, 'in', spot)}</td>
+      <td>${_bandCellHtml(r, 'loss', spot)}</td>
     </tr>`;
   }).join('');
   return `
     <div class="band-cal-head">${nowHtml}</div>
     <p class="muted band-cal-note">${payload && payload.fresh
       ? 'Rebuilt just now from current volatility and the suggested prices. The expiry row stays fixed. Earlier rows move when volatility changes.'
-      : 'Saved when this suggestion was created. Each row uses that volatility and the suggested prices, so it stays put.'}</p>
+      : 'Saved when this suggestion was created. Each row uses that volatility and the suggested prices, so it stays put.'}
+br>% \u2191 / % \u2193 = how far the index must move from Now to enter that zone.</p>
     <table class="band-cal-table">
-      <thead><tr><th>Date</th><th>Full profit</th><th>In profit</th></tr></thead>
-      <tbody>${body || '<tr><td colspan="3">No rows</td></tr>'}</tbody>
+      <thead><tr><th>Date</th><th>Full profit</th><th>In profit</th><th>Full loss</th></tr></thead>
+      <tbody>${body || '<tr><td colspan="4">No rows</td></tr>'}</tbody>
     </table>`;
 }
 

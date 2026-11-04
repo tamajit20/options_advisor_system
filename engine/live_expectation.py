@@ -1315,6 +1315,7 @@ def today_mark_bands(
     empty = {
         "full_lo": None, "full_hi": None, "in_lo": None, "in_hi": None,
         "full_side": None, "in_side": None,
+        "loss_below": None, "loss_above": None,
     }
     rows = []
     for leg in legs or []:
@@ -1371,43 +1372,47 @@ def today_mark_bands(
 
     lo = lo_strike - pad
     hi = hi_strike + pad
-    # Grow the profitable side until the peak leaves the edge, or the mark
-    # crosses from profit into loss inside the window.
+    # Grow until peak and trough leave the edges, or profit/loss both appear.
     spots, pnls, step = _sweep(lo, hi)
-    for _ in range(6):
+    for _ in range(8):
         if not pnls:
             break
         peak_i = max(range(len(pnls)), key=lambda i: pnls[i])
+        trough_i = min(range(len(pnls)), key=lambda i: pnls[i])
         has_profit = any(p > 1.0 for p in pnls)
         has_loss = any(p <= 1.0 for p in pnls)
         peak_on_left = peak_i == 0
         peak_on_right = peak_i == len(pnls) - 1
-        if side == "below" and peak_on_left:
-            if has_profit and has_loss:
-                break
-            width = hi - lo
+        trough_on_left = trough_i == 0
+        trough_on_right = trough_i == len(pnls) - 1
+        grew = False
+        width = hi - lo
+        if side == "below" and peak_on_left and not (has_profit and has_loss):
             lo -= max(width, pad)
-            spots, pnls, step = _sweep(lo, hi)
-            continue
-        if side == "above" and peak_on_right:
-            if has_profit and has_loss:
-                break
-            width = hi - lo
+            grew = True
+        elif side == "above" and peak_on_right and not (has_profit and has_loss):
             hi += max(width, pad)
-            spots, pnls, step = _sweep(lo, hi)
-            continue
-        if peak_on_left or peak_on_right:
-            width = hi - lo
-            if peak_on_left:
+            grew = True
+        elif side == "above" and trough_on_left and pnls[trough_i] < -1:
+            lo -= max(width * 0.5, pad)
+            grew = True
+        elif side == "below" and trough_on_right and pnls[trough_i] < -1:
+            hi += max(width * 0.5, pad)
+            grew = True
+        elif peak_on_left or peak_on_right or trough_on_left or trough_on_right:
+            if peak_on_left or trough_on_left:
                 lo -= max(width * 0.5, pad)
-            if peak_on_right:
+                grew = True
+            if peak_on_right or trough_on_right:
                 hi += max(width * 0.5, pad)
-            spots, pnls, step = _sweep(lo, hi)
-            continue
-        break
+                grew = True
+        if not grew:
+            break
+        spots, pnls, step = _sweep(lo, hi)
     if not pnls:
         return empty
     peak = max(pnls)
+    trough = min(pnls)
 
     def _span(pred) -> tuple[Optional[float], Optional[float]]:
         best = None
@@ -1446,6 +1451,33 @@ def today_mark_bands(
         full_lo, full_hi = _span(lambda pnl: pnl >= peak * 0.97)
     in_lo, in_hi, in_side = _open_side(in_lo, in_hi)
     full_lo, full_hi, full_side = _open_side(full_lo, full_hi)
+
+    # Full loss: spot <= loss_below or spot >= loss_above (near the worst mark).
+    loss_below = loss_above = None
+    if trough < -1.0:
+        thresh = trough * 0.97
+        llo, lhi = _span(lambda pnl: pnl <= thresh)
+        edge_lo = edge_hi = None
+        if pnls[0] <= thresh:
+            i = 0
+            while i < len(pnls) and pnls[i] <= thresh:
+                i += 1
+            edge_lo = round(spots[i - 1])
+        if pnls[-1] <= thresh:
+            i = len(pnls) - 1
+            while i >= 0 and pnls[i] <= thresh:
+                i -= 1
+            edge_hi = round(spots[i + 1])
+        if side == "above":
+            loss_below = edge_lo if edge_lo is not None else lhi
+        elif side == "below":
+            loss_above = edge_hi if edge_hi is not None else llo
+        else:
+            loss_below, loss_above = edge_lo, edge_hi
+            if loss_below is None and loss_above is None and llo is not None and lhi is not None:
+                # Interior trough band — treat outer edges as the loss gates.
+                loss_below, loss_above = llo, lhi
+
     return {
         "full_lo": full_lo,
         "full_hi": full_hi,
@@ -1453,6 +1485,8 @@ def today_mark_bands(
         "in_hi": in_hi,
         "full_side": full_side,
         "in_side": in_side,
+        "loss_below": loss_below,
+        "loss_above": loss_above,
     }
 
 
@@ -1493,6 +1527,8 @@ def expiry_structural_bands(
     """Expiry ranges that match the trade page: sold strikes, then breakevens."""
     short_put = _leg_strike(legs, "SELL", "PE")
     short_call = _leg_strike(legs, "SELL", "CE")
+    long_put = _leg_strike(legs, "BUY", "PE")
+    long_call = _leg_strike(legs, "BUY", "CE")
     strat = (strategy or "").upper()
     row = {
         "full_lo": None,
@@ -1501,6 +1537,8 @@ def expiry_structural_bands(
         "in_hi": None,
         "full_side": None,
         "in_side": None,
+        "loss_below": None,
+        "loss_above": None,
         "expiry": True,
     }
     credit_range = (
@@ -1513,6 +1551,10 @@ def expiry_structural_bands(
         if lower_be is not None and upper_be is not None:
             row["in_lo"] = round(min(lower_be, upper_be))
             row["in_hi"] = round(max(lower_be, upper_be))
+        if long_put is not None:
+            row["loss_below"] = round(long_put)
+        if long_call is not None:
+            row["loss_above"] = round(long_call)
         return row
     if strat in ("BULL_PUT_SPREAD", "JADE_LIZARD") or (short_put is not None and short_call is None):
         if short_put is not None:
@@ -1521,6 +1563,8 @@ def expiry_structural_bands(
         if lower_be is not None:
             row["in_lo"] = round(lower_be)
             row["in_side"] = "above"
+        if long_put is not None:
+            row["loss_below"] = round(long_put)
         return row
     if strat == "BEAR_CALL_SPREAD" or (
         short_call is not None and short_put is None
@@ -1532,9 +1576,10 @@ def expiry_structural_bands(
         if upper_be is not None:
             row["in_hi"] = round(upper_be)
             row["in_side"] = "below"
+        if long_call is not None:
+            row["loss_above"] = round(long_call)
         return row
     if strat in ("BULL_CALL_SPREAD", "LONG_CALL"):
-        long_call = _leg_strike(legs, "BUY", "CE")
         full_level = short_call if short_call is not None else long_call
         if full_level is not None:
             row["full_lo"] = round(full_level)
@@ -1543,9 +1588,10 @@ def expiry_structural_bands(
         if be is not None:
             row["in_lo"] = round(be)
             row["in_side"] = "above"
+        if long_call is not None:
+            row["loss_below"] = round(long_call)
         return row
     if strat in ("BEAR_PUT_SPREAD", "LONG_PUT"):
-        long_put = _leg_strike(legs, "BUY", "PE")
         full_level = short_put if short_put is not None else long_put
         if full_level is not None:
             row["full_hi"] = round(full_level)
@@ -1554,6 +1600,8 @@ def expiry_structural_bands(
         if be is not None:
             row["in_hi"] = round(be)
             row["in_side"] = "below"
+        if long_put is not None:
+            row["loss_above"] = round(long_put)
         return row
     return row
 
@@ -1612,6 +1660,8 @@ def mark_band_calendar(
                 "in_hi": bands.get("in_hi"),
                 "full_side": bands.get("full_side"),
                 "in_side": bands.get("in_side"),
+                "loss_below": bands.get("loss_below"),
+                "loss_above": bands.get("loss_above"),
                 "expiry": False,
             }
         row["date"] = day.isoformat()

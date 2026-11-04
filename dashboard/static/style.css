@@ -1291,7 +1291,7 @@ input:focus, select:focus, textarea:focus {
 .pre-event-marquee-track {
   display: inline-block;
   white-space: nowrap;
-  animation: pre-event-marquee-rtl 32s linear infinite;
+  animation: pre-event-marquee-rtl 50s linear infinite;
   will-change: transform;
 }
 .pre-event-marquee-viewport:hover .pre-event-marquee-track {
@@ -2619,6 +2619,7 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 }
 .band-cal-head { margin: 0 0 8px; }
 .band-cal-note { margin: 0 0 10px; font-size: .75rem; }
+.sg-modal-panel.band-cal-panel { width: min(96vw, 920px); }
 .band-cal-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
 .band-cal-table th {
   text-align: left;
@@ -2631,8 +2632,19 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
   padding: 5px 8px;
   border-top: 1px solid rgba(148, 163, 184, .22);
   font-variant-numeric: tabular-nums;
+  vertical-align: top;
 }
 .band-cal-table tr.is-today td { background: rgba(14, 165, 233, .14); font-weight: 700; }
+.band-reach {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: .72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.band-reach-up { color: var(--ok, #22c55e); }
+.band-reach-dn { color: var(--err, #ef4444); }
+.band-reach-in { color: var(--muted, #94a3b8); font-weight: 600; }
 .lo-fit-range strong {
   font-size: .84rem;
   font-variant-numeric: tabular-nums;
