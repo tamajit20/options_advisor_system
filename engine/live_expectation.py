@@ -1316,6 +1316,7 @@ def today_mark_bands(
         "full_lo": None, "full_hi": None, "in_lo": None, "in_hi": None,
         "full_side": None, "in_side": None,
         "loss_below": None, "loss_above": None,
+        "in_loss_below": None, "in_loss_above": None,
     }
     rows = []
     for leg in legs or []:
@@ -1478,6 +1479,15 @@ def today_mark_bands(
                 # Interior trough band — treat outer edges as the loss gates.
                 loss_below, loss_above = llo, lhi
 
+    # In loss starts where in-profit ends (outside the BE / mark-zero gate).
+    in_loss_below = in_loss_above = None
+    if in_side == "above" and in_lo is not None:
+        in_loss_below = in_lo
+    elif in_side == "below" and in_hi is not None:
+        in_loss_above = in_hi
+    else:
+        in_loss_below, in_loss_above = in_lo, in_hi
+
     return {
         "full_lo": full_lo,
         "full_hi": full_hi,
@@ -1487,6 +1497,8 @@ def today_mark_bands(
         "in_side": in_side,
         "loss_below": loss_below,
         "loss_above": loss_above,
+        "in_loss_below": in_loss_below,
+        "in_loss_above": in_loss_above,
     }
 
 
@@ -1539,8 +1551,21 @@ def expiry_structural_bands(
         "in_side": None,
         "loss_below": None,
         "loss_above": None,
+        "in_loss_below": None,
+        "in_loss_above": None,
         "expiry": True,
     }
+
+    def _attach_in_loss(r: dict) -> dict:
+        if r.get("in_side") == "above" and r.get("in_lo") is not None:
+            r["in_loss_below"] = r["in_lo"]
+        elif r.get("in_side") == "below" and r.get("in_hi") is not None:
+            r["in_loss_above"] = r["in_hi"]
+        else:
+            r["in_loss_below"] = r.get("in_lo")
+            r["in_loss_above"] = r.get("in_hi")
+        return r
+
     credit_range = (
         short_put is not None and short_call is not None
         and strat not in ("BULL_CALL_SPREAD", "BEAR_PUT_SPREAD")
@@ -1555,7 +1580,7 @@ def expiry_structural_bands(
             row["loss_below"] = round(long_put)
         if long_call is not None:
             row["loss_above"] = round(long_call)
-        return row
+        return _attach_in_loss(row)
     if strat in ("BULL_PUT_SPREAD", "JADE_LIZARD") or (short_put is not None and short_call is None):
         if short_put is not None:
             row["full_lo"] = round(short_put)
@@ -1565,7 +1590,7 @@ def expiry_structural_bands(
             row["in_side"] = "above"
         if long_put is not None:
             row["loss_below"] = round(long_put)
-        return row
+        return _attach_in_loss(row)
     if strat == "BEAR_CALL_SPREAD" or (
         short_call is not None and short_put is None
         and strat not in ("BULL_CALL_SPREAD", "LONG_CALL")
@@ -1578,7 +1603,7 @@ def expiry_structural_bands(
             row["in_side"] = "below"
         if long_call is not None:
             row["loss_above"] = round(long_call)
-        return row
+        return _attach_in_loss(row)
     if strat in ("BULL_CALL_SPREAD", "LONG_CALL"):
         full_level = short_call if short_call is not None else long_call
         if full_level is not None:
@@ -1590,7 +1615,7 @@ def expiry_structural_bands(
             row["in_side"] = "above"
         if long_call is not None:
             row["loss_below"] = round(long_call)
-        return row
+        return _attach_in_loss(row)
     if strat in ("BEAR_PUT_SPREAD", "LONG_PUT"):
         full_level = short_put if short_put is not None else long_put
         if full_level is not None:
@@ -1602,7 +1627,7 @@ def expiry_structural_bands(
             row["in_side"] = "below"
         if long_put is not None:
             row["loss_above"] = round(long_put)
-        return row
+        return _attach_in_loss(row)
     return row
 
 
@@ -1662,6 +1687,8 @@ def mark_band_calendar(
                 "in_side": bands.get("in_side"),
                 "loss_below": bands.get("loss_below"),
                 "loss_above": bands.get("loss_above"),
+                "in_loss_below": bands.get("in_loss_below"),
+                "in_loss_above": bands.get("in_loss_above"),
                 "expiry": False,
             }
         row["date"] = day.isoformat()

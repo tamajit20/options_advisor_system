@@ -2619,7 +2619,7 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 }
 .band-cal-head { margin: 0 0 8px; }
 .band-cal-note { margin: 0 0 10px; font-size: .75rem; }
-.sg-modal-panel.band-cal-panel { width: min(96vw, 920px); }
+.sg-modal-panel.band-cal-panel { width: min(98vw, 1080px); }
 .band-cal-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
 .band-cal-table th {
   text-align: left;

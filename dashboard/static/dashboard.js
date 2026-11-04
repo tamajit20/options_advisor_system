@@ -5013,21 +5013,21 @@ function _bandOpenText(side, lo, hi) {
   return '';
 }
 
-function _bandLossText(row) {
-  if (!row) return '\u2014';
-  const below = row.loss_below != null ? Number(row.loss_below) : null;
-  const above = row.loss_above != null ? Number(row.loss_above) : null;
-  if (below != null && above != null && !isNaN(below) && !isNaN(above)) {
-    return `below ${_fitIdx(below)} \u00b7 above ${_fitIdx(above)}`;
+function _bandDualOpenText(below, above) {
+  const b = below != null ? Number(below) : null;
+  const a = above != null ? Number(above) : null;
+  if (b != null && a != null && !isNaN(b) && !isNaN(a)) {
+    return `below ${_fitIdx(b)} \u00b7 above ${_fitIdx(a)}`;
   }
-  if (below != null && !isNaN(below)) return `below ${_fitIdx(below)}`;
-  if (above != null && !isNaN(above)) return `above ${_fitIdx(above)}`;
+  if (b != null && !isNaN(b)) return `below ${_fitIdx(b)}`;
+  if (a != null && !isNaN(a)) return `above ${_fitIdx(a)}`;
   return '\u2014';
 }
 
 function _bandRangeText(row, kind) {
   if (!row) return '\u2014';
-  if (kind === 'loss') return _bandLossText(row);
+  if (kind === 'loss') return _bandDualOpenText(row.loss_below, row.loss_above);
+  if (kind === 'in_loss') return _bandDualOpenText(row.in_loss_below, row.in_loss_above);
   if (kind === 'full') {
     const open = _bandOpenText(row.full_side, row.full_lo, row.full_hi);
     if (open) return open;
@@ -5040,77 +5040,78 @@ function _bandRangeText(row, kind) {
   return _fitRange(Number(row.in_lo), Number(row.in_hi));
 }
 
-/** % move from spot to enter a zone. Returns { text, cls } or null. */
+/** % from Now to the zone: enter if outside, cushion to the edge if already inside. */
 function _bandReachFromSpot(spot, row, kind) {
   if (spot == null || isNaN(spot) || spot <= 0 || !row) return null;
-  const pct = (target) => {
-    if (target == null || isNaN(target)) return null;
+  const pctTo = (target) => {
+    if (target == null || isNaN(Number(target))) return null;
     return ((Number(target) - spot) / spot) * 100;
   };
   const fmtReach = (p) => {
     if (p == null || isNaN(p)) return null;
-    if (Math.abs(p) < 0.05) return { text: 'in', cls: 'band-reach-in' };
+    if (Math.abs(p) < 0.05) return { text: '0.0%', cls: 'band-reach-in' };
     const arrow = p > 0 ? '\u2191' : '\u2193';
     return { text: `${Math.abs(p).toFixed(1)}%${arrow}`, cls: p > 0 ? 'band-reach-up' : 'band-reach-dn' };
   };
   const nearest = (targets) => {
     let best = null;
-    targets.forEach((t) => {
-      if (t == null || isNaN(t)) return;
-      const p = pct(t);
+    (targets || []).forEach((t) => {
+      const p = pctTo(t);
       if (p == null) return;
       if (best == null || Math.abs(p) < Math.abs(best)) best = p;
     });
     return fmtReach(best);
   };
-
-  if (kind === 'loss') {
-    const below = row.loss_below != null ? Number(row.loss_below) : null;
-    const above = row.loss_above != null ? Number(row.loss_above) : null;
-    if (below != null && spot <= below) return { text: 'in', cls: 'band-reach-in' };
-    if (above != null && spot >= above) return { text: 'in', cls: 'band-reach-in' };
+  const dualGates = (below, above) => {
+    const b = below != null ? Number(below) : null;
+    const a = above != null ? Number(above) : null;
+    const inBelow = b != null && spot <= b;
+    const inAbove = a != null && spot >= a;
+    if (inBelow || inAbove) {
+      // Cushion back to the gate you crossed.
+      if (inBelow && inAbove) return nearest([b, a]);
+      if (inBelow) return fmtReach(pctTo(b));
+      return fmtReach(pctTo(a));
+    }
     const targets = [];
-    if (below != null && spot > below) targets.push(below);
-    if (above != null && spot < above) targets.push(above);
+    if (b != null && spot > b) targets.push(b);
+    if (a != null && spot < a) targets.push(a);
     return nearest(targets);
-  }
+  };
+  const openAbove = (lo) => {
+    if (lo == null) return null;
+    if (spot >= Number(lo)) return fmtReach(pctTo(lo)); // cushion back down to floor
+    return fmtReach(pctTo(lo)); // climb to enter
+  };
+  const openBelow = (hi) => {
+    if (hi == null) return null;
+    if (spot <= Number(hi)) return fmtReach(pctTo(hi)); // cushion back up to ceiling
+    return fmtReach(pctTo(hi)); // fall to enter
+  };
+  const closedRange = (lo, hi) => {
+    if (lo == null || hi == null) return null;
+    if (spot >= lo && spot <= hi) return nearest([lo, hi]); // cushion to nearer edge
+    if (spot < lo) return fmtReach(pctTo(lo));
+    return fmtReach(pctTo(hi));
+  };
 
+  if (kind === 'loss') return dualGates(row.loss_below, row.loss_above);
+  if (kind === 'in_loss') return dualGates(row.in_loss_below, row.in_loss_above);
   if (kind === 'full') {
-    if (row.full_side === 'above' && row.full_lo != null) {
-      if (spot >= Number(row.full_lo)) return { text: 'in', cls: 'band-reach-in' };
-      return fmtReach(pct(row.full_lo));
-    }
-    if (row.full_side === 'below' && row.full_hi != null) {
-      if (spot <= Number(row.full_hi)) return { text: 'in', cls: 'band-reach-in' };
-      return fmtReach(pct(row.full_hi));
-    }
-    const lo = row.full_lo != null ? Number(row.full_lo) : null;
-    const hi = row.full_hi != null ? Number(row.full_hi) : null;
-    if (lo != null && hi != null) {
-      if (spot >= lo && spot <= hi) return { text: 'in', cls: 'band-reach-in' };
-      if (spot < lo) return fmtReach(pct(lo));
-      return fmtReach(pct(hi));
-    }
-    return null;
+    if (row.full_side === 'above') return openAbove(row.full_lo);
+    if (row.full_side === 'below') return openBelow(row.full_hi);
+    return closedRange(
+      row.full_lo != null ? Number(row.full_lo) : null,
+      row.full_hi != null ? Number(row.full_hi) : null,
+    );
   }
-
   // in profit
-  if (row.in_side === 'above' && row.in_lo != null) {
-    if (spot >= Number(row.in_lo)) return { text: 'in', cls: 'band-reach-in' };
-    return fmtReach(pct(row.in_lo));
-  }
-  if (row.in_side === 'below' && row.in_hi != null) {
-    if (spot <= Number(row.in_hi)) return { text: 'in', cls: 'band-reach-in' };
-    return fmtReach(pct(row.in_hi));
-  }
-  const lo = row.in_lo != null ? Number(row.in_lo) : null;
-  const hi = row.in_hi != null ? Number(row.in_hi) : null;
-  if (lo != null && hi != null) {
-    if (spot >= lo && spot <= hi) return { text: 'in', cls: 'band-reach-in' };
-    if (spot < lo) return fmtReach(pct(lo));
-    return fmtReach(pct(hi));
-  }
-  return null;
+  if (row.in_side === 'above') return openAbove(row.in_lo);
+  if (row.in_side === 'below') return openBelow(row.in_hi);
+  return closedRange(
+    row.in_lo != null ? Number(row.in_lo) : null,
+    row.in_hi != null ? Number(row.in_hi) : null,
+  );
 }
 
 function _bandCellHtml(row, kind, spot) {
@@ -5168,9 +5169,22 @@ function _ensureBandCalendarModal() {
   return modal;
 }
 
+function _withInLossGates(row) {
+  if (!row) return row;
+  if (row.in_loss_below != null || row.in_loss_above != null) return row;
+  const r = Object.assign({}, row);
+  if (r.in_side === 'above' && r.in_lo != null) r.in_loss_below = r.in_lo;
+  else if (r.in_side === 'below' && r.in_hi != null) r.in_loss_above = r.in_hi;
+  else {
+    r.in_loss_below = r.in_lo != null ? r.in_lo : null;
+    r.in_loss_above = r.in_hi != null ? r.in_hi : null;
+  }
+  return r;
+}
+
 function _paintBandCalendar(payload, live) {
   const cal = payload && payload.calendar;
-  const rows = (cal && cal.rows) || [];
+  const rows = ((cal && cal.rows) || []).map(_withInLossGates);
   const today = _todayIso();
   const todayRow = rows.find(r => String(r.date).slice(0, 10) === today) || null;
   const entry = payload.entry_spot != null ? Number(payload.entry_spot) : null;
@@ -5206,18 +5220,20 @@ function _paintBandCalendar(payload, live) {
       <td>${escapeHtml(_fitDayLabel(iso) || iso)}</td>
       <td>${_bandCellHtml(r, 'full', spot)}</td>
       <td>${_bandCellHtml(r, 'in', spot)}</td>
+      <td>${_bandCellHtml(r, 'in_loss', spot)}</td>
       <td>${_bandCellHtml(r, 'loss', spot)}</td>
     </tr>`;
   }).join('');
+  const noteMain = payload && payload.fresh
+    ? 'Rebuilt just now from current volatility and the suggested prices. The expiry row stays fixed. Earlier rows move when volatility changes.'
+    : 'Saved when this suggestion was created. Each row uses that volatility and the suggested prices, so it stays put.';
   return `
     <div class="band-cal-head">${nowHtml}</div>
-    <p class="muted band-cal-note">${payload && payload.fresh
-      ? 'Rebuilt just now from current volatility and the suggested prices. The expiry row stays fixed. Earlier rows move when volatility changes.'
-      : 'Saved when this suggestion was created. Each row uses that volatility and the suggested prices, so it stays put.'}
-br>% \u2191 / % \u2193 = how far the index must move from Now to enter that zone.</p>
+    <p class="muted band-cal-note">${escapeHtml(noteMain)}</p>
+    <p class="muted band-cal-note">% \u2191 / % \u2193 = move from Now to that zone (or cushion back to its edge if you are already inside).</p>
     <table class="band-cal-table">
-      <thead><tr><th>Date</th><th>Full profit</th><th>In profit</th><th>Full loss</th></tr></thead>
-      <tbody>${body || '<tr><td colspan="4">No rows</td></tr>'}</tbody>
+      <thead><tr><th>Date</th><th>Full profit</th><th>In profit</th><th>In loss</th><th>Full loss</th></tr></thead>
+      <tbody>${body || '<tr><td colspan="5">No rows</td></tr>'}</tbody>
     </table>`;
 }
 

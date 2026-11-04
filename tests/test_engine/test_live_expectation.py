@@ -699,6 +699,10 @@ class TestTodayMarkBands:
         assert cal["rows"][-1]["in_hi"] == 55615
         assert cal["rows"][-1]["loss_above"] == 56200
         assert cal["rows"][-1].get("loss_below") in (None, )
+        assert cal["rows"][-1]["in_loss_above"] == 55615
+        assert cal["rows"][-1].get("in_loss_below") in (None, )
+        assert mid["in_loss_above"] == mid["in_hi"]
+        assert mid.get("in_loss_below") in (None, )
 
     def test_bull_call_uses_above_not_below(self):
         exp = date(2026, 11, 23)
@@ -738,3 +742,7 @@ class TestTodayMarkBands:
         assert cal["rows"][-1]["in_lo"] == 23862
         assert cal["rows"][-1]["loss_below"] == 23700
         assert cal["rows"][-1].get("loss_above") in (None, )
+        assert cal["rows"][-1]["in_loss_below"] == 23862
+        assert cal["rows"][-1].get("in_loss_above") in (None, )
+        assert mid["in_loss_below"] == mid["in_lo"]
+        assert mid.get("in_loss_above") in (None, )
