@@ -1631,7 +1631,13 @@ def _safe_pos_float(v: Any) -> bool:
         return False
 
 
-def _trade_live_outlook(db: SQLServerConnection, trade: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _trade_live_outlook(
+    db: SQLServerConnection,
+    trade: Dict[str, Any],
+    *,
+    include_scenarios: bool = True,
+    include_today_bands: bool = True,
+) -> Optional[Dict[str, Any]]:
     """Compute live outlook for an open trade (live tick or last EOD/intraday data)."""
     sug = trade.get("suggestion") or {}
     if not sug.get("strategy"):
@@ -1680,7 +1686,8 @@ def _trade_live_outlook(db: SQLServerConnection, trade: Dict[str, Any]) -> Optio
             current_mtm=current_mtm,
             leg_ltps=leg_ltps,
             conditions_json=sug.get("conditions_json"),
-            include_scenarios=True,
+            include_scenarios=include_scenarios,
+            include_today_bands=include_today_bands,
         )
     except Exception:
         logger.debug("trade live outlook failed for %s", trade.get("trade_id"), exc_info=True)
@@ -2668,13 +2675,55 @@ def create_app() -> Flask:
             else:
                 r_out["suggestion"] = None
                 r_out["entry_quality_score"] = None
-            r_out["live_outlook"] = _trade_live_outlook(db, r_out)
+            # List path skips mark-band grid + scenarios (seconds each). Client
+            # hydrates those via /api/trades/<id>/outlook after cards paint.
+            r_out["live_outlook"] = _trade_live_outlook(
+                db, r_out, include_scenarios=False, include_today_bands=False,
+            )
             _enrich_trade_execution_channel(db, r_out)
             if r_out.get("suggestion"):
                 r_out["suggestion"]["execution_channel"] = r_out["execution_channel"]
             out.append(r_out)
         out = _filter_trades_by_execution_channel(out, channel_f)
         return jsonify({"trades": out, "channel": channel_f or "all", "count": len(out)})
+
+    @app.route("/api/trades/<trade_id>/outlook")
+    @_with_db
+    def api_trade_outlook(db: SQLServerConnection, trade_id: str):
+        """Full live outlook for one open trade (today bands + scenarios)."""
+        trd = TradeRepo(db)
+        sug = SuggestionRepo(db)
+        r = trd.get(trade_id)
+        if r is None:
+            return jsonify({"error": "Not found"}), 404
+        r_out = _row(r)
+        r_out["legs"] = [_row(l) for l in trd.legs_with_suggestion_info(trade_id)]
+        if r.get("suggestion_id"):
+            sug_row = sug.get(r["suggestion_id"])
+            if sug_row:
+                sug_out = _row(sug_row)
+                if "net_credit_suggested" in sug_out:
+                    sug_out["net_credit"] = sug_out.pop("net_credit_suggested")
+                sug_out["legs"] = [_row(l) for l in sug.legs(r["suggestion_id"])]
+                r_out["suggestion"] = sug_out
+            else:
+                r_out["suggestion"] = None
+        else:
+            r_out["suggestion"] = None
+        snap = (_stored_mtm_payloads(db).get(str(trade_id)) or {})
+        live = (_read_live_mtm_state().get("trades") or {}).get(str(trade_id)) or {}
+        merged = _merge_live_over_stored_mtm(
+            {str(trade_id): snap} if snap else {},
+            {str(trade_id): live} if live else {},
+        ).get(str(trade_id)) or dict(snap)
+        r_out["last_mtm"] = merged.get("mtm")
+        r_out["last_mtm_at"] = merged.get("as_of")
+        outlook = _trade_live_outlook(
+            db, r_out, include_scenarios=True, include_today_bands=True,
+        )
+        if outlook is None:
+            return jsonify({"error": "Outlook unavailable"}), 404
+        return jsonify({"trade_id": trade_id, "live_outlook": outlook})
 
     @app.route("/api/trades/<trade_id>")
     @_with_db

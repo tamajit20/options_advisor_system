@@ -586,6 +586,7 @@ def compute_trade_outlook(
     leg_ltps: Optional[Mapping[str, Any]] = None,
     conditions_json: Any = None,
     include_scenarios: bool = True,
+    include_today_bands: bool = True,
     as_of: Optional[date] = None,
 ) -> dict:
     """Outlook for dashboard display — uses live tick or last stored market data."""
@@ -615,6 +616,7 @@ def compute_trade_outlook(
         data_source=market.get("data_source"),
         data_as_of=market.get("data_as_of"),
         leg_ltps=leg_ltps,
+        include_today_bands=include_today_bands,
     )
     em_warn = _em_calibration_for_trade(db, underlying, outlook_dte)
     enriched = enrich_trade_outlook(
@@ -1176,10 +1178,11 @@ def compute_scenarios(
     out: list[dict] = []
     for label, pct in (("Flat", 0.0), ("Spot −1%", -0.01), ("Spot +1%", 0.01)):
         scen_spot = round(spot_f * (1.0 + pct), 2)
+        # Scenarios only need PoP/EV — skip today's mark-band grid (very expensive).
         row = live_trade_outlook(
             legs=legs, strategy=strategy, underlying=underlying, expiry=expiry,
             spot=scen_spot, dte=dte, atm_iv=atm_iv, max_profit=max_profit, max_loss=max_loss,
-            leg_ltps=leg_ltps,
+            leg_ltps=leg_ltps, include_today_bands=False,
         )
         out.append({
             "label": label, "spot": scen_spot,
@@ -1720,6 +1723,7 @@ def live_trade_outlook(
     data_source: Optional[str] = None,
     data_as_of: Optional[str] = None,
     leg_ltps: Optional[Mapping[str, Any]] = None,
+    include_today_bands: bool = True,
 ) -> dict:
     """Live outlook dict (JSON-safe) for an open trade.
 
@@ -1846,11 +1850,18 @@ def live_trade_outlook(
         live_pop_hi=live_pop_hi,
     )
 
-    today_bands = today_mark_bands(
-        legs=pop_legs,
-        dte=dte_i,
-        atm_iv=iv,
-        strategy=strategy,
+    today_bands = (
+        today_mark_bands(
+            legs=pop_legs,
+            dte=dte_i,
+            atm_iv=iv,
+            strategy=strategy,
+        )
+        if include_today_bands
+        else {
+            "full_lo": None, "full_hi": None, "in_lo": None, "in_hi": None,
+            "full_side": None, "in_side": None,
+        }
     )
     result = {
         "live_pop": live_pop,

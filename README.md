@@ -612,6 +612,8 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 **Day Ranges** (Live outlook → All dates): Full profit, In profit, In loss, and Full loss per day, each with %↑/%↓ from Now (cushion to the edge when already inside). Trade popups rebuild on open (`fresh=1`); suggestion calendars stay as saved at generation.
 
+**My Trades load:** `/api/trades/open` returns a light outlook first (win chance / EV / expiry fit). Today mark bands and scenario chips hydrate after paint via `/api/trades/<id>/outlook`. Close forms load when a card is expanded, not for every trade up front.
+
 **Suggestion leg LTPs:** prefer WebSocket ticks already subscribed for today-PENDING suggestions (`data/suggestion_ltp_state.json`); REST `ltp` is a throttled fallback only when WS has no quote yet.
 
 Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), not raw “cheap IV”. When rank is low but **IV/HV > 1**, the title is “options still rich vs HV” so it does not contradict the expensive-vs-realised soft-fail.

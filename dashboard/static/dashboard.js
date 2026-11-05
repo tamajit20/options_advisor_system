@@ -9202,8 +9202,8 @@ function _loadTradeCloseForm(tradeId, netCreditActual) {
   openCloseForm(tradeId, netCreditActual);
 }
 
-function bindMobileCloseOnExpand(root) {
-  if (!_isMobileLayout()) return;
+function bindCloseFormOnExpand(root) {
+  // Close form hits option-chain APIs — load only when the card is opened.
   (root || document).querySelectorAll('.collapsible-card[data-trade-id]').forEach(card => {
     if (card.dataset.closeExpandBound === '1') return;
     card.dataset.closeExpandBound = '1';
@@ -9215,6 +9215,19 @@ function bindMobileCloseOnExpand(root) {
       _loadTradeCloseForm(tid, netCr);
     });
   });
+}
+
+async function _hydrateTradeOutlooks(tradeIds) {
+  const ids = (tradeIds || []).filter(Boolean);
+  if (!ids.length) return;
+  await Promise.all(ids.map(async (tid) => {
+    try {
+      const data = await API(`/api/trades/${encodeURIComponent(tid)}/outlook`);
+      const lo = data && data.live_outlook;
+      if (!lo) return;
+      _updateLiveOutlook(tid, lo);
+    } catch (_) { /* keep light outlook from /api/trades/open */ }
+  }));
 }
 
 // ---------------- Tab 2: My Trades ----------------
@@ -9260,13 +9273,6 @@ async function loadTrades() {
     $$('.btn-complete-trade').forEach(b => b.addEventListener('click', e => {
       openSupplementForm(e.target.dataset.tradeId);
     }));
-    data.trades.forEach(t => {
-      const legs = t.legs || [];
-      const hasExecutedLegs = legs.some(l => l.executed);
-      if (hasExecutedLegs && !_isMobileLayout()) {
-        openCloseForm(t.trade_id, parseFloat(t.net_credit_actual) || 0);
-      }
-    });
     $$('.btn-close-trade').forEach(b => b.addEventListener('click', e => {
       const id = e.currentTarget.dataset.tradeId;
       const card = e.currentTarget.closest('.card');
@@ -9295,7 +9301,7 @@ async function loadTrades() {
     }));
     bindGapReplayPanels();
     bindCollapsibleCardInteractions(c);
-    bindMobileCloseOnExpand(c);
+    bindCloseFormOnExpand(c);
     wireTermHelpToggle(c);
     _hydrateSuggestionZerodhaMargins(c);
     _focusPendingTradeCard();
@@ -9308,6 +9314,8 @@ async function loadTrades() {
         );
       }
     });
+    // Heavy mark-band / scenario work — fill At-today ranges after first paint.
+    _hydrateTradeOutlooks(data.trades.map(t => t.trade_id));
   } catch (e) {
     if (summaryEl) summaryEl.textContent = '';
     c.className=''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;

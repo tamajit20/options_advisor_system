@@ -544,6 +544,18 @@ class TestProfitZoneDetail:
 
 
 class TestEnrichTradeOutlook:
+    def test_skip_today_bands_still_returns_pop(self):
+        out = live_trade_outlook(
+            legs=_ic_legs(), strategy="IRON_CONDOR",
+            underlying="NIFTY", expiry=date(2026, 5, 28),
+            spot=23000.0, dte=10, atm_iv=0.18,
+            max_profit=4500.0, max_loss=15500.0, entry_pop=65.0,
+            include_today_bands=False,
+        )
+        assert out["live_pop"] is not None
+        assert out["today_full_lo"] is None
+        assert out["today_in_lo"] is None
+
     def test_be_distance_outside_upper(self):
         base = live_trade_outlook(
             legs=_ic_legs(), strategy="IRON_CONDOR",
