@@ -1107,6 +1107,8 @@ PROVIDERS_CONFIG = {
     "cache_ttl_seconds_chain": float(_env("OPT_PROVIDER_CACHE_TTL_CHAIN", "5")),
     # Hard cap on the cache to avoid runaway memory.
     "cache_max_entries": _env_int("OPT_PROVIDER_CACHE_MAX_ENTRIES", 10_000),
+    # Kite quote/ltp are GET with i= params; large BANKNIFTY chains 414 without chunking.
+    "kite_quote_chunk_size": _env_int("OPT_KITE_QUOTE_CHUNK_SIZE", 80),
 }
 
 

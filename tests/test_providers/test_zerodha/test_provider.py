@@ -264,6 +264,46 @@ def test_get_chain_caches(provider, facade_mock):
     assert facade_mock.quote.call_count == 1  # second call served from cache
 
 
+def test_get_chain_chunks_large_banknifty_style_lists(eod_mock, facade_mock):
+    """One URI with every BANKNIFTY strike returns HTTP 414 — chunk instead."""
+    rows = []
+    for i in range(12):
+        strike = 50000.0 + i * 100
+        for opt, tok in (("CE", i * 2 + 1), ("PE", i * 2 + 2)):
+            rows.append({
+                "instrument_token": tok, "exchange_token": tok,
+                "tradingsymbol": f"BANKNIFTY26NOV{int(strike)}{opt}",
+                "name": "BANKNIFTY",
+                "expiry": "2026-11-23", "strike": strike,
+                "tick_size": 0.05, "lot_size": 30,
+                "instrument_type": opt, "segment": "NFO-OPT", "exchange": "NFO",
+            })
+    im = InstrumentMaster(loader=lambda: rows)
+    im.refresh()
+
+    def _quote(keys):
+        return {
+            k: {"last_price": 10.0 + n, "oi": 1000 + n}
+            for n, k in enumerate(keys)
+        }
+
+    facade_mock.quote.side_effect = _quote
+    with patch.dict(
+        "providers.zerodha.provider.PROVIDERS_CONFIG",
+        {"kite_quote_chunk_size": 5},
+    ):
+        p = ZerodhaProvider(
+            eod_fallback=eod_mock,
+            facade=facade_mock,
+            instrument_master=im,
+            cache=TTLCache(default_ttl_seconds=5.0),
+        )
+        chain = p.get_chain("BANKNIFTY", _today_ist(), date(2026, 11, 23))
+    assert len(chain) == 24
+    assert facade_mock.quote.call_count == 5  # 24 keys / chunk 5
+    eod_mock.get_chain.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 #8 — NSE live failsafe path
 # ---------------------------------------------------------------------------

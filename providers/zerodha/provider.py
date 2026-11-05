@@ -53,6 +53,11 @@ logger = logging.getLogger(__name__)
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
+# Kite quote/ltp are GET with `i=` query params. A full BANKNIFTY monthly
+# chain (~400–600 symbols) overflows the URI (HTTP 414) when sent in one
+# call; NIFTY/FINNIFTY often fit. Chunk so every underlying can load.
+_DEFAULT_QUOTE_CHUNK = 80
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -435,6 +440,7 @@ class ZerodhaProvider:
         # Prefer quote() over ltp() because it includes open_interest (oi).
         # quote() is rate-limited to 1 req/sec; ltp() to 10 req/sec.
         # Fall back chain: quote() → ltp() (no OI) → EOD.
+        # Chunk keys: one giant BANKNIFTY monthly URL returns HTTP 414.
         kite_keys = [f"NFO:{i.tradingsymbol}" for i in options]
         cache_key = ("chain", symbol.upper(), expiry)
         cached, age = self._cache.get_with_age(cache_key)
@@ -442,30 +448,72 @@ class ZerodhaProvider:
             return self._build_chain_rows(options, cached, expiry, age)
 
         data: Optional[dict] = None
-        # Try quote() first — returns oi alongside last_price.
         try:
-            self._rl_quote.acquire()
-            data = self._wrap_call(
-                lambda: self._facade.quote(kite_keys), "quote(chain)"  # type: ignore[union-attr]
-            )
+            data = self._quote_or_ltp_chunked(kite_keys, prefer_quote=True)
         except (TokenExpiredError, ProviderError) as exc:
-            logger.warning("zerodha quote(chain) failed, trying ltp: %s", exc)
-
-        # If quote() failed or returned nothing, try ltp() (no OI).
-        if not isinstance(data, dict) or not data:
-            try:
-                self._rl_ltp.acquire()
-                data = self._wrap_call(
-                    lambda: self._facade.ltp(kite_keys), "ltp(chain)"  # type: ignore[union-attr]
-                )
-            except (TokenExpiredError, ProviderError) as exc:
-                logger.warning("zerodha get_chain falling back: %s", exc)
-                return self._live_then_eod(symbol, trade_date, expiry)
+            logger.warning("zerodha get_chain falling back: %s", exc)
+            return self._live_then_eod(symbol, trade_date, expiry)
 
         if not isinstance(data, dict) or not data:
             return self._live_then_eod(symbol, trade_date, expiry)
         self._cache.set(cache_key, data)
         return self._build_chain_rows(options, data, expiry, 0.0)
+
+    def _quote_chunk_size(self) -> int:
+        raw = PROVIDERS_CONFIG.get("kite_quote_chunk_size", _DEFAULT_QUOTE_CHUNK)
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            n = _DEFAULT_QUOTE_CHUNK
+        return max(1, min(n, 500))
+
+    def _quote_or_ltp_chunked(
+        self,
+        kite_keys: List[str],
+        *,
+        prefer_quote: bool,
+    ) -> Dict[str, Any]:
+        """Fetch quotes/ltps in URI-safe chunks and merge.
+
+        Kite's quote and ltp endpoints are GET with repeated ``i=`` params.
+        Full index option chains (especially BANKNIFTY) exceed typical URI
+        limits and return HTML ``414 Request-URI Too Large`` — previously
+        treated as a total failure, so the engine reported an empty chain.
+        """
+        if not kite_keys:
+            return {}
+        chunk_size = self._quote_chunk_size()
+        merged: Dict[str, Any] = {}
+
+        def _pull(method: str, keys: List[str]) -> Dict[str, Any]:
+            out: Dict[str, Any] = {}
+            facade = self._facade
+            assert facade is not None
+            for i in range(0, len(keys), chunk_size):
+                chunk = keys[i : i + chunk_size]
+                if method == "quote":
+                    self._rl_quote.acquire()
+                    part = self._wrap_call(
+                        lambda c=chunk: facade.quote(c), "quote(chain)"
+                    )
+                else:
+                    self._rl_ltp.acquire()
+                    part = self._wrap_call(
+                        lambda c=chunk: facade.ltp(c), "ltp(chain)"
+                    )
+                if isinstance(part, dict) and part:
+                    out.update(part)
+            return out
+
+        if prefer_quote:
+            try:
+                merged = _pull("quote", kite_keys)
+            except (TokenExpiredError, ProviderError) as exc:
+                logger.warning("zerodha quote(chain) failed, trying ltp: %s", exc)
+                merged = {}
+        if not merged:
+            merged = _pull("ltp", kite_keys)
+        return merged
 
     def _build_chain_rows(
         self,
