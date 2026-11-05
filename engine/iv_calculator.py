@@ -32,6 +32,38 @@ def _bs_price(spot: float, strike: float, t: float, r: float, vol: float, opt_ty
     return strike * math.exp(-r * t) * norm.cdf(-d2) - spot * norm.cdf(-d1)
 
 
+def _bs_prices(
+    spots: "object",
+    strike: float,
+    t: float,
+    r: float,
+    vol: float,
+    opt_type: str,
+):
+    """Vector Black-Scholes prices for many spots (numpy array in, array out)."""
+    import numpy as np
+
+    s = np.asarray(spots, dtype=float)
+    out = np.empty_like(s, dtype=float)
+    if t <= 0 or vol <= 0 or strike <= 0:
+        if opt_type == "CE":
+            return np.maximum(s - strike, 0.0)
+        return np.maximum(strike - s, 0.0)
+    ok = s > 0
+    out[~ok] = 0.0
+    if not np.any(ok):
+        return out
+    s_ok = s[ok]
+    sqrt_t = math.sqrt(t)
+    d1 = (np.log(s_ok / strike) + (r + 0.5 * vol * vol) * t) / (vol * sqrt_t)
+    d2 = d1 - vol * sqrt_t
+    if opt_type == "CE":
+        out[ok] = s_ok * norm.cdf(d1) - strike * math.exp(-r * t) * norm.cdf(d2)
+    else:
+        out[ok] = strike * math.exp(-r * t) * norm.cdf(-d2) - s_ok * norm.cdf(-d1)
+    return out
+
+
 def implied_vol(
     market_price: float,
     spot: float,

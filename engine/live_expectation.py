@@ -1312,8 +1312,10 @@ def today_mark_bands(
     """
     import math
 
+    import numpy as np
+
     from config import STRATEGY_CONFIG
-    from engine.iv_calculator import _bs_price
+    from engine.iv_calculator import _bs_prices
 
     empty = {
         "full_lo": None, "full_hi": None, "in_lo": None, "in_hi": None,
@@ -1353,32 +1355,42 @@ def today_mark_bands(
     # index pad. 3σ of the time left is enough to find the mark zero-crossing.
     em = mid * (iv or 0.0) * math.sqrt(t) if t > 0 else 0.0
     pad = max(wing * 2.0, 3.0 * em)
+    # Hard cap so one-sided structures cannot explode the grid (BANKNIFTY
+    # bear/bull spreads used to grow the window for tens of thousands of BS calls).
+    max_half_width = max(pad * 2.0, mid * 0.12, wing * 6.0)
     side = _one_sided_profit_side(strategy, rows)
-
-    def _pnl_at(spot: float) -> float:
-        pnl = 0.0
-        for strike, opt, action, qty, fill in rows:
-            mark = _bs_price(spot, strike, t, r, iv or 0.0, opt)
-            pnl += (fill - mark) * qty if action == "SELL" else (mark - fill) * qty
-        return pnl
+    vol = iv or 0.0
 
     def _sweep(lo: float, hi: float) -> tuple[list[float], list[float], float]:
-        width = hi - lo
-        step = 10.0 if width <= 4000 else (25.0 if width <= 10000 else 50.0)
-        spots: list[float] = []
-        pnls: list[float] = []
-        spot = lo
-        while spot <= hi + 0.1:
-            spots.append(spot)
-            pnls.append(_pnl_at(spot))
-            spot += step
-        return spots, pnls, step
+        width = max(hi - lo, 1.0)
+        # Expiry-day (intrinsic) needs a tighter grid so BE edges stay sharp.
+        # With time left, band edges only need tens-of-points resolution.
+        if dte_i <= 0:
+            step = 10.0
+        elif width <= 4000:
+            step = 25.0
+        elif width <= 12000:
+            step = 50.0
+        else:
+            step = 100.0
+        spots_arr = np.arange(lo, hi + step * 0.5, step, dtype=float)
+        if spots_arr.size == 0:
+            return [], [], step
+        pnls_arr = np.zeros(spots_arr.shape, dtype=float)
+        for strike, opt, action, qty, fill in rows:
+            marks = _bs_prices(spots_arr, strike, t, r, vol, opt)
+            if action == "SELL":
+                pnls_arr += (fill - marks) * qty
+            else:
+                pnls_arr += (marks - fill) * qty
+        return spots_arr.tolist(), pnls_arr.tolist(), step
 
     lo = lo_strike - pad
     hi = hi_strike + pad
-    # Grow until peak and trough leave the edges, or profit/loss both appear.
+    # Grow until the loss/profit transition is inside the window. For one-sided
+    # strategies the peak lives at ±∞ on the open side — never expand that way.
     spots, pnls, step = _sweep(lo, hi)
-    for _ in range(8):
+    for _ in range(4):
         if not pnls:
             break
         peak_i = max(range(len(pnls)), key=lambda i: pnls[i])
@@ -1389,28 +1401,33 @@ def today_mark_bands(
         peak_on_right = peak_i == len(pnls) - 1
         trough_on_left = trough_i == 0
         trough_on_right = trough_i == len(pnls) - 1
-        grew = False
+        prev_lo, prev_hi = lo, hi
         width = hi - lo
-        if side == "below" and peak_on_left and not (has_profit and has_loss):
-            lo -= max(width, pad)
-            grew = True
-        elif side == "above" and peak_on_right and not (has_profit and has_loss):
-            hi += max(width, pad)
-            grew = True
-        elif side == "above" and trough_on_left and pnls[trough_i] < -1:
-            lo -= max(width * 0.5, pad)
-            grew = True
-        elif side == "below" and trough_on_right and pnls[trough_i] < -1:
-            hi += max(width * 0.5, pad)
-            grew = True
-        elif peak_on_left or peak_on_right or trough_on_left or trough_on_right:
-            if peak_on_left or trough_on_left:
-                lo -= max(width * 0.5, pad)
-                grew = True
-            if peak_on_right or trough_on_right:
-                hi += max(width * 0.5, pad)
-                grew = True
-        if not grew:
+        grow = max(width * 0.5, pad)
+        if side == "below":
+            # Peak belongs on the left (low spots). Expand right to capture loss.
+            if (not has_loss) or (trough_on_right and pnls[trough_i] < -1):
+                hi += grow
+            elif not has_profit:
+                lo -= grow
+        elif side == "above":
+            # Peak belongs on the right (high spots). Expand left to capture loss.
+            if (not has_loss) or (trough_on_left and pnls[trough_i] < -1):
+                lo -= grow
+            elif not has_profit:
+                hi += grow
+        else:
+            need_left = peak_on_left or trough_on_left
+            need_right = peak_on_right or trough_on_right
+            if has_profit and has_loss and not need_left and not need_right:
+                break
+            if need_left:
+                lo -= grow
+            if need_right:
+                hi += grow
+        lo = max(lo, mid - max_half_width)
+        hi = min(hi, mid + max_half_width)
+        if lo == prev_lo and hi == prev_hi:
             break
         spots, pnls, step = _sweep(lo, hi)
     if not pnls:

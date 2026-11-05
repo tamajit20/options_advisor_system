@@ -65,6 +65,7 @@ from engine.strategy_selector import (
     assemble_suggestion,
     enforce_directional_tape_and_wall,
     select_strategy,
+    _select_strategy_matrix,
 )
 from exceptions import StrategyVeto
 from lifecycle.chain_aggregator import load_trajectory
@@ -76,6 +77,35 @@ logger = logging.getLogger(__name__)
 # NSE market hours (IST)
 _NSE_OPEN  = time(9, 15)
 _NSE_CLOSE = time(15, 30)
+
+
+def _confidence_hard_blocked(confidence) -> bool:
+    """True only when a HARD gate returned FAIL (SOFT/ADVISORY never hide a card)."""
+    return any(
+        getattr(c, "status", None) == "FAIL"
+        for c in (getattr(confidence, "checks", None) or [])
+    )
+
+
+def _is_directional_sitout_veto(msg: str) -> bool:
+    """Tape / nearby OI-wall sit-outs — shown as warnings, not hidden sit-outs."""
+    text = (msg or "").lower()
+    return (
+        "today's tape" in text
+        or "not flipping direction" in text
+        or "blocked: spot" in text
+        or "oi wall" in text
+        or "call resistance" in text
+        or "put support" in text
+    )
+
+
+def _merge_strategy_warning(sug: Suggestion, note: str) -> None:
+    note = (note or "").strip()
+    if not note:
+        return
+    prior = (sug.strategy_veto_reason or "").strip()
+    sug.strategy_veto_reason = f"{prior}; {note}" if prior else note
 
 
 def expiry_dte_sit_out_reason(
@@ -231,11 +261,14 @@ def _append_ic_ib_companions(
         return
     for companion_strategy in ("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"):
         try:
-            # Same tape / OI-wall sit-out as a primary directional pick.
-            # Companions skip select_strategy, so this is the only check.
+            # Tape / OI-wall → warning on the card (same as primary), not a skip.
             indicators = assemble_kw.get("indicators")
+            tape_note = None
             if indicators is not None:
-                enforce_directional_tape_and_wall(companion_strategy, indicators)
+                try:
+                    enforce_directional_tape_and_wall(companion_strategy, indicators)
+                except StrategyVeto as veto:
+                    tape_note = str(veto)
             comp_id = sug_repo.next_suggestion_id(id_date)
             # Bug 8: size + max-loss cap via the same path as primaries — do not
             # copy primary lots into assemble_suggestion (skips risk budget).
@@ -251,7 +284,10 @@ def _append_ic_ib_companions(
                 suggestion_id=comp_id,
                 assemble_kw=companion_kw,
                 strategy_override=companion_strategy,
+                defer_entry_vetoes=bool(tape_note),
             )
+            if tape_note:
+                _merge_strategy_warning(comp, tape_note)
             comp.pricing_provenance = provenance
             suggestions.append(comp)
             existing_names.append(comp.trade_name)
@@ -679,54 +715,11 @@ def _retire_pending_not_placeable(
     entry_day: date,
     indicators: MarketIndicators,
 ) -> int:
-    """Ignore today's PENDING cards that the current tape or OI wall would refuse.
+    """Tape / OI-wall checks are advisory warnings on the card — do not auto-ignore.
 
-    Neutral structures (condor, butterfly, calendar, straddle) pass the check
-    and stay. Age alone does not retire a card.
+    Kept as a hook so callers and tests stay stable. Returns 0 always.
     """
-    rows = db.fetch_all(
-        """SELECT suggestion_id, strategy, trade_name
-           FROM options_suggestions
-           WHERE status = 'PENDING'
-             AND underlying = ?
-             AND expiry_type = ?
-             AND entry_date = ?""",
-        [underlying, expiry_type, entry_day],
-    )
-    if not rows:
-        return 0
-    notif_repo = NotificationRepo(db)
-    n = 0
-    for row in rows:
-        strategy = str(row.get("strategy") or "")
-        try:
-            enforce_directional_tape_and_wall(strategy, indicators)
-        except StrategyVeto as veto:
-            reason = f"No longer placeable: {veto}"
-            sid = row["suggestion_id"]
-            cur = db.execute(
-                """UPDATE options_suggestions
-                   SET status = 'IGNORED', no_suggestion_reason = ?
-                   WHERE suggestion_id = ? AND status = 'PENDING'""",
-                [reason, sid],
-            )
-            cur.close()
-            logger.info(
-                "Retired %s %s %s — %s", sid, underlying, strategy, reason,
-            )
-            try:
-                notif_repo.insert(Notification(
-                    created_at=now_ist(),
-                    notif_type="SUGGESTION_STALE",
-                    severity="WARNING",
-                    title=f"{row.get('trade_name') or sid} no longer placeable",
-                    body=reason,
-                    related_suggestion_id=sid,
-                ))
-            except Exception:
-                logger.exception("notify retire failed for %s", sid)
-            n += 1
-    return n
+    return 0
 
 
 def _evaluate_underlying(
@@ -1038,6 +1031,8 @@ def _evaluate_underlying(
         _catalyst_end = min(entry_day + timedelta(days=_lv_lookahead), expiry)
         _has_lv_catalyst = event_repo.has_high_impact(entry_day, _catalyst_end)
 
+        picked: Optional[str] = None
+        entry_warnings: list[str] = []
         if iv_rank is not None:
             try:
                 picked = select_strategy(
@@ -1047,13 +1042,33 @@ def _evaluate_underlying(
                     has_long_vol_catalyst=_has_lv_catalyst,
                 )
             except StrategyVeto as veto:
-                no_suggestions.append(NoSuggestion(
-                    generated_on=now_ist(),
-                    underlying=symbol,
-                    confidence=confidence,
-                    reason=f"[{expiry_type} {expiry}] Strategy veto: {veto}",
-                ))
-                continue
+                msg = str(veto)
+                if _is_directional_sitout_veto(msg):
+                    # Matrix still has a pick — show it with the tape/wall as a warning.
+                    try:
+                        picked = _select_strategy_matrix(
+                            iv_rank=iv_rank,
+                            trend=indicators.trend,
+                            indicators=indicators,
+                            has_long_vol_catalyst=_has_lv_catalyst,
+                        )
+                        entry_warnings.append(msg)
+                    except StrategyVeto as veto2:
+                        no_suggestions.append(NoSuggestion(
+                            generated_on=now_ist(),
+                            underlying=symbol,
+                            confidence=confidence,
+                            reason=f"[{expiry_type} {expiry}] Strategy veto: {veto2}",
+                        ))
+                        continue
+                else:
+                    no_suggestions.append(NoSuggestion(
+                        generated_on=now_ist(),
+                        underlying=symbol,
+                        confidence=confidence,
+                        reason=f"[{expiry_type} {expiry}] Strategy veto: {veto}",
+                    ))
+                    continue
             if picked == "CALENDAR_SPREAD":
                 calendar_legs = _resolve_calendar_legs(
                     fo, symbol, trade_date, entry_day,
@@ -1144,7 +1159,9 @@ def _evaluate_underlying(
                     if use_iv_rank is not None:
                         iv_rank = use_iv_rank
 
-        if not use_confidence.all_passed:
+        # Soft / advisory confidence misses (DTE, news, PCR, FII, …) still get a
+        # card — only a HARD FAIL (ATM liquidity) hides the suggestion entirely.
+        if not use_confidence.all_passed and _confidence_hard_blocked(use_confidence):
             no_suggestions.append(NoSuggestion(
                 generated_on=now_ist(),
                 underlying=symbol,
@@ -1152,6 +1169,18 @@ def _evaluate_underlying(
                 reason=f"[{expiry_type} {use_expiry}] Confidence "
                        f"{use_confidence.score}/{use_confidence.total}: "
                        + "; ".join(use_confidence.failed_reasons),
+            ))
+            continue
+
+        if picked is None:
+            no_suggestions.append(NoSuggestion(
+                generated_on=now_ist(),
+                underlying=symbol,
+                confidence=use_confidence,
+                reason=(
+                    f"[{expiry_type} {use_expiry}] Strategy veto: IV rank unavailable "
+                    f"— cannot select a strategy"
+                ),
             ))
             continue
 
@@ -1187,7 +1216,11 @@ def _evaluate_underlying(
             primary_suggestion = _assemble_sized_suggestion(
                 suggestion_id=suggestion_id,
                 assemble_kw=_assemble_kw,
+                strategy_override=picked,
+                defer_entry_vetoes=bool(entry_warnings) or (not use_confidence.all_passed),
             )
+            for note in entry_warnings:
+                _merge_strategy_warning(primary_suggestion, note)
             primary_suggestion.pricing_provenance = provenance
             suggestions.append(primary_suggestion)
             existing_names.append(primary_suggestion.trade_name)

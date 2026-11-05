@@ -629,18 +629,22 @@ class TestIcIbCompanions:
             assert c.kwargs.get("assemble_kw", {}).get("companion_mode") is True
             assert "lots" not in c.kwargs.get("assemble_kw", {})
 
-    def test_skips_companion_when_today_tape_disagrees(self, mocker):
+    def test_keeps_companion_with_warning_when_today_tape_disagrees(self, mocker):
         from dataclasses import replace
 
         from tests.test_engine.test_strategy_selector import _ind
 
         mocker.patch("lifecycle.suggestion_engine._attach_em_calibration_warning")
+        comps = [
+            MagicMock(trade_name="N-BPS", strategy_veto_reason=None),
+            MagicMock(trade_name="N-BCS", strategy_veto_reason=None),
+        ]
         sized = mocker.patch(
             "lifecycle.suggestion_engine._assemble_sized_suggestion",
-            return_value=MagicMock(trade_name="N-BPS"),
+            side_effect=comps,
         )
         repo = MagicMock()
-        repo.next_suggestion_id.return_value = "SUG-C1"
+        repo.next_suggestion_id.side_effect = ["SUG-C1", "SUG-C2"]
         indicators = replace(
             _ind(),
             trend_today="BULLISH",
@@ -665,8 +669,12 @@ class TestIcIbCompanions:
             db=MagicMock(),
         )
         overrides = [c.kwargs.get("strategy_override") for c in sized.call_args_list]
-        assert overrides == ["BULL_PUT_SPREAD"]
-        assert [s.trade_name for s in out] == ["N-BPS"]
+        assert overrides == ["BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"]
+        assert [s.trade_name for s in out] == ["N-BPS", "N-BCS"]
+        # Bullish tape fights the bear-call companion — warning, still shown.
+        assert comps[1].strategy_veto_reason
+        assert "today's tape" in comps[1].strategy_veto_reason.lower()
+        assert sized.call_args_list[1].kwargs.get("defer_entry_vetoes") is True
 
 
 class TestRetirePendingNotPlaceable:
@@ -709,13 +717,9 @@ class TestRetirePendingNotPlaceable:
             entry_day=date(2026, 10, 30),
             indicators=self._indicators("BULLISH"),
         )
-        assert n == 1
-        ignored = [
-            c.args[1][1]
-            for c in mock_db.execute.call_args_list
-            if "IGNORED" in c.args[0]
-        ]
-        assert ignored == ["SUG-BEAR"]
+        # Tape / OI-wall is advisory — pending cards stay visible with a warning.
+        assert n == 0
+        mock_db.execute.assert_not_called()
 
     def test_leaves_card_when_tape_still_agrees(self, mock_db, mocker):
         mocker.patch("lifecycle.suggestion_engine.NotificationRepo")

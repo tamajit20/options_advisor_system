@@ -421,7 +421,7 @@ Runtime kill-switches: `options_runtime_flags`.
 
 **Index lot sizes (Jan 2026+ NSE revision):** `options_lot_sizes` wins over `STRATEGY_CONFIG.default_lot_sizes` — NIFTY **65**, BANKNIFTY **30**, FINNIFTY **60**. After a revision, re-stamp legs / recalc closed P&L with `scripts/migrate_nse_lot_sizes.py` (close path uses stamped `lot_size`, not live Zerodha qty).
 
-Trend knobs (high traffic): `trend_sma_*`, `trend_adx_min`, `trend_return_*`, `trend_session_*`. Opposing SMA vs tape -> `MIXED` sit-out; chop SMA is **not** lifted to BEARISH by a 5-10 day dump alone. Live directional picks also need **today's** open-vs-spot to match (`directional_require_today_tape`); a nearby put wall blocks a bearish pick and a nearby call wall blocks a bullish pick (`oi_wall_block_em_fraction` × 1-day EM). No direction flip.
+Trend knobs (high traffic): `trend_sma_*`, `trend_adx_min`, `trend_return_*`, `trend_session_*`. Opposing SMA vs tape -> `MIXED` sit-out; chop SMA is **not** lifted to BEARISH by a 5-10 day dump alone. Live directional picks still prefer **today's** open-vs-spot (`directional_require_today_tape`) and nearby OI walls (`oi_wall_block_em_fraction` × 1-day EM), but a mismatch is an **advisory warning on the card** — the suggestion is still shown (no direction flip). Soft confidence misses (DTE, news/events, PCR, FII, …) also keep the card; only a **HARD** ATM-liquidity fail hides it.
 
 ---
 
@@ -512,7 +512,7 @@ options_advisor_system/
   spot + chain + history
         -> build_indicators  (trend: BULLISH|BEARISH|SIDEWAYS|MIXED)
         -> confidence.evaluate
-              fail -> NoSuggestion
+              HARD fail -> NoSuggestion; soft/advisory misses still show the card
               MIXED -> NoSuggestion (sit-out; not Iron Condor)
               pass  -> select_strategy + legs + charges
                          StrategyVeto -> NoSuggestion
@@ -525,9 +525,9 @@ sequenceDiagram
   participant Eng as engine
   participant DB as OptionsAdvisorDB
   Life->>Eng: build_indicators + evaluate
-  alt fail or MIXED or veto
+  alt HARD fail or MIXED or hard veto
     Life->>DB: NoSuggestion
-  else OK
+  else OK (soft/tape warnings allowed)
     Life->>Eng: select_strategy + assemble
     Life->>DB: options_suggestions
   end
@@ -544,7 +544,7 @@ sequenceDiagram
 | Live directional, today's tape disagrees | Sit out (no flip)        |
 | Live directional, spot within 1× 1-day EM of the fighting OI wall (put vs bearish, call vs bullish) | Sit out |
 
-**Pending recheck:** each suggestion run re-applies that tape and OI-wall sit-out to PENDING cards for the same underlying and expiry type. A card that would no longer be placed is marked IGNORED (with a stale notification). Neutral structures stay. Iron-condor and iron-butterfly wing companions are not saved when the same check refuses them. Age alone does not ignore a card. PENDING cards whose entry date is already past are ignored as well.
+**Pending recheck:** tape / OI-wall mismatches no longer auto-ignore PENDING cards (they stay as warnings). Iron-condor / iron-butterfly wing companions are still saved with the same advisory note when the tape fights them. Age alone does not ignore a card. PENDING cards whose entry date is already past are ignored as well.
 
 **Sideways:** one strategy via `select_strategy` (same as directional) — no range+breakout pair cards.
 
@@ -610,7 +610,7 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 **Amount needed Final/Peak:** suggestion **Amount needed** is Zerodha **Final** (margin once every leg is on) for every strategy once a session quotes. Peak / Avail, and an insufficient-funds note when cash cannot cover Peak, sit on the line underneath. That line is only on the suggestion page, where the trade is not yet placed. After a hedge buy fills, the short is held for up to 20s (`OPT_ZERODHA_HEDGE_MARGIN_WAIT_SEC`) until Kite live sell-margin includes that long; if it never does, the filled buy is flattened instead of sending a short Zerodha still prices as naked. Engine estimate only until Kite responds. On an open trade, in History → Trades, in the trade header, and on **Close in Zerodha**, that same Final is labeled **Amount used** (already held) with no Peak, available cash, or insufficient-funds line. Wherever Net and Gross P&L are shown, **Amount used** is that Final in rupees, with net profit or loss as a percent in brackets. Quotes once per suggestion+lots per browser session (tab reloads reuse cache); **Place orders in Zerodha** always fetches a live preview. Requires valid session (`zerodha_execution.enabled` + login) — place-orders toggle not required.
 
-**Day Ranges** (Live outlook → All dates): Full profit, In profit, In loss, and Full loss per day, each with %↑/%↓ from Now (cushion to the edge when already inside). Trade popups rebuild on open (`fresh=1`); suggestion calendars stay as saved at generation.
+**Day Ranges** (Live outlook → All dates): Full profit, In profit, In loss, and Full loss per day, each with %↑/%↓ from Now (cushion to the edge when already inside). Trade popups rebuild on open (`fresh=1`); suggestion calendars stay as saved at generation. Mark-band sweeps are vectorized and capped so one-sided Bank Nifty structures cannot explode the grid (that had made suggestion runs and the Day Ranges popup very slow).
 
 **My Trades load:** `/api/trades/open` returns a light outlook first (win chance / EV / expiry fit). Today mark bands and scenario chips hydrate after paint via `/api/trades/<id>/outlook`. Close forms load when a card is expanded, not for every trade up front.
 
