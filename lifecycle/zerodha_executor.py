@@ -1411,6 +1411,7 @@ class ExecutionPreview:
     margin_final_required: Optional[float] = None
     margin_peak_required: Optional[float] = None
     margin_buffer_pct: Optional[float] = None
+    margin_shortfall: Optional[float] = None
     margin_path_steps: Optional[List[dict]] = None
     # When Kite is already flat, Close syncs exit fills instead of placing EXIT.
     sync_from_kite: bool = False
@@ -1434,6 +1435,7 @@ class ExecutionPreview:
             "margin_final_required": self.margin_final_required,
             "margin_peak_required": self.margin_peak_required,
             "margin_buffer_pct": self.margin_buffer_pct,
+            "margin_shortfall": self.margin_shortfall,
             "margin_path_steps": self.margin_path_steps or [],
             "sync_from_kite": self.sync_from_kite,
             "message": self.message,
@@ -1800,6 +1802,9 @@ def preview_suggestion_execution(
         margin_final_required=margin.final_required if margin else None,
         margin_peak_required=margin.peak_required if margin else None,
         margin_buffer_pct=margin.buffer_pct if margin else None,
+        margin_shortfall=(
+            margin.shortfall if margin and getattr(margin, "shortfall", None) else None
+        ),
         margin_path_steps=list(margin.path_steps) if margin else None,
     )
 

@@ -101,12 +101,14 @@ def test_margin_blocks_when_available_below_required():
     facade = MagicMock()
     facade.basket_order_margins.return_value = {"final": {"total": 20000.0}}
     facade.margins.return_value = {
-        "equity": {"available": {"live_balance": 5000.0}},
+        "equity": {"net": 5000.0, "available": {"live_balance": 5000.0}},
     }
     out = check_margin_for_orders(facade, [{"variety": "regular"}])
     assert not out.ok
     assert out.required == 20000.0
     assert out.available == 5000.0
+    assert out.shortfall > 0
+    assert "Add ₹" in out.message or "Add" in out.message
     assert "Insufficient funds" in out.message
 
 
@@ -162,7 +164,9 @@ def test_margin_preview_uses_hedged_final_not_naked_initial():
     assert out.ok
     assert out.peak_required == 41550.89
     assert out.final_required == 41550.89
-    assert out.available == 44738.17
+    # Gate uses equity net (Kite "Margin available"), not cash alone.
+    assert out.available == 278704.60
+    assert out.shortfall == 0.0
 
 
 def test_hedged_sell_waits_until_margin_picture_includes_the_long():
@@ -231,8 +235,11 @@ def test_margin_blocks_when_cash_cannot_pay_option_premium():
     out = check_margin_for_orders(facade, [{"variety": "regular"}])
     assert not out.ok
     assert out.peak_required == 40000.0
-    assert out.available == 5000.0
-    assert "option premium" in out.message
+    # available is equity net (SPAN gate); cash shortfall is in the message.
+    assert out.available == 300000.0
+    assert out.shortfall > 0
+    assert "Option premium" in out.message
+    assert "Add ₹" in out.message
 
 
 def test_margin_gates_on_path_peak_not_final():

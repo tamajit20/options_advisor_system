@@ -25,6 +25,7 @@ class MarginCheckResult:
     final_required: float = 0.0
     peak_required: float = 0.0
     buffer_pct: float = 0.0
+    shortfall: float = 0.0  # max(0, need − available) including buffer
     path_steps: List[dict] = field(default_factory=list)
 
 
@@ -561,10 +562,12 @@ def check_margin_for_orders(
 
     For multi-leg orders we call Kite basket margins on each prefix of the
     planned sequence (same order as placement). Peak and Final use the
-    basket ``final`` total (margin once the hedge is counted). Available
-    cash must cover peak × (1 + buffer). Option premium, when Zerodha
-    reports it, must also fit in cash. A sell that follows a filled buy is
-    held separately until the live order-margin check sees that hedge.
+    basket ``final`` total (margin once the hedge is counted). Equity
+    **net** (Kite “Margin available”) must cover peak × (1 + buffer).
+    Option premium, when Zerodha reports it, must also fit in cash.
+    Shortfall is returned so the UI can show Add ₹X. A sell that follows
+    a filled buy is held separately until the live order-margin check
+    sees that hedge.
     """
     if not order_params:
         return MarginCheckResult(ok=True)
@@ -625,8 +628,11 @@ def check_margin_for_orders(
                 f"({exc})"
             ),
         )
-    available = _available_cash(margins)
-    cash = available
+    # SPAN / order gate uses equity net — same figure Kite shows as
+    # "Margin available" on insufficient-funds rejects. Cash alone is for
+    # option premium (checked separately below).
+    available = _available_order_margin(margins)
+    cash = _available_cash(margins)
     if available is None:
         return MarginCheckResult(
             ok=False,
@@ -638,21 +644,26 @@ def check_margin_for_orders(
         )
     buffer_pct = float(ZERODHA_EXECUTION_CONFIG.get("margin_buffer_pct", 5)) / 100.0
     need = peak_required * (1.0 + buffer_pct)
+    shortfall = 0.0
     shortfalls: List[str] = []
     if available < need:
+        shortfall = need - available
         shortfalls.append(
-            f"need ~₹{need:,.0f} at peak "
-            f"(peak ₹{peak_required:,.0f} + {buffer_pct * 100:.0f}% buffer; "
-            f"final structure ₹{final_required:,.0f}), "
-            f"available margin ₹{available:,.0f}"
+            f"Margin required: ₹{need:,.2f} "
+            f"(peak ₹{peak_required:,.2f} + {buffer_pct * 100:.0f}% buffer; "
+            f"final structure ₹{final_required:,.2f}). "
+            f"Margin available: ₹{available:,.2f}. "
+            f"Add ₹{shortfall:,.2f} to place this order."
         )
     if cash_required is not None and cash is not None:
         cash_need = cash_required * (1.0 + buffer_pct)
         if cash < cash_need:
+            cash_short = cash_need - cash
+            shortfall = max(shortfall, cash_short)
             shortfalls.append(
-                f"option premium needs ~₹{cash_need:,.0f} cash "
-                f"(₹{cash_required:,.0f} + {buffer_pct * 100:.0f}% buffer), "
-                f"cash ₹{cash:,.0f}"
+                f"Option premium needs ₹{cash_need:,.2f} cash "
+                f"(₹{cash_required:,.2f} + {buffer_pct * 100:.0f}% buffer); "
+                f"cash ₹{cash:,.2f}. Add ₹{cash_short:,.2f}."
             )
     if shortfalls:
         return MarginCheckResult(
@@ -662,8 +673,9 @@ def check_margin_for_orders(
             final_required=final_required,
             available=available,
             buffer_pct=buffer_pct * 100.0,
+            shortfall=round(shortfall, 2),
             path_steps=path_steps,
-            message="Insufficient funds in Zerodha: " + "; ".join(shortfalls),
+            message="Insufficient funds. " + " ".join(shortfalls),
         )
     return MarginCheckResult(
         ok=True,
@@ -672,6 +684,7 @@ def check_margin_for_orders(
         final_required=final_required,
         available=available,
         buffer_pct=buffer_pct * 100.0,
+        shortfall=0.0,
         path_steps=path_steps,
         message=(
             f"Peak during place ₹{peak_required:,.0f}; "

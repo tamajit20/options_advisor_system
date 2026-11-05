@@ -864,6 +864,8 @@ function _applyZerodhaMarginToCard(card, preview) {
   if (amountRs != null) _setSuggestionAmountNeeded(card, amountRs);
   if (info.peak != null) card.dataset.marginPeak = String(info.peak);
   if (preview.margin_available != null) card.dataset.marginAvail = String(preview.margin_available);
+  if (preview.margin_shortfall != null) card.dataset.marginShortfall = String(preview.margin_shortfall);
+  else delete card.dataset.marginShortfall;
   card.dataset.marginOk = info.blocked ? '0' : (preview.margin_ok === true ? '1' : '');
   card.dataset.marginMessage = preview.margin_message
     ? String(preview.margin_message)
@@ -1095,6 +1097,10 @@ function _renderZerodhaFundsBlock(preview) {
   const finalTxt = fin != null ? `\u20b9${fmt(fin)}` : '\u2014';
   const have = preview.margin_available != null ? `\u20b9${fmt(preview.margin_available)}` : '\u2014';
   const blocked = preview.margin_ok === false;
+  const shortfall = preview.margin_shortfall != null ? Number(preview.margin_shortfall) : null;
+  const shortfallHtml = (blocked && shortfall != null && shortfall > 0)
+    ? `<div style="margin-top:6px;font-weight:700">Add \u20b9${fmt(shortfall)} more in Zerodha to place this order.</div>`
+    : '';
   const note = preview.margin_message
     || (blocked
       ? 'Not enough funds in Zerodha for the peak margin during place'
@@ -1108,6 +1114,7 @@ function _renderZerodhaFundsBlock(preview) {
         <span class="term-help" tabindex="0" aria-label="Margin path calculation">\u24d8<span class="term-help-popup">${helpHtml}</span></span>
         \u00b7 <strong>Available</strong> ${have}
       </div>
+      ${shortfallHtml}
       <div class="muted" style="font-size:.82rem;margin-top:4px">${escapeHtml(note)}</div>
     </div>`;
 }
@@ -1125,9 +1132,15 @@ function showZerodhaConfirmModal(preview, { title, submitLabel, onConfirm }) {
   }
   const submit = document.getElementById('zerodha-confirm-submit');
   submit.hidden = false;
-  const fundsBlocked = preview && preview.operation !== 'EXIT' && preview.margin_ok === false;
+  const fundsBlocked = preview && preview.margin_ok === false;
+  const shortfall = preview && preview.margin_shortfall != null
+    ? Number(preview.margin_shortfall) : null;
   submit.disabled = !!fundsBlocked;
-  submit.textContent = fundsBlocked ? 'Insufficient funds' : (submitLabel || 'Place orders');
+  submit.textContent = fundsBlocked
+    ? (shortfall != null && shortfall > 0
+      ? `Add \u20b9${fmt(shortfall)} more`
+      : 'Insufficient funds')
+    : (submitLabel || 'Place orders');
   if (fundsBlocked) {
     submit.onclick = null;
     modal.hidden = false;
@@ -7006,12 +7019,15 @@ function collectPrePlaceZerodhaItems(s, card) {
       if (peak) bits.push(`Peak \u20b9${fmt(parseFloat(peak))}`);
       if (fin) bits.push(`Final \u20b9${fmt(parseFloat(fin))}`);
       if (avail) bits.push(`Available \u20b9${fmt(parseFloat(avail))}`);
+      const shortRaw = card.dataset.marginShortfall;
+      const shortN = shortRaw != null && shortRaw !== '' ? parseFloat(shortRaw) : NaN;
+      if (!isNaN(shortN) && shortN > 0) bits.push(`Add \u20b9${fmt(shortN)}`);
       items.push({
         section: 'blocks',
         severity: 'block',
         label: 'Insufficient Zerodha funds',
         detail: (bits.length ? bits.join(' \u00b7 ') + ' \u2014 ' : '')
-          + (marginMsg || 'Available cash does not cover peak margin + buffer'),
+          + (marginMsg || 'Available margin does not cover peak + buffer'),
       });
     } else if (hydrated === '1' && (peak || fin || avail)) {
       const bits = [];
