@@ -475,14 +475,26 @@ class TestLiveTradeOutlook:
 
     def test_resolve_market_inputs_prefers_eod_when_no_live(self):
         db = MagicMock()
+        # Call order: ATM-IV snapshot (IV only), then EOD spot (header source).
         db.fetch_one.side_effect = [
-            None,
+            {"snapshot_at": None, "spot": 25030.0, "atm_iv": 0.12, "dte": 2},
             {"close_price": 22950.0, "trade_date": date(2026, 5, 27)},
-            None,
         ]
         out = resolve_market_inputs(db, "NIFTY", date(2026, 5, 28))
         assert out["spot"] == 22950.0
         assert out["data_source"] == "eod"
+
+    def test_resolve_market_inputs_ignores_atm_iv_spot_when_eod_exists(self):
+        """ATM-IV 5m spot must not override EOD — that desynced Outlook Now vs header."""
+        db = MagicMock()
+        db.fetch_one.side_effect = [
+            {"snapshot_at": None, "spot": 25030.35, "atm_iv": 0.15, "dte": 3},
+            {"close_price": 24537.0, "trade_date": date(2026, 11, 6)},
+        ]
+        out = resolve_market_inputs(db, "NIFTY", date(2026, 11, 9))
+        assert out["spot"] == 24537.0
+        assert out["data_source"] == "eod"
+        assert out["atm_iv"] == pytest.approx(0.15)
 
 
 class TestProfitZoneDetail:

@@ -2809,12 +2809,43 @@ async function refreshIndexSpotStrip() {
   }
 }
 
+function _syncOutlookNowFromIndexStrip(items) {
+  /** Keep Live Outlook "Now" on the same index print as the header strip. */
+  const bySym = {};
+  (items || []).forEach(it => {
+    const sym = String(it.symbol || '').toUpperCase();
+    const px = it.price != null ? Number(it.price) : NaN;
+    if (sym && Number.isFinite(px) && px > 0) bySym[sym] = px;
+  });
+  document.querySelectorAll('.live-outlook[data-underlying]').forEach(el => {
+    const und = String(el.dataset.underlying || '').toUpperCase();
+    const px = bySym[und];
+    if (px == null) return;
+    const nowEl = el.querySelector('.lo-today-now');
+    if (nowEl) nowEl.textContent = `\u20b9${fmt(px)}`;
+    const entryEl = el.querySelector('.lo-today-entry');
+    const chgEl = el.querySelector('.lo-today-chg');
+    if (entryEl && chgEl) {
+      const entry = parseFloat(String(entryEl.textContent || '').replace(/[^\d.-]/g, ''));
+      if (Number.isFinite(entry) && entry > 0) {
+        const chg = px - entry;
+        const sign = chg > 0 ? '+' : '';
+        chgEl.textContent = `${sign}${fmt(chg)} vs entry`;
+        chgEl.classList.remove('pnl-profit', 'pnl-loss');
+        if (chg > 0) chgEl.classList.add('pnl-profit');
+        else if (chg < 0) chgEl.classList.add('pnl-loss');
+      }
+    }
+  });
+}
+
 function _renderIndexSpotStrip(host, data) {
     const items = data.indices || [];
     if (!items.length) {
       host.innerHTML = '';
       return;
     }
+    _syncOutlookNowFromIndexStrip(items);
     host.innerHTML = items.map(item => {
       const src = (item.source || '').toLowerCase();
       const cls = src === 'live' ? 'idx-chip-live'
@@ -4924,8 +4955,9 @@ function _renderFitBoard(t) {
 }
 
 function renderLiveOutlook(t) {
+  const und = ((t.suggestion && t.suggestion.underlying) || t.underlying || '').toUpperCase();
   return `
-    <div class="live-outlook" data-trade-id="${escapeHtml(t.trade_id)}">
+    <div class="live-outlook" data-trade-id="${escapeHtml(t.trade_id)}" data-underlying="${escapeHtml(und)}">
       <div class="lo-head">
         <div class="sl-monitor-label">${labelWithHelp('Live outlook', 'live_outlook')}</div>
         <button type="button" class="lo-help-btn" aria-label="What do these numbers mean?">?</button>
