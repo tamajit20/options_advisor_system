@@ -498,6 +498,36 @@ def assess_direction_fit(
     }
 
 
+def live_tick_from_mtm(
+    mtm_row: Optional[Mapping[str, Any]],
+) -> tuple[Optional[float], Optional[float]]:
+    """Return ``(live_spot, live_iv)`` only for a real session tick in MTM state.
+
+    Off-session / seeded rows often store ATM-IV snapshot spot with
+    ``data_source`` of ``eod`` or ``intraday``. Those must not be passed as
+    ``live_spot`` into :func:`resolve_market_inputs` or Outlook ``Now`` drifts
+    from the header index strip.
+    """
+    if not mtm_row:
+        return None, None
+    if str(mtm_row.get("data_source") or "").lower() != "live":
+        return None, None
+    spot = iv = None
+    if mtm_row.get("spot") is not None:
+        try:
+            spot_f = float(mtm_row["spot"])
+            if spot_f > 0:
+                spot = spot_f
+        except (TypeError, ValueError):
+            spot = None
+    if mtm_row.get("atm_iv") is not None:
+        try:
+            iv = float(mtm_row["atm_iv"])
+        except (TypeError, ValueError):
+            iv = None
+    return spot, iv
+
+
 def resolve_market_inputs(
     db,
     symbol: str,
