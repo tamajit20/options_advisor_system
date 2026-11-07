@@ -199,7 +199,13 @@ def test_multi_leg_entry_order_and_side(mock_db, mocker):
     facade.margins.return_value = {
         "equity": {"available": {"live_balance": 100000.0}, "net": 100000.0},
     }
-    facade.positions.return_value = {"net": []}
+    # After the BUY hedge fills, Kite must show that long or the SELL wait
+    # times out and flattens the buy (production hedge-margin gate).
+    facade.positions.side_effect = lambda: (
+        {"net": [{"tradingsymbol": inst_buy.tradingsymbol, "quantity": 50}]}
+        if kite.place_order.call_count >= 1
+        else {"net": []}
+    )
 
     mocker.patch("lifecycle.zerodha_executor._build_client", return_value=(facade, master))
     mocker.patch("lifecycle.zerodha_executor._refresh_leg_ltp", side_effect=lambda _f, _m, leg: 100.0)
