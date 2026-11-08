@@ -506,33 +506,39 @@ def resolve_market_inputs(
     live_spot: Optional[float] = None,
     live_iv: Optional[float] = None,
 ) -> dict:
-    """Best available spot/IV for outlook — aligned with the header index strip.
-
-    Spot priority matches ``/api/indices/spot``:
-      1. live index tick (when the caller passes ``live_spot``)
-      2. EOD close from ``options_spot_eod``
-      3. ATM-IV 5‑min snapshot spot only if EOD is missing
-
-    ATM-IV rows still supply IV; their stored spot is not preferred over EOD
-    (that mismatch made Live Outlook ``Now`` disagree with the header Nifty).
-    """
+    """Best available spot/IV: live tick, last intraday sample, or EOD close."""
     from database.models import AtmIvTimeseriesRepo, SpotEodRepo
 
     sym = str(symbol or "").upper()
-    iv_repo = AtmIvTimeseriesRepo(db)
-    snap = iv_repo.latest_snapshot(sym, expiry)
-    snap_iv = normalize_atm_iv((snap or {}).get("atm_iv")) if snap else None
-
     if live_spot is not None and live_spot > 0:
-        iv = normalize_atm_iv(live_iv) or snap_iv or normalize_atm_iv(
-            iv_repo.latest_atm_iv(sym, expiry)
-        )
+        iv = normalize_atm_iv(live_iv)
+        if iv is None:
+            iv = normalize_atm_iv(
+                AtmIvTimeseriesRepo(db).latest_atm_iv(sym, expiry)
+            )
         return {
             "spot": float(live_spot),
             "atm_iv": iv,
             "data_source": "live",
             "data_as_of": None,
         }
+
+    snap = AtmIvTimeseriesRepo(db).latest_snapshot(sym, expiry)
+    if snap and snap.get("spot") is not None:
+        try:
+            spot = float(snap["spot"])
+        except (TypeError, ValueError):
+            spot = 0.0
+        if spot > 0:
+            iv = normalize_atm_iv(snap.get("atm_iv"))
+            as_of = snap.get("snapshot_at")
+            return {
+                "spot": spot,
+                "atm_iv": iv,
+                "data_source": "intraday",
+                "data_as_of": as_of.isoformat(timespec="seconds")
+                if hasattr(as_of, "isoformat") else str(as_of) if as_of else None,
+            }
 
     eod = SpotEodRepo(db).latest(sym)
     if eod and eod.get("close_price") is not None:
@@ -541,7 +547,9 @@ def resolve_market_inputs(
         except (TypeError, ValueError):
             spot = 0.0
         if spot > 0:
-            iv = snap_iv or normalize_atm_iv(iv_repo.latest_atm_iv(sym, expiry))
+            iv = normalize_atm_iv(
+                AtmIvTimeseriesRepo(db).latest_atm_iv(sym, expiry)
+            )
             td = eod.get("trade_date")
             return {
                 "spot": spot,
@@ -550,26 +558,11 @@ def resolve_market_inputs(
                 "data_as_of": td.isoformat() if hasattr(td, "isoformat") else str(td),
             }
 
-    if snap and snap.get("spot") is not None:
-        try:
-            spot = float(snap["spot"])
-        except (TypeError, ValueError):
-            spot = 0.0
-        if spot > 0:
-            as_of = snap.get("snapshot_at")
-            return {
-                "spot": spot,
-                "atm_iv": snap_iv or normalize_atm_iv(
-                    iv_repo.latest_atm_iv(sym, expiry)
-                ),
-                "data_source": "intraday",
-                "data_as_of": as_of.isoformat(timespec="seconds")
-                if hasattr(as_of, "isoformat") else str(as_of) if as_of else None,
-            }
-
     return {
         "spot": None,
-        "atm_iv": snap_iv or normalize_atm_iv(iv_repo.latest_atm_iv(sym, expiry)),
+        "atm_iv": normalize_atm_iv(
+            AtmIvTimeseriesRepo(db).latest_atm_iv(sym, expiry)
+        ),
         "data_source": "none",
         "data_as_of": None,
     }

@@ -1730,9 +1730,6 @@ class LiveRiskMonitor:
     def _effective_market(
         self, state: _TradeState, now: datetime,
     ) -> tuple[Optional[float], Optional[float], Optional[str], Optional[str]]:
-        # Same idea as the header index strip: live ticks only while the
-        # session is open and fresh; otherwise EOD/fallback — never a stale
-        # last tick that can disagree with header Nifty off-hours.
         live_fresh = (
             state.last_spot is not None
             and state.last_spot_at is not None
@@ -1748,9 +1745,7 @@ class LiveRiskMonitor:
                 state.market_data_source or "eod",
                 state.market_as_of,
             )
-        if self._in_session(now):
-            return state.last_spot, state.atm_iv, state.market_data_source, state.market_as_of
-        return None, state.fallback_iv or state.atm_iv, state.market_data_source, state.market_as_of
+        return state.last_spot, state.atm_iv, state.market_data_source, state.market_as_of
 
     def _seed_outlook_on_reload(self) -> None:
         """Publish outlook from EOD/intraday data when live ticks are unavailable.
