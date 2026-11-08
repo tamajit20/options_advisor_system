@@ -1554,11 +1554,11 @@ function _updateLiveProfitLevels(tradeId, payload) {
     if (peakRs != null && !isNaN(peakRs)) {
       section.dataset.mtmPeak = String(peakRs);
     }
+    // Milestone math may keep the monitor's est_charges_rs on the section.
+    // Do not copy it onto .live-mtm — Net must stay on the fill-based charge
+    // shared with the trade header.
     if (payload.est_charges_rs != null && !isNaN(parseFloat(payload.est_charges_rs))) {
       section.dataset.estCharges = String(payload.est_charges_rs);
-      section.querySelectorAll('.live-mtm[data-charges-rs]').forEach(el => {
-        el.dataset.chargesRs = String(payload.est_charges_rs);
-      });
     }
     if (lineEl && (profitMilestoneEnabled() || profitFixed)) {
       const premRs = parseFloat(section.dataset.premiumRs);
@@ -1877,6 +1877,25 @@ function _renderClosePnlBlock(pnl, tradeId) {
     </div>`;
 }
 
+function _canonicalChargesRs(tradeId) {
+  /** One round-trip charge for every Net on this trade (header, levels, close).
+   *  Taken from the card chip rendered off actual fills — not the monitor's
+   *  slightly different est_charges_rs, which was making Net disagree. */
+  const header = document.querySelector(
+    `.tag-current-pnl.live-mtm[data-trade-id="${CSS.escape(tradeId)}"]`,
+  );
+  const raw = header && header.dataset.chargesRs != null && header.dataset.chargesRs !== ''
+    ? header.dataset.chargesRs
+    : null;
+  const n = raw != null ? parseFloat(raw) : NaN;
+  if (Number.isFinite(n) && n >= 0) return n;
+  const any = document.querySelector(
+    `.live-mtm[data-trade-id="${CSS.escape(tradeId)}"]`,
+  );
+  const n2 = any ? parseFloat(any.dataset.chargesRs) : NaN;
+  return (Number.isFinite(n2) && n2 >= 0) ? n2 : null;
+}
+
 function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
   // Never blank the header when a tick/outlook event omits MTM (common off-market).
   let displayMtm = mtm;
@@ -1904,8 +1923,9 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
     const grossEl = el.querySelector('.cpnl-gross-val');
     const hasNetGross = !!(netEl || grossEl);
     if (hasNetGross) {
-      const charges = parseFloat(el.dataset.chargesRs);
-      const net = (!isNaN(charges) && charges >= 0) ? displayMtm - charges : null;
+      const charges = _canonicalChargesRs(tradeId);
+      if (charges != null) el.dataset.chargesRs = String(charges);
+      const net = (charges != null) ? displayMtm - charges : null;
       const colorSrc = net != null ? net : displayMtm;
       const netPctEl = el.querySelector('.cpnl-net-pct');
       const grossPctEl = el.querySelector('.cpnl-gross-pct');
@@ -2137,15 +2157,26 @@ function _applyLegLtpsToClosePanel(tradeId, legLtps) {
     });
     const fillPreview = closePanel.querySelector('.fill-pnl-preview');
     if (fillPreview && fOk) {
-      const charges = estChargesOneSide([...fEntry, ...fExit]);
-      const net = fGross - charges;
+      const anyTyped = fillRows.some(row => (row.querySelector('.close-price')?.value || '').trim());
+      let charges;
+      let gross = fGross;
+      if (!anyTyped) {
+        const liveGross = _lastMtmByTrade[tradeId] && _lastMtmByTrade[tradeId].mtm;
+        const canon = _canonicalChargesRs(tradeId);
+        if (liveGross != null && !isNaN(liveGross) && canon != null) {
+          gross = liveGross;
+          charges = canon;
+        }
+      }
+      if (charges == null) charges = estChargesOneSide([...fEntry, ...fExit]);
+      const net = gross - charges;
       const prem = _premiumFromDataset(fillPreview);
-      _setPnlLine(fillPreview.querySelector('.fill-pnl-gross'), fillPreview.querySelector('.fill-pnl-gross-pct'), fGross, prem);
+      _setPnlLine(fillPreview.querySelector('.fill-pnl-gross'), fillPreview.querySelector('.fill-pnl-gross-pct'), gross, prem);
       const c = fillPreview.querySelector('.fill-pnl-charges');
       if (c) c.textContent = `\u20b9${fmt(charges)}`;
       _setPnlLine(fillPreview.querySelector('.fill-pnl-value'), fillPreview.querySelector('.fill-pnl-pct'), net, prem);
       fillPreview.dataset.fillNet = String(net);
-      fillPreview.dataset.fillGross = String(fGross);
+      fillPreview.dataset.fillGross = String(gross);
       _paintFillAmountUsed(fillPreview, net);
     }
   }
@@ -5661,8 +5692,12 @@ function _updateLiveOutlook(tradeId, payload) {
     if (popNote) {
       let note = payload.summary || popNote.textContent;
       const holdEv = payload.live_ev_net != null ? payload.live_ev_net : payload.live_ev;
-      if (payload.close_now_ev != null && holdEv != null) {
-        note += ` · Gross ${_fmtSignedRs(payload.close_now_ev)} vs hold ${_fmtSignedRs(holdEv)}`;
+      const cachedGross = _lastMtmByTrade[tradeId] && _lastMtmByTrade[tradeId].mtm;
+      const closeGross = (cachedGross != null && !isNaN(cachedGross))
+        ? cachedGross
+        : (payload.mtm != null ? parseFloat(payload.mtm) : payload.close_now_ev);
+      if (closeGross != null && !isNaN(closeGross) && holdEv != null) {
+        note += ` · Gross ${_fmtSignedRs(closeGross)} vs hold ${_fmtSignedRs(holdEv)}`;
       }
       if (payload.pop_uses_skew) note += ' · skew-adjusted';
       popNote.textContent = note;

@@ -317,7 +317,7 @@ ACK refuses if `LAST_HOT_BACKUP.json` is missing or older than this export, `PEN
 | HTTPS / cert fail     | `docker logs options_caddy`; cert includes the Tailscale IP; see A7   |
 | Archive stuck         | Laptop task; VM `git pull` + `vm-restart`; ACK conditions above. If merge fails with `\var\opt\mssql\...` paths, update `scripts/merge_archive_into_local.py` (RESTORE must WITH MOVE to local SQL data dir) |
 | Zerodha execute fails | `OPT_DASHBOARD_API_KEY` in VM `.env.docker`                           |
-| Live P&L looks frozen | UI always prefers a **priced live/snap** MTM (leg LTPs present); only then falls back to DB `last_mtm`. Special sessions (e.g. Muhurat Sunday) still need `_inMarketHours` for feed labels |
+| Live P&L looks frozen | UI always prefers a **priced live/snap** MTM (leg LTPs present); only then falls back to DB `last_mtm`. Net on the card chip, Live Profit Levels, and the close preview share one fill-based charge (`estChargesFromLegs`) |
 
 
 ---
