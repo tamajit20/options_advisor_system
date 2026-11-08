@@ -1,7 +1,7 @@
 """Unit tests for engine.live_expectation — live PoP / EV on open trades."""
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -478,35 +478,24 @@ class TestLiveTradeOutlook:
         db = MagicMock()
         # Call order: ATM-IV snapshot (IV only), then EOD spot (header source).
         db.fetch_one.side_effect = [
-            {"snapshot_at": datetime(2026, 5, 27, 15, 30), "spot": 25030.0, "atm_iv": 0.12, "dte": 2},
+            {"snapshot_at": None, "spot": 25030.0, "atm_iv": 0.12, "dte": 2},
             {"close_price": 22950.0, "trade_date": date(2026, 5, 27)},
         ]
         out = resolve_market_inputs(db, "NIFTY", date(2026, 5, 28))
         assert out["spot"] == 22950.0
         assert out["data_source"] == "eod"
 
-    def test_resolve_market_inputs_ignores_atm_iv_spot_when_eod_same_day(self):
-        """Same-session ATM-IV spot must not override that day's EOD close."""
+    def test_resolve_market_inputs_ignores_atm_iv_spot_when_eod_exists(self):
+        """ATM-IV 5m spot must not override EOD — that desynced Outlook Now vs header."""
         db = MagicMock()
         db.fetch_one.side_effect = [
-            {"snapshot_at": datetime(2026, 11, 6, 15, 25), "spot": 25030.35, "atm_iv": 0.15, "dte": 3},
+            {"snapshot_at": None, "spot": 25030.35, "atm_iv": 0.15, "dte": 3},
             {"close_price": 24537.0, "trade_date": date(2026, 11, 6)},
         ]
         out = resolve_market_inputs(db, "NIFTY", date(2026, 11, 9))
         assert out["spot"] == 24537.0
         assert out["data_source"] == "eod"
         assert out["atm_iv"] == pytest.approx(0.15)
-
-    def test_resolve_market_inputs_prefers_fresher_atm_iv_when_eod_stale(self):
-        """Missing spot-bhav days left EOD on 5 Nov 24536.6 while Now should track ~25k."""
-        db = MagicMock()
-        db.fetch_one.side_effect = [
-            {"snapshot_at": datetime(2026, 11, 8, 14, 30), "spot": 24988.8, "atm_iv": 0.15, "dte": 3},
-            {"close_price": 24536.6, "trade_date": date(2026, 11, 5)},
-        ]
-        out = resolve_market_inputs(db, "NIFTY", date(2026, 11, 17))
-        assert out["spot"] == pytest.approx(24988.8)
-        assert out["data_source"] == "intraday"
 
     def test_live_tick_from_mtm_ignores_seeded_atm_iv_spot(self):
         # Same 25030.35 print operators still saw after the EOD preference fix —

@@ -528,49 +528,6 @@ def live_tick_from_mtm(
     return spot, iv
 
 
-def _as_calendar_date(value: Any) -> Optional[date]:
-    """Normalize date / datetime / ISO string to a calendar ``date``."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        return date.fromisoformat(text[:10])
-    except ValueError:
-        return None
-
-
-def _snap_spot_payload(
-    snap: Optional[Mapping[str, Any]],
-    *,
-    snap_iv: Optional[float],
-    iv_repo,
-    sym: str,
-    expiry: date,
-) -> Optional[dict]:
-    if not snap or snap.get("spot") is None:
-        return None
-    try:
-        spot = float(snap["spot"])
-    except (TypeError, ValueError):
-        return None
-    if spot <= 0:
-        return None
-    as_of = snap.get("snapshot_at")
-    return {
-        "spot": spot,
-        "atm_iv": snap_iv or normalize_atm_iv(iv_repo.latest_atm_iv(sym, expiry)),
-        "data_source": "intraday",
-        "data_as_of": as_of.isoformat(timespec="seconds")
-        if hasattr(as_of, "isoformat") else str(as_of) if as_of else None,
-    }
-
-
 def resolve_market_inputs(
     db,
     symbol: str,
@@ -581,16 +538,13 @@ def resolve_market_inputs(
 ) -> dict:
     """Best available spot/IV for outlook — aligned with the header index strip.
 
-    Spot priority:
+    Spot priority matches ``/api/indices/spot``:
       1. live index tick (when the caller passes ``live_spot``)
-      2. EOD close from ``options_spot_eod`` when it is at least as fresh as
-         the ATM-IV snapshot day (same session / not a multi-day gap)
-      3. ATM-IV 5‑min snapshot spot when it is newer than EOD (covers missing
-         spot-bhav days) or when EOD is absent
+      2. EOD close from ``options_spot_eod``
+      3. ATM-IV 5‑min snapshot spot only if EOD is missing
 
-    Preferring a stale EOD over a fresher ATM-IV print made Live Outlook
-    ``Now`` stick on an old close (e.g. 24,536.6) while the header showed
-    the current index.
+    ATM-IV rows still supply IV; their stored spot is not preferred over EOD
+    (that mismatch made Live Outlook ``Now`` disagree with the header Nifty).
     """
     from database.models import AtmIvTimeseriesRepo, SpotEodRepo
 
@@ -598,10 +552,6 @@ def resolve_market_inputs(
     iv_repo = AtmIvTimeseriesRepo(db)
     snap = iv_repo.latest_snapshot(sym, expiry)
     snap_iv = normalize_atm_iv((snap or {}).get("atm_iv")) if snap else None
-    snap_payload = _snap_spot_payload(
-        snap, snap_iv=snap_iv, iv_repo=iv_repo, sym=sym, expiry=expiry,
-    )
-    snap_day = _as_calendar_date((snap or {}).get("snapshot_at"))
 
     if live_spot is not None and live_spot > 0:
         iv = normalize_atm_iv(live_iv) or snap_iv or normalize_atm_iv(
@@ -615,36 +565,37 @@ def resolve_market_inputs(
         }
 
     eod = SpotEodRepo(db).latest(sym)
-    eod_spot = 0.0
-    eod_day = None
     if eod and eod.get("close_price") is not None:
         try:
-            eod_spot = float(eod["close_price"])
+            spot = float(eod["close_price"])
         except (TypeError, ValueError):
-            eod_spot = 0.0
-        eod_day = _as_calendar_date(eod.get("trade_date"))
+            spot = 0.0
+        if spot > 0:
+            iv = snap_iv or normalize_atm_iv(iv_repo.latest_atm_iv(sym, expiry))
+            td = eod.get("trade_date")
+            return {
+                "spot": spot,
+                "atm_iv": iv,
+                "data_source": "eod",
+                "data_as_of": td.isoformat() if hasattr(td, "isoformat") else str(td),
+            }
 
-    # Fresher ATM-IV session print beats a gappy/stale EOD row.
-    if (
-        snap_payload is not None
-        and snap_day is not None
-        and (eod_day is None or snap_day > eod_day)
-    ):
-        return snap_payload
-
-    if eod_spot > 0:
-        iv = snap_iv or normalize_atm_iv(iv_repo.latest_atm_iv(sym, expiry))
-        return {
-            "spot": eod_spot,
-            "atm_iv": iv,
-            "data_source": "eod",
-            "data_as_of": eod_day.isoformat() if eod_day else (
-                str(eod.get("trade_date")) if eod else None
-            ),
-        }
-
-    if snap_payload is not None:
-        return snap_payload
+    if snap and snap.get("spot") is not None:
+        try:
+            spot = float(snap["spot"])
+        except (TypeError, ValueError):
+            spot = 0.0
+        if spot > 0:
+            as_of = snap.get("snapshot_at")
+            return {
+                "spot": spot,
+                "atm_iv": snap_iv or normalize_atm_iv(
+                    iv_repo.latest_atm_iv(sym, expiry)
+                ),
+                "data_source": "intraday",
+                "data_as_of": as_of.isoformat(timespec="seconds")
+                if hasattr(as_of, "isoformat") else str(as_of) if as_of else None,
+            }
 
     return {
         "spot": None,

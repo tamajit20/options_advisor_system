@@ -5776,12 +5776,6 @@ function _updateLiveOutlook(tradeId, payload) {
     }
     if (marketNote) marketNote.textContent = emText;
   });
-  // Outlook paint can race the header strip; re-apply strip Now after payload.
-  if (Object.keys(_indexStripPrices).length) {
-    _syncOutlookNowFromIndexStrip(
-      Object.entries(_indexStripPrices).map(([symbol, price]) => ({ symbol, price })),
-    );
-  }
   document.querySelectorAll(`.live-pop-kv[data-trade-id="${CSS.escape(tradeId)}"] .v`).forEach(v => {
     const pop = payload.live_pop != null ? parseFloat(payload.live_pop) : null;
     v.textContent = (pop != null && !isNaN(pop)) ? fmtPct(pop) : '\u2014';
