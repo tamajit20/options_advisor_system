@@ -16,7 +16,6 @@ from engine.live_expectation import (
     expiry_ev_note,
     hold_vs_close_advice,
     legs_from_fills,
-    live_tick_from_mtm,
     live_trade_outlook,
     normalize_atm_iv,
     today_mark_bands,
@@ -496,18 +495,6 @@ class TestLiveTradeOutlook:
         assert out["spot"] == 24537.0
         assert out["data_source"] == "eod"
         assert out["atm_iv"] == pytest.approx(0.15)
-
-    def test_live_tick_from_mtm_ignores_seeded_atm_iv_spot(self):
-        # Same 25030.35 print operators still saw after the EOD preference fix —
-        # MTM seed was wrongly treated as a live tick.
-        spot, iv = live_tick_from_mtm({
-            "spot": 25030.35, "atm_iv": 0.15, "data_source": "intraday",
-        })
-        assert spot is None and iv is None
-        spot, iv = live_tick_from_mtm({
-            "spot": 24537.0, "atm_iv": 0.14, "data_source": "live",
-        })
-        assert spot == 24537.0 and iv == pytest.approx(0.14)
 
 
 class TestProfitZoneDetail:

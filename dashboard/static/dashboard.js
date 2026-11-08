@@ -2809,15 +2809,6 @@ async function refreshIndexSpotStrip() {
   }
 }
 
-/** Last header-strip prices by symbol — wins over outlook payload spot for "Now". */
-let _indexStripPrices = {};
-
-function _indexStripSpotFor(underlying) {
-  const und = String(underlying || '').toUpperCase();
-  const px = _indexStripPrices[und];
-  return (px != null && Number.isFinite(px) && px > 0) ? px : null;
-}
-
 function _syncOutlookNowFromIndexStrip(items) {
   /** Keep Live Outlook "Now" on the same index print as the header strip. */
   const bySym = {};
@@ -2826,10 +2817,9 @@ function _syncOutlookNowFromIndexStrip(items) {
     const px = it.price != null ? Number(it.price) : NaN;
     if (sym && Number.isFinite(px) && px > 0) bySym[sym] = px;
   });
-  if (Object.keys(bySym).length) _indexStripPrices = bySym;
   document.querySelectorAll('.live-outlook[data-underlying]').forEach(el => {
     const und = String(el.dataset.underlying || '').toUpperCase();
-    const px = _indexStripPrices[und];
+    const px = bySym[und];
     if (px == null) return;
     const nowEl = el.querySelector('.lo-today-now');
     if (nowEl) nowEl.textContent = `\u20b9${fmt(px)}`;
@@ -5433,14 +5423,8 @@ function _renderLoSpotStrip(el, payload) {
   const whereEl = el.querySelector('.lo-fit-where');
   const entryNote = el.querySelector('.lo-spot-entry-note');
   const entry = payload.entry_spot != null ? parseFloat(payload.entry_spot) : null;
-  // Header strip is the operator-facing Nifty print; prefer it over MTM/ATM-IV spot.
-  const stripPx = _indexStripSpotFor(el.dataset && el.dataset.underlying);
-  const payloadSpot = payload.spot != null ? parseFloat(payload.spot) : null;
-  const spot = stripPx != null ? stripPx
-    : (payloadSpot != null && !isNaN(payloadSpot) ? payloadSpot : null);
-  const chg = (spot != null && entry != null && !isNaN(entry))
-    ? (spot - entry)
-    : (payload.spot_change != null ? parseFloat(payload.spot_change) : null);
+  const spot = payload.spot != null ? parseFloat(payload.spot) : null;
+  const chg = payload.spot_change != null ? parseFloat(payload.spot_change) : null;
   if (nowEl) {
     nowEl.textContent = (spot != null && !isNaN(spot)) ? `\u20b9${fmt(spot)}` : '\u2014';
   }

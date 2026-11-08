@@ -1643,7 +1643,7 @@ def _trade_live_outlook(
     if not sug.get("strategy"):
         return None
     try:
-        from engine.live_expectation import compute_trade_outlook, live_tick_from_mtm
+        from engine.live_expectation import compute_trade_outlook
         from utils import days_between, now_ist
 
         expiry = sug.get("expiry_date") or trade.get("expiry_date")
@@ -1652,10 +1652,14 @@ def _trade_live_outlook(
         if isinstance(expiry, str):
             expiry = date.fromisoformat(expiry[:10])
         legs = trade.get("legs") or sug.get("legs") or []
+        live_spot = live_iv = None
         leg_ltps = None
         current_mtm = None
         mtm_row = (_read_live_mtm_state().get("trades") or {}).get(str(trade["trade_id"])) or {}
-        live_spot, live_iv = live_tick_from_mtm(mtm_row)
+        if mtm_row.get("spot") is not None:
+            live_spot = float(mtm_row["spot"])
+            if mtm_row.get("atm_iv") is not None:
+                live_iv = float(mtm_row["atm_iv"])
         if mtm_row.get("leg_ltps"):
             leg_ltps = mtm_row["leg_ltps"]
         # Only trust live-file MTM when legs are marked; else DB last_mtm.
