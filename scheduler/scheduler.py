@@ -436,8 +436,16 @@ def _live_suggestion_window_job(window_suffix: str):
 
 
 def job_live_suggestion() -> None:
-    """Manual / default run (no window suffix)."""
-    _run_job("live_suggestion_engine", run_live_suggestion_engine)
+    """Manual / default run (no window suffix).
+
+    Weekend is allowed here only. Hourly windows still call
+    ``run_live_suggestion_engine`` with the default weekday gate.
+    """
+
+    def _manual(db: SQLServerConnection) -> int:
+        return run_live_suggestion_engine(db, allow_weekend=True)
+
+    _run_job("live_suggestion_engine", _manual)
 def job_simulation(): _run_job("simulation_update",  run_simulation_update)
 def job_exit():       _run_job("exit_engine",        run_exit_engine)
 def job_trade_greeks(): _run_job("trade_greeks_update", run_trade_greeks_update)

@@ -541,10 +541,21 @@ class TestRunLiveSuggestionEngine:
 
     def test_skips_on_weekend(self, mock_db, mocker):
         p = self._make_provider(supports_live=True)
-        # 2 May 2026 is Saturday
+        # 2 May 2026 is Saturday — scheduled path still skips.
         mocker.patch("lifecycle.suggestion_engine.today_ist",
                      return_value=date(2026, 5, 2))
         assert se.run_live_suggestion_engine(mock_db, provider=p) == 0
+
+    def test_manual_weekend_run_is_not_blocked(self, mock_db, mocker):
+        p = self._make_provider(supports_live=True)
+        mocker.patch("lifecycle.suggestion_engine.today_ist",
+                     return_value=date(2026, 5, 2))
+        mocker.patch("lifecycle.suggestion_engine.FoEodRepo.latest_trade_date",
+                     return_value=None)
+        # Passed the weekend gate; stops later only because FO history is empty.
+        assert se.run_live_suggestion_engine(
+            mock_db, provider=p, allow_weekend=True,
+        ) == 0
 
     def test_aborts_when_no_fo_data(self, mock_db, mocker):
         p = self._make_provider(supports_live=True)

@@ -1552,6 +1552,7 @@ def run_live_suggestion_engine(
     db: SQLServerConnection,
     *,
     provider=None,
+    allow_weekend: bool = False,
 ) -> int:
     """Generate suggestions from live market data during market hours.
 
@@ -1565,7 +1566,9 @@ def run_live_suggestion_engine(
     Requires OPT_PROVIDERS=zerodha and a valid Kite access token.  Falls back
     gracefully when the provider reports no live-quote capability.
 
-    Only runs on weekdays.  Suggestions are tagged data_source=LIVE and
+    Scheduled windows stay weekday-only. A manual Run now passes
+    ``allow_weekend=True`` so a special session (for example Muhurat Sunday)
+    can still generate cards. Suggestions are tagged data_source=LIVE and
     replace any stale EOD PENDING suggestion for the same slot so the
     dashboard always shows the freshest data.
 
@@ -1582,9 +1585,13 @@ def run_live_suggestion_engine(
         return 0
 
     live_today = today_ist()
-    if live_today.weekday() >= 5:   # Saturday=5, Sunday=6
+    if live_today.weekday() >= 5 and not allow_weekend:   # Saturday=5, Sunday=6
         logger.info("Live suggestion engine: not a trading day (%s) — skipping", live_today)
         return 0
+    if live_today.weekday() >= 5 and allow_weekend:
+        logger.info(
+            "Live suggestion engine: manual weekend run on %s", live_today,
+        )
 
     try:
         _retire_prior_day_pending(db, live_today)
