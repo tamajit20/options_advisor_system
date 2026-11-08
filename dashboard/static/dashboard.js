@@ -2820,12 +2820,13 @@ function _indexStripSpotFor(underlying) {
 
 function _syncOutlookNowFromIndexStrip(items) {
   /** Keep Live Outlook "Now" on the same index print as the header strip. */
-  // Merge (do not replace) so partial live SSE ticks do not drop other symbols.
+  const bySym = {};
   (items || []).forEach(it => {
     const sym = String(it.symbol || '').toUpperCase();
     const px = it.price != null ? Number(it.price) : NaN;
-    if (sym && Number.isFinite(px) && px > 0) _indexStripPrices[sym] = px;
+    if (sym && Number.isFinite(px) && px > 0) bySym[sym] = px;
   });
+  if (Object.keys(bySym).length) _indexStripPrices = bySym;
   document.querySelectorAll('.live-outlook[data-underlying]').forEach(el => {
     const und = String(el.dataset.underlying || '').toUpperCase();
     const px = _indexStripPrices[und];
@@ -2926,8 +2927,6 @@ function _applyIndexSpotLiveUpdate(data) {
       label: item.label || chip.querySelector('.idx-chip-label')?.textContent || sym,
     });
   });
-  // Header SSE was updating chips only — Outlook "Now" stayed frozen.
-  _syncOutlookNowFromIndexStrip(items);
 }
 
 let _indexSpotSource = null;
