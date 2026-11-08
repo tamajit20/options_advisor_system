@@ -1260,14 +1260,29 @@ function _updateFeedTag(tradeId, opts = {}) {
   }
 }
 
-/** Best available MTM for header / Live P&L (live tick, DB snapshot, or outlook). */
+/** True when a live/snap MTM row has at least one positive leg mark (real book). */
+function _isPricedMtmRow(row) {
+  if (!row || row.mtm == null || row.mtm === '') return false;
+  const legs = row.leg_ltps;
+  if (!legs || typeof legs !== 'object') return false;
+  return Object.values(legs).some(v => {
+    const n = typeof v === 'number' ? v : parseFloat(v);
+    return Number.isFinite(n) && n > 0;
+  });
+}
+
+/** Best available MTM for header / Live P&L.
+ *
+ * Always: priced live/snap mark → else DB last_mtm → else outlook estimate.
+ * Do not gate on weekday/session — Muhurat Sundays (and any special session)
+ * still publish live LTPs while `_inMarketHours` used to say "closed".
+ */
 function _resolveTradeMtm(trade, snapTrade) {
   const st = snapTrade || {};
   const lo = (trade && trade.live_outlook) || {};
-  // Off-market: prefer DB last_mtm — live/outlook can invent −100% when LTPs are missing.
-  const candidates = _inMarketHours()
+  const candidates = _isPricedMtmRow(st)
     ? [st.mtm, trade && trade.last_mtm, lo.close_now_ev, lo.mtm]
-    : [trade && trade.last_mtm, st.mtm, lo.close_now_ev, lo.mtm];
+    : [trade && trade.last_mtm, lo.close_now_ev, lo.mtm];
   for (const v of candidates) {
     if (v == null || v === '') continue;
     const n = typeof v === 'number' ? v : parseFloat(v);
