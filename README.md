@@ -317,6 +317,7 @@ ACK refuses if `LAST_HOT_BACKUP.json` is missing or older than this export, `PEN
 | HTTPS / cert fail     | `docker logs options_caddy`; cert includes the Tailscale IP; see A7   |
 | Archive stuck         | Laptop task; VM `git pull` + `vm-restart`; ACK conditions above. If merge fails with `\var\opt\mssql\...` paths, update `scripts/merge_archive_into_local.py` (RESTORE must WITH MOVE to local SQL data dir) |
 | Zerodha execute fails | `OPT_DASHBOARD_API_KEY` in VM `.env.docker`                           |
+| Live P&L frozen on Muhurat Sunday | Dashboard `_inMarketHours` must treat Sun ~14:05–15:40 as open; otherwise UI prefers DB `last_mtm` |
 
 
 ---

@@ -65,9 +65,14 @@ function _lookupLegLtp(legLtps, symbol, strike, optionType, expiry) {
 
 function _inMarketHours() {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const dow = now.getDay();
+  const dow = now.getDay(); // 0=Sun … 6=Sat
   const hhmm = now.getHours() * 100 + now.getMinutes();
-  return dow >= 1 && dow <= 5 && hhmm >= 915 && hhmm <= 1530;
+  // Regular NSE cash/F&O session (Mon–Fri).
+  if (dow >= 1 && dow <= 5 && hhmm >= 915 && hhmm <= 1530) return true;
+  // Special Sunday sessions (e.g. Diwali Muhurat ~14:05–15:40 IST). Without
+  // this, Current P&L prefers frozen DB last_mtm while the monitor is live.
+  if (dow === 0 && hhmm >= 1405 && hhmm <= 1540) return true;
+  return false;
 }
 
 const LIVE_FEED_STALE_SEC = 45;
@@ -1842,7 +1847,9 @@ function _renderClosePnlBlock(pnl, tradeId) {
       ? pnlPctTextCompact(row.net, { rs: row.marginFinal }) : '');
   const usedAmt = header
     ? header.text
-    : (row.marginFinal > 0 ? `\u20b9${fmt(row.marginFinal)}` : '\u2014');
+    : (row.marginFinal > 0
+      ? `\u20b9${Math.round(row.marginFinal).toLocaleString('en-IN')}`
+      : '\u2014');
   const usedCls = header
     ? (header.pos ? 'pnl-profit' : (header.neg ? 'pnl-loss' : ''))
     : tone(row.net);
@@ -1905,7 +1912,10 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
         const basis = net != null ? net : displayMtm;
         const marginBase = parseFloat(el.dataset.marginFinal);
         const haveBase = Number.isFinite(marginBase) && marginBase > 0;
-        marginEl.textContent = haveBase ? `\u20b9${fmt(marginBase)}` : '\u2014';
+        // Whole rupees — matches index chips / earlier Amount-used paint.
+        marginEl.textContent = haveBase
+          ? `\u20b9${Math.round(marginBase).toLocaleString('en-IN')}`
+          : '\u2014';
         marginEl.classList.remove('mtm-pos', 'mtm-neg');
         if (marginPctEl) {
           marginPctEl.textContent = (haveBase && basis != null)
