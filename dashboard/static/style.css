@@ -2645,6 +2645,9 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 .band-reach-up { color: var(--ok, #22c55e); }
 .band-reach-dn { color: var(--err, #ef4444); }
 .band-reach-in { color: var(--muted, #94a3b8); font-weight: 600; }
+.band-reach-safe { color: var(--ok, #22c55e); }
+.band-reach-bad { color: var(--err, #ef4444); }
+.band-reach-need { color: #e8b86d; }
 .lo-fit-range strong {
   font-size: .84rem;
   font-variant-numeric: tabular-nums;

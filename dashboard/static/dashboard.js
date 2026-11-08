@@ -5109,59 +5109,119 @@ function _bandRangeText(row, kind) {
   return _fitRange(Number(row.in_lo), Number(row.in_hi));
 }
 
-/** % from Now to the zone: enter if outside, cushion to the edge if already inside. */
+/** % from Now to the zone.
+ *  Already on the safe side: tick + cushion (not a move you still need).
+ *  Already inside a loss zone: cross.
+ *  Profit zone not reached yet: arrow = move still required.
+ */
 function _bandReachFromSpot(spot, row, kind) {
   if (spot == null || isNaN(spot) || spot <= 0 || !row) return null;
+  const lossKind = kind === 'loss' || kind === 'in_loss';
   const pctTo = (target) => {
     if (target == null || isNaN(Number(target))) return null;
     return ((Number(target) - spot) / spot) * 100;
   };
-  const fmtReach = (p) => {
+  const absTxt = (p) => `${Math.abs(p).toFixed(1)}%`;
+  const dirWord = (p) => (p > 0 ? 'rise' : 'drop');
+  const fmtSafe = (p, alreadyIn) => {
     if (p == null || isNaN(p)) return null;
-    if (Math.abs(p) < 0.05) return { text: '0.0%', cls: 'band-reach-in' };
-    const arrow = p > 0 ? '\u2191' : '\u2193';
-    return { text: `${Math.abs(p).toFixed(1)}%${arrow}`, cls: p > 0 ? 'band-reach-up' : 'band-reach-dn' };
+    if (Math.abs(p) < 0.05) {
+      return {
+        text: '\u2713 on the line',
+        cls: 'band-reach-safe',
+        title: 'Spot is on the edge of this zone.',
+      };
+    }
+    const abs = absTxt(p);
+    if (alreadyIn) {
+      return {
+        text: `\u2713 ${abs} room`,
+        cls: 'band-reach-safe',
+        title: `Already in this zone. ${abs} cushion (${dirWord(p)}) before you leave it.`,
+      };
+    }
+    return {
+      text: `\u2713 ${abs} clear`,
+      cls: 'band-reach-safe',
+      title: `Not in this zone. A ${abs} ${dirWord(p)} from Now would be needed to enter it.`,
+    };
   };
-  const nearest = (targets) => {
+  const fmtBad = (p) => {
+    if (p == null || isNaN(p)) return null;
+    if (Math.abs(p) < 0.05) {
+      return {
+        text: '\u2717 on the line',
+        cls: 'band-reach-bad',
+        title: 'Spot is on the edge of this loss zone.',
+      };
+    }
+    const abs = absTxt(p);
+    return {
+      text: `\u2717 ${abs} in`,
+      cls: 'band-reach-bad',
+      title: `Already in this loss zone. ${abs} ${dirWord(p)} to get back out.`,
+    };
+  };
+  const fmtNeed = (p) => {
+    if (p == null || isNaN(p)) return null;
+    if (Math.abs(p) < 0.05) {
+      return {
+        text: '\u2713 on the line',
+        cls: 'band-reach-safe',
+        title: 'Spot is on the edge of this zone.',
+      };
+    }
+    const arrow = p > 0 ? '\u2191' : '\u2193';
+    const abs = absTxt(p);
+    return {
+      text: `${abs}${arrow} needed`,
+      cls: 'band-reach-need',
+      title: `Not in this zone yet. Needs ${abs} ${p > 0 ? 'up' : 'down'} from Now.`,
+    };
+  };
+  const paint = (p, inside) => {
+    if (inside) return lossKind ? fmtBad(p) : fmtSafe(p, true);
+    return lossKind ? fmtSafe(p, false) : fmtNeed(p);
+  };
+  const nearestPct = (targets) => {
     let best = null;
     (targets || []).forEach((t) => {
       const p = pctTo(t);
       if (p == null) return;
       if (best == null || Math.abs(p) < Math.abs(best)) best = p;
     });
-    return fmtReach(best);
+    return best;
   };
   const dualGates = (below, above) => {
     const b = below != null ? Number(below) : null;
     const a = above != null ? Number(above) : null;
-    const inBelow = b != null && spot <= b;
-    const inAbove = a != null && spot >= a;
+    const inBelow = b != null && !isNaN(b) && spot <= b;
+    const inAbove = a != null && !isNaN(a) && spot >= a;
     if (inBelow || inAbove) {
-      // Cushion back to the gate you crossed.
-      if (inBelow && inAbove) return nearest([b, a]);
-      if (inBelow) return fmtReach(pctTo(b));
-      return fmtReach(pctTo(a));
+      const edge = (inBelow && inAbove) ? nearestPct([b, a])
+        : (inBelow ? pctTo(b) : pctTo(a));
+      return paint(edge, true);
     }
     const targets = [];
-    if (b != null && spot > b) targets.push(b);
-    if (a != null && spot < a) targets.push(a);
-    return nearest(targets);
+    if (b != null && !isNaN(b) && spot > b) targets.push(b);
+    if (a != null && !isNaN(a) && spot < a) targets.push(a);
+    return paint(nearestPct(targets), false);
   };
   const openAbove = (lo) => {
-    if (lo == null) return null;
-    if (spot >= Number(lo)) return fmtReach(pctTo(lo)); // cushion back down to floor
-    return fmtReach(pctTo(lo)); // climb to enter
+    if (lo == null || isNaN(Number(lo))) return null;
+    const inside = spot >= Number(lo);
+    return paint(pctTo(lo), inside);
   };
   const openBelow = (hi) => {
-    if (hi == null) return null;
-    if (spot <= Number(hi)) return fmtReach(pctTo(hi)); // cushion back up to ceiling
-    return fmtReach(pctTo(hi)); // fall to enter
+    if (hi == null || isNaN(Number(hi))) return null;
+    const inside = spot <= Number(hi);
+    return paint(pctTo(hi), inside);
   };
   const closedRange = (lo, hi) => {
-    if (lo == null || hi == null) return null;
-    if (spot >= lo && spot <= hi) return nearest([lo, hi]); // cushion to nearer edge
-    if (spot < lo) return fmtReach(pctTo(lo));
-    return fmtReach(pctTo(hi));
+    if (lo == null || hi == null || isNaN(lo) || isNaN(hi)) return null;
+    if (spot >= lo && spot <= hi) return paint(nearestPct([lo, hi]), true);
+    if (spot < lo) return paint(pctTo(lo), false);
+    return paint(pctTo(hi), false);
   };
 
   if (kind === 'loss') return dualGates(row.loss_below, row.loss_above);
@@ -5174,7 +5234,6 @@ function _bandReachFromSpot(spot, row, kind) {
       row.full_hi != null ? Number(row.full_hi) : null,
     );
   }
-  // in profit
   if (row.in_side === 'above') return openAbove(row.in_lo);
   if (row.in_side === 'below') return openBelow(row.in_hi);
   return closedRange(
@@ -5188,7 +5247,7 @@ function _bandCellHtml(row, kind, spot) {
   if (!label || label === '\u2014') return '\u2014';
   const reach = _bandReachFromSpot(spot, row, kind);
   const reachHtml = reach
-    ? ` <span class="band-reach ${escapeHtml(reach.cls)}">${escapeHtml(reach.text)}</span>`
+    ? ` <span class="band-reach ${escapeHtml(reach.cls)}" title="${escapeHtml(reach.title || '')}">${escapeHtml(reach.text)}</span>`
     : '';
   return `${escapeHtml(label)}${reachHtml}`;
 }
@@ -5299,7 +5358,7 @@ function _paintBandCalendar(payload, live) {
   return `
     <div class="band-cal-head">${nowHtml}</div>
     <p class="muted band-cal-note">${escapeHtml(noteMain)}</p>
-    <p class="muted band-cal-note">% \u2191 / % \u2193 = move from Now to that zone (or cushion back to its edge if you are already inside).</p>
+    <p class="muted band-cal-note">\u2713 room = already inside that profit zone (cushion before you leave it). \u2713 clear = not in that loss zone. \u2717 in = already inside that loss zone. %\u2191 / %\u2193 needed = move still required to enter a profit zone.</p>
     <table class="band-cal-table">
       <thead><tr><th>Date</th><th>Full profit</th><th>In profit</th><th>In loss</th><th>Full loss</th></tr></thead>
       <tbody>${body || '<tr><td colspan="5">No rows</td></tr>'}</tbody>
