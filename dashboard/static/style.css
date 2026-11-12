@@ -1940,6 +1940,8 @@ input:focus, select:focus, textarea:focus {
 /* ── Charts tab ── */
 .chart-toolbar { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-bottom:14px; }
 .chart-summary-row { display:flex; flex-wrap:wrap; gap:16px 28px; background:rgba(56,189,248,.06); border:1px solid rgba(56,189,248,.12); border-radius:8px; padding:12px 16px; margin-bottom:16px; }
+#trades-totals { align-items: center; }
+#trades-totals .trades-totals-pnl { justify-content: flex-start; }
 .chart-kv { display:flex; flex-direction:column; gap:2px; }
 .chart-kv span { font-size:.72rem; color:var(--text-dim); }
 .chart-kv strong { font-size:.95rem; }

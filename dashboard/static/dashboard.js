@@ -2031,7 +2031,12 @@ function _paintOpenTradesTotals() {
     const mtm = cached && cached.mtm != null ? Number(cached.mtm) : NaN;
     const charges = parseFloat(el.dataset.chargesRs);
     const prem = parseFloat(el.dataset.premiumRs);
-    const mar = parseFloat(el.dataset.marginFinal);
+    let mar = parseFloat(el.dataset.marginFinal);
+    if (!(mar > 0)) {
+      const shown = (el.querySelector('.cpnl-margin-val') || {}).textContent || '';
+      const parsed = Number(String(shown).replace(/[₹,\s]/g, ''));
+      if (parsed > 0) mar = parsed;
+    }
     const ch = (Number.isFinite(charges) && charges >= 0) ? charges : 0;
     const rowNet = Number.isFinite(mtm) ? mtm - ch : null;
     if (Number.isFinite(prem) && prem > 0) premium += prem;
@@ -2049,19 +2054,41 @@ function _paintOpenTradesTotals() {
       havePnl = true;
     }
   });
-  const tone = (n) => (n > 0 ? 'pnl-profit' : (n < 0 ? 'pnl-loss' : ''));
   const rupee = (n, have) => (have ? `\u20b9${fmt(n)}` : '\u2014');
   const signed = (n, have) => (have ? _fmtSignedInr(n) : '\u2014');
   const pct = (n, base) => (
     Number.isFinite(n) && base > 0 ? pnlPctTextCompact(n, { rs: base }) : ''
   );
   const usedPct = (haveMargin && marginForPct > 0) ? pct(netOnMargin, marginForPct) : '';
+  const usedAmt = haveMargin
+    ? `\u20b9${Math.round(margin).toLocaleString('en-IN')}`
+    : '\u2014';
+  const usedCls = netOnMargin > 0 ? 'mtm-pos' : (netOnMargin < 0 ? 'mtm-neg' : '');
+  const netCls = havePnl && net > 0 ? 'mtm-pos' : (havePnl && net < 0 ? 'mtm-neg' : '');
+  const grossCls = havePnl && gross > 0 ? 'mtm-pos' : (havePnl && gross < 0 ? 'mtm-neg' : '');
   host.hidden = false;
   host.innerHTML = `
     <div class="chart-kv" title="Sum of each open trade's max loss. This is the capital inside the structure, not the cash Zerodha holds."><span>Total invested</span><strong>${rupee(invested, haveInvested)}</strong></div>
-    <div class="chart-kv" title="Sum of Zerodha Final already held. The percent is total net divided by that amount."><span>Total amount used</span><strong>${rupee(margin, haveMargin)} <span class="${tone(netOnMargin)}">${usedPct}</span></strong></div>
-    <div class="chart-kv" title="Sum of live net profit. The percent is versus total premium received or paid."><span>Total net</span><strong class="${havePnl ? tone(net) : ''}">${signed(net, havePnl)}${havePnl ? pct(net, premium) : ''}</strong></div>
-    <div class="chart-kv" title="Sum of live gross profit. The percent is versus total premium received or paid."><span>Total gross</span><strong class="${havePnl ? tone(gross) : ''}">${signed(gross, havePnl)}${havePnl ? pct(gross, premium) : ''}</strong></div>`;
+    <div class="card-head-pnl-row trades-totals-pnl">
+      <span class="tag tag-current-pnl ${netCls}" title="Same line as each trade header. Amount used is Zerodha Final already held. Its percent is total net divided by that sum. Net and Gross percents are versus total premium.">
+        <span class="cpnl-metrics">
+          <span class="cpnl-pair">
+            <span class="cpnl-k">Total net</span>
+            <span class="cpnl-fig"><strong class="cpnl-val cpnl-net-val">${signed(net, havePnl)}</strong><span class="cpnl-pct-bracket cpnl-net-pct">${havePnl ? pct(net, premium) : ''}</span></span>
+          </span>
+          <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+          <span class="cpnl-pair">
+            <span class="cpnl-k">Total gross</span>
+            <span class="cpnl-fig"><strong class="cpnl-gross-val ${grossCls}">${signed(gross, havePnl)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct">${havePnl ? pct(gross, premium) : ''}</span></span>
+          </span>
+          <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+          <span class="cpnl-pair">
+            <span class="cpnl-k">Total amount used</span>
+            <span class="cpnl-fig"><strong class="cpnl-margin-val">${usedAmt}</strong><span class="cpnl-pct-bracket cpnl-margin-pct ${usedCls}">${usedPct}</span></span>
+          </span>
+        </span>
+      </span>
+    </div>`;
 }
 
 function _refreshAllFeedTags() {
