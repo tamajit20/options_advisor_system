@@ -3100,7 +3100,9 @@ function _syncCardSignal(tradeId, live) {
     });
     host.innerHTML = _signalMarkHtml(kind);
     host.hidden = !kind;
-    // Hide sticky PRE_BREACH / LOSS_LIMIT chip once live MTM has recovered.
+    // Sticky DB chip vs live strip: only one risk chip should show.
+    // _updateLiveRiskStrip hides sticky when live TARGET HIT (etc.) is up; do not
+    // re-show it here. Still hide sticky on SL / PRE_BREACH recovery.
     if (card) {
       const sticky = card.querySelector('.risk-alert-static');
       if (sticky) {
@@ -3115,7 +3117,17 @@ function _syncCardSignal(tradeId, live) {
         const lossRs = rec.lossRs;
         const abovePreBreach = lossRs != null && liveMtm != null
           && liveMtm > -(liveRiskMonitor().pre_breach_fraction * lossRs);
-        sticky.hidden = !!(recoveredSl || recoveredPre || (rn === 'PRE_BREACH_WARNING' && abovePreBreach));
+        const liveChip = card.querySelector('.live-risk-live');
+        const liveChipShowing = !!(liveChip && !liveChip.hidden);
+        const liveReplacesSticky = !!(live && (
+          live.targetHit || live.lossHit
+          || live.milestoneHit || live.milestoneConfirming
+          || live.profitMilestoneHit || live.profitMilestoneConfirming
+        ));
+        sticky.hidden = !!(
+          recoveredSl || recoveredPre || (rn === 'PRE_BREACH_WARNING' && abovePreBreach)
+          || liveChipShowing || liveReplacesSticky
+        );
       }
     }
   });
