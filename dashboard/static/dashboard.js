@@ -2067,7 +2067,7 @@ function _paintOpenTradesTotals() {
   host.innerHTML = `
     <div class="chart-kv" title="Sum of each open trade's max loss. This is the capital inside the structure, not the cash Zerodha holds."><span>Total invested</span><strong>${rupee(invested, haveInvested)}</strong></div>
     <div class="card-head-pnl-row trades-totals-pnl">
-      <span class="tag tag-current-pnl ${netCls}" title="Same line as each trade header. Amount used is Zerodha Final already held. Its percent is total net divided by that sum. Net and Gross percents are versus total premium.">
+      <span class="tag tag-current-pnl ${netCls}" title="Same figures as each collapsed trade line. Amount used is Zerodha Final already held. Its percent is total net divided by that sum. Net and Gross percents are versus total premium.">
         <span class="cpnl-metrics">
           <span class="cpnl-pair">
             <span class="cpnl-k">Total net</span>
@@ -10326,7 +10326,7 @@ function renderTrade(t, expanded = false) {
     ? pnlPctTextCompact(_headerMtm, _tradePremium) : '';
   const _chargesAttr = _headerCharges != null ? ` data-charges-rs="${_headerCharges}"` : '';
   const summaryHtml = `
-    <div class="card-head collapsible-card-head">
+    <div class="card-head collapsible-card-head trade-card-head">
       <div class="card-head-title">
         <span class="card-signal" data-trade-id="${escapeHtml(t.trade_id)}">${_signalMarkHtml(_signalKindFromFields({
           dailyStatus: t.daily_status,
@@ -10335,26 +10335,6 @@ function renderTrade(t, expanded = false) {
         }))}</span>
       <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
         ${strategyGuideInfoBtn((t.suggestion && t.suggestion.strategy) || t.strategy)}
-      </div>
-      <div class="card-head-pnl-row">
-        <span class="tag tag-current-pnl live-mtm${_headerMtmCls}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs}${_chargesAttr} title="Net = live MTM minus estimated round-trip charges. Gross = raw MTM. Amount used = Zerodha Final; percent = net \u00f7 that amount.">
-          <span class="cpnl-metrics">
-            <span class="cpnl-pair">
-              <span class="cpnl-k">Net</span>
-              <span class="cpnl-fig"><strong class="cpnl-val cpnl-net-val">${_fmtSignedInr(_headerNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct muted">${_headerNetPct}</span></span>
-            </span>
-            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
-            <span class="cpnl-pair">
-              <span class="cpnl-k">Gross</span>
-              <span class="cpnl-fig"><strong class="cpnl-gross-val${_headerGrossCls}">${_fmtSignedInr(_headerMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${_headerGrossPct}</span></span>
-            </span>
-            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
-            <span class="cpnl-pair">
-              <span class="cpnl-k">Amount used</span>
-              <span class="cpnl-fig"><strong class="cpnl-margin-val">\u2014</strong><span class="cpnl-pct-bracket cpnl-margin-pct muted"></span></span>
-            </span>
-          </span>
-        </span>
       </div>
       <div class="card-head-tags">
         <div class="card-head-badges">
@@ -10403,8 +10383,30 @@ function renderTrade(t, expanded = false) {
       <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
     <div class="collapsible-preview">
+      <div class="collapsible-preview-facts">
       ${_tradePremium ? `<span>${_tradePremium.kind === 'received' ? 'Premium received' : 'Premium paid'} <strong>\u20b9${fmt(_tradePremium.rs)}</strong></span>` : (t.net_credit_actual != null ? `<span>Entry <strong>\u20b9${fmt(t.net_credit_actual)}</strong></span>` : '')}
       ${tradeHeaderWhenHtml(t)}
+      </div>
+      <div class="card-head-pnl-row">
+        <span class="tag tag-current-pnl live-mtm${_headerMtmCls}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs}${_chargesAttr} title="Net = live MTM minus estimated round-trip charges. Gross = raw MTM. Amount used = Zerodha Final; percent = net \u00f7 that amount.">
+          <span class="cpnl-metrics">
+            <span class="cpnl-pair">
+              <span class="cpnl-k">Net</span>
+              <span class="cpnl-fig"><strong class="cpnl-val cpnl-net-val">${_fmtSignedInr(_headerNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct muted">${_headerNetPct}</span></span>
+            </span>
+            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+            <span class="cpnl-pair">
+              <span class="cpnl-k">Gross</span>
+              <span class="cpnl-fig"><strong class="cpnl-gross-val${_headerGrossCls}">${_fmtSignedInr(_headerMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${_headerGrossPct}</span></span>
+            </span>
+            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+            <span class="cpnl-pair">
+              <span class="cpnl-k">Amount used</span>
+              <span class="cpnl-fig"><strong class="cpnl-margin-val">\u2014</strong><span class="cpnl-pct-bracket cpnl-margin-pct muted"></span></span>
+            </span>
+          </span>
+        </span>
+      </div>
     </div>`;
   const bodyHtml = `
     ${renderTradeActionPanel(t)}

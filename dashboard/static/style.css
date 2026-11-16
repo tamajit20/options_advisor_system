@@ -306,7 +306,7 @@ a { color: var(--accent); text-decoration: none; }
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   width: auto;
   min-width: 0;
 }
@@ -390,12 +390,23 @@ details.collapsible-card[open] .collapsible-chevron::before { content: '▼'; }
 .collapsible-preview {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px 12px;
   font-size: .78rem;
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid rgba(255,255,255,.06);
   color: var(--text-dim);
+}
+.collapsible-preview-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.collapsible-preview .card-head-pnl-row {
+  margin-left: auto;
 }
 .collapsible-preview strong { color: var(--text); font-weight: 600; }
 .collapsible-body {

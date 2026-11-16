@@ -285,6 +285,27 @@
     align-items: flex-start;
   }
   .card-head .card-head-tags { margin-left: 0; }
+  .trade-card-head {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .trade-card-head .card-head-tags {
+    width: auto;
+    max-width: 100%;
+    margin-top: 0;
+    margin-left: auto;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-end;
+  }
+  .trade-card-head .card-head-badges {
+    justify-content: flex-end;
+  }
+  .collapsible-preview .card-head-pnl-row {
+    margin-left: auto;
+    justify-content: flex-end;
+  }
 
   /* Suggestion / trade cards: hide dense blocks when collapsed on phone */
   .collapsible-card.mobile-compact:not([open]) .collapsible-body .sug-context,
