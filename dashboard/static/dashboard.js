@@ -1344,9 +1344,6 @@ function _bootstrapLiveLevelsForTrades(trades, snap) {
     }
     _updateLiveProfitLevels(t.trade_id, payload);
     _updateLiveOutlook(t.trade_id, payload);
-    if (t.live_outlook && t.live_outlook.data_source_label) {
-      _updateOutlookFreshnessBadge(t.trade_id, t.live_outlook);
-    }
   });
   _refreshAllFeedTags();
 }
@@ -5462,22 +5459,6 @@ function _fmtSignedRs(v) {
 
 const _outlookSparkCache = {};
 
-function _updateOutlookFreshnessBadge(tradeId, payload) {
-  const label = payload && (payload.data_source_label || _loDataSourceLabel(payload.data_source, payload.data_as_of));
-  document.querySelectorAll(`.lo-freshness-badge[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
-    if (!label) {
-      el.hidden = true;
-      return;
-    }
-    el.hidden = false;
-    el.textContent = label;
-    el.className = `tag lo-freshness-badge lo-fresh-${payload.data_source || 'none'}`;
-    el.title = payload.uses_live_marks
-      ? `${label} · PoP uses live leg marks`
-      : label;
-  });
-}
-
 function _renderLoEntryPop(el, payload) {
   const entryEl = el && el.querySelector('.lo-pop-entry');
   if (!entryEl) return;
@@ -5734,7 +5715,6 @@ function _wireLiveOutlookHelp(el) {
 
 function _updateLiveOutlook(tradeId, payload) {
   if (!payload) return;
-  _updateOutlookFreshnessBadge(tradeId, payload);
   document.querySelectorAll(`.live-outlook[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
     _wireLiveOutlookHelp(el);
     _renderLoEntryPop(el, payload);
@@ -10394,7 +10374,6 @@ function renderTrade(t, expanded = false) {
         <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
         <span class="tag tag-warn live-feed-tag" data-trade-id="${escapeHtml(t.trade_id)}" title="Checking feed\u2026">\u2026</span>
-        <span class="tag lo-freshness-badge" data-trade-id="${escapeHtml(t.trade_id)}" hidden title="Outlook data source"></span>
         ${_entryQualBadge}
         </div>
         <div class="card-head-pnl-row">
