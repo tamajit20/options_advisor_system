@@ -279,8 +279,8 @@ a { color: var(--accent); text-decoration: none; }
   margin-bottom: 12px;
 }
 .card-head {
-  display: flex; justify-content: space-between; align-items: flex-start;
-  margin-bottom: 8px; flex-wrap: wrap; gap: 8px;
+  display: flex; justify-content: flex-start; align-items: center;
+  margin-bottom: 8px; flex-wrap: wrap; gap: 8px 14px;
 }
 .card-head .card-head-tags {
   margin-left: auto;
@@ -304,8 +304,9 @@ a { color: var(--accent); text-decoration: none; }
 }
 .card-head-pnl-row {
   display: flex;
-  justify-content: flex-end;
-  flex: 0 1 auto;
+  justify-content: flex-start;
+  align-items: center;
+  flex: 1 1 auto;
   width: auto;
   min-width: 0;
 }

@@ -10336,6 +10336,26 @@ function renderTrade(t, expanded = false) {
       <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
         ${strategyGuideInfoBtn((t.suggestion && t.suggestion.strategy) || t.strategy)}
       </div>
+      <div class="card-head-pnl-row">
+        <span class="tag tag-current-pnl live-mtm${_headerMtmCls}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs}${_chargesAttr} title="Net = live MTM minus estimated round-trip charges. Gross = raw MTM. Amount used = Zerodha Final; percent = net \u00f7 that amount.">
+          <span class="cpnl-metrics">
+            <span class="cpnl-pair">
+              <span class="cpnl-k">Net</span>
+              <span class="cpnl-fig"><strong class="cpnl-val cpnl-net-val">${_fmtSignedInr(_headerNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct muted">${_headerNetPct}</span></span>
+            </span>
+            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+            <span class="cpnl-pair">
+              <span class="cpnl-k">Gross</span>
+              <span class="cpnl-fig"><strong class="cpnl-gross-val${_headerGrossCls}">${_fmtSignedInr(_headerMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${_headerGrossPct}</span></span>
+            </span>
+            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
+            <span class="cpnl-pair">
+              <span class="cpnl-k">Amount used</span>
+              <span class="cpnl-fig"><strong class="cpnl-margin-val">\u2014</strong><span class="cpnl-pct-bracket cpnl-margin-pct muted"></span></span>
+            </span>
+          </span>
+        </span>
+      </div>
       <div class="card-head-tags">
         <div class="card-head-badges">
         ${(() => {
@@ -10378,26 +10398,6 @@ function renderTrade(t, expanded = false) {
           ${escapeHtml(t.daily_status || t.status)}</span>
         <span class="tag tag-warn live-feed-tag" data-trade-id="${escapeHtml(t.trade_id)}" title="Checking feed\u2026">\u2026</span>
         ${_entryQualBadge}
-        </div>
-        <div class="card-head-pnl-row">
-        <span class="tag tag-current-pnl live-mtm${_headerMtmCls}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs}${_chargesAttr} title="Net = live MTM minus estimated round-trip charges. Gross = raw MTM. Amount used = Zerodha Final; percent = net \u00f7 that amount.">
-          <span class="cpnl-metrics">
-            <span class="cpnl-pair">
-              <span class="cpnl-k">Net</span>
-              <span class="cpnl-fig"><strong class="cpnl-val cpnl-net-val">${_fmtSignedInr(_headerNet)}</strong><span class="cpnl-pct-bracket cpnl-net-pct muted">${_headerNetPct}</span></span>
-            </span>
-            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
-            <span class="cpnl-pair">
-              <span class="cpnl-k">Gross</span>
-              <span class="cpnl-fig"><strong class="cpnl-gross-val${_headerGrossCls}">${_fmtSignedInr(_headerMtm)}</strong><span class="cpnl-pct-bracket cpnl-gross-pct muted">${_headerGrossPct}</span></span>
-            </span>
-            <span class="cpnl-sep" aria-hidden="true">\u00b7</span>
-            <span class="cpnl-pair">
-              <span class="cpnl-k">Amount used</span>
-              <span class="cpnl-fig"><strong class="cpnl-margin-val">\u2014</strong><span class="cpnl-pct-bracket cpnl-margin-pct muted"></span></span>
-            </span>
-          </span>
-        </span>
         </div>
       </div>
       <span class="collapsible-chevron" aria-hidden="true"></span>
