@@ -129,10 +129,56 @@ Closed-trade join on 2026-09-10 (16 CLOSED rows, 4 wins / 12 losses) found **no 
 
 ---
 
+## 🟢 Platform — Multi-user login (parked Nov 2026)
+
+**Status:** Plan finalized; **implementation parked** until explicitly started.  
+**Today:** One shared `OPT_DASHBOARD_API_KEY`, one `data/zerodha_session.json`, one Kite app key/secret, global `options_suggestions` / `options_trades` / notifications (no `owner_user_id`).  
+**Test stubs:** `tests/test_dashboard/test_multi_user_future.py`
+
+### Locked decisions
+| Rule | Detail |
+|---|---|
+| Exactly one admin | `app_users.is_admin` — only one row may be `1`; promoting another demotes the current admin in the same transaction |
+| Ticks = admin Zerodha | `stock_ws_runner` loads **only** the admin session. Index %, live MTM marks, SL/risk ticks, chain / ATM IV all from that feed |
+| Orders = logged-in user Zerodha | Place / close / supplement / trading margin quotes use that user’s token |
+| Shared suggestions | Everyone sees the same engine suggestions / sit-outs / market context |
+| Private book | Trades, legs, broker orders, History P&L, trade-scoped notifications scoped by `owner_user_id` |
+| Admin UI | User list: create / disable / transfer admin |
+| Logs | System, Jobs, and WS/feed logs visible to **both** admin and non-admin |
+
+### Target shape
+- **Auth:** Real app users (replace single dashboard API-key gate). Cookie identifies the app user.
+- **Tables:** `app_users` (login, password hash, `is_admin`, active); `zerodha_sessions` per user (kite_user_id, api_key, access_token, generated_at).
+- **Suggestion “taken”:** Keep shared suggestion row; add `options_suggestion_user_state (suggestion_id, user_id, status)` so User A executing does not hide it for User B. Engine retire (`IGNORED` / stale) can still retire the shared row for everyone.
+- **Trades / risk:** `owner_user_id` on `options_trades`, `options_broker_orders`, trade-scoped notifications. LiveRiskMonitor marks from **admin ticks**; auto-close / milestone flatten must use the **trade owner’s** session. Dashboard Place/Close refuse if the logged-in user has no valid Zerodha token.
+- **Kite credentials (v1):** Keep one env `OPT_ZERODHA_API_KEY` / `SECRET`; each user daily-logs in; tokens stored per user. One `ws_runner` process = admin ticker only.
+- **UI:** App login; header shows app user + this user’s Zerodha status + separate “Feed (admin)” health; admin-only Users tab; My Trades / History = own data.
+
+### Build order (when unparked; ~4–6 weeks)
+1. Users + login + single-admin constraint + user list UI  
+2. Per-user Zerodha sessions; ws_runner pinned to admin  
+3. `owner_user_id` on trades/orders; scope My Trades / History  
+4. Per-user suggestion state; place/close with owner token  
+5. Risk/auto-exec uses owner token; feed stays admin  
+6. Logs shared; WS/feed status shows admin session health  
+
+### Open before implementation (must decide)
+1. **Admin sees other users’ trades?** A) No — user list + own book only (plan default) / B) Yes — read-only all-users view  
+2. **Jobs / runtime flags / void** — admin only, or any logged-in user?  
+3. **Kite Connect app** — confirm one API key can mint daily tokens for multiple Kite client IDs; if not, store per-user API key/secret on `app_users`  
+4. **Auto-close without keyboard** — when risk fires on User B’s trade, place close in B’s Zerodha using B’s stored token? (Recommended: yes)  
+5. **Same suggestion, two users** — allow parallel execute (recommended), or block the second?  
+6. **Migrate existing rows** — assign current trades/orders/notifications to the first admin?  
+7. **Zerodha execution logs** — shared system/jobs/WS logs for everyone, but execution logs own-orders-only? (Recommended: yes)  
+8. **User provisioning** — admin sets temporary password, or invite link?
+
+---
+
 ## 📋 Discussed but Deferred (User Decision)
 
 | Item | Status |
 |---|---|
+| **Multi-user login** (admin feed / per-user orders) | **Parked Nov 2026** — full plan → [Platform — Multi-user login](#-platform--multi-user-login-parked-nov-2026) |
 | Broker-agnostic adapter layer (ZerodhaAdapter / NoOpAdapter) | Discussed only — not implementing yet |
 | Telegram / email notification dispatcher | Discussed only — not implementing yet |
 | Trade Action Panel — full rule fusion + broker execution | Advisory panel shipped May 2026; remaining UI items → Risk & Monitoring |

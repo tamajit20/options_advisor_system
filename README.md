@@ -855,6 +855,7 @@ pytest tests/test_database/test_schema.py tests/test_scheduler/test_scheduler.py
 | Index lot-size revision | `options_lot_sizes`, `config.py` `default_lot_sizes`, `scripts/migrate_nse_lot_sizes.py`, README B4 |
 | New module / boundary   | README B1 / B6 / B12                                                                           |
 | Code-only ship          | [A7](#a7-code-deploy)                                                                          |
+| Parked multi-user login | `FUTURE_ENHANCEMENT_SCOPES.md` → Platform — Multi-user login; stubs in `tests/test_dashboard/test_multi_user_future.py` |
 
 
 **Agent shorthand:** saying **deploy** means document (if needed) → commit → push → VM deploy (A7).
