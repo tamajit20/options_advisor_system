@@ -196,6 +196,17 @@ def test_tick_to_quote_without_meta_uses_token_placeholder():
     assert q.last_price == 100.0
 
 
+def test_tick_to_quote_index_keeps_kite_previous_close():
+    meta = TokenMeta(symbol="NIFTY", is_index=True, product="options_index")
+    tick = {
+        "instrument_token": 256265,
+        "last_price": 24510.35,
+        "ohlc": {"open": 24480.0, "high": 24540.0, "low": 24410.0, "close": 24462.15},
+    }
+    q = _tick_to_quote(tick, meta, "zerodha")
+    assert q.prev_close == 24462.15
+
+
 def test_tick_to_quote_missing_depth_yields_none_bid_ask():
     tick = {"instrument_token": 1, "last_price": 50.0}
     q = _tick_to_quote(tick, None, "zerodha")

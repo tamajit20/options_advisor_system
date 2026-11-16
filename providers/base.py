@@ -80,6 +80,7 @@ class LiveQuote:
     source: DataSource = DataSource.UNKNOWN
     provider: str = ""                   # which adapter served this
     freshness_ms: Optional[int] = None   # tick age in ms (None for EOD)
+    prev_close: Optional[float] = None   # Kite ohlc.close; index day-change baseline
 
 
 # ---------------------------------------------------------------------------

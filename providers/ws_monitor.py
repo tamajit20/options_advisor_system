@@ -198,14 +198,23 @@ class WSMonitor:
                 self._last_tick_at = now
                 self._tick_timestamps.append(now.timestamp())
                 self._prune_rate_window_locked(now)
-                self._recent.append({
+                event = {
                     "ts":          now.isoformat(),
                     "topic":       topic,
                     "symbol":      symbol,
                     "option_type": opt,
                     "strike":      float(strike) if strike is not None else None,
                     "last_price":  float(last_price) if last_price is not None else None,
-                })
+                }
+                if opt is None:
+                    raw_prev = getattr(payload, "prev_close", None)
+                    try:
+                        prev = float(raw_prev) if raw_prev is not None else 0.0
+                    except (TypeError, ValueError):
+                        prev = 0.0
+                    if prev > 0:
+                        event["prev_close"] = prev
+                self._recent.append(event)
                 if opt is None and last_price is not None:
                     sym_u = symbol.upper()
                     if sym_u not in _INDEX_SYMBOLS:

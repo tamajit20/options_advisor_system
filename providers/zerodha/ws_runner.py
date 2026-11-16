@@ -201,6 +201,15 @@ def _tick_to_quote(tick: dict, meta: Optional[_TokenMeta], provider_name: str) -
         option_type = meta.option_type
 
     exchange = meta.exchange if meta is not None else None
+    prev_close = None
+    if meta is not None and meta.is_index:
+        ohlc = tick.get("ohlc") or {}
+        raw_close = ohlc.get("close")
+        try:
+            if raw_close is not None and float(raw_close) > 0:
+                prev_close = float(raw_close)
+        except (TypeError, ValueError):
+            prev_close = None
     return LiveQuote(
         symbol=symbol,
         expiry=expiry,
@@ -217,6 +226,7 @@ def _tick_to_quote(tick: dict, meta: Optional[_TokenMeta], provider_name: str) -
         timestamp=ts,
         source=DataSource.LIVE,
         provider=provider_name,
+        prev_close=prev_close,
         freshness_ms=0,
     )
 

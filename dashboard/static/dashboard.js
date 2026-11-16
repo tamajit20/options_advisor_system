@@ -2934,7 +2934,10 @@ function _applyIndexSpotLiveUpdate(data) {
     const srcEl = chip.querySelector('.idx-chip-src');
     if (priceEl) priceEl.textContent = _fmtIndexPrice(item.symbol, item.price);
     if (srcEl) srcEl.textContent = 'Live';
-    // Recompute day change from stashed prior close (SSE payload has no DB).
+    // Day % uses Zerodha's previous close from the tick when the stream has it.
+    if (item.ref_close != null && !isNaN(Number(item.ref_close)) && Number(item.ref_close) > 0) {
+      chip.dataset.refClose = String(item.ref_close);
+    }
     let change = item.change;
     let changePct = item.change_pct;
     const refRaw = chip.dataset.refClose;

@@ -194,6 +194,35 @@ class TestApiIndicesSpot:
         assert syms["VIX"]["price"] == 16.7
         assert syms["VIX"]["change"] == 0.7
 
+    def test_live_percent_uses_kite_previous_close(self, client, mocker):
+        now = datetime(2026, 5, 25, 11, 0, 0)
+        mocker.patch("dashboard.server.now_ist", return_value=now)
+        mocker.patch("dashboard.server._ws_tick_age_seconds", return_value=5.0)
+        mocker.patch("dashboard.server._load_ws_status_snapshot", return_value={
+            "connection_state": "connected",
+            "token_expired": False,
+            "recent_events": [
+                {
+                    "symbol": "NIFTY",
+                    "last_price": 24031.7,
+                    "prev_close": 24100.0,
+                    "ts": "2026-05-25T11:00:00",
+                },
+                {"symbol": "BANKNIFTY", "last_price": 55293.65, "ts": "2026-05-25T11:00:00"},
+                {"symbol": "FINNIFTY", "last_price": 26102.15, "ts": "2026-05-25T11:00:00"},
+                {"symbol": "VIX", "last_price": 16.7, "ts": "2026-05-25T11:00:00"},
+            ],
+        })
+        mocker.patch(
+            "dashboard.server._prior_eod_close",
+            return_value=24000.0,
+        )
+        resp = client.get("/api/indices/spot")
+        nifty = next(i for i in resp.get_json()["indices"] if i["symbol"] == "NIFTY")
+        assert nifty["ref_close"] == 24100.0
+        assert nifty["change"] == -68.3
+        assert nifty["change_pct"] == -0.28
+
     def test_falls_back_to_eod_when_ws_missing(self, client, mocker):
         mocker.patch("dashboard.server._load_ws_status_snapshot", return_value=None)
         mocker.patch(

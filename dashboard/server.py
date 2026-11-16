@@ -890,10 +890,18 @@ def _latest_live_index_quotes(
         lp = ev.get("last_price")
         if lp is None:
             continue
-        out[sym] = {
+        quote = {
             "price": float(lp),
             "as_of": ev.get("ts"),
         }
+        raw_prev = ev.get("prev_close")
+        try:
+            prev = float(raw_prev) if raw_prev is not None else 0.0
+        except (TypeError, ValueError):
+            prev = 0.0
+        if prev > 0:
+            quote["prev_close"] = prev
+        out[sym] = quote
     return out
 
 
@@ -968,8 +976,16 @@ def _enrich_index_item_change(
     sym = str(item.get("symbol") or "").upper()
     price = item.get("price")
     if item.get("source") == "live":
-        ref = _prior_eod_close(db, sym)
-        item.update(_index_change_fields(price, ref))
+        # Kite ohlc.close is the previous close Zerodha uses for the day %.
+        # Our own spot EOD can be a different print or an older day.
+        ref = item.get("prev_close")
+        try:
+            ref_f = float(ref) if ref is not None else 0.0
+        except (TypeError, ValueError):
+            ref_f = 0.0
+        if ref_f <= 0:
+            ref_f = _prior_eod_close(db, sym)
+        item.update(_index_change_fields(price, ref_f))
         return item
     if item.get("source") == "eod" and eod_row is not None:
         td = eod_row.get("trade_date")
@@ -1150,13 +1166,15 @@ def _indices_spot_live_payload(snap: dict) -> dict:
                 live_as_of = dt.strftime("%Y-%m-%d %H:%M:%S")
             except ValueError:
                 live_as_of = str(raw_ts)
+        price = round(float(live["price"]), 2)
         indices.append({
             "symbol": sym,
             "label": _INDEX_LABELS.get(sym, sym),
-            "price": round(float(live["price"]), 2),
+            "price": price,
             "source": "live",
             "as_of": live_as_of,
             "trade_date": None,
+            **_index_change_fields(price, live.get("prev_close")),
         })
     return {
         "feed": "live" if indices else "eod",
@@ -4443,6 +4461,7 @@ def create_app() -> Flask:
                     "source": "live",
                     "as_of": live_as_of,
                     "trade_date": None,
+                    "prev_close": live.get("prev_close"),
                 }))
                 continue
 

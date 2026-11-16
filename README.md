@@ -603,7 +603,7 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 **My Trades profit / loss milestone:** each row has **Fixed** + a rupee box + **Save**. Checked = this trade uses that ₹ line (profit = sell when MTM ≤ ₹X; loss = close when MTM ≤ −₹X). Unchecked = overlay M1..MN / % of entry premium. Overlay off still honors a saved Fixed line.
 
-**Header index strip:** Nifty / BN / FN / VIX on their own full-width row under the header controls (compact ▲/▼ % vs prior EOD; full change in the tooltip) so a wide window cannot clip them. Phones hide header banners so VIX stays visible.
+**Header index strip:** Nifty / BN / FN / VIX on their own full-width row under the header controls (compact ▲/▼ % vs Zerodha's previous close on the live tick; prior EOD only when that close is missing; full change in the tooltip) so a wide window cannot clip them. Phones hide header banners so VIX stays visible.
 
 **Pre-event exit marquee:** from the **morning of the prior day**, when a HIGH-impact event is **tomorrow** (or still **today**) and any ACTIVE short/credit trade is open, a single-line scrolling banner under the header warns to consider closing tonight (advisory). Multiple events are **one at a time** on that line — **×** dismisses the current event (localStorage through the event date) and shows the next. Driven by live `/api/system-status` (`pre_event_exit.items`), not unread state; visible on phones. Job `event_eve_review` (**09:05 IST**) inserts `PRE_EVENT_EXIT` (CRITICAL) for shorts and `EVENT_AHEAD_REVIEW` for other ACTIVE trades.
 
