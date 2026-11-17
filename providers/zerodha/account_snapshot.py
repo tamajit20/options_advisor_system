@@ -84,8 +84,43 @@ def invalidate_account_cache() -> None:
         _CACHE["at"] = 0.0
 
 
-def fetch_account_snapshot(*, force_refresh: bool = False) -> dict:
-    """Return profile + margin block for dashboard APIs."""
+def persist_capital_snapshot_if_changed(
+    snapshot: dict,
+    *,
+    trigger_reason: str = "fetch",
+) -> bool:
+    """Write a DB row when Zerodha capital figures changed. Never raises."""
+    if not snapshot or not snapshot.get("available"):
+        return False
+    try:
+        from database.connection import SQLServerConnection
+        from database.models import ZerodhaCapitalSnapshotRepo
+
+        with SQLServerConnection() as db:
+            return ZerodhaCapitalSnapshotRepo(db).insert_if_changed(
+                snapshot,
+                trigger_reason=trigger_reason,
+            )
+    except Exception:
+        logger.debug(
+            "zerodha capital snapshot persist failed (trigger=%s)",
+            trigger_reason,
+            exc_info=True,
+        )
+        return False
+
+
+def fetch_account_snapshot(
+    *,
+    force_refresh: bool = False,
+    persist_capital: bool = True,
+    trigger_reason: str = "fetch",
+) -> dict:
+    """Return profile + margin block for dashboard APIs.
+
+    Fresh (non-cached) pulls also persist a capital history row when net /
+    idle / utilised figures change vs the last stored snapshot.
+    """
     session = load_session()
     if session is None or not is_token_valid(session):
         return {"available": False, "reason": "no_valid_session"}
@@ -112,6 +147,12 @@ def fetch_account_snapshot(*, force_refresh: bool = False) -> dict:
         with _CACHE_LOCK:
             _CACHE["payload"] = stored
             _CACHE["at"] = time.monotonic()
+        if persist_capital:
+            reason = trigger_reason if force_refresh else (trigger_reason or "poll")
+            body["capital_persisted"] = persist_capital_snapshot_if_changed(
+                stored,
+                trigger_reason=reason,
+            )
         return body
     except Exception as exc:
         logger.warning("zerodha account snapshot failed: %s", exc)

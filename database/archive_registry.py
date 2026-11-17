@@ -128,6 +128,11 @@ ARCHIVE_TABLE_SPECS: List[ArchiveTableSpec] = [
         ("id",),
         date_type="datetime",
     ),
+    ArchiveTableSpec(
+        "options_zerodha_capital_snapshots", "recorded_at", ARCHIVE_RETENTION_KEY,
+        ("id",),
+        date_type="datetime",
+    ),
 ]
 
 

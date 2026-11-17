@@ -108,12 +108,20 @@ def kite_console_redirect_url() -> str:
     return zerodha_callback_url()
 
 
-def _zerodha_account_for_api(*, force_refresh: bool = False) -> dict:
+def _zerodha_account_for_api(
+    *,
+    force_refresh: bool = False,
+    trigger_reason: str = "dashboard",
+) -> dict:
     from providers.zerodha.account_snapshot import fetch_account_snapshot, invalidate_account_cache
 
     if force_refresh:
         invalidate_account_cache()
-    return fetch_account_snapshot(force_refresh=force_refresh)
+    return fetch_account_snapshot(
+        force_refresh=force_refresh,
+        persist_capital=True,
+        trigger_reason=trigger_reason if force_refresh else "poll",
+    )
 
 
 def _zerodha_status_payload(
@@ -1222,6 +1230,12 @@ _JOB_META: Dict[str, Dict[str, str]] = {
                             "description": "Export pending *_Archive .bak before VM stop (Fri 15:36)."},
     "db_backup":          {"icon": "💽", "name": "Hot DB Backup",
                             "description": "SQL BACKUP of OptionsAdvisorDB to ./backups before VM stop (Fri 15:38). ACK will not delete hot rows without this."},
+    "zerodha_capital_snapshot": {"icon": "💰", "name": "Zerodha Capital Snapshot",
+                            "description": "Every ~5m in session: refresh Kite margins and store a row when idle/utilised/net capital changes (History → Capital)."},
+    "pcr_regen_poll":     {"icon": "📡", "name": "PCR Regen Poll",
+                            "description": "Every ~5m in session: PCR band-cross hints for opportunity regen."},
+    "intraday_sl_fallback": {"icon": "🛡️", "name": "Intraday SL Fallback",
+                            "description": "Every ~3m: poll chain for SL when the WebSocket feed is stale."},
 }
 
 _DOW_LABELS = {"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu",
@@ -3439,6 +3453,181 @@ def create_app() -> Flask:
             "total_amount_invested": round(total_amount_invested, 2),
             "total_charges":   round(total_charges, 2),
             "channel":         channel_f or "all",
+        })
+
+    @app.route("/api/stats/capital-timeline")
+    @_with_db
+    def api_capital_timeline(db: SQLServerConnection):
+        """Capital vs P&L for History → Capital.
+
+        - concurrent_capital: step series from trade max-loss open/close
+        - zerodha_snapshots: seating idle / utilised / net (from now forward)
+        - trades: closed-trade cumulative P&L in the same From/To window
+        """
+        from database.models import ZerodhaCapitalSnapshotRepo
+
+        from_date = request.args.get("from_date") or None
+        to_date = request.args.get("to_date") or None
+        channel_f = _normalize_execution_channel_filter(
+            request.args.get("channel") or request.args.get("execution_channel"),
+        )
+
+        def _parse_day(s: Optional[str], *, end: bool = False) -> Optional[datetime]:
+            raw = (s or "").strip()
+            if not raw:
+                return None
+            try:
+                d = datetime.strptime(raw, "%Y-%m-%d")
+            except ValueError:
+                return None
+            if end:
+                return d.replace(hour=23, minute=59, second=59)
+            return d
+
+        from_dt = _parse_day(from_date, end=False)
+        to_dt = _parse_day(to_date, end=True)
+
+        # Trades whose lifetime overlaps the window (for concurrent capital).
+        open_filters = [
+            "t.executed_on IS NOT NULL",
+            "t.actual_max_loss IS NOT NULL",
+            "t.actual_max_loss > 0",
+        ]
+        open_params: list = []
+        if to_dt is not None:
+            open_filters.append("t.executed_on <= ?")
+            open_params.append(to_dt)
+        if from_dt is not None:
+            open_filters.append("(t.closed_on IS NULL OR t.closed_on >= ?)")
+            open_params.append(from_dt)
+        open_rows = db.fetch_all(
+            "SELECT t.trade_id, t.trade_name, t.executed_on, t.closed_on, "
+            "       t.actual_max_loss, t.status, t.net_pnl "
+            "FROM options_trades t "
+            f"WHERE {' AND '.join(open_filters)} "
+            "ORDER BY t.executed_on ASC",
+            open_params,
+        )
+        zids_open = (
+            _zerodha_trade_id_set(db, [r["trade_id"] for r in open_rows])
+            if channel_f else set()
+        )
+        capital_trades = []
+        for r in open_rows:
+            if channel_f and _channel_for_trade_id(r["trade_id"], zids_open) != channel_f:
+                continue
+            capital_trades.append(r)
+
+        events = []
+        for r in capital_trades:
+            ml = float(r["actual_max_loss"] or 0)
+            if ml <= 0:
+                continue
+            exe = r.get("executed_on")
+            clo = r.get("closed_on")
+            tid = r["trade_id"]
+            if exe is not None:
+                events.append((exe, ml, "open", tid))
+            if clo is not None:
+                events.append((clo, -ml, "close", tid))
+        # Opens before closes at the same timestamp so concurrent dips correctly.
+        events.sort(key=lambda e: (e[0], 0 if e[2] == "open" else 1, e[3]))
+
+        concurrent_series = []
+        concurrent = 0.0
+        peak = 0.0
+        for at, delta, kind, tid in events:
+            concurrent = max(0.0, concurrent + delta)
+            if concurrent > peak:
+                peak = concurrent
+            rr = {"at": at}
+            concurrent_series.append({
+                "at": _row(rr)["at"],
+                "concurrent_capital": round(concurrent, 2),
+                "event": kind,
+                "trade_id": tid,
+                "delta": round(delta, 2),
+            })
+
+        # Closed-trade P&L (same window idea as pnl-timeline).
+        pnl_filters = [
+            "t.status IN ('CLOSED', 'EXPIRED')",
+            "t.net_pnl IS NOT NULL",
+            "t.closed_on IS NOT NULL",
+        ]
+        date_filters, date_params = _optional_closed_date_filters(
+            from_date, to_date, date_expr="t.closed_on",
+        )
+        pnl_filters.extend(date_filters)
+        pnl_rows = db.fetch_all(
+            "SELECT t.trade_id, t.trade_name, t.closed_on, t.executed_on, "
+            "       t.net_pnl, t.actual_max_loss, "
+            "       COALESCE(s.strategy, 'UNKNOWN') AS strategy "
+            "FROM options_trades t "
+            "LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
+            f"WHERE {' AND '.join(pnl_filters)} "
+            "ORDER BY t.closed_on ASC",
+            date_params,
+        )
+        zids_pnl = (
+            _zerodha_trade_id_set(db, [r["trade_id"] for r in pnl_rows])
+            if channel_f else set()
+        )
+        cum = 0.0
+        pnl_trades = []
+        for r in pnl_rows:
+            if channel_f and _channel_for_trade_id(r["trade_id"], zids_pnl) != channel_f:
+                continue
+            pnl = float(r["net_pnl"])
+            cum += pnl
+            rr = {"closed_on": r["closed_on"], "executed_on": r["executed_on"]}
+            pnl_trades.append({
+                "trade_id": r["trade_id"],
+                "trade_name": r["trade_name"],
+                "closed_on": _row(rr)["closed_on"],
+                "executed_on": _row(rr)["executed_on"],
+                "strategy": r["strategy"],
+                "net_pnl": round(pnl, 2),
+                "actual_max_loss": float(r["actual_max_loss"] or 0),
+                "cum_pnl_overall": round(cum, 2),
+            })
+
+        snap_rows = ZerodhaCapitalSnapshotRepo(db).list_between(
+            from_dt=from_dt, to_dt=to_dt,
+        )
+        snapshots = []
+        for s in snap_rows:
+            rr = {"recorded_at": s.get("recorded_at")}
+            snapshots.append({
+                "recorded_at": _row(rr)["recorded_at"],
+                "net": float(s["net"]) if s.get("net") is not None else None,
+                "usable_balance": (
+                    float(s["usable_balance"])
+                    if s.get("usable_balance") is not None else None
+                ),
+                "available_cash": (
+                    float(s["available_cash"])
+                    if s.get("available_cash") is not None else None
+                ),
+                "utilised_debits": (
+                    float(s["utilised_debits"])
+                    if s.get("utilised_debits") is not None else None
+                ),
+                "trigger_reason": s.get("trigger_reason"),
+            })
+
+        return jsonify({
+            "concurrent_capital": concurrent_series,
+            "peak_concurrent_capital": round(peak, 2),
+            "zerodha_snapshots": snapshots,
+            "trades": pnl_trades,
+            "total_pnl": round(cum, 2),
+            "channel": channel_f or "all",
+            "zerodha_note": (
+                "Zerodha idle/utilised lines start when snapshots are captured "
+                "(on capital change during session). Past dates before capture "
+                "have no Zerodha series."
+            ),
         })
 
     @app.route("/api/stats/strategy-performance")

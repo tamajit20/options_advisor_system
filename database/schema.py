@@ -1019,6 +1019,30 @@ _TABLE_DDL: List[str] = [
     "CREATE INDEX IF NOT EXISTS IX_options_execution_reversals_job "
     "ON options_execution_reversals (execution_job_id)",
 
+    # Zerodha account capital — one row when net / idle / utilised meaningfully changes.
+    # usable_balance ≈ seating idle margin; utilised_debits ≈ capital blocked in positions.
+    """
+    IF OBJECT_ID('options_zerodha_capital_snapshots', 'U') IS NULL
+    CREATE TABLE options_zerodha_capital_snapshots (
+        id                       BIGINT IDENTITY(1,1) PRIMARY KEY,
+        recorded_at              DATETIME2(0)  NOT NULL,
+        user_id                  NVARCHAR(40)  NULL,
+        net                      DECIMAL(18,4) NULL,
+        usable_balance           DECIMAL(18,4) NULL,
+        available_cash           DECIMAL(18,4) NULL,
+        live_balance             DECIMAL(18,4) NULL,
+        opening_balance          DECIMAL(18,4) NULL,
+        utilised_debits          DECIMAL(18,4) NULL,
+        utilised_span            DECIMAL(18,4) NULL,
+        utilised_exposure        DECIMAL(18,4) NULL,
+        utilised_option_premium  DECIMAL(18,4) NULL,
+        trigger_reason           NVARCHAR(40)  NULL,
+        created_at               DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_zerodha_capital_snapshots_at "
+    "ON options_zerodha_capital_snapshots (recorded_at DESC)",
+
     """
     IF OBJECT_ID('options_zerodha_execution_jobs', 'U') IS NULL
     CREATE TABLE options_zerodha_execution_jobs (
@@ -1233,4 +1257,5 @@ def list_tables() -> List[str]:
         "options_chain_5min",
         "options_atm_iv_5min",
         "options_em_calibration",
+        "options_zerodha_capital_snapshots",
     ]

@@ -1,6 +1,6 @@
 # Options Advisor - Complete Guide
 
-**Last updated:** 2026-10-24
+**Last updated:** 2026-11-17
 
 **Single document** for install, day-to-day ops, and architecture.  
 Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.
@@ -179,6 +179,7 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 
  Every ~3m during session: intraday_sl_fallback
  Every ~5m during session: pcr_regen_poll
+ Every ~5m during session: zerodha_capital_snapshot (persist idle/utilised on change)
 ```
 
 
@@ -206,6 +207,7 @@ Enable flags / handlers live in `SCHEDULER_CONFIG["jobs"]` and `JOB_FUNCS` in `s
 | `intraday_close_snapshot`                                                | On @ 15:35      | LTP capture                   |
 | `intraday_sl_fallback`                                                   | On every 3m     | If WS stale                   |
 | `pcr_regen_poll`                                                         | On every 5m     | Regen hints                   |
+| `zerodha_capital_snapshot`                                               | On every 5m     | Store Zerodha idle/utilised when margins change (History → Capital) |
 | `event_eve_review` / `events_seed`                                       | On @ 09:05 / Mon | Eve-of HIGH + seed           |
 | `weekly_archive` / `weekly_log_cleanup` / `archive_export` / `db_backup` | Fri             | Archive path                  |
 | Solo `fo_bhav_*` … `suggestion_engine`                                   | Usually off     | Available for manual Jobs tab |
@@ -465,7 +467,7 @@ flowchart TB
 
 
 
-Other important tables: `options_config`, `options_runtime_flags`, `options_job_log`, `options_system_logs`, `options_notifications`, `options_chain_5min`, `options_atm_iv_5min`, MTM / level-event tables, `options_simulations`, calendars, lot sizes. Full list: `list_tables()`.
+Other important tables: `options_config`, `options_runtime_flags`, `options_job_log`, `options_system_logs`, `options_notifications`, `options_chain_5min`, `options_atm_iv_5min`, MTM / level-event tables, `options_simulations`, calendars, lot sizes, `options_zerodha_capital_snapshots` (Zerodha idle/utilised on change for History → Capital). Full list: `list_tables()`.
 
 ---
 
@@ -597,7 +599,7 @@ Leg **pricing provenance** (`LIVE` | `EOD` | `MIXED`) is unrelated to trend labe
 Flask on **:5001** (`dashboard/server.py`). Reads DB; execution calls lifecycle.  
 Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-outs must show a clear reason.
 
-**My Trades / History channel filter:** shared All / Zerodha only / Manual only on My Trades and across all History tabs (Trades, Suggestions, Performance, Charts). On **My Trades** and **History → Trades**, cards are grouped under separate **Zerodha** and **Manual** section headings (All shows both; a channel filter shows only that section). History opens on **All channels**, from the first day of the current month through today. Advisor tabs end with **Learning** (after Config). From, To, channel, and that tab’s other filters sit in one bar; Refresh reloads the open History tab. The closed-trade strip (net P&L, total premium deployed, return on premium, total amount used = Zerodha Final with net÷that sum %, total amount invested = sum of max loss, return on amount invested, charges, trade count) sits under that bar on every History tab and uses the same From / To and channel. Each History → Trades card keeps a facts row visible collapsed and expanded: left = name / Executed / Closed / Expiry; right = Amount used (Zerodha Final + %) and Premium paid (+ %); header shows signed net only. Amount used width is reserved so the row does not jump when the quote arrives. Switching tabs does not change those dates; each tab reloads with the current range. `?channel=` on `/api/trades/open`, `/api/history/closed-trades`, `/api/history/suggestions`, `/api/stats/pnl-timeline`, `/api/stats/strategy-performance`. Channel follows opening Kite ENTRY/SUPPLEMENT fills (execution reversals count as Zerodha). History Trades lists those reverts as their own cards in the same date window, for All and Zerodha, so the list matches the strip. Suggestions without a linked trade are hidden when a channel filter is active. History → Trades expands a Trade at close snapshot (booked net, gross, and the trade-page layout frozen at exit) and the original suggestion, both in the same muted panel as My Trades. History → Trades cards also embed that trade’s Zerodha execution log (ENTRY → EXIT, plus suggestion-only failed attempts) in time order. History → Performance, under the strategy cards, scores the same closed trades by gate, advisory warning, index, DTE, IV rank, credit grade, entry quality, how the trade ended, and whether a high-impact event was flagged. Each row shows the trade count.
+**My Trades / History channel filter:** shared All / Zerodha only / Manual only on My Trades and across all History tabs (Trades, Suggestions, Performance, Charts). On **My Trades** and **History → Trades**, cards are grouped under separate **Zerodha** and **Manual** section headings (All shows both; a channel filter shows only that section). History opens on **All channels**, from the first day of the current month through today. Advisor tabs end with **Learning** (after Config). From, To, channel, and that tab’s other filters sit in one bar; Refresh reloads the open History tab. The closed-trade strip (net P&L, total premium deployed, return on premium, total amount used = Zerodha Final with net÷that sum %, total amount invested = sum of max loss, return on amount invested, charges, trade count) sits under that bar on every History tab and uses the same From / To and channel. Each History → Trades card keeps a facts row visible collapsed and expanded: left = name / Executed / Closed / Expiry; right = Amount used (Zerodha Final + %) and Premium paid (+ %); header shows signed net only. Amount used width is reserved so the row does not jump when the quote arrives. **History → Capital** charts concurrent trade capital (max loss step), cumulative P&L (and per-trade dots), plus Zerodha seating idle (`usable_balance`) and utilised (`utilised_debits`) from `options_zerodha_capital_snapshots` — snapshots are written only when those figures change (scheduler every ~5m in session, and on dashboard margin refresh). Zerodha lines start from first capture going forward (no past backfill). Switching tabs does not change those dates; each tab reloads with the current range. `?channel=` on `/api/trades/open`, `/api/history/closed-trades`, `/api/history/suggestions`, `/api/stats/pnl-timeline`, `/api/stats/strategy-performance`. Channel follows opening Kite ENTRY/SUPPLEMENT fills (execution reversals count as Zerodha). History Trades lists those reverts as their own cards in the same date window, for All and Zerodha, so the list matches the strip. Suggestions without a linked trade are hidden when a channel filter is active. History → Trades expands a Trade at close snapshot (booked net, gross, and the trade-page layout frozen at exit) and the original suggestion, both in the same muted panel as My Trades. History → Trades cards also embed that trade’s Zerodha execution log (ENTRY → EXIT, plus suggestion-only failed attempts) in time order. History → Performance, under the strategy cards, scores the same closed trades by gate, advisory warning, index, DTE, IV rank, credit grade, entry quality, how the trade ended, and whether a high-impact event was flagged. Each row shows the trade count.
 
 **My Trades Current P&L:** header badge shows live MTM in session; **off-market** it keeps the last live/DB MTM (same figure as expanded Live P&L / Close now), not a blank dash. Under the channel filter, one strip sums the open trades in that filter: **Total invested** (each trade’s max loss), then the same figures as each collapsed trade line — **Total net**, **Total gross** (each with percent of premium), and **Total amount used** (Zerodha Final, with total net ÷ that sum in brackets). On the card, those three sit on the right of the premium / entry / expiry line; status chips (target, close pending, channel, feed) sit on the right of the trade name. The strip follows live marks.
 

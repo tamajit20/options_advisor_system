@@ -2366,3 +2366,132 @@ class TradeGreeksRepo:
             """,
             [limit, trade_id],
         )
+
+
+# ---------------------------------------------------------------------------
+# Zerodha account capital (idle seating + utilised) — change-detected snapshots
+# ---------------------------------------------------------------------------
+class ZerodhaCapitalSnapshotRepo:
+    """Persist Zerodha equity margins when capital figures change.
+
+    ``usable_balance`` is seating idle (available to place). ``utilised_debits``
+    is capital already blocked. Rows are inserted only when a watched field
+    differs from the latest row (or on first ever snapshot).
+    """
+
+    _WATCH = (
+        "net",
+        "usable_balance",
+        "available_cash",
+        "live_balance",
+        "utilised_debits",
+        "utilised_span",
+        "utilised_option_premium",
+    )
+
+    def __init__(self, db: SQLServerConnection):
+        self.db = db
+
+    @staticmethod
+    def _round_money(value: Any) -> Optional[float]:
+        f = _safe_float(value)
+        if f is None:
+            return None
+        return round(f, 2)
+
+    def latest(self) -> Optional[dict]:
+        return self.db.fetch_one(
+            "SELECT TOP 1 * FROM options_zerodha_capital_snapshots "
+            "ORDER BY recorded_at DESC, id DESC"
+        )
+
+    def _changed(self, prev: Optional[dict], row: dict) -> bool:
+        if not prev:
+            return True
+        for key in self._WATCH:
+            if self._round_money(prev.get(key)) != self._round_money(row.get(key)):
+                return True
+        return False
+
+    def insert_if_changed(
+        self,
+        snapshot: dict,
+        *,
+        trigger_reason: str = "fetch",
+        recorded_at: Optional[datetime] = None,
+    ) -> bool:
+        """Insert one row when watched capital fields changed. Returns True if inserted."""
+        if not snapshot or not snapshot.get("available"):
+            return False
+        equity = snapshot.get("equity") or {}
+        row = {
+            "user_id": snapshot.get("user_id"),
+            "net": self._round_money(snapshot.get("net")),
+            "usable_balance": self._round_money(snapshot.get("usable_balance")),
+            "available_cash": self._round_money(snapshot.get("available_cash")),
+            "live_balance": self._round_money(snapshot.get("live_balance")),
+            "opening_balance": self._round_money(equity.get("opening_balance")),
+            "utilised_debits": self._round_money(equity.get("utilised_debits")),
+            "utilised_span": self._round_money(equity.get("utilised_span")),
+            "utilised_exposure": self._round_money(equity.get("utilised_exposure")),
+            "utilised_option_premium": self._round_money(
+                equity.get("utilised_option_premium")
+            ),
+        }
+        # Need at least one capital figure to store.
+        if all(row.get(k) is None for k in self._WATCH):
+            return False
+        prev = self.latest()
+        if not self._changed(prev, row):
+            return False
+        at = recorded_at or now_ist()
+        if isinstance(at, str):
+            at = datetime.fromisoformat(at.replace(" ", "T"))
+        self.db.execute(
+            "INSERT INTO options_zerodha_capital_snapshots "
+            "(recorded_at, user_id, net, usable_balance, available_cash, live_balance, "
+            " opening_balance, utilised_debits, utilised_span, utilised_exposure, "
+            " utilised_option_premium, trigger_reason) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                at,
+                row["user_id"],
+                row["net"],
+                row["usable_balance"],
+                row["available_cash"],
+                row["live_balance"],
+                row["opening_balance"],
+                row["utilised_debits"],
+                row["utilised_span"],
+                row["utilised_exposure"],
+                row["utilised_option_premium"],
+                (trigger_reason or "fetch")[:40],
+            ],
+        ).close()
+        return True
+
+    def list_between(
+        self,
+        *,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+    ) -> List[dict]:
+        filters = ["1=1"]
+        params: List[Any] = []
+        if from_dt is not None:
+            filters.append("recorded_at >= ?")
+            params.append(from_dt)
+        if to_dt is not None:
+            filters.append("recorded_at <= ?")
+            params.append(to_dt)
+        where = " AND ".join(filters)
+        rows = self.db.fetch_all(
+            f"SELECT recorded_at, user_id, net, usable_balance, available_cash, "
+            f"       live_balance, opening_balance, utilised_debits, utilised_span, "
+            f"       utilised_exposure, utilised_option_premium, trigger_reason "
+            f"FROM options_zerodha_capital_snapshots "
+            f"WHERE {where} "
+            f"ORDER BY recorded_at ASC, id ASC",
+            params,
+        )
+        return list(rows) if isinstance(rows, (list, tuple)) else []

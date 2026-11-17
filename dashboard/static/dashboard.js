@@ -9563,6 +9563,7 @@ function _reloadActiveHistoryTab() {
   else if (_histActiveSubtab === 'suggestions')  loadHistorySuggestions();
   else if (_histActiveSubtab === 'performance')  loadStrategyPerformance();
   else if (_histActiveSubtab === 'charts')       loadPnlCharts();
+  else if (_histActiveSubtab === 'capital')      loadCapitalCharts();
 }
 
 async function openSupplementForm(tradeId) {
@@ -10640,10 +10641,13 @@ document.querySelectorAll('#panel-history .hist-subtab').forEach(btn => {
     $('#hist-pane-suggestions').hidden  = (_histActiveSubtab !== 'suggestions');
     $('#hist-pane-performance').hidden  = (_histActiveSubtab !== 'performance');
     $('#hist-pane-charts').hidden       = (_histActiveSubtab !== 'charts');
+    const capPane = $('#hist-pane-capital');
+    if (capPane) capPane.hidden = (_histActiveSubtab !== 'capital');
     if (_histActiveSubtab === 'trades')       loadHistory();
     if (_histActiveSubtab === 'suggestions')  loadHistorySuggestions();
     if (_histActiveSubtab === 'performance')  loadStrategyPerformance();
     if (_histActiveSubtab === 'charts')       loadPnlCharts();
+    if (_histActiveSubtab === 'capital')      loadCapitalCharts();
   });
 });
 
@@ -11057,6 +11061,200 @@ async function loadPnlCharts() {
     });
   } catch (err) {
     cumEl.className = 'chart-wrap'; cumEl.innerHTML = `<div class="empty">Error: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function _capChartMoneyLabel(v) {
+  if (v >= 1000 || v <= -1000) {
+    return `${v < 0 ? '-' : ''}₹${(Math.abs(v) / 1000).toFixed(0)}k`;
+  }
+  return `₹${v.toFixed(0)}`;
+}
+
+function _buildCapitalChart(data, W = 720, H = 360) {
+  const concurrent = data.concurrent_capital || [];
+  const snaps = data.zerodha_snapshots || [];
+  const trades = data.trades || [];
+  const dates = [];
+  concurrent.forEach(p => { if (p.at) dates.push(new Date(p.at)); });
+  snaps.forEach(p => { if (p.recorded_at) dates.push(new Date(p.recorded_at)); });
+  trades.forEach(p => { if (p.closed_on) dates.push(new Date(p.closed_on)); });
+  if (!dates.length) {
+    return '<div class="empty">No capital or P&amp;L points in this range yet. Zerodha idle lines appear after the first capital-change snapshot.</div>';
+  }
+
+  const PAD = { top: 24, right: 72, bottom: 48, left: 72 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+  const minDate = new Date(Math.min(...dates));
+  const maxDate = new Date(Math.max(...dates));
+  const dateRange = Math.max(maxDate - minDate, 86400000);
+  const toX = d => PAD.left + ((d - minDate) / dateRange) * cW;
+
+  const leftVals = [0];
+  concurrent.forEach(p => leftVals.push(Number(p.concurrent_capital) || 0));
+  snaps.forEach(p => {
+    if (p.usable_balance != null) leftVals.push(Number(p.usable_balance));
+    if (p.utilised_debits != null) leftVals.push(Number(p.utilised_debits));
+    if (p.net != null) leftVals.push(Number(p.net));
+  });
+  const rightVals = [0];
+  trades.forEach(p => {
+    rightVals.push(Number(p.cum_pnl_overall) || 0);
+    rightVals.push(Number(p.net_pnl) || 0);
+  });
+  const lMin = Math.min(...leftVals);
+  const lMax = Math.max(...leftVals);
+  const rMin = Math.min(...rightVals);
+  const rMax = Math.max(...rightVals);
+  const lPad = Math.max((lMax - lMin) * 0.08, 500);
+  const rPad = Math.max((rMax - rMin) * 0.12, 200);
+  const yL0 = lMin - lPad;
+  const yL1 = lMax + lPad;
+  const yR0 = rMin - rPad;
+  const yR1 = rMax + rPad;
+  const toYL = v => PAD.top + (1 - (v - yL0) / Math.max(yL1 - yL0, 1)) * cH;
+  const toYR = v => PAD.top + (1 - (v - yR0) / Math.max(yR1 - yR0, 1)) * cH;
+
+  let grid = '';
+  let yLeft = '';
+  let yRight = '';
+  const ticks = 5;
+  for (let i = 0; i <= ticks; i++) {
+    const lv = yL0 + ((yL1 - yL0) / ticks) * i;
+    const rv = yR0 + ((yR1 - yR0) / ticks) * i;
+    const y = toYL(lv);
+    grid += `<line x1="${PAD.left}" y1="${y.toFixed(1)}" x2="${PAD.left + cW}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,.06)" stroke-width="1"/>`;
+    yLeft += _svgText(PAD.left - 6, y + 4, _capChartMoneyLabel(lv), 'end');
+    yRight += _svgText(PAD.left + cW + 6, toYR(rv) + 4, _capChartMoneyLabel(rv), 'start');
+  }
+
+  let xLabels = '';
+  const xCount = Math.min(6, dates.length);
+  const sortedDates = [...dates].sort((a, b) => a - b);
+  for (let i = 0; i < xCount; i++) {
+    const idx = Math.round(i * (sortedDates.length - 1) / Math.max(xCount - 1, 1));
+    const d = sortedDates[idx];
+    xLabels += _svgText(
+      toX(d),
+      PAD.top + cH + 20,
+      d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+      'middle',
+    );
+  }
+
+  // Step path for concurrent capital
+  const stepPts = concurrent
+    .filter(p => p.at)
+    .map(p => [toX(new Date(p.at)), toYL(Number(p.concurrent_capital) || 0)]);
+  let stepPath = '';
+  if (stepPts.length) {
+    let d = `M${stepPts[0][0].toFixed(1)},${stepPts[0][1].toFixed(1)}`;
+    for (let i = 1; i < stepPts.length; i++) {
+      d += ` H${stepPts[i][0].toFixed(1)} V${stepPts[i][1].toFixed(1)}`;
+    }
+    stepPath = `<path d="${d}" fill="none" stroke="#fcd34d" stroke-width="2" stroke-linejoin="round"/>`;
+  }
+
+  const idlePts = snaps
+    .filter(p => p.recorded_at && p.usable_balance != null)
+    .map(p => [toX(new Date(p.recorded_at)), toYL(Number(p.usable_balance))]);
+  const usedPts = snaps
+    .filter(p => p.recorded_at && p.utilised_debits != null)
+    .map(p => [toX(new Date(p.recorded_at)), toYL(Number(p.utilised_debits))]);
+  const idleLine = _svgLine(idlePts, '#38bdf8', 2);
+  const usedLine = _svgLine(usedPts, '#c4b5fd', 1.75);
+
+  const cumPts = trades
+    .filter(p => p.closed_on)
+    .map(p => [toX(new Date(p.closed_on)), toYR(Number(p.cum_pnl_overall) || 0)]);
+  const cumLine = _svgLine(cumPts, '#f1f5f9', 2.25);
+
+  let dots = '';
+  trades.forEach(t => {
+    if (!t.closed_on) return;
+    const x = toX(new Date(t.closed_on));
+    const y = toYR(Number(t.cum_pnl_overall) || 0);
+    const fill = (t.net_pnl || 0) >= 0 ? '#86efac' : '#fca5a5';
+    const tip = `${t.trade_id || ''} | ${t.strategy || ''} | `
+      + `${(t.net_pnl || 0) >= 0 ? '+' : ''}₹${Number(t.net_pnl || 0).toLocaleString('en-IN')}`
+      + ` · cum ₹${Number(t.cum_pnl_overall || 0).toLocaleString('en-IN')}`;
+    dots += _svgCircle(x, y, 4, fill, 'chart-dot chart-cap-dot', `data-tip="${escapeHtml(tip)}"`);
+  });
+
+  const legend = `<div class="chart-legend">
+    <span class="chart-legend-item"><span class="chart-legend-line" style="background:#fcd34d"></span>Capital in trades (max loss)</span>
+    <span class="chart-legend-item"><span class="chart-legend-line" style="background:#38bdf8"></span>Zerodha idle (usable)</span>
+    <span class="chart-legend-item"><span class="chart-legend-line" style="background:#c4b5fd"></span>Zerodha utilised</span>
+    <span class="chart-legend-item"><span class="chart-legend-line" style="background:#f1f5f9"></span>Cumulative P&amp;L</span>
+  </div>`;
+
+  const svg = `<svg viewBox="0 0 ${W} ${H}" class="chart-svg" xmlns="http://www.w3.org/2000/svg">
+    ${grid}${xLabels}${yLeft}${yRight}
+    ${stepPath}${usedLine}${idleLine}${cumLine}${dots}
+  </svg>`;
+  return `<div class="chart-title">Capital in use vs P&amp;L</div>
+    <div class="muted" style="font-size:.78rem;margin:0 0 8px">Left axis: capital (₹). Right axis: cumulative P&amp;L (₹). Dots = each closed trade.</div>
+    ${legend}${svg}`;
+}
+
+async function loadCapitalCharts() {
+  const host = $('#chart-capital');
+  const note = $('#hist-capital-note');
+  const summary = $('#chart-capital-summary');
+  if (!host) return;
+  if (note) note.textContent = '';
+  if (summary) summary.innerHTML = '';
+  host.className = 'chart-wrap loading';
+  host.textContent = 'Loading…';
+  refreshClosedTradeSummary();
+
+  const qs = _sharedHistRangeQuery();
+  _histChannelParam(qs);
+  try {
+    const data = await API('/api/stats/capital-timeline?' + qs);
+    if (note) {
+      note.textContent = data.zerodha_note
+        || 'Zerodha idle/utilised appear after capital-change snapshots are stored.';
+    }
+    host.className = 'chart-wrap';
+    host.innerHTML = _buildCapitalChart(data);
+
+    const peak = Number(data.peak_concurrent_capital) || 0;
+    const pnl = Number(data.total_pnl) || 0;
+    const snaps = data.zerodha_snapshots || [];
+    const last = snaps.length ? snaps[snaps.length - 1] : null;
+    const pnlCls = pnl > 0 ? 'pnl-pos' : (pnl < 0 ? 'pnl-neg' : '');
+    const retPeak = peak > 0 ? `${(pnl / peak * 100).toFixed(1)}%` : '—';
+    if (summary) {
+      summary.innerHTML = `
+        <div class="chart-kv"><span>Peak capital in trades</span><strong>₹${fmt(peak)}</strong></div>
+        <div class="chart-kv"><span>Return on peak capital</span><strong class="${pnlCls}">${retPeak}</strong></div>
+        <div class="chart-kv"><span>Total net P&amp;L</span><strong class="${pnlCls}">${pnl > 0 ? '+' : (pnl < 0 ? '−' : '')}₹${fmt(Math.abs(pnl))}</strong></div>
+        <div class="chart-kv"><span>Latest Zerodha idle</span><strong>${last && last.usable_balance != null ? '₹' + fmt(last.usable_balance) : '—'}</strong></div>
+        <div class="chart-kv"><span>Latest Zerodha utilised</span><strong>${last && last.utilised_debits != null ? '₹' + fmt(last.utilised_debits) : '—'}</strong></div>
+        <div class="chart-kv"><span>Zerodha snapshots</span><strong>${snaps.length}</strong></div>`;
+    }
+
+    const tooltip = $('#chart-capital-tooltip');
+    host.querySelectorAll('.chart-cap-dot').forEach(el => {
+      el.addEventListener('mouseenter', () => {
+        if (!tooltip) return;
+        tooltip.textContent = el.dataset.tip;
+        tooltip.hidden = false;
+      });
+      el.addEventListener('mousemove', e => {
+        if (!tooltip) return;
+        tooltip.style.left = (e.clientX + 12) + 'px';
+        tooltip.style.top = (e.clientY - 28) + 'px';
+      });
+      el.addEventListener('mouseleave', () => {
+        if (tooltip) tooltip.hidden = true;
+      });
+    });
+  } catch (err) {
+    host.className = 'chart-wrap';
+    host.innerHTML = `<div class="empty">Error: ${escapeHtml(err.message)}</div>`;
   }
 }
 

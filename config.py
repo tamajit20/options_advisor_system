@@ -167,6 +167,11 @@ SCHEDULER_CONFIG = {
             "enabled": True,
             "interval_minutes": 5,
         },
+        # Persist Zerodha idle/utilised capital when margins change (History → Capital).
+        "zerodha_capital_snapshot": {
+            "enabled": True,
+            "interval_minutes": 5,
+        },
         # Hot DB backup — Fri before VM stop (Sat job removed: VM off on weekends).
         "db_backup": {
             "day_of_week": "fri", "hour": 15, "minute": 38, "enabled": True,
@@ -201,6 +206,7 @@ SCHEDULER_CONFIG = {
         "morning_eod_catchup":     1200,
         "intraday_sl_fallback":    120,
         "pcr_regen_poll":          120,
+        "zerodha_capital_snapshot": 90,
         "db_backup":               1800,
     },
     # Default for jobs not listed above.

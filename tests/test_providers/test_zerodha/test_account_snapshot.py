@@ -51,6 +51,10 @@ def test_fetch_account_snapshot_success(mocker):
     mocker.patch("providers.zerodha.account_snapshot.load_session", return_value=session)
     mocker.patch("providers.zerodha.account_snapshot.is_token_valid", return_value=True)
     mocker.patch.dict("config.ZERODHA_API_CONFIG", {"api_key": "k"}, clear=False)
+    persist = mocker.patch(
+        "providers.zerodha.account_snapshot.persist_capital_snapshot_if_changed",
+        return_value=True,
+    )
 
     facade = MagicMock()
     facade.profile.return_value = {
@@ -73,6 +77,8 @@ def test_fetch_account_snapshot_success(mocker):
     assert out["user_name"] == "Test User"
     assert out["usable_balance"] == 49500.0
     assert out["cached"] is False
+    assert out["capital_persisted"] is True
+    persist.assert_called_once()
 
     cached = acct.fetch_account_snapshot(force_refresh=False)
     assert cached["cached"] is True
@@ -88,6 +94,10 @@ def test_account_cache_expires_after_ttl(mocker):
     mocker.patch("providers.zerodha.account_snapshot.load_session", return_value=session)
     mocker.patch("providers.zerodha.account_snapshot.is_token_valid", return_value=True)
     mocker.patch.dict("config.ZERODHA_API_CONFIG", {"api_key": "k"}, clear=False)
+    mocker.patch(
+        "providers.zerodha.account_snapshot.persist_capital_snapshot_if_changed",
+        return_value=False,
+    )
     clock = {"t": 1_000.0}
     mocker.patch(
         "providers.zerodha.account_snapshot.time.monotonic",
@@ -118,6 +128,10 @@ def test_fetch_account_snapshot_force_refresh_bypasses_cache(mocker):
     mocker.patch("providers.zerodha.account_snapshot.load_session", return_value=session)
     mocker.patch("providers.zerodha.account_snapshot.is_token_valid", return_value=True)
     mocker.patch.dict("config.ZERODHA_API_CONFIG", {"api_key": "k"}, clear=False)
+    mocker.patch(
+        "providers.zerodha.account_snapshot.persist_capital_snapshot_if_changed",
+        return_value=False,
+    )
 
     facade = MagicMock()
     facade.profile.return_value = {"user_id": "X", "user_name": "A"}
@@ -129,3 +143,4 @@ def test_fetch_account_snapshot_force_refresh_bypasses_cache(mocker):
     acct.fetch_account_snapshot(force_refresh=True)
     acct.fetch_account_snapshot(force_refresh=True)
     assert facade.profile.call_count == 2
+

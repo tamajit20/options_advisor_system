@@ -179,6 +179,15 @@ def test_event_eve_review_job_registered():
     assert sched.JOB_FUNCS["event_eve_review"] is sched.job_event_eve_review
 
 
+def test_zerodha_capital_snapshot_job_registered():
+    assert "zerodha_capital_snapshot" in sched.JOB_FUNCS
+    assert sched.JOB_FUNCS["zerodha_capital_snapshot"] is sched.job_zerodha_capital_snapshot
+    conf = __import__("config", fromlist=["SCHEDULER_CONFIG"]).SCHEDULER_CONFIG
+    job = conf["jobs"]["zerodha_capital_snapshot"]
+    assert job.get("enabled") is True
+    assert int(job.get("interval_minutes") or 0) == 5
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 — #6 data-freshness gate
 # ---------------------------------------------------------------------------

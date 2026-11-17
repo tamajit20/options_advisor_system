@@ -49,6 +49,7 @@ from lifecycle.snapshot_orchestrator import (
 from lifecycle.intraday_sl_fallback import run_intraday_sl_fallback
 from lifecycle.intraday_validator import run_intraday_validator
 from lifecycle.pcr_regen_poll import run_pcr_regen_poll
+from lifecycle.zerodha_capital_snapshot import run_zerodha_capital_snapshot
 from lifecycle.suggestion_engine import run_live_suggestion_engine, run_suggestion_engine
 from lifecycle.trade_greeks_job import run_trade_greeks_update
 from simulation.simulator import run_simulation_update
@@ -473,6 +474,10 @@ def job_pcr_regen_poll():
     _run_job("pcr_regen_poll", run_pcr_regen_poll)
 
 
+def job_zerodha_capital_snapshot():
+    _run_job("zerodha_capital_snapshot", run_zerodha_capital_snapshot)
+
+
 def job_db_backup():
     def _backup(db: SQLServerConnection) -> int:
         from lifecycle.sql_backup import run_hot_backup
@@ -640,6 +645,7 @@ JOB_FUNCS = {
     "intraday_validator":      job_intraday_validator,
     "intraday_sl_fallback":    job_intraday_sl_fallback,
     "pcr_regen_poll":          job_pcr_regen_poll,
+    "zerodha_capital_snapshot": job_zerodha_capital_snapshot,
     "db_backup":               job_db_backup,
     "eod_nightly_pipeline":    job_eod_nightly_pipeline,
     "morning_eod_catchup":     job_morning_eod_catchup,

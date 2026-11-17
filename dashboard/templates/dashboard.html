@@ -152,6 +152,7 @@
         <button class="hist-subtab" data-htab="suggestions">Suggestions</button>
         <button class="hist-subtab" data-htab="performance">📊 Performance</button>
         <button class="hist-subtab" data-htab="charts">📈 Charts</button>
+        <button class="hist-subtab" data-htab="capital">💰 Capital</button>
       </div>
       <div class="filter-row hist-filter-bar">
         <label class="hist-filter-label" title="Close or suggestion date. Same range on every History tab.">From
@@ -229,6 +230,14 @@
         <div id="chart-cumulative" class="chart-wrap"></div>
         <div id="chart-strategy-bar" class="chart-wrap"></div>
         <div id="chart-tooltip" class="chart-tooltip" hidden></div>
+      </div>
+
+      <!-- Capital sub-tab: concurrent trade capital + P&L + Zerodha idle/utilised -->
+      <div id="hist-pane-capital" hidden>
+        <p class="muted hist-capital-note" id="hist-capital-note"></p>
+        <div id="chart-capital" class="chart-wrap"></div>
+        <div id="chart-capital-summary" class="chart-summary-row" style="margin-top:12px"></div>
+        <div id="chart-capital-tooltip" class="chart-tooltip" hidden></div>
       </div>
 
       <!-- Performance sub-tab -->
