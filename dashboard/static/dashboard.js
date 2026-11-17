@@ -10799,7 +10799,7 @@ async function loadHistorySuggestions() {
   }
 }
 
-// ---------------- Charts sub-tab ----------------
+// ---------------- Charts sub-tab (Chart.js MIT) ----------------
 
 const CHART_STRATEGY_COLORS = [
   '#38bdf8','#86efac','#fcd34d','#f9a8d4','#c4b5fd',
@@ -10808,179 +10808,408 @@ const CHART_STRATEGY_COLORS = [
 
 function _chartColor(idx) { return CHART_STRATEGY_COLORS[idx % CHART_STRATEGY_COLORS.length]; }
 
-// SVG helpers
-function _svgLine(points, color, width = 2) {
-  if (points.length < 2) return '';
-  const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
-  return `<path d="${d}" fill="none" stroke="${color}" stroke-width="${width}" stroke-linejoin="round" stroke-linecap="round"/>`;
-}
-function _svgCircle(x, y, r, fill, cls = '', extra = '') {
-  return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r}" fill="${fill}" class="${cls}" ${extra}/>`;
-}
-function _svgText(x, y, text, anchor = 'middle', cls = '') {
-  return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" class="chart-axis-label ${cls}">${escapeHtml(String(text))}</text>`;
+const _histChartInstances = Object.create(null);
+
+function _chartJsReady() {
+  return typeof window.Chart === 'function';
 }
 
-function _buildLineChart(trades, strategies, W = 700, H = 320) {
-  const PAD = { top: 20, right: 20, bottom: 48, left: 72 };
-  const cW = W - PAD.left - PAD.right;
-  const cH = H - PAD.top - PAD.bottom;
-
-  // Collect all cumulative series
-  // overall: {date, cum}[]
-  // per strategy: strategy → {date, cum}[]
-  const overallSeries = trades.map(t => ({ date: new Date(t.closed_on), cum: t.cum_pnl_overall, t }));
-  const stratSeries = {};
-  strategies.forEach(s => { stratSeries[s] = []; });
-  trades.forEach(t => {
-    if (stratSeries[t.strategy]) stratSeries[t.strategy].push({ date: new Date(t.closed_on), cum: t.cum_pnl_strategy, t });
-  });
-
-  if (!overallSeries.length) return '<div class="empty">No data</div>';
-
-  const allDates = overallSeries.map(p => p.date);
-  const minDate = new Date(Math.min(...allDates));
-  const maxDate = new Date(Math.max(...allDates));
-  const dateRange = Math.max(maxDate - minDate, 86400000); // at least 1 day
-
-  // All y values including 0 baseline
-  const allY = [0, ...overallSeries.map(p => p.cum),
-    ...Object.values(stratSeries).flat().map(p => p.cum)];
-  const minY = Math.min(...allY);
-  const maxY = Math.max(...allY);
-  const yPad = Math.max((maxY - minY) * 0.1, 500);
-  const yMin = minY - yPad, yMax = maxY + yPad;
-  const yRange = yMax - yMin;
-
-  const toX = d => PAD.left + ((d - minDate) / dateRange) * cW;
-  const toY = v => PAD.top + (1 - (v - yMin) / yRange) * cH;
-  const zero = toY(0);
-
-  // Y-axis gridlines + labels
-  const yTicks = 5;
-  let gridLines = '', yLabels = '';
-  for (let i = 0; i <= yTicks; i++) {
-    const v = yMin + (yRange / yTicks) * i;
-    const y = toY(v);
-    gridLines += `<line x1="${PAD.left}" y1="${y.toFixed(1)}" x2="${PAD.left + cW}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,.06)" stroke-width="1"/>`;
-    yLabels += _svgText(PAD.left - 6, y + 4, v >= 1000 ? `₹${(v/1000).toFixed(0)}k` : v <= -1000 ? `-₹${(Math.abs(v)/1000).toFixed(0)}k` : `₹${v.toFixed(0)}`, 'end');
+function _destroyHistChart(key) {
+  const prev = _histChartInstances[key];
+  if (prev) {
+    try { prev.destroy(); } catch (_) { /* ignore */ }
+    delete _histChartInstances[key];
   }
-
-  // Zero line
-  const zeroLine = `<line x1="${PAD.left}" y1="${zero.toFixed(1)}" x2="${PAD.left + cW}" y2="${zero.toFixed(1)}" stroke="rgba(255,255,255,.2)" stroke-width="1" stroke-dasharray="4,3"/>`;
-
-  // X-axis labels (up to 6 dates)
-  let xLabels = '';
-  const xTickCount = Math.min(6, overallSeries.length);
-  for (let i = 0; i < xTickCount; i++) {
-    const idx = Math.round(i * (overallSeries.length - 1) / Math.max(xTickCount - 1, 1));
-    const p = overallSeries[idx];
-    const x = toX(p.date);
-    const label = p.date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
-    xLabels += _svgText(x, PAD.top + cH + 20, label, 'middle');
-  }
-
-  // Strategy lines
-  let stratLines = '';
-  strategies.forEach((s, si) => {
-    const pts = (stratSeries[s] || []).map(p => [toX(p.date), toY(p.cum)]);
-    if (pts.length) stratLines += _svgLine(pts, _chartColor(si), 1.5);
-  });
-
-  // Overall line (bold white)
-  const overallPts = overallSeries.map(p => [toX(p.date), toY(p.cum)]);
-  const overallLine = _svgLine(overallPts, '#f1f5f9', 2.5);
-
-  // Profit/loss fill area under overall line
-  const areaPath = overallPts.length > 1 ? (() => {
-    const d = overallPts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
-    return `<path d="${d} L${overallPts[overallPts.length-1][0].toFixed(1)},${zero.toFixed(1)} L${overallPts[0][0].toFixed(1)},${zero.toFixed(1)} Z" fill="url(#pnlGrad)" opacity="0.3"/>`;
-  })() : '';
-
-  // Trade dots (coloured by win/loss)
-  let dots = '';
-  trades.forEach(t => {
-    const x = toX(new Date(t.closed_on));
-    const y = toY(t.cum_pnl_overall);
-    const fill = t.net_pnl >= 0 ? '#86efac' : '#fca5a5';
-    const prem = premiumInfoFromTrade(t);
-    const pnlTxt = (t.net_pnl >= 0 ? '+' : '') + '₹' + Number(t.net_pnl).toLocaleString('en-IN') + formatPnlPctText(t.net_pnl, prem);
-    const tip = `${t.trade_id || t.trade_name || ''}${t.suggestion_id ? ' · ' + t.suggestion_id : ''} | ${t.strategy} | ${pnlTxt}`;
-    dots += _svgCircle(x, y, 4, fill, 'chart-dot', `data-tip="${escapeHtml(tip)}"`);
-  });
-
-  // Legend
-  let legend = `<div class="chart-legend"><span class="chart-legend-item"><span class="chart-legend-line" style="background:#f1f5f9"></span>Overall</span>`;
-  strategies.forEach((s, si) => {
-    legend += `<span class="chart-legend-item"><span class="chart-legend-line" style="background:${_chartColor(si)}"></span>${escapeHtml(s)}</span>`;
-  });
-  legend += `</div>`;
-
-  const svg = `<svg viewBox="0 0 ${W} ${H}" class="chart-svg" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <linearGradient id="pnlGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.6"/>
-        <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
-      </linearGradient>
-    </defs>
-    ${gridLines}${zeroLine}${xLabels}${yLabels}
-    ${areaPath}${stratLines}${overallLine}${dots}
-  </svg>`;
-
-  return `<div class="chart-title">Cumulative P&L over time</div>${legend}${svg}`;
 }
 
-function _buildBarChart(trades, strategies, W = 700, H = 220) {
-  const PAD = { top: 20, right: 20, bottom: 48, left: 72 };
-  const cW = W - PAD.left - PAD.right;
-  const cH = H - PAD.top - PAD.bottom;
+function _inrTick(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '';
+  if (Math.abs(n) >= 1000) {
+    return `${n < 0 ? '-' : ''}₹${(Math.abs(n) / 1000).toFixed(0)}k`;
+  }
+  return `₹${n.toFixed(0)}`;
+}
 
-  // Per-strategy total P&L and premium deployed
+function _inrTip(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '—';
+  const sign = n > 0 ? '+' : (n < 0 ? '−' : '');
+  return `${sign}₹${Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+}
+
+function _chartDarkDefaults() {
+  return {
+    color: 'rgba(226,232,240,.85)',
+    borderColor: 'rgba(255,255,255,.08)',
+    plugins: {
+      legend: {
+        labels: {
+          color: 'rgba(148,163,184,.95)',
+          boxWidth: 14,
+          boxHeight: 3,
+          usePointStyle: false,
+        },
+      },
+      tooltip: {
+        enabled: true,
+        backgroundColor: 'rgba(15,23,42,.96)',
+        titleColor: '#f8fafc',
+        bodyColor: '#e2e8f0',
+        borderColor: 'rgba(255,255,255,.14)',
+        borderWidth: 1,
+        padding: 10,
+        displayColors: true,
+        // Keep tooltip inside the chart area (avoids clipping off-screen).
+        position: 'nearest',
+        caretPadding: 8,
+        callbacks: {},
+      },
+    },
+    scales: {
+      x: {
+        ticks: { color: 'rgba(148,163,184,.9)', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+        grid: { color: 'rgba(255,255,255,.05)' },
+      },
+      y: {
+        ticks: { color: 'rgba(148,163,184,.9)', callback: (v) => _inrTick(v) },
+        grid: { color: 'rgba(255,255,255,.06)' },
+      },
+    },
+  };
+}
+
+function _mountChartCanvas(host, { title, subtitle = '', small = false } = {}) {
+  host.innerHTML = `
+    <div class="chart-title">${escapeHtml(title)}</div>
+    ${subtitle ? `<div class="muted" style="font-size:.78rem;margin:0 0 8px">${subtitle}</div>` : ''}
+    <div class="chart-canvas-host${small ? ' chart-canvas-host-sm' : ''}"><canvas></canvas></div>`;
+  return host.querySelector('canvas');
+}
+
+function _positionHtmlTooltip(el, clientX, clientY) {
+  if (!el) return;
+  el.hidden = false;
+  const pad = 12;
+  const tw = el.offsetWidth || 160;
+  const th = el.offsetHeight || 40;
+  let left = clientX + pad;
+  let top = clientY - th - 8;
+  if (left + tw > window.innerWidth - pad) left = clientX - tw - pad;
+  if (left < pad) left = pad;
+  if (top < pad) top = clientY + pad;
+  if (top + th > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - th - pad);
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+}
+
+function _renderPnlLineChart(host, trades, strategies) {
+  _destroyHistChart('pnlLine');
+  if (!_chartJsReady()) {
+    host.innerHTML = '<div class="empty">Chart.js failed to load. Check network / CDN access.</div>';
+    return;
+  }
+  if (!trades.length) {
+    host.innerHTML = '<div class="empty">No data</div>';
+    return;
+  }
+  const canvas = _mountChartCanvas(host, { title: 'Cumulative P&L over time' });
+  const overall = trades.map(t => ({
+    x: new Date(t.closed_on),
+    y: Number(t.cum_pnl_overall) || 0,
+    trade: t,
+  }));
+  const datasets = [{
+    label: 'Overall',
+    data: overall,
+    borderColor: '#f1f5f9',
+    backgroundColor: 'rgba(56,189,248,.18)',
+    fill: true,
+    tension: 0.2,
+    pointRadius: 4,
+    pointHoverRadius: 6,
+    pointBackgroundColor: (ctx) => {
+      const t = ctx.raw && ctx.raw.trade;
+      if (!t) return '#f1f5f9';
+      return (t.net_pnl || 0) >= 0 ? '#86efac' : '#fca5a5';
+    },
+    borderWidth: 2.5,
+    order: 0,
+  }];
+  (strategies || []).forEach((s, si) => {
+    const pts = trades
+      .filter(t => t.strategy === s)
+      .map(t => ({ x: new Date(t.closed_on), y: Number(t.cum_pnl_strategy) || 0, trade: t }));
+    if (!pts.length) return;
+    datasets.push({
+      label: s,
+      data: pts,
+      borderColor: _chartColor(si),
+      backgroundColor: 'transparent',
+      fill: false,
+      tension: 0.15,
+      pointRadius: 2,
+      pointHoverRadius: 5,
+      borderWidth: 1.5,
+      order: si + 1,
+    });
+  });
+  const dark = _chartDarkDefaults();
+  _histChartInstances.pnlLine = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'nearest', intersect: false, axis: 'x' },
+      plugins: {
+        ...dark.plugins,
+        tooltip: {
+          ...dark.plugins.tooltip,
+          callbacks: {
+            title(items) {
+              const d = items[0] && items[0].parsed && items[0].parsed.x;
+              return d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+            },
+            label(item) {
+              const t = item.raw && item.raw.trade;
+              if (item.dataset.label === 'Overall' && t) {
+                const prem = premiumInfoFromTrade(t);
+                const pnlTxt = _inrTip(t.net_pnl) + formatPnlPctText(t.net_pnl, prem);
+                return [
+                  `Cum ${_inrTip(item.parsed.y)}`,
+                  `${t.trade_id || t.trade_name || ''} · ${t.strategy || ''}`,
+                  `Trade ${pnlTxt}`,
+                ];
+              }
+              return `${item.dataset.label}: ${_inrTip(item.parsed.y)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { tooltipFormat: 'dd MMM yyyy HH:mm' },
+          ticks: dark.scales.x.ticks,
+          grid: dark.scales.x.grid,
+        },
+        y: {
+          ticks: dark.scales.y.ticks,
+          grid: dark.scales.y.grid,
+          title: { display: true, text: 'Cumulative P&L (₹)', color: 'rgba(148,163,184,.9)' },
+        },
+      },
+    },
+  });
+}
+
+function _renderPnlBarChart(host, trades, strategies) {
+  _destroyHistChart('pnlBar');
+  if (!_chartJsReady() || !(strategies || []).length) {
+    host.innerHTML = '';
+    return;
+  }
   const totals = {};
   const premTotals = {};
   strategies.forEach(s => { totals[s] = 0; premTotals[s] = 0; });
   trades.forEach(t => {
-    totals[t.strategy] = (totals[t.strategy] || 0) + t.net_pnl;
+    totals[t.strategy] = (totals[t.strategy] || 0) + Number(t.net_pnl || 0);
     const premRs = t.premium_rs > 0 ? t.premium_rs : Math.abs(t.net_credit_actual || 0);
     premTotals[t.strategy] = (premTotals[t.strategy] || 0) + premRs;
   });
   const sorted = [...strategies].sort((a, b) => (totals[b] || 0) - (totals[a] || 0));
-
-  if (!sorted.length) return '';
-  const vals = sorted.map(s => totals[s]);
-  const maxAbs = Math.max(...vals.map(Math.abs), 1);
-  const barW = Math.min(60, (cW / sorted.length) * 0.65);
-  const gap   = cW / sorted.length;
-  const zero  = PAD.top + cH / 2;
-
-  let bars = '', xLabels = '', yLabels = '';
-  const yTicks = 4;
-  for (let i = -yTicks/2; i <= yTicks/2; i++) {
-    const v = (maxAbs / (yTicks/2)) * i;
-    const y = zero - (v / maxAbs) * (cH / 2);
-    yLabels += `<line x1="${PAD.left}" y1="${y.toFixed(1)}" x2="${PAD.left + cW}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,.06)" stroke-width="1"/>`;
-    if (i !== 0) yLabels += _svgText(PAD.left - 6, y + 4, Math.abs(v) >= 1000 ? `${v < 0 ? '-' : ''}₹${(Math.abs(v)/1000).toFixed(0)}k` : `₹${v.toFixed(0)}`, 'end');
-  }
-  yLabels += `<line x1="${PAD.left}" y1="${zero.toFixed(1)}" x2="${PAD.left+cW}" y2="${zero.toFixed(1)}" stroke="rgba(255,255,255,.2)" stroke-width="1"/>`;
-
-  sorted.forEach((s, i) => {
-    const v = totals[s] || 0;
-    const x = PAD.left + gap * i + gap / 2 - barW / 2;
-    const barH = Math.abs(v / maxAbs) * (cH / 2);
-    const y = v >= 0 ? zero - barH : zero;
-    const fill = v >= 0 ? 'rgba(134,239,172,.75)' : 'rgba(252,165,165,.75)';
-    const stratPrem = premTotals[s] > 0 ? { rs: premTotals[s], kind: 'paid' } : null;
-    const tip = stratPrem
-      ? `${s}: ${formatPnlWithPct(v, stratPrem, { aggregate: true })}`
-      : `${s}: ${v >= 0 ? '+' : ''}₹${v.toLocaleString('en-IN', {maximumFractionDigits:0})}`;
-    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${barH.toFixed(1)}" rx="3" fill="${fill}" class="chart-bar" data-tip="${escapeHtml(tip)}"/>`;
-    xLabels += _svgText(PAD.left + gap * i + gap / 2, PAD.top + cH + 20, s.replace('_', ' '), 'middle');
+  const canvas = _mountChartCanvas(host, { title: 'Total P&L by strategy', small: true });
+  const dark = _chartDarkDefaults();
+  _histChartInstances.pnlBar = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: sorted.map(s => s.replace(/_/g, ' ')),
+      datasets: [{
+        label: 'Net P&L',
+        data: sorted.map(s => totals[s] || 0),
+        backgroundColor: sorted.map(s => (totals[s] || 0) >= 0 ? 'rgba(134,239,172,.75)' : 'rgba(252,165,165,.75)'),
+        borderRadius: 4,
+        maxBarThickness: 56,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        ...dark.plugins,
+        legend: { display: false },
+        tooltip: {
+          ...dark.plugins.tooltip,
+          callbacks: {
+            label(item) {
+              const s = sorted[item.dataIndex];
+              const v = totals[s] || 0;
+              const stratPrem = premTotals[s] > 0 ? { rs: premTotals[s], kind: 'paid' } : null;
+              return stratPrem
+                ? formatPnlWithPct(v, stratPrem, { aggregate: true }).replace(/<[^>]+>/g, '')
+                : _inrTip(v);
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: dark.scales.x.ticks, grid: { display: false } },
+        y: {
+          ticks: dark.scales.y.ticks,
+          grid: dark.scales.y.grid,
+          title: { display: true, text: 'Net P&L (₹)', color: 'rgba(148,163,184,.9)' },
+        },
+      },
+    },
   });
+}
 
-  const svg = `<svg viewBox="0 0 ${W} ${H}" class="chart-svg" xmlns="http://www.w3.org/2000/svg">
-    ${yLabels}${bars}${xLabels}
-  </svg>`;
-  return `<div class="chart-title">Total P&L by strategy</div>${svg}`;
+function _renderCapitalChart(host, data) {
+  _destroyHistChart('capital');
+  const concurrent = data.concurrent_capital || [];
+  const snaps = data.zerodha_snapshots || [];
+  const trades = data.trades || [];
+  const hasAny = concurrent.length || snaps.length || trades.length;
+  if (!hasAny) {
+    host.innerHTML = '<div class="empty">No capital or P&amp;L points in this range yet. Zerodha idle lines appear after the first capital-change snapshot.</div>';
+    return;
+  }
+  if (!_chartJsReady()) {
+    host.innerHTML = '<div class="empty">Chart.js failed to load. Check network / CDN access.</div>';
+    return;
+  }
+  const canvas = _mountChartCanvas(host, {
+    title: 'Capital in use vs P&L',
+    subtitle: 'Left: capital (₹). Right: cumulative P&L (₹). Hover any point for details.',
+  });
+  const dark = _chartDarkDefaults();
+  const datasets = [
+    {
+      label: 'Capital in trades (max loss)',
+      data: concurrent.filter(p => p.at).map(p => ({
+        x: new Date(p.at),
+        y: Number(p.concurrent_capital) || 0,
+        meta: p,
+      })),
+      borderColor: '#fcd34d',
+      backgroundColor: 'rgba(252,211,77,.12)',
+      stepped: 'before',
+      fill: false,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      borderWidth: 2,
+      yAxisID: 'y',
+    },
+    {
+      label: 'Zerodha idle (usable)',
+      data: snaps.filter(p => p.recorded_at && p.usable_balance != null).map(p => ({
+        x: new Date(p.recorded_at),
+        y: Number(p.usable_balance),
+      })),
+      borderColor: '#38bdf8',
+      backgroundColor: 'transparent',
+      tension: 0.15,
+      pointRadius: 2,
+      pointHoverRadius: 5,
+      borderWidth: 2,
+      yAxisID: 'y',
+      spanGaps: true,
+    },
+    {
+      label: 'Zerodha utilised',
+      data: snaps.filter(p => p.recorded_at && p.utilised_debits != null).map(p => ({
+        x: new Date(p.recorded_at),
+        y: Number(p.utilised_debits),
+      })),
+      borderColor: '#c4b5fd',
+      backgroundColor: 'transparent',
+      tension: 0.15,
+      pointRadius: 2,
+      pointHoverRadius: 5,
+      borderWidth: 1.75,
+      yAxisID: 'y',
+      spanGaps: true,
+    },
+    {
+      label: 'Cumulative P&L',
+      data: trades.filter(t => t.closed_on).map(t => ({
+        x: new Date(t.closed_on),
+        y: Number(t.cum_pnl_overall) || 0,
+        trade: t,
+      })),
+      borderColor: '#f1f5f9',
+      backgroundColor: 'rgba(241,245,249,.08)',
+      tension: 0.2,
+      fill: false,
+      pointRadius: 4,
+      pointHoverRadius: 6,
+      pointBackgroundColor: (ctx) => {
+        const t = ctx.raw && ctx.raw.trade;
+        if (!t) return '#f1f5f9';
+        return (t.net_pnl || 0) >= 0 ? '#86efac' : '#fca5a5';
+      },
+      borderWidth: 2.25,
+      yAxisID: 'y1',
+    },
+  ].filter(ds => ds.data.length);
+
+  _histChartInstances.capital = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        ...dark.plugins,
+        tooltip: {
+          ...dark.plugins.tooltip,
+          callbacks: {
+            title(items) {
+              const d = items[0] && items[0].parsed && items[0].parsed.x;
+              return d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+            },
+            label(item) {
+              const t = item.raw && item.raw.trade;
+              if (t) {
+                return [
+                  `Cum P&L ${_inrTip(item.parsed.y)}`,
+                  `${t.trade_id || ''} · ${t.strategy || ''}`,
+                  `Trade ${_inrTip(t.net_pnl)}`,
+                ];
+              }
+              const meta = item.raw && item.raw.meta;
+              if (meta && meta.event) {
+                return `${item.dataset.label}: ${_inrTip(item.parsed.y)} (${meta.event} ${meta.trade_id || ''})`;
+              }
+              return `${item.dataset.label}: ${_inrTip(item.parsed.y)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { tooltipFormat: 'dd MMM yyyy HH:mm' },
+          ticks: dark.scales.x.ticks,
+          grid: dark.scales.x.grid,
+        },
+        y: {
+          position: 'left',
+          ticks: dark.scales.y.ticks,
+          grid: dark.scales.y.grid,
+          title: { display: true, text: 'Capital (₹)', color: 'rgba(148,163,184,.9)' },
+        },
+        y1: {
+          position: 'right',
+          ticks: { color: 'rgba(148,163,184,.9)', callback: (v) => _inrTick(v) },
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: 'Cumulative P&L (₹)', color: 'rgba(148,163,184,.9)' },
+        },
+      },
+    },
+  });
 }
 
 function _fillDefaultDateRange(fromEl, toEl, days = 30) {
@@ -11025,6 +11254,8 @@ async function loadPnlCharts() {
   const barEl  = $('#chart-strategy-bar');
   if (!cumEl) return;
   const summaryGen = ++_closedSummaryGen;
+  _destroyHistChart('pnlLine');
+  _destroyHistChart('pnlBar');
   cumEl.className = 'chart-wrap loading'; cumEl.textContent = 'Loading…';
   barEl.className = 'chart-wrap loading'; barEl.textContent = '';
 
@@ -11041,161 +11272,13 @@ async function loadPnlCharts() {
     }
 
     cumEl.className = 'chart-wrap';
-    cumEl.innerHTML = _buildLineChart(data.trades, data.strategies);
+    _renderPnlLineChart(cumEl, data.trades, data.strategies);
 
     barEl.className = 'chart-wrap';
-    barEl.innerHTML = _buildBarChart(data.trades, data.strategies);
-
-    // Tooltip binding
-    const tooltip = $('#chart-tooltip');
-    document.querySelectorAll('.chart-dot, .chart-bar').forEach(el => {
-      el.addEventListener('mouseenter', e => {
-        tooltip.textContent = el.dataset.tip;
-        tooltip.hidden = false;
-      });
-      el.addEventListener('mousemove', e => {
-        tooltip.style.left = (e.clientX + 12) + 'px';
-        tooltip.style.top  = (e.clientY - 28) + 'px';
-      });
-      el.addEventListener('mouseleave', () => { tooltip.hidden = true; });
-    });
+    _renderPnlBarChart(barEl, data.trades, data.strategies);
   } catch (err) {
     cumEl.className = 'chart-wrap'; cumEl.innerHTML = `<div class="empty">Error: ${escapeHtml(err.message)}</div>`;
   }
-}
-
-function _capChartMoneyLabel(v) {
-  if (v >= 1000 || v <= -1000) {
-    return `${v < 0 ? '-' : ''}₹${(Math.abs(v) / 1000).toFixed(0)}k`;
-  }
-  return `₹${v.toFixed(0)}`;
-}
-
-function _buildCapitalChart(data, W = 720, H = 360) {
-  const concurrent = data.concurrent_capital || [];
-  const snaps = data.zerodha_snapshots || [];
-  const trades = data.trades || [];
-  const dates = [];
-  concurrent.forEach(p => { if (p.at) dates.push(new Date(p.at)); });
-  snaps.forEach(p => { if (p.recorded_at) dates.push(new Date(p.recorded_at)); });
-  trades.forEach(p => { if (p.closed_on) dates.push(new Date(p.closed_on)); });
-  if (!dates.length) {
-    return '<div class="empty">No capital or P&amp;L points in this range yet. Zerodha idle lines appear after the first capital-change snapshot.</div>';
-  }
-
-  const PAD = { top: 24, right: 72, bottom: 48, left: 72 };
-  const cW = W - PAD.left - PAD.right;
-  const cH = H - PAD.top - PAD.bottom;
-  const minDate = new Date(Math.min(...dates));
-  const maxDate = new Date(Math.max(...dates));
-  const dateRange = Math.max(maxDate - minDate, 86400000);
-  const toX = d => PAD.left + ((d - minDate) / dateRange) * cW;
-
-  const leftVals = [0];
-  concurrent.forEach(p => leftVals.push(Number(p.concurrent_capital) || 0));
-  snaps.forEach(p => {
-    if (p.usable_balance != null) leftVals.push(Number(p.usable_balance));
-    if (p.utilised_debits != null) leftVals.push(Number(p.utilised_debits));
-    if (p.net != null) leftVals.push(Number(p.net));
-  });
-  const rightVals = [0];
-  trades.forEach(p => {
-    rightVals.push(Number(p.cum_pnl_overall) || 0);
-    rightVals.push(Number(p.net_pnl) || 0);
-  });
-  const lMin = Math.min(...leftVals);
-  const lMax = Math.max(...leftVals);
-  const rMin = Math.min(...rightVals);
-  const rMax = Math.max(...rightVals);
-  const lPad = Math.max((lMax - lMin) * 0.08, 500);
-  const rPad = Math.max((rMax - rMin) * 0.12, 200);
-  const yL0 = lMin - lPad;
-  const yL1 = lMax + lPad;
-  const yR0 = rMin - rPad;
-  const yR1 = rMax + rPad;
-  const toYL = v => PAD.top + (1 - (v - yL0) / Math.max(yL1 - yL0, 1)) * cH;
-  const toYR = v => PAD.top + (1 - (v - yR0) / Math.max(yR1 - yR0, 1)) * cH;
-
-  let grid = '';
-  let yLeft = '';
-  let yRight = '';
-  const ticks = 5;
-  for (let i = 0; i <= ticks; i++) {
-    const lv = yL0 + ((yL1 - yL0) / ticks) * i;
-    const rv = yR0 + ((yR1 - yR0) / ticks) * i;
-    const y = toYL(lv);
-    grid += `<line x1="${PAD.left}" y1="${y.toFixed(1)}" x2="${PAD.left + cW}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,.06)" stroke-width="1"/>`;
-    yLeft += _svgText(PAD.left - 6, y + 4, _capChartMoneyLabel(lv), 'end');
-    yRight += _svgText(PAD.left + cW + 6, toYR(rv) + 4, _capChartMoneyLabel(rv), 'start');
-  }
-
-  let xLabels = '';
-  const xCount = Math.min(6, dates.length);
-  const sortedDates = [...dates].sort((a, b) => a - b);
-  for (let i = 0; i < xCount; i++) {
-    const idx = Math.round(i * (sortedDates.length - 1) / Math.max(xCount - 1, 1));
-    const d = sortedDates[idx];
-    xLabels += _svgText(
-      toX(d),
-      PAD.top + cH + 20,
-      d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-      'middle',
-    );
-  }
-
-  // Step path for concurrent capital
-  const stepPts = concurrent
-    .filter(p => p.at)
-    .map(p => [toX(new Date(p.at)), toYL(Number(p.concurrent_capital) || 0)]);
-  let stepPath = '';
-  if (stepPts.length) {
-    let d = `M${stepPts[0][0].toFixed(1)},${stepPts[0][1].toFixed(1)}`;
-    for (let i = 1; i < stepPts.length; i++) {
-      d += ` H${stepPts[i][0].toFixed(1)} V${stepPts[i][1].toFixed(1)}`;
-    }
-    stepPath = `<path d="${d}" fill="none" stroke="#fcd34d" stroke-width="2" stroke-linejoin="round"/>`;
-  }
-
-  const idlePts = snaps
-    .filter(p => p.recorded_at && p.usable_balance != null)
-    .map(p => [toX(new Date(p.recorded_at)), toYL(Number(p.usable_balance))]);
-  const usedPts = snaps
-    .filter(p => p.recorded_at && p.utilised_debits != null)
-    .map(p => [toX(new Date(p.recorded_at)), toYL(Number(p.utilised_debits))]);
-  const idleLine = _svgLine(idlePts, '#38bdf8', 2);
-  const usedLine = _svgLine(usedPts, '#c4b5fd', 1.75);
-
-  const cumPts = trades
-    .filter(p => p.closed_on)
-    .map(p => [toX(new Date(p.closed_on)), toYR(Number(p.cum_pnl_overall) || 0)]);
-  const cumLine = _svgLine(cumPts, '#f1f5f9', 2.25);
-
-  let dots = '';
-  trades.forEach(t => {
-    if (!t.closed_on) return;
-    const x = toX(new Date(t.closed_on));
-    const y = toYR(Number(t.cum_pnl_overall) || 0);
-    const fill = (t.net_pnl || 0) >= 0 ? '#86efac' : '#fca5a5';
-    const tip = `${t.trade_id || ''} | ${t.strategy || ''} | `
-      + `${(t.net_pnl || 0) >= 0 ? '+' : ''}₹${Number(t.net_pnl || 0).toLocaleString('en-IN')}`
-      + ` · cum ₹${Number(t.cum_pnl_overall || 0).toLocaleString('en-IN')}`;
-    dots += _svgCircle(x, y, 4, fill, 'chart-dot chart-cap-dot', `data-tip="${escapeHtml(tip)}"`);
-  });
-
-  const legend = `<div class="chart-legend">
-    <span class="chart-legend-item"><span class="chart-legend-line" style="background:#fcd34d"></span>Capital in trades (max loss)</span>
-    <span class="chart-legend-item"><span class="chart-legend-line" style="background:#38bdf8"></span>Zerodha idle (usable)</span>
-    <span class="chart-legend-item"><span class="chart-legend-line" style="background:#c4b5fd"></span>Zerodha utilised</span>
-    <span class="chart-legend-item"><span class="chart-legend-line" style="background:#f1f5f9"></span>Cumulative P&amp;L</span>
-  </div>`;
-
-  const svg = `<svg viewBox="0 0 ${W} ${H}" class="chart-svg" xmlns="http://www.w3.org/2000/svg">
-    ${grid}${xLabels}${yLeft}${yRight}
-    ${stepPath}${usedLine}${idleLine}${cumLine}${dots}
-  </svg>`;
-  return `<div class="chart-title">Capital in use vs P&amp;L</div>
-    <div class="muted" style="font-size:.78rem;margin:0 0 8px">Left axis: capital (₹). Right axis: cumulative P&amp;L (₹). Dots = each closed trade.</div>
-    ${legend}${svg}`;
 }
 
 async function loadCapitalCharts() {
@@ -11205,6 +11288,7 @@ async function loadCapitalCharts() {
   if (!host) return;
   if (note) note.textContent = '';
   if (summary) summary.innerHTML = '';
+  _destroyHistChart('capital');
   host.className = 'chart-wrap loading';
   host.textContent = 'Loading…';
   refreshClosedTradeSummary();
@@ -11218,7 +11302,7 @@ async function loadCapitalCharts() {
         || 'Zerodha idle/utilised appear after capital-change snapshots are stored.';
     }
     host.className = 'chart-wrap';
-    host.innerHTML = _buildCapitalChart(data);
+    _renderCapitalChart(host, data);
 
     const peak = Number(data.peak_concurrent_capital) || 0;
     const pnl = Number(data.total_pnl) || 0;
@@ -11235,23 +11319,6 @@ async function loadCapitalCharts() {
         <div class="chart-kv"><span>Latest Zerodha utilised</span><strong>${last && last.utilised_debits != null ? '₹' + fmt(last.utilised_debits) : '—'}</strong></div>
         <div class="chart-kv"><span>Zerodha snapshots</span><strong>${snaps.length}</strong></div>`;
     }
-
-    const tooltip = $('#chart-capital-tooltip');
-    host.querySelectorAll('.chart-cap-dot').forEach(el => {
-      el.addEventListener('mouseenter', () => {
-        if (!tooltip) return;
-        tooltip.textContent = el.dataset.tip;
-        tooltip.hidden = false;
-      });
-      el.addEventListener('mousemove', e => {
-        if (!tooltip) return;
-        tooltip.style.left = (e.clientX + 12) + 'px';
-        tooltip.style.top = (e.clientY - 28) + 'px';
-      });
-      el.addEventListener('mouseleave', () => {
-        if (tooltip) tooltip.hidden = true;
-      });
-    });
   } catch (err) {
     host.className = 'chart-wrap';
     host.innerHTML = `<div class="empty">Error: ${escapeHtml(err.message)}</div>`;
