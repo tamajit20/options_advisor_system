@@ -3336,6 +3336,7 @@ def create_app() -> Flask:
         rows = db.fetch_all(
             f"SELECT t.trade_id, t.trade_name, t.closed_on, t.executed_on, "
             f"       t.net_pnl, t.gross_pnl, t.total_charges, t.net_credit_actual, "
+            f"       t.actual_max_loss, "
             f"       COALESCE(s.strategy, 'UNKNOWN') AS strategy, "
             f"       COALESCE(s.underlying, '') AS underlying "
             f"FROM options_trades t "
@@ -3362,6 +3363,7 @@ def create_app() -> Flask:
                 "gross_pnl":         float(r["gross_pnl"] or 0),
                 "total_charges":     float(r["total_charges"] or 0),
                 "net_credit_actual": float(r["net_credit_actual"] or 0),
+                "actual_max_loss":   float(r["actual_max_loss"] or 0),
                 "is_reversal":       False,
             })
         # Reversals are Zerodha-broker artifacts — include only for all/zerodha.
@@ -3378,6 +3380,7 @@ def create_app() -> Flask:
                     "gross_pnl":         float(r.get("gross_pnl") or 0),
                     "total_charges":     float(r.get("total_charges") or 0),
                     "net_credit_actual": 0.0,
+                    "actual_max_loss":   0.0,
                     "is_reversal":       True,
                 })
         events.sort(key=lambda e: e["closed_on"] or "")
@@ -3386,6 +3389,7 @@ def create_app() -> Flask:
         cum_overall = 0.0
         cum_by_strategy: dict = {}
         total_invested = 0.0
+        total_amount_invested = 0.0
         total_charges = 0.0
 
         for e in events:
@@ -3400,6 +3404,9 @@ def create_app() -> Flask:
             cum_overall += pnl
             cum_by_strategy[strat] = cum_by_strategy.get(strat, 0.0) + pnl
             total_invested += prem_rs
+            ml = float(e.get("actual_max_loss") or 0)
+            if ml > 0:
+                total_amount_invested += ml
             total_charges += e["total_charges"]
             rr = {
                 "closed_on": e["closed_on"],
@@ -3429,6 +3436,7 @@ def create_app() -> Flask:
             "strategies":      strategies,
             "total_pnl":       round(cum_overall, 2),
             "total_invested":  round(total_invested, 2),
+            "total_amount_invested": round(total_amount_invested, 2),
             "total_charges":   round(total_charges, 2),
             "channel":         channel_f or "all",
         })

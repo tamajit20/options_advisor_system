@@ -2105,6 +2105,8 @@ details.collapsible-card.hist-card > .collapsible-summary .hist-card-head {
 .hist-card-title .id-chip { user-select: all; }
 .hist-instr { font-size: 1.05rem; }
 .hist-card-pnl { font-size: 1.15rem; font-weight: 700; white-space: nowrap; }
+.hist-ret-invested { white-space: nowrap; }
+.hist-ret-invested strong { font-weight: 700; }
 .hist-pnl-pct { font-size: .75rem; font-weight: 400; opacity: .8; }
 .hist-card-meta { font-size: .78rem; color: var(--text-dim); margin-bottom: 14px; }
 .hcmp-grid {

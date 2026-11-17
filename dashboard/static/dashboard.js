@@ -10649,16 +10649,21 @@ document.querySelectorAll('#panel-history .hist-subtab').forEach(btn => {
 
 function _closedTradeSummaryHtml(data) {
   const invested = Number(data && data.total_invested) || 0;
+  const amountInvested = Number(data && data.total_amount_invested) || 0;
   const pnl = Number(data && data.total_pnl) || 0;
   const charges = Number(data && data.total_charges) || 0;
   const n = (data && data.trades) ? data.trades.length : 0;
   const pnlCls = pnl > 0 ? 'pnl-pos' : (pnl < 0 ? 'pnl-neg' : '');
   const totalPrem = invested > 0 ? { rs: invested, kind: 'paid' } : null;
   const ret = invested > 0 ? (pnl / invested * 100).toFixed(1) + '%' : '—';
+  const retOnAmt = amountInvested > 0
+    ? (pnl / amountInvested * 100).toFixed(1) + '%'
+    : '—';
   return `
       <div class="chart-kv"><span>Total net P&amp;L</span><strong class="${pnlCls}">${formatPnlWithPct(pnl, totalPrem, { aggregate: true })}</strong></div>
       <div class="chart-kv"><span>Total premium deployed</span><strong>₹${fmt(invested)}</strong></div>
       <div class="chart-kv"><span>Return on premium</span><strong class="${pnlCls}">${ret}</strong></div>
+      <div class="chart-kv" title="Net P&amp;L ÷ sum of each closed trade's max loss (same capital idea as Total invested on My Trades)."><span>Return on amount invested</span><strong class="${pnlCls}">${retOnAmt}</strong>${amountInvested > 0 ? `<span class="muted" style="font-size:.72rem;display:block;margin-top:2px">on ₹${fmt(amountInvested)}</span>` : ''}</div>
       <div class="chart-kv"><span>Total charges paid</span><strong>₹${fmt(charges)}</strong></div>
       <div class="chart-kv"><span>Trades</span><strong>${n}</strong></div>`;
 }
@@ -11505,6 +11510,13 @@ function renderHistoryTrade(t) {
     ? '&nbsp;·&nbsp;Expiries: ' + legExpiries.map(e => escapeHtml(fmtDate(e))).join(' / ')
     : (s.expiry ? '&nbsp;·&nbsp;Expiry: '+escapeHtml(fmtDate(s.expiry))+(s.dte != null ? ' ('+s.dte+'d)' : '') : '');
 
+  // Stored max loss — same capital base as History strip "return on amount invested".
+  // Rendered from DB on first paint (no Zerodha quote) so the collapsed row does not jump.
+  const maxLossRs = t.actual_max_loss != null ? Number(t.actual_max_loss) : NaN;
+  const retOnInvested = (pnl != null && Number.isFinite(maxLossRs) && maxLossRs > 0)
+    ? `<span class="hist-ret-invested ${pnlClass}" title="Net P&amp;L \u00f7 this trade's max loss (capital at risk).">Return on amount invested <strong>${pnl >= 0 ? '+' : ''}${(pnl / maxLossRs * 100).toFixed(1)}%</strong> <span class="muted">\u00b7 \u20b9${fmt(maxLossRs)}</span></span>`
+    : '';
+
   return wrapCollapsibleCard(`
     <div class="hist-card-head collapsible-card-head">
       <div class="hist-card-title">
@@ -11523,6 +11535,7 @@ function renderHistoryTrade(t) {
       <span>${escapeHtml(t.trade_name || '')}</span>
       <span>Executed ${fmtDt(t.executed_on)}</span>
       ${t.closed_on ? `<span>Closed ${fmtDt(t.closed_on)}</span>` : ''}
+      ${retOnInvested}
     </div>`, `
     <div class="hist-card-meta muted">
       ${t.trade_name ? escapeHtml(t.trade_name) + ' &nbsp;·&nbsp; ' : ''}Executed: ${fmtDt(t.executed_on)}
