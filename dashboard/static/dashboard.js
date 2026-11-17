@@ -9534,25 +9534,21 @@ function _channelSectionsHtml(parts, renderOne, filterChannel) {
   const showM = !filterChannel || filterChannel === 'manual';
   const z = parts.zerodha || [];
   const m = parts.manual || [];
+  const block = (key, label, rows) => `
+    <details class="channel-section channel-section-${key}" data-channel-section="${key}" open>
+      <summary class="channel-section-title">
+        <span class="channel-section-label">${label}</span>
+        <span class="muted channel-section-count">(${rows.length})</span>
+      </summary>
+      <div class="channel-section-body">
+        ${rows.length
+          ? rows.map(renderOne).join('')
+          : `<div class="empty channel-section-empty">No ${label.toLowerCase()} trades.</div>`}
+      </div>
+    </details>`;
   const blocks = [];
-  if (showZ) {
-    blocks.push(`
-      <section class="channel-section channel-section-zerodha" aria-label="Zerodha trades">
-        <h3 class="channel-section-title">Zerodha <span class="muted channel-section-count">(${z.length})</span></h3>
-        ${z.length
-          ? z.map(renderOne).join('')
-          : '<div class="empty channel-section-empty">No Zerodha trades.</div>'}
-      </section>`);
-  }
-  if (showM) {
-    blocks.push(`
-      <section class="channel-section channel-section-manual" aria-label="Manual trades">
-        <h3 class="channel-section-title">Manual <span class="muted channel-section-count">(${m.length})</span></h3>
-        ${m.length
-          ? m.map(renderOne).join('')
-          : '<div class="empty channel-section-empty">No manual trades.</div>'}
-      </section>`);
-  }
+  if (showZ) blocks.push(block('zerodha', 'Zerodha', z));
+  if (showM) blocks.push(block('manual', 'Manual', m));
   return blocks.join('');
 }
 

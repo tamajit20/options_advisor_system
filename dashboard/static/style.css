@@ -1932,21 +1932,36 @@ input:focus, select:focus, textarea:focus {
 }
 .channel-section:first-child { margin-top: 4px; }
 .channel-section-title {
-  margin: 0 0 10px;
+  margin: 0;
   font-size: .92rem;
   font-weight: 700;
   letter-spacing: .02em;
   color: var(--text);
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding-bottom: 6px;
+  padding: 8px 0;
   border-bottom: 1px solid rgba(255,255,255,.08);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
 }
+.channel-section-title::-webkit-details-marker { display: none; }
+.channel-section-title::before {
+  content: '▼';
+  font-size: .65rem;
+  color: var(--text-dim);
+  transition: transform .15s ease;
+}
+.channel-section:not([open]) .channel-section-title::before {
+  transform: rotate(-90deg);
+}
+.channel-section-label { flex: 0 0 auto; }
 .channel-section-count { font-weight: 500; font-size: .78rem; }
+.channel-section-body { padding-top: 10px; }
 .channel-section-empty { margin: 0 0 8px; padding: 10px 12px; }
-.channel-section-zerodha .channel-section-title { color: #7dd3fc; }
-.channel-section-manual .channel-section-title { color: #cbd5e1; }
+.channel-section-zerodha > .channel-section-title { color: #7dd3fc; }
+.channel-section-manual > .channel-section-title { color: #cbd5e1; }
 
 .hist-subtabs {
   display: flex; gap: 4px; margin-bottom: 16px;
