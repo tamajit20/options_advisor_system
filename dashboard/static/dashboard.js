@@ -847,6 +847,10 @@ function _invalidateZerodhaMarginQuote(sid) {
 }
 
 function _collectCardLotsForMargin(card) {
+  // Open-trade Amount used stamps data-lots from fills; prefer that over the
+  // suggestion order-size box (which is absent on held trades).
+  const stamped = parseInt(card?.dataset?.lots, 10);
+  if (Number.isFinite(stamped) && stamped > 0) return stamped;
   if (typeof _collectExecLots !== 'function') return null;
   const lots = _collectExecLots(card);
   if (lots == null || lots === 'invalid') return null;
@@ -888,7 +892,12 @@ function _applyZerodhaMarginToCard(card, preview) {
   } else {
     _setSuggestionMarginStatus(card, '');
   }
-  _refreshHeldMarginPnl(card, amountRs);
+  // Only the open-trade Amount used cell may push Final onto the live header.
+  // Original-suggestion quotes stay at suggestion size (usually 1 lot) and
+  // must not overwrite a multi-lot trade's held margin.
+  if (card.classList.contains('trade-zerodha-margin')) {
+    _refreshHeldMarginPnl(card, amountRs);
+  }
   const compact = card.querySelector('[data-econ-z-margin-compact]');
   if (compact && showFunds) {
     compact.hidden = false;
@@ -6215,8 +6224,9 @@ function renderTradeKvGrid(t, legs, opts) {
   const pnlCell = (!isOpenTrade && t.net_pnl != null)
     ? `<div>${kvLabel('P&amp;L', 'mtm')}<br><span class="v">${formatPnlWithPct(t.net_pnl, premium)}</span></div>`
     : '';
+  const tradeLots = _historyTradeLots(t);
   const zerodhaMarginCell = t.suggestion_id ? `
-      <div data-sug-id="${escapeHtml(t.suggestion_id)}" class="trade-zerodha-margin">
+      <div data-sug-id="${escapeHtml(t.suggestion_id)}" class="trade-zerodha-margin"${tradeLots != null ? ` data-lots="${tradeLots}"` : ''}>
         ${kvLabel('Amount used', 'amount_used')}<br>
         <span class="v econ-cap-req">\u2014</span>
       </div>` : '<div></div>';
