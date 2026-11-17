@@ -10654,18 +10654,46 @@ function _closedTradeSummaryHtml(data) {
   const charges = Number(data && data.total_charges) || 0;
   const n = (data && data.trades) ? data.trades.length : 0;
   const pnlCls = pnl > 0 ? 'pnl-pos' : (pnl < 0 ? 'pnl-neg' : '');
-  const totalPrem = invested > 0 ? { rs: invested, kind: 'paid' } : null;
   const ret = invested > 0 ? (pnl / invested * 100).toFixed(1) + '%' : '—';
   const retOnAmt = amountInvested > 0
     ? (pnl / amountInvested * 100).toFixed(1) + '%'
     : '—';
+  // Total amount used fills from hydrated History cards (Zerodha Final); reserved so the strip does not jump.
   return `
-      <div class="chart-kv"><span>Total net P&amp;L</span><strong class="${pnlCls}">${formatPnlWithPct(pnl, totalPrem, { aggregate: true })}</strong></div>
-      <div class="chart-kv"><span>Total premium deployed</span><strong>₹${fmt(invested)}</strong></div>
+      <div class="chart-kv"><span>Total net P&amp;L</span><strong class="${pnlCls}">${pnl > 0 ? '+' : (pnl < 0 ? '\u2212' : '')}\u20b9${fmt(Math.abs(pnl))}</strong></div>
+      <div class="chart-kv"><span>Total premium deployed</span><strong>\u20b9${fmt(invested)}</strong></div>
       <div class="chart-kv"><span>Return on premium</span><strong class="${pnlCls}">${ret}</strong></div>
-      <div class="chart-kv" title="Net P&amp;L ÷ sum of each closed trade's max loss (same capital idea as Total invested on My Trades)."><span>Return on amount invested</span><strong class="${pnlCls}">${retOnAmt}</strong>${amountInvested > 0 ? `<span class="muted" style="font-size:.72rem;display:block;margin-top:2px">on ₹${fmt(amountInvested)}</span>` : ''}</div>
-      <div class="chart-kv"><span>Total charges paid</span><strong>₹${fmt(charges)}</strong></div>
+      <div class="chart-kv" title="Sum of Zerodha Final for closed trades in view; percent = total net \u00f7 that sum."><span>Total amount used</span><strong class="hist-strip-amount-used" data-hist-total-amount-used="1">\u2014</strong></div>
+      <div class="chart-kv" title="Sum of each closed trade's max loss (same capital idea as Total invested on My Trades)."><span>Total amount invested</span><strong>\u20b9${fmt(amountInvested)}</strong></div>
+      <div class="chart-kv" title="Net P&amp;L \u00f7 total amount invested."><span>Return on amount invested</span><strong class="${pnlCls}">${retOnAmt}</strong></div>
+      <div class="chart-kv"><span>Total charges paid</span><strong>\u20b9${fmt(charges)}</strong></div>
       <div class="chart-kv"><span>Trades</span><strong>${n}</strong></div>`;
+}
+
+/** Sum Zerodha Final from painted History trade cards into the strip's Total amount used. */
+function _paintClosedAmountUsedFromCards() {
+  const el = document.querySelector('[data-hist-total-amount-used]');
+  if (!el) return;
+  let margin = 0;
+  let netOnMargin = 0;
+  let have = false;
+  document.querySelectorAll('#history-container details.collapsible-card[data-margin-final]').forEach(card => {
+    const mar = parseFloat(card.dataset.marginFinal);
+    const net = parseFloat(card.dataset.netPnl);
+    if (!(mar > 0)) return;
+    have = true;
+    margin += mar;
+    if (Number.isFinite(net)) netOnMargin += net;
+  });
+  if (!have) {
+    el.textContent = '\u2014';
+    el.className = 'hist-strip-amount-used';
+    return;
+  }
+  const pct = margin > 0 ? pnlPctTextCompact(netOnMargin, { rs: margin }) : '';
+  const cls = netOnMargin > 0 ? 'pnl-pos' : (netOnMargin < 0 ? 'pnl-neg' : '');
+  el.className = `hist-strip-amount-used ${cls}`;
+  el.innerHTML = `\u20b9${fmt(margin)}<span class="${cls}">${pct}</span>`;
 }
 
 let _closedSummaryGen = 0;
@@ -10674,6 +10702,7 @@ function _paintClosedTradeSummary(data, gen) {
   if (gen != null && gen !== _closedSummaryGen) return;
   const host = $('#chart-summary-row');
   if (host) host.innerHTML = _closedTradeSummaryHtml(data);
+  _paintClosedAmountUsedFromCards();
 }
 
 async function refreshClosedTradeSummary() {
@@ -11305,13 +11334,21 @@ async function _fillHistoryMarginPnl(row) {
     );
     if (!(Number(fin) > 0)) {
       row.dataset.marginHydrated = '0';
+      if (snapCard) {
+        delete snapCard.dataset.marginFinal;
+      }
       if (act) act.textContent = 'Zerodha Final unavailable';
       setUsedFacts('\u2014');
+      _paintClosedAmountUsedFromCards();
       return;
     }
     const usedHtml = _marginPnlText(row.dataset.netPnl, fin);
     if (act) act.innerHTML = usedHtml;
     if (snapCard) {
+      snapCard.dataset.marginFinal = String(fin);
+      if (row.dataset.netPnl != null && row.dataset.netPnl !== '') {
+        snapCard.dataset.netPnl = row.dataset.netPnl;
+      }
       snapCard.querySelectorAll('.trade-snap-margin, .trade-snap-body .econ-cap-req').forEach(el => {
         el.innerHTML = usedHtml;
       });
@@ -11321,10 +11358,13 @@ async function _fillHistoryMarginPnl(row) {
       ? _marginPnlText(row.dataset.sugNetPnl, fin)
       : '\u2014';
     row.dataset.marginHydrated = '1';
+    _paintClosedAmountUsedFromCards();
   } catch (err) {
     row.dataset.marginHydrated = '0';
+    if (snapCard) delete snapCard.dataset.marginFinal;
     if (act) act.textContent = 'Zerodha Final unavailable';
     setUsedFacts('\u2014');
+    _paintClosedAmountUsedFromCards();
   }
 }
 
@@ -11525,16 +11565,15 @@ function renderHistoryTrade(t) {
     ? '&nbsp;·&nbsp;Expiries: ' + legExpiries.map(e => escapeHtml(fmtDate(e))).join(' / ')
     : (s.expiry ? '&nbsp;·&nbsp;Expiry: '+escapeHtml(fmtDate(s.expiry))+(s.dte != null ? ' ('+s.dte+'d)' : '') : '');
 
-  // Header: net + % of premium only. Amount used / Premium paid live on the facts row.
+  // Header: signed net only (no %). Amount used / Premium paid + their % live on the facts row.
   const headPnl = pnl != null
-    ? (() => {
-        const prefix = pnl > 0 ? '+' : (pnl < 0 ? '\u2212' : '');
-        const pct = premium ? pnlPctTextCompact(pnl, premium) : '';
-        return `${prefix}\u20b9${fmt(Math.abs(pnl))}${pct ? `<span class="pnl-pct-bracket">${pct}</span>` : ''}`;
-      })()
+    ? `${pnl > 0 ? '+' : (pnl < 0 ? '\u2212' : '')}\u20b9${fmt(Math.abs(pnl))}`
     : '\u2014';
+  const premPct = (pnl != null && premium)
+    ? `<span class="${pnlClass}">${pnlPctTextCompact(pnl, premium)}</span>`
+    : '';
   const premMeta = premium
-    ? `<span class="hist-prem-paid">${premium.kind === 'received' ? 'Premium received' : 'Premium paid'} <strong>\u20b9${fmt(premium.rs)}</strong></span>`
+    ? `<span class="hist-prem-paid" title="Profit or loss as a percent of premium.">${premium.kind === 'received' ? 'Premium received' : 'Premium paid'} <strong>\u20b9${fmt(premium.rs)}${premPct}</strong></span>`
     : '';
   // Amount used fills from Zerodha Final (same as expanded grid). Placeholder reserves width so the row does not jump.
   const amountUsedMeta = t.suggestion_id
@@ -11556,12 +11595,16 @@ function renderHistoryTrade(t) {
       <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
     <div class="collapsible-preview hist-card-facts">
-      <span>${escapeHtml(t.trade_name || '')}</span>
-      <span>Executed ${fmtDt(t.executed_on)}</span>
-      ${t.closed_on ? `<span>Closed ${fmtDt(t.closed_on)}</span>` : ''}
-      ${amountUsedMeta}
-      ${premMeta}
-      ${expiryMeta ? `<span>${expiryMeta.replace(/^&nbsp;·&nbsp;/, '')}</span>` : ''}
+      <div class="hist-card-facts-left">
+        <span>${escapeHtml(t.trade_name || '')}</span>
+        <span>Executed ${fmtDt(t.executed_on)}</span>
+        ${t.closed_on ? `<span>Closed ${fmtDt(t.closed_on)}</span>` : ''}
+        ${expiryMeta ? `<span>${expiryMeta.replace(/^&nbsp;·&nbsp;/, '')}</span>` : ''}
+      </div>
+      <div class="hist-card-facts-right">
+        ${amountUsedMeta}
+        ${premMeta}
+      </div>
     </div>`, `
     <div class="hcmp-grid">
       <div class="hcmp-header">

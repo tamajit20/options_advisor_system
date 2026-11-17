@@ -2107,9 +2107,30 @@ details.collapsible-card.hist-card > .collapsible-summary .hist-card-head {
 .hist-card-pnl { font-size: 1.15rem; font-weight: 700; white-space: nowrap; }
 .hist-pnl-pct { font-size: .75rem; font-weight: 400; opacity: .8; }
 .hist-card-meta { font-size: .78rem; color: var(--text-dim); margin-bottom: 14px; }
-/* Keep Executed / Closed / Amount used / Premium paid visible when the card is open. */
+/* Keep facts row visible when open; left meta vs right Amount used / Premium paid. */
 details.collapsible-card.hist-card[open] > .collapsible-summary .hist-card-facts {
   display: flex;
+}
+.hist-card-facts {
+  width: 100%;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px 16px;
+}
+.hist-card-facts-left,
+.hist-card-facts-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+.hist-card-facts-left { flex: 1 1 auto; justify-content: flex-start; text-align: left; }
+.hist-card-facts-right {
+  flex: 0 1 auto;
+  margin-left: auto;
+  justify-content: flex-end;
+  text-align: right;
 }
 .hist-amount-used-wrap,
 .hist-prem-paid { white-space: nowrap; }
@@ -2117,6 +2138,11 @@ details.collapsible-card.hist-card[open] > .collapsible-summary .hist-card-facts
 .hist-amount-used {
   display: inline-block;
   min-width: 22ch;
+  font-variant-numeric: tabular-nums;
+}
+.hist-strip-amount-used {
+  display: inline-block;
+  min-width: 12ch;
   font-variant-numeric: tabular-nums;
 }
 .hcmp-grid {
