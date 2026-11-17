@@ -45,9 +45,9 @@
   <nav class="options-subtabs" id="options-subtabs-bar" role="tablist" aria-label="Options Advisor sections">
     <button type="button" class="options-subtab active" data-tab="suggestion">Suggestion</button>
     <button type="button" class="options-subtab" data-tab="trades">Trades</button>
-    <button type="button" class="options-subtab" data-tab="learn">Learning</button>
     <button type="button" class="options-subtab" data-tab="history">History</button>
     <button type="button" class="options-subtab" data-tab="config">Config</button>
+    <button type="button" class="options-subtab" data-tab="learn">Learning</button>
   </nav>
   <div class="header-actions">
     <div id="zerodha-profile-chip" class="idx-chip idx-chip-live zerodha-funds-chip" hidden
@@ -88,9 +88,6 @@
         <button class="nav-item" data-tab="trades">
           <span class="nav-icon">📊</span><span class="nav-label">My Trades</span>
         </button>
-        <button class="nav-item" data-tab="learn">
-          <span class="nav-icon">📘</span><span class="nav-label">Learning</span>
-        </button>
         <button class="nav-item" data-tab="history">
           <span class="nav-icon">📜</span><span class="nav-label">History</span>
         </button>
@@ -110,6 +107,9 @@
         </button>
         <button class="nav-item" data-tab="config">
           <span class="nav-icon">⚙️</span><span class="nav-label">Config</span>
+        </button>
+        <button class="nav-item" data-tab="learn">
+          <span class="nav-icon">📘</span><span class="nav-label">Learning</span>
         </button>
   </nav>
 
@@ -161,8 +161,8 @@
           <input type="date" id="hist-to" class="hist-date-input">
         </label>
         <select id="hist-channel" title="Zerodha broker vs manual/paper fills (applies to all History tabs)">
-          <option value="">All channels</option>
-          <option value="zerodha" selected>Zerodha only</option>
+          <option value="" selected>All channels</option>
+          <option value="zerodha">Zerodha only</option>
           <option value="manual">Manual only</option>
         </select>
         <span class="hist-pane-filters" data-hist-filters="trades">
@@ -457,7 +457,7 @@
         <button type="button" class="more-drawer-item" data-tab="wsmon"><span class="more-drawer-icon">📡</span>WS Monitor</button>
       </div>
     </div>
-    <p class="more-drawer-note">Suggestion, Trades, Learning, History, and Config live under <strong>Advisor</strong> (top tabs).</p>
+    <p class="more-drawer-note">Suggestion, Trades, History, Config, and Learning live under <strong>Advisor</strong> (top tabs).</p>
     <button type="button" class="btn btn-ghost" data-more-close style="width:100%;margin-top:10px">Close</button>
   </div>
 </div>

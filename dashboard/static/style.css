@@ -1926,6 +1926,28 @@ input:focus, select:focus, textarea:focus {
 .tag-sm     { font-size: 9px; padding: 1px 5px; }
 
 /* ---------- History sub-tabs ---------- */
+.channel-section {
+  margin-top: 14px;
+  margin-bottom: 18px;
+}
+.channel-section:first-child { margin-top: 4px; }
+.channel-section-title {
+  margin: 0 0 10px;
+  font-size: .92rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--text);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.channel-section-count { font-weight: 500; font-size: .78rem; }
+.channel-section-empty { margin: 0 0 8px; padding: 10px 12px; }
+.channel-section-zerodha .channel-section-title { color: #7dd3fc; }
+.channel-section-manual .channel-section-title { color: #cbd5e1; }
+
 .hist-subtabs {
   display: flex; gap: 4px; margin-bottom: 16px;
   border-bottom: 2px solid #2a3744;

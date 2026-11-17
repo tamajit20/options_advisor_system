@@ -9414,16 +9414,33 @@ async function loadTrades() {
           ? `No open ${_channelFilterLabel(channelEl.value)} trades.`
           : 'No open trades.';
       }
-      c.className=''; c.innerHTML = '<div class="empty">No open trades match the selected filter.</div>';
+      c.className='';
+      c.innerHTML = _channelSectionsHtml(
+        { zerodha: [], manual: [] },
+        () => '',
+        channelEl?.value || '',
+      ) || '<div class="empty">No open trades match the selected filter.</div>';
       _pruneMtmCache([]);
       _paintOpenTradesTotals();
       return;
     }
     if (summaryEl) {
-      const label = channelEl?.value ? ` · ${_channelFilterLabel(channelEl.value)}` : '';
-      summaryEl.textContent = _histFilterSummary(data.count ?? data.trades.length, 'open trade') + label;
+      const parts = _partitionByTradeChannel(data.trades);
+      const bits = [`${data.count ?? data.trades.length} open`];
+      if (!channelEl?.value) {
+        bits.push(`${parts.zerodha.length} Zerodha`);
+        bits.push(`${parts.manual.length} manual`);
+      } else {
+        bits.push(_channelFilterLabel(channelEl.value));
+      }
+      summaryEl.textContent = bits.join(' · ');
     }
-    c.className=''; c.innerHTML = data.trades.map(t => renderTrade(t, false)).join('');
+    c.className='';
+    c.innerHTML = _channelSectionsHtml(
+      _partitionByTradeChannel(data.trades),
+      t => renderTrade(t, false),
+      channelEl?.value || '',
+    );
     _paintOpenTradesTotals();
     try {
       const snap = await API('/api/live/mtm/snapshot');
@@ -9494,6 +9511,49 @@ function _channelFilterLabel(channel) {
   if (channel === 'zerodha') return 'Zerodha';
   if (channel === 'manual') return 'manual';
   return 'all';
+}
+
+function _tradeChannelOf(t) {
+  const ch = (t && (t.execution_channel || t.channel)) || '';
+  return ch === 'zerodha' ? 'zerodha' : 'manual';
+}
+
+function _partitionByTradeChannel(trades) {
+  const zerodha = [];
+  const manual = [];
+  (trades || []).forEach(t => {
+    if (_tradeChannelOf(t) === 'zerodha') zerodha.push(t);
+    else manual.push(t);
+  });
+  return { zerodha, manual };
+}
+
+/** Zerodha / Manual section wrappers. When filterChannel is set, only that section. */
+function _channelSectionsHtml(parts, renderOne, filterChannel) {
+  const showZ = !filterChannel || filterChannel === 'zerodha';
+  const showM = !filterChannel || filterChannel === 'manual';
+  const z = parts.zerodha || [];
+  const m = parts.manual || [];
+  const blocks = [];
+  if (showZ) {
+    blocks.push(`
+      <section class="channel-section channel-section-zerodha" aria-label="Zerodha trades">
+        <h3 class="channel-section-title">Zerodha <span class="muted channel-section-count">(${z.length})</span></h3>
+        ${z.length
+          ? z.map(renderOne).join('')
+          : '<div class="empty channel-section-empty">No Zerodha trades.</div>'}
+      </section>`);
+  }
+  if (showM) {
+    blocks.push(`
+      <section class="channel-section channel-section-manual" aria-label="Manual trades">
+        <h3 class="channel-section-title">Manual <span class="muted channel-section-count">(${m.length})</span></h3>
+        ${m.length
+          ? m.map(renderOne).join('')
+          : '<div class="empty channel-section-empty">No manual trades.</div>'}
+      </section>`);
+  }
+  return blocks.join('');
 }
 
 function _histChannelParam(params) {
@@ -10649,13 +10709,22 @@ function loadHistory() {
     _fillHistSelect(instrEl, data.underlyings, instrEl.value, 'All instruments');
     _fillHistSelect(stratEl, data.strategies, stratEl.value, 'All strategies');
 
+    const channelFilter = ($('#hist-channel') && $('#hist-channel').value) || '';
     if (!data.trades.length) {
-      c.className=''; c.innerHTML='<div class="empty">No closed trades match the selected filters.</div>'; return;
+      c.className='';
+      c.innerHTML = _channelSectionsHtml(
+        { zerodha: [], manual: [] },
+        () => '',
+        channelFilter,
+      ) || '<div class="empty">No closed trades match the selected filters.</div>';
+      return;
     }
     c.className='';
-    c.innerHTML = data.trades.map(t => (
-      t.is_reversal ? renderHistoryReversal(t) : renderHistoryTrade(t)
-    )).join('');
+    c.innerHTML = _channelSectionsHtml(
+      _partitionByTradeChannel(data.trades),
+      t => (t.is_reversal ? renderHistoryReversal(t) : renderHistoryTrade(t)),
+      channelFilter,
+    );
     bindCollapsibleCardInteractions(c);
     wireTermHelpToggle(c);
     _bindHistoryMarginPnl(c);
