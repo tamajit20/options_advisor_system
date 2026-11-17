@@ -2105,10 +2105,20 @@ details.collapsible-card.hist-card > .collapsible-summary .hist-card-head {
 .hist-card-title .id-chip { user-select: all; }
 .hist-instr { font-size: 1.05rem; }
 .hist-card-pnl { font-size: 1.15rem; font-weight: 700; white-space: nowrap; }
-.hist-ret-invested { white-space: nowrap; }
-.hist-ret-invested strong { font-weight: 700; }
 .hist-pnl-pct { font-size: .75rem; font-weight: 400; opacity: .8; }
 .hist-card-meta { font-size: .78rem; color: var(--text-dim); margin-bottom: 14px; }
+/* Keep Executed / Closed / Amount used / Premium paid visible when the card is open. */
+details.collapsible-card.hist-card[open] > .collapsible-summary .hist-card-facts {
+  display: flex;
+}
+.hist-amount-used-wrap,
+.hist-prem-paid { white-space: nowrap; }
+/* Reserve space so Zerodha Final fill does not shove neighbouring meta items. */
+.hist-amount-used {
+  display: inline-block;
+  min-width: 22ch;
+  font-variant-numeric: tabular-nums;
+}
 .hcmp-grid {
   border: 1px solid #2a3744; border-radius: 6px; overflow: hidden;
   margin-bottom: 12px; font-size: .84rem;

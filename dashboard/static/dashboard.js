@@ -11261,14 +11261,24 @@ async function _fillHistoryMarginPnl(row) {
   const blocked = typeof _zerodhaMarginQuoteDisabledReason === 'function'
     ? _zerodhaMarginQuoteDisabledReason()
     : '';
+  const snapCard = row.closest('details.collapsible-card');
+  const setUsedFacts = (html) => {
+    if (snapCard) {
+      snapCard.querySelectorAll('[data-hist-amount-used]').forEach(el => {
+        el.innerHTML = html;
+      });
+    }
+  };
   if (blocked) {
     if (act) act.textContent = blocked;
+    setUsedFacts(blocked);
     return;
   }
   const lots = row.dataset.lots ? parseInt(row.dataset.lots, 10) : null;
   const cacheKey = _marginQuoteCacheKey(sid, Number.isFinite(lots) ? lots : null);
   row.dataset.marginHydrated = 'pending';
   if (act) act.textContent = 'Fetching Zerodha Final\u2026';
+  setUsedFacts('\u2026');
   try {
     let preview = _zerodhaMarginQuoteCache.get(cacheKey);
     if (!preview) {
@@ -11296,15 +11306,17 @@ async function _fillHistoryMarginPnl(row) {
     if (!(Number(fin) > 0)) {
       row.dataset.marginHydrated = '0';
       if (act) act.textContent = 'Zerodha Final unavailable';
+      setUsedFacts('\u2014');
       return;
     }
-    if (act) act.innerHTML = _marginPnlText(row.dataset.netPnl, fin);
-    const snapCard = row.closest('details.collapsible-card');
+    const usedHtml = _marginPnlText(row.dataset.netPnl, fin);
+    if (act) act.innerHTML = usedHtml;
     if (snapCard) {
       snapCard.querySelectorAll('.trade-snap-margin, .trade-snap-body .econ-cap-req').forEach(el => {
-        el.innerHTML = _marginPnlText(row.dataset.netPnl, fin);
+        el.innerHTML = usedHtml;
       });
     }
+    setUsedFacts(usedHtml);
     if (sug) sug.innerHTML = row.dataset.sugNetPnl != null && row.dataset.sugNetPnl !== ''
       ? _marginPnlText(row.dataset.sugNetPnl, fin)
       : '\u2014';
@@ -11312,6 +11324,7 @@ async function _fillHistoryMarginPnl(row) {
   } catch (err) {
     row.dataset.marginHydrated = '0';
     if (act) act.textContent = 'Zerodha Final unavailable';
+    setUsedFacts('\u2014');
   }
 }
 
@@ -11321,6 +11334,8 @@ function _bindHistoryMarginPnl(root) {
     const row = card.querySelector('[data-hist-margin-pnl]');
     if (!row) return;
     card.dataset.histMarginBound = '1';
+    // Hydrate on list paint so Amount used is on the facts row while collapsed (no expand-only delay).
+    _fillHistoryMarginPnl(row);
     card.addEventListener('toggle', () => {
       if (card.open) _fillHistoryMarginPnl(row);
     });
@@ -11510,11 +11525,20 @@ function renderHistoryTrade(t) {
     ? '&nbsp;·&nbsp;Expiries: ' + legExpiries.map(e => escapeHtml(fmtDate(e))).join(' / ')
     : (s.expiry ? '&nbsp;·&nbsp;Expiry: '+escapeHtml(fmtDate(s.expiry))+(s.dte != null ? ' ('+s.dte+'d)' : '') : '');
 
-  // Stored max loss — same capital base as History strip "return on amount invested".
-  // Rendered from DB on first paint (no Zerodha quote) so the collapsed row does not jump.
-  const maxLossRs = t.actual_max_loss != null ? Number(t.actual_max_loss) : NaN;
-  const retOnInvested = (pnl != null && Number.isFinite(maxLossRs) && maxLossRs > 0)
-    ? `<span class="hist-ret-invested ${pnlClass}" title="Net P&amp;L \u00f7 this trade's max loss (capital at risk).">Return on amount invested <strong>${pnl >= 0 ? '+' : ''}${(pnl / maxLossRs * 100).toFixed(1)}%</strong> <span class="muted">\u00b7 \u20b9${fmt(maxLossRs)}</span></span>`
+  // Header: net + % of premium only. Amount used / Premium paid live on the facts row.
+  const headPnl = pnl != null
+    ? (() => {
+        const prefix = pnl > 0 ? '+' : (pnl < 0 ? '\u2212' : '');
+        const pct = premium ? pnlPctTextCompact(pnl, premium) : '';
+        return `${prefix}\u20b9${fmt(Math.abs(pnl))}${pct ? `<span class="pnl-pct-bracket">${pct}</span>` : ''}`;
+      })()
+    : '\u2014';
+  const premMeta = premium
+    ? `<span class="hist-prem-paid">${premium.kind === 'received' ? 'Premium received' : 'Premium paid'} <strong>\u20b9${fmt(premium.rs)}</strong></span>`
+    : '';
+  // Amount used fills from Zerodha Final (same as expanded grid). Placeholder reserves width so the row does not jump.
+  const amountUsedMeta = t.suggestion_id
+    ? `<span class="hist-amount-used-wrap" title="Zerodha Final margin already held; percent = net \u00f7 that amount.">Amount used <strong class="hist-amount-used" data-hist-amount-used="1">\u2014</strong></span>`
     : '';
 
   return wrapCollapsibleCard(`
@@ -11528,21 +11552,17 @@ function renderHistoryTrade(t) {
         ${t.position_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(t.position_type)}</span>` : ''}
         ${_idChipsHtml(t.trade_id, t.suggestion_id)}
       </div>
-      <div class="hist-card-pnl ${pnlClass}">${pnl != null ? formatPnlWithPct(pnl, premium) : '—'}</div>
+      <div class="hist-card-pnl ${pnlClass}">${headPnl}</div>
       <span class="collapsible-chevron" aria-hidden="true"></span>
     </div>
-    <div class="collapsible-preview">
+    <div class="collapsible-preview hist-card-facts">
       <span>${escapeHtml(t.trade_name || '')}</span>
       <span>Executed ${fmtDt(t.executed_on)}</span>
       ${t.closed_on ? `<span>Closed ${fmtDt(t.closed_on)}</span>` : ''}
-      ${retOnInvested}
+      ${amountUsedMeta}
+      ${premMeta}
+      ${expiryMeta ? `<span>${expiryMeta.replace(/^&nbsp;·&nbsp;/, '')}</span>` : ''}
     </div>`, `
-    <div class="hist-card-meta muted">
-      ${t.trade_name ? escapeHtml(t.trade_name) + ' &nbsp;·&nbsp; ' : ''}Executed: ${fmtDt(t.executed_on)}
-      ${t.closed_on ? '&nbsp;·&nbsp;Closed: '+fmtDt(t.closed_on) : ''}
-      ${expiryMeta}
-    </div>
-
     <div class="hcmp-grid">
       <div class="hcmp-header">
         <span>Parameter</span>
