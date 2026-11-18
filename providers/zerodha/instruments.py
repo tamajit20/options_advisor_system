@@ -24,12 +24,15 @@ Memory: each row is a dict; ~80 bytes × 30k = ~2.4 MB. Acceptable.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
-from datetime import date
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 
 logger = logging.getLogger(__name__)
@@ -37,6 +40,70 @@ logger = logging.getLogger(__name__)
 
 # 24h refresh cadence. Kite regenerates the master at ~08:00 IST.
 _DEFAULT_TTL_SECONDS = 24 * 60 * 60
+# Disk fallback may be used for up to 3 days when Kite rate-limits the download.
+_DISK_MAX_AGE_SECONDS = 3 * 24 * 60 * 60
+
+
+def _default_instruments_cache_dir() -> Path:
+    try:
+        from config import DASHBOARD_CONFIG
+        raw = DASHBOARD_CONFIG.get("data_dir") or "data"
+    except Exception:
+        raw = os.environ.get("OPT_DATA_DIR", "data")
+    return Path(str(raw))
+
+
+def _serialize_instrument_row(row: dict) -> dict:
+    out = dict(row)
+    exp = out.get("expiry")
+    if isinstance(exp, datetime):
+        out["expiry"] = exp.date().isoformat()
+    elif isinstance(exp, date):
+        out["expiry"] = exp.isoformat()
+    return out
+
+
+def _write_instruments_disk_cache(path: Path, rows: List[dict]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        payload = {
+            "saved_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "count": len(rows),
+            "rows": [_serialize_instrument_row(r) for r in rows if isinstance(r, dict)],
+        }
+        tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        logger.warning("instrument disk cache write failed: %s", path, exc_info=True)
+
+
+def _read_instruments_disk_cache(
+    path: Path,
+    *,
+    max_age_sec: float = _DISK_MAX_AGE_SECONDS,
+) -> Optional[List[dict]]:
+    try:
+        if not path.is_file():
+            return None
+        age = time.time() - path.stat().st_mtime
+        if age > max_age_sec:
+            logger.warning(
+                "instrument disk cache too old (%.0fh): %s", age / 3600.0, path,
+            )
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) or not rows:
+            return None
+        logger.info(
+            "instrument disk cache hit: %d rows from %s (age %.0fm)",
+            len(rows), path, age / 60.0,
+        )
+        return rows
+    except Exception:
+        logger.warning("instrument disk cache read failed: %s", path, exc_info=True)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -100,11 +167,14 @@ class InstrumentMaster:
         self,
         loader: Callable[[], Iterable[dict]],
         ttl_seconds: float = _DEFAULT_TTL_SECONDS,
+        *,
+        disk_cache_path: Optional[Union[str, Path]] = None,
     ):
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
         self._loader = loader
         self._ttl = float(ttl_seconds)
+        self._disk_cache_path = Path(disk_cache_path) if disk_cache_path else None
         self._lock = threading.RLock()
         self._loaded_at: Optional[float] = None
         self._by_symbol: Dict[Tuple[str, str], Instrument] = {}
@@ -141,9 +211,7 @@ class InstrumentMaster:
             raise last_exc
         return []
 
-    def refresh(self) -> int:
-        """Force a full reload from `loader()`. Returns row count."""
-        rows = self._load_rows_with_retry()
+    def _apply_rows(self, rows: List[dict]) -> int:
         by_sym: Dict[Tuple[str, str], Instrument] = {}
         by_opt: Dict[Tuple[str, date, float, str], Instrument] = {}
         for row in rows:
@@ -159,10 +227,34 @@ class InstrumentMaster:
             self._by_symbol = by_sym
             self._by_option = by_opt
             self._loaded_at = time.monotonic()
-        logger.info(
-            "instrument master refreshed: %d total, %d option keys", len(by_sym), len(by_opt)
-        )
         return len(by_sym)
+
+    def _load_from_disk(self) -> bool:
+        if self._disk_cache_path is None:
+            return False
+        rows = _read_instruments_disk_cache(self._disk_cache_path)
+        if not rows:
+            return False
+        n = self._apply_rows(rows)
+        logger.info(
+            "instrument master loaded from disk: %d total (%s)",
+            n, self._disk_cache_path,
+        )
+        return n > 0
+
+    def refresh(self) -> int:
+        """Force a full reload from `loader()`. Returns row count."""
+        rows = self._load_rows_with_retry()
+        n = self._apply_rows(rows)
+        if self._disk_cache_path is not None:
+            _write_instruments_disk_cache(self._disk_cache_path, list(rows))
+        with self._lock:
+            opt_n = len(self._by_option)
+        logger.info(
+            "instrument master refreshed: %d total, %d option keys",
+            n, opt_n,
+        )
+        return n
 
     @property
     def is_loaded(self) -> bool:
@@ -173,10 +265,9 @@ class InstrumentMaster:
         """Refresh only if TTL elapsed (or never loaded). Returns True if a
         refresh actually happened.
 
-        If the master has never loaded and Kite rate-limits the download, keep
-        ``_loaded_at`` unset so the next reconcile retries instead of sitting
-        on an empty token map (which zeros WS subscriptions and freezes the
-        header on stale EOD).
+        If the master has never loaded and Kite rate-limits the download, try
+        the on-disk cache before failing — empty token maps zero WS
+        subscriptions and freeze the header on stale EOD.
 
         If a previous load exists and the refresh fails, keep the stale map
         and return False — better a day-old token list than zero subscriptions.
@@ -190,6 +281,11 @@ class InstrumentMaster:
             with self._lock:
                 never_loaded = self._loaded_at is None
             if never_loaded:
+                if self._load_from_disk():
+                    logger.warning(
+                        "instrument master using disk cache after Kite failure",
+                    )
+                    return True
                 logger.error(
                     "instrument master still empty after failed refresh — will retry",
                     exc_info=True,

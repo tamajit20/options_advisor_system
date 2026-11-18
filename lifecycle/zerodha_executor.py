@@ -376,7 +376,16 @@ def _shared_nfo_master(access_token: str) -> InstrumentMaster:
                 api_key=ZERODHA_API_CONFIG["api_key"],
                 access_token=token,
             )
-            master = InstrumentMaster(loader=lambda: read.instruments("NFO"))
+            from pathlib import Path as _Path
+            try:
+                from config import DASHBOARD_CONFIG
+                data_dir = DASHBOARD_CONFIG.get("data_dir") or "data"
+            except Exception:
+                data_dir = "data"
+            master = InstrumentMaster(
+                loader=lambda: read.instruments("NFO"),
+                disk_cache_path=_Path(str(data_dir)) / "kite_instruments_nfo.json",
+            )
             _SHARED_NFO_MASTER = master
             _SHARED_NFO_MASTER_TOKEN = token
     master.refresh_if_stale()

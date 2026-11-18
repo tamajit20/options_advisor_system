@@ -617,6 +617,8 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 **My Trades load:** `/api/trades/open` paints from last MTM / live snap (no outlook on the list path — that cold path was ~2s+ per first trade). Full outlook hydrates after paint via `/api/trades/<id>/outlook` (one trade at a time). Open-trade **Amount used** is not auto-quoted on load (that burned Kite REST and made **Place orders** 429); suggestion **Amount needed** still quotes, spaced, and stops the batch on rate limit. **Place orders in Zerodha** clears that cooldown and retries preview with backoff. Preview/execute reuse one process-wide NFO instrument master (not a fresh Kite download each click) so the WS runner can keep index subscriptions. Close forms load when a card is expanded, not for every trade up front.
 
+**Header index strip:** live WS ticks when subscribed; if WS is connected but has no index ticks (e.g. instrument master rate-limited after deploy), `/api/indices/spot` falls back to a throttled Kite OHLC for Nifty / BN / FN / VIX so price and day % stay live and in sync. Instrument master is cached on disk under `data/kite_instruments_*.json` so the next WS restart can subscribe without re-downloading from Kite.
+
 **Suggestion leg LTPs:** prefer WebSocket ticks already subscribed for today-PENDING suggestions (`data/suggestion_ltp_state.json`); REST `ltp` is a throttled fallback only when WS has no quote yet.
 
 Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), not raw “cheap IV”. When rank is low but **IV/HV > 1**, the title is “options still rich vs HV” so it does not contradict the expensive-vs-realised soft-fail.

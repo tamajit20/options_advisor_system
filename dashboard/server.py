@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
@@ -867,6 +868,96 @@ def _index_ticker_symbols() -> list[str]:
         if key and key not in seen:
             seen.add(key)
             out.append(key)
+    return out
+
+
+# Kite exchange:tradingsymbol for header strip REST fallback (no instrument master).
+_INDEX_KITE_KEYS: Dict[str, str] = {
+    "NIFTY": "NSE:NIFTY 50",
+    "BANKNIFTY": "NSE:NIFTY BANK",
+    "FINNIFTY": "NSE:NIFTY FIN SERVICE",
+    "VIX": "NSE:INDIA VIX",
+}
+_REST_INDEX_CACHE: Dict[str, Any] = {"at": 0.0, "quotes": {}}
+_REST_INDEX_CACHE_LOCK = threading.Lock()
+_REST_INDEX_CACHE_TTL_SEC = 20.0
+
+
+def _rest_live_index_quotes(
+    symbols: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Throttle-cached Kite OHLC for header indexes when WS has no ticks.
+
+    One bulk ``ohlc`` call covers last price + previous close (day %), without
+    needing the instrument master download that WS uses for subscriptions.
+    """
+    import time as _time
+
+    want = [str(s).upper() for s in (symbols or []) if str(s).upper() in _INDEX_KITE_KEYS]
+    if not want:
+        return {}
+    now_m = _time.monotonic()
+    with _REST_INDEX_CACHE_LOCK:
+        cached = _REST_INDEX_CACHE.get("quotes") or {}
+        if (
+            cached
+            and (now_m - float(_REST_INDEX_CACHE.get("at") or 0.0)) < _REST_INDEX_CACHE_TTL_SEC
+            and all(sym in cached for sym in want)
+        ):
+            return {sym: dict(cached[sym]) for sym in want if sym in cached}
+    try:
+        from providers.zerodha.facade import KiteFacade
+        from providers.zerodha.session import is_token_valid, load_session
+        from config import ZERODHA_API_CONFIG
+
+        session = load_session()
+        if session is None or not is_token_valid(session):
+            return {}
+        api_key = ZERODHA_API_CONFIG.get("api_key")
+        if not api_key:
+            return {}
+        facade = KiteFacade(api_key=api_key, access_token=session.access_token)
+        keys = [_INDEX_KITE_KEYS[sym] for sym in want]
+        raw = facade.ohlc(keys) or {}
+    except Exception:
+        logger.warning("REST index OHLC fallback failed", exc_info=True)
+        return {}
+
+    out: dict[str, dict[str, Any]] = {}
+    as_of = _ist_iso(now_ist())
+    for sym in want:
+        key = _INDEX_KITE_KEYS[sym]
+        row = raw.get(key) if isinstance(raw, dict) else None
+        if not isinstance(row, dict):
+            continue
+        last = row.get("last_price")
+        if last is None and isinstance(row.get("ohlc"), dict):
+            last = row["ohlc"].get("close")
+        try:
+            price = float(last) if last is not None else 0.0
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        prev = None
+        ohlc = row.get("ohlc") if isinstance(row.get("ohlc"), dict) else {}
+        raw_prev = ohlc.get("close") if ohlc else None
+        try:
+            prev_f = float(raw_prev) if raw_prev is not None else 0.0
+        except (TypeError, ValueError):
+            prev_f = 0.0
+        if prev_f > 0:
+            prev = prev_f
+        quote = {"price": price, "as_of": as_of}
+        if prev:
+            quote["prev_close"] = prev
+        out[sym] = quote
+    if out:
+        with _REST_INDEX_CACHE_LOCK:
+            merged = dict(_REST_INDEX_CACHE.get("quotes") or {})
+            merged.update(out)
+            _REST_INDEX_CACHE["quotes"] = merged
+            _REST_INDEX_CACHE["at"] = now_m
     return out
 
 
@@ -4644,12 +4735,19 @@ def create_app() -> Flask:
 
         spot_repo = SpotEodRepo(db)
         vix_repo = VixRepo(db)
+        # When WS is up but has zero subscriptions (instrument master rate-limited),
+        # keep the header on live prints via one throttled REST OHLC call.
+        rest_quotes: dict[str, dict[str, Any]] = {}
+        if session_open and not live_fresh:
+            rest_quotes = _rest_live_index_quotes(symbols)
         indices: list[dict[str, Any]] = []
 
         for sym in symbols:
             label = _INDEX_LABELS.get(sym, sym)
-            live = live_quotes.get(sym)
-            use_live = bool(live_fresh and live and live.get("price") is not None)
+            live = live_quotes.get(sym) if live_fresh else None
+            if not live and rest_quotes.get(sym):
+                live = rest_quotes[sym]
+            use_live = bool(live and live.get("price") is not None)
 
             if use_live:
                 raw_ts = live.get("as_of")
