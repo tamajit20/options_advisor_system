@@ -2556,6 +2556,18 @@ def create_app() -> Flask:
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
+        except Exception as exc:  # noqa: BLE001 — Kite NetworkException etc.
+            msg = str(exc) or exc.__class__.__name__
+            low = msg.lower()
+            if (
+                "too many requests" in low
+                or "rate limit" in low
+                or exc.__class__.__name__ == "NetworkException"
+            ):
+                logger.warning("zerodha-preview rate-limited for %s: %s", sid, msg)
+                return jsonify({"error": "Zerodha rate limit — try again shortly"}), 429
+            logger.exception("zerodha-preview failed for %s", sid)
+            return jsonify({"error": msg}), 500
         preview_dict = preview.to_dict()
         preview_dict["instrument_overlaps"] = _instrument_overlaps_for_suggestion(db, sid)
         return jsonify({"preview": preview_dict})
@@ -2707,11 +2719,11 @@ def create_app() -> Flask:
             else:
                 r_out["suggestion"] = None
                 r_out["entry_quality_score"] = None
-            # List path skips mark-band grid + scenarios (seconds each). Client
-            # hydrates those via /api/trades/<id>/outlook after cards paint.
-            r_out["live_outlook"] = _trade_live_outlook(
-                db, r_out, include_scenarios=False, include_today_bands=False,
-            )
+            # List path skips outlook entirely — even the "light" path cold-starts
+            # compute_trade_outlook (~2s+) and blocks the My Trades spinner.
+            # Client paints from last_mtm / live snap, then hydrates full outlook
+            # via /api/trades/<id>/outlook after first paint.
+            r_out["live_outlook"] = None
             _enrich_trade_execution_channel(db, r_out)
             if r_out.get("suggestion"):
                 r_out["suggestion"]["execution_channel"] = r_out["execution_channel"]

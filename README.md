@@ -615,7 +615,7 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 **Day Ranges** (Live outlook → All dates): Full profit, In profit, In loss, and Full loss per day. A tick means you are already on the safe side of that line (the % is cushion, not a move still required). A cross means you are already inside that loss zone. An arrow marked "needed" is a move still required to enter a profit zone. Trade popups rebuild on open (`fresh=1`); suggestion calendars stay as saved at generation. Mark-band sweeps are vectorized and capped so one-sided Bank Nifty structures cannot explode the grid (that had made suggestion runs and the Day Ranges popup very slow).
 
-**My Trades load:** `/api/trades/open` returns a light outlook first (win chance / EV / expiry fit). Today mark bands and scenario chips hydrate after paint via `/api/trades/<id>/outlook`. Close forms load when a card is expanded, not for every trade up front.
+**My Trades load:** `/api/trades/open` paints from last MTM / live snap (no outlook on the list path — that cold path was ~2s+ per first trade). Full outlook hydrates after paint via `/api/trades/<id>/outlook` (one trade at a time). Open-trade **Amount used** is not auto-quoted on load (that burned Kite REST and made **Place orders** 429); suggestion **Amount needed** still quotes, spaced, and stops the batch on rate limit. **Place orders in Zerodha** clears that cooldown and retries preview with backoff. Close forms load when a card is expanded, not for every trade up front.
 
 **Suggestion leg LTPs:** prefer WebSocket ticks already subscribed for today-PENDING suggestions (`data/suggestion_ltp_state.json`); REST `ltp` is a throttled fallback only when WS has no quote yet.
 
