@@ -120,6 +120,28 @@ def test_refresh_if_stale_skips_when_fresh(monkeypatch):
     assert calls["n"] == 2   # past TTL, refreshed
 
 
+def test_refresh_if_stale_keeps_cache_when_reload_fails(monkeypatch):
+    import time as _t
+    fake = {"t": 1000.0}
+    monkeypatch.setattr(_t, "monotonic", lambda: fake["t"])
+    monkeypatch.setattr(_t, "sleep", lambda _s: None)
+    calls = {"n": 0}
+
+    def loader():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _sample_rows()
+        raise RuntimeError("Too many requests")
+
+    im = InstrumentMaster(loader=loader, ttl_seconds=10)
+    assert im.refresh_if_stale() is True
+    assert im.is_loaded
+    token = im.get_by_tradingsymbol("NFO", "NIFTY26MAY23000CE")
+    fake["t"] += 20
+    assert im.refresh_if_stale() is False  # failed refresh, keep stale
+    assert im.get_by_tradingsymbol("NFO", "NIFTY26MAY23000CE") == token
+
+
 def test_malformed_row_skipped():
     im = InstrumentMaster(loader=lambda: [
         _row(token=1, tradingsymbol="OK"),

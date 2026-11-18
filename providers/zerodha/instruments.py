@@ -111,9 +111,39 @@ class InstrumentMaster:
         self._by_option: Dict[Tuple[str, date, float, str], Instrument] = {}
 
     # ------------------------------------------------------------------ refresh
+    @staticmethod
+    def _is_rate_limit_error(exc: BaseException) -> bool:
+        msg = str(exc) or ""
+        if "too many requests" in msg.lower() or "rate limit" in msg.lower():
+            return True
+        return exc.__class__.__name__ == "NetworkException"
+
+    def _load_rows_with_retry(self, *, attempts: int = 5) -> list:
+        """Load instrument rows; back off on Kite 'Too many requests'."""
+        last_exc: Optional[BaseException] = None
+        # Instruments download is large — Kite needs a longer cool-down than
+        # quote/ltp when we have already been hammering margins/preview.
+        waits = (5.0, 15.0, 30.0, 45.0)
+        for i in range(max(1, attempts)):
+            try:
+                return list(self._loader())
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_rate_limit_error(exc) or i == attempts - 1:
+                    raise
+                wait = waits[min(i, len(waits) - 1)]
+                logger.warning(
+                    "instrument master rate-limited (%s) — retry in %.1fs",
+                    exc, wait,
+                )
+                time.sleep(wait)
+        if last_exc is not None:
+            raise last_exc
+        return []
+
     def refresh(self) -> int:
         """Force a full reload from `loader()`. Returns row count."""
-        rows = list(self._loader())
+        rows = self._load_rows_with_retry()
         by_sym: Dict[Tuple[str, str], Instrument] = {}
         by_opt: Dict[Tuple[str, date, float, str], Instrument] = {}
         for row in rows:
@@ -134,13 +164,42 @@ class InstrumentMaster:
         )
         return len(by_sym)
 
+    @property
+    def is_loaded(self) -> bool:
+        with self._lock:
+            return self._loaded_at is not None and bool(self._by_symbol)
+
     def refresh_if_stale(self) -> bool:
         """Refresh only if TTL elapsed (or never loaded). Returns True if a
-        refresh actually happened."""
+        refresh actually happened.
+
+        If the master has never loaded and Kite rate-limits the download, keep
+        ``_loaded_at`` unset so the next reconcile retries instead of sitting
+        on an empty token map (which zeros WS subscriptions and freezes the
+        header on stale EOD).
+
+        If a previous load exists and the refresh fails, keep the stale map
+        and return False — better a day-old token list than zero subscriptions.
+        """
         with self._lock:
             if self._loaded_at is not None and (time.monotonic() - self._loaded_at) < self._ttl:
                 return False
-        self.refresh()
+        try:
+            self.refresh()
+        except Exception:
+            with self._lock:
+                never_loaded = self._loaded_at is None
+            if never_loaded:
+                logger.error(
+                    "instrument master still empty after failed refresh — will retry",
+                    exc_info=True,
+                )
+                raise
+            logger.warning(
+                "instrument master refresh failed — keeping stale cache",
+                exc_info=True,
+            )
+            return False
         return True
 
     # ------------------------------------------------------------------ lookups

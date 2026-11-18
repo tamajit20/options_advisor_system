@@ -87,6 +87,11 @@ _TERMINAL_FAIL = frozenset({"REJECTED", "CANCELLED"})
 _IN_FLIGHT = frozenset({"PENDING", "OPEN", "TRIGGER PENDING"})
 _LOCKS: Dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
+# Process-wide NFO instrument master — every preview/execute used to download
+# ~30k rows from Kite, which rate-limits the WS runner and freezes live spots.
+_SHARED_NFO_MASTER: Optional[InstrumentMaster] = None
+_SHARED_NFO_MASTER_TOKEN: Optional[str] = None
+_SHARED_NFO_MASTER_LOCK = threading.Lock()
 
 
 class ZerodhaExecutionError(Exception):
@@ -348,6 +353,40 @@ def _lock_for(key: str) -> threading.Lock:
         return _LOCKS[key]
 
 
+def _reset_shared_nfo_master_for_tests() -> None:
+    """Drop the process-wide instrument cache (tests only)."""
+    global _SHARED_NFO_MASTER, _SHARED_NFO_MASTER_TOKEN
+    with _SHARED_NFO_MASTER_LOCK:
+        _SHARED_NFO_MASTER = None
+        _SHARED_NFO_MASTER_TOKEN = None
+
+
+def _shared_nfo_master(access_token: str) -> InstrumentMaster:
+    """Reuse one NFO InstrumentMaster for the life of the access token."""
+    global _SHARED_NFO_MASTER, _SHARED_NFO_MASTER_TOKEN
+    token = str(access_token or "")
+    with _SHARED_NFO_MASTER_LOCK:
+        if (
+            _SHARED_NFO_MASTER is not None
+            and _SHARED_NFO_MASTER_TOKEN == token
+        ):
+            master = _SHARED_NFO_MASTER
+        else:
+            read = KiteFacade(
+                api_key=ZERODHA_API_CONFIG["api_key"],
+                access_token=token,
+            )
+            master = InstrumentMaster(loader=lambda: read.instruments("NFO"))
+            _SHARED_NFO_MASTER = master
+            _SHARED_NFO_MASTER_TOKEN = token
+    master.refresh_if_stale()
+    if not master.is_loaded:
+        raise ZerodhaExecutionError(
+            "Zerodha instrument master unavailable — rate-limited; try again shortly"
+        )
+    return master
+
+
 def _build_client() -> Tuple[KiteExecutionFacade, InstrumentMaster]:
     if not ZERODHA_API_CONFIG.get("api_key"):
         raise ZerodhaExecutionError("OPT_ZERODHA_API_KEY is not configured")
@@ -356,16 +395,11 @@ def _build_client() -> Tuple[KiteExecutionFacade, InstrumentMaster]:
         raise ZerodhaExecutionError(
             "Zerodha session missing or expired — log in on the dashboard first"
         )
-    read = KiteFacade(
-        api_key=ZERODHA_API_CONFIG["api_key"],
-        access_token=session.access_token,
-    )
     facade = KiteExecutionFacade(
         api_key=ZERODHA_API_CONFIG["api_key"],
         access_token=session.access_token,
     )
-    master = InstrumentMaster(loader=lambda: read.instruments("NFO"))
-    master.refresh_if_stale()
+    master = _shared_nfo_master(session.access_token)
     return facade, master
 
 
