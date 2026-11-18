@@ -241,21 +241,7 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict) -> str:
     )
 
     facade = KiteFacade(api_key=session.api_key, access_token=session.access_token)
-
-    def _load_ws_instruments():
-        # NSE indexes + NFO options — skip BSE/MCX/etc so the download is smaller
-        # and less likely to trip Kite rate limits after a deploy restart.
-        rows = []
-        rows.extend(facade.instruments("NSE") or [])
-        rows.extend(facade.instruments("NFO") or [])
-        return rows
-
-    from pathlib import Path as _Path
-    _inst_cache = _Path(str(DASHBOARD_CONFIG.get("data_dir") or "data")) / "kite_instruments_nse_nfo.json"
-    master = InstrumentMaster(
-        loader=_load_ws_instruments,
-        disk_cache_path=_inst_cache,
-    )
+    master = InstrumentMaster(loader=lambda: facade.instruments())
 
     db = SQLServerConnection()
     db.connect()

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
@@ -871,97 +870,6 @@ def _index_ticker_symbols() -> list[str]:
     return out
 
 
-# Kite exchange:tradingsymbol for header strip REST fallback (no instrument master).
-_INDEX_KITE_KEYS: Dict[str, str] = {
-    "NIFTY": "NSE:NIFTY 50",
-    "BANKNIFTY": "NSE:NIFTY BANK",
-    "FINNIFTY": "NSE:NIFTY FIN SERVICE",
-    "VIX": "NSE:INDIA VIX",
-}
-_REST_INDEX_CACHE: Dict[str, Any] = {"at": 0.0, "quotes": {}}
-_REST_INDEX_CACHE_LOCK = threading.Lock()
-# Keep short — SSE + strip poll rely on this when WS has no index ticks.
-_REST_INDEX_CACHE_TTL_SEC = 5.0
-
-
-def _rest_live_index_quotes(
-    symbols: list[str],
-) -> dict[str, dict[str, Any]]:
-    """Throttle-cached Kite OHLC for header indexes when WS has no ticks.
-
-    One bulk ``ohlc`` call covers last price + previous close (day %), without
-    needing the instrument master download that WS uses for subscriptions.
-    """
-    import time as _time
-
-    want = [str(s).upper() for s in (symbols or []) if str(s).upper() in _INDEX_KITE_KEYS]
-    if not want:
-        return {}
-    now_m = _time.monotonic()
-    with _REST_INDEX_CACHE_LOCK:
-        cached = _REST_INDEX_CACHE.get("quotes") or {}
-        if (
-            cached
-            and (now_m - float(_REST_INDEX_CACHE.get("at") or 0.0)) < _REST_INDEX_CACHE_TTL_SEC
-            and all(sym in cached for sym in want)
-        ):
-            return {sym: dict(cached[sym]) for sym in want if sym in cached}
-    try:
-        from providers.zerodha.facade import KiteFacade
-        from providers.zerodha.session import is_token_valid, load_session
-        from config import ZERODHA_API_CONFIG
-
-        session = load_session()
-        if session is None or not is_token_valid(session):
-            return {}
-        api_key = ZERODHA_API_CONFIG.get("api_key")
-        if not api_key:
-            return {}
-        facade = KiteFacade(api_key=api_key, access_token=session.access_token)
-        keys = [_INDEX_KITE_KEYS[sym] for sym in want]
-        raw = facade.ohlc(keys) or {}
-    except Exception:
-        logger.warning("REST index OHLC fallback failed", exc_info=True)
-        return {}
-
-    out: dict[str, dict[str, Any]] = {}
-    as_of = _ist_iso(now_ist())
-    for sym in want:
-        key = _INDEX_KITE_KEYS[sym]
-        row = raw.get(key) if isinstance(raw, dict) else None
-        if not isinstance(row, dict):
-            continue
-        last = row.get("last_price")
-        if last is None and isinstance(row.get("ohlc"), dict):
-            last = row["ohlc"].get("close")
-        try:
-            price = float(last) if last is not None else 0.0
-        except (TypeError, ValueError):
-            continue
-        if price <= 0:
-            continue
-        prev = None
-        ohlc = row.get("ohlc") if isinstance(row.get("ohlc"), dict) else {}
-        raw_prev = ohlc.get("close") if ohlc else None
-        try:
-            prev_f = float(raw_prev) if raw_prev is not None else 0.0
-        except (TypeError, ValueError):
-            prev_f = 0.0
-        if prev_f > 0:
-            prev = prev_f
-        quote = {"price": price, "as_of": as_of}
-        if prev:
-            quote["prev_close"] = prev
-        out[sym] = quote
-    if out:
-        with _REST_INDEX_CACHE_LOCK:
-            merged = dict(_REST_INDEX_CACHE.get("quotes") or {})
-            merged.update(out)
-            _REST_INDEX_CACHE["quotes"] = merged
-            _REST_INDEX_CACHE["at"] = now_m
-    return out
-
-
 def _load_ws_status_snapshot() -> Optional[dict]:
     from providers.ws_monitor import default_snapshot_path
 
@@ -1228,7 +1136,7 @@ def _load_ws_monitor_snap_or_unavailable() -> dict:
 
 
 def _indices_spot_live_payload(snap: dict) -> dict:
-    """Live index strip update for SSE — WS ticks, else throttled REST OHLC."""
+    """Live-only index strip update from ws_status (no DB)."""
     from utils import market_state_at
 
     now = now_ist()
@@ -1236,11 +1144,10 @@ def _indices_spot_live_payload(snap: dict) -> dict:
     session_open = ms in ("OPEN_VOLATILE", "OPEN_STABLE", "CLOSE_AUCTION")
     symbols = _index_ticker_symbols()
     want = set(symbols)
-    live_quotes = _latest_live_index_quotes(snap, want) if snap else {}
-    tick_age = _ws_tick_age_seconds(snap, now) if snap else None
+    live_quotes = _latest_live_index_quotes(snap, want)
+    tick_age = _ws_tick_age_seconds(snap, now)
     ws_connected = bool(
-        snap
-        and snap.get("connection_state") == "connected"
+        snap.get("connection_state") == "connected"
         and not snap.get("token_expired")
     )
     live_fresh = (
@@ -1248,11 +1155,6 @@ def _indices_spot_live_payload(snap: dict) -> dict:
         and tick_age is not None
         and tick_age <= (120.0 if session_open else 1800.0)
     )
-    # Without this, SSE emits feed=eod/[] while GET /indices/spot still shows
-    # REST live — chips paint once then never move until a full page reload.
-    if not live_fresh and session_open:
-        live_quotes = _rest_live_index_quotes(symbols)
-        live_fresh = bool(live_quotes)
     if not live_fresh:
         return {"feed": "eod", "indices": [], "as_of": _ist_iso(now)}
 
@@ -2654,18 +2556,6 @@ def create_app() -> Flask:
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
-        except Exception as exc:  # noqa: BLE001 — Kite NetworkException etc.
-            msg = str(exc) or exc.__class__.__name__
-            low = msg.lower()
-            if (
-                "too many requests" in low
-                or "rate limit" in low
-                or exc.__class__.__name__ == "NetworkException"
-            ):
-                logger.warning("zerodha-preview rate-limited for %s: %s", sid, msg)
-                return jsonify({"error": "Zerodha rate limit — try again shortly"}), 429
-            logger.exception("zerodha-preview failed for %s", sid)
-            return jsonify({"error": msg}), 500
         preview_dict = preview.to_dict()
         preview_dict["instrument_overlaps"] = _instrument_overlaps_for_suggestion(db, sid)
         return jsonify({"preview": preview_dict})
@@ -2817,11 +2707,11 @@ def create_app() -> Flask:
             else:
                 r_out["suggestion"] = None
                 r_out["entry_quality_score"] = None
-            # List path skips outlook entirely — even the "light" path cold-starts
-            # compute_trade_outlook (~2s+) and blocks the My Trades spinner.
-            # Client paints from last_mtm / live snap, then hydrates full outlook
-            # via /api/trades/<id>/outlook after first paint.
-            r_out["live_outlook"] = None
+            # List path skips mark-band grid + scenarios (seconds each). Client
+            # hydrates those via /api/trades/<id>/outlook after cards paint.
+            r_out["live_outlook"] = _trade_live_outlook(
+                db, r_out, include_scenarios=False, include_today_bands=False,
+            )
             _enrich_trade_execution_channel(db, r_out)
             if r_out.get("suggestion"):
                 r_out["suggestion"]["execution_channel"] = r_out["execution_channel"]
@@ -4742,19 +4632,12 @@ def create_app() -> Flask:
 
         spot_repo = SpotEodRepo(db)
         vix_repo = VixRepo(db)
-        # When WS is up but has zero subscriptions (instrument master rate-limited),
-        # keep the header on live prints via one throttled REST OHLC call.
-        rest_quotes: dict[str, dict[str, Any]] = {}
-        if session_open and not live_fresh:
-            rest_quotes = _rest_live_index_quotes(symbols)
         indices: list[dict[str, Any]] = []
 
         for sym in symbols:
             label = _INDEX_LABELS.get(sym, sym)
-            live = live_quotes.get(sym) if live_fresh else None
-            if not live and rest_quotes.get(sym):
-                live = rest_quotes[sym]
-            use_live = bool(live and live.get("price") is not None)
+            live = live_quotes.get(sym)
+            use_live = bool(live_fresh and live and live.get("price") is not None)
 
             if use_live:
                 raw_ts = live.get("as_of")

@@ -830,11 +830,8 @@ function _setSuggestionAmountNeeded(card, rs) {
   card.dataset.marginFinal = String(rs);
 }
 
-/** Session cache: one Kite margin quote per suggestion+lots until lots change or Execute.
- * Failed / rate-limited quotes are cached as `{ __failed: true, ... }` so reloads
- * do not re-hammer Kite (which otherwise 429/500s and stalls Amount used). */
+/** Session cache: one Kite margin quote per suggestion+lots until lots change or Execute. */
 const _zerodhaMarginQuoteCache = new Map();
-let _zerodhaMarginRateLimitedUntil = 0;
 
 function _marginQuoteCacheKey(sid, lots) {
   const lotPart = (lots != null && lots !== 'invalid') ? String(lots) : 'default';
@@ -847,43 +844,6 @@ function _invalidateZerodhaMarginQuote(sid) {
   for (const key of [..._zerodhaMarginQuoteCache.keys()]) {
     if (key.startsWith(prefix)) _zerodhaMarginQuoteCache.delete(key);
   }
-}
-
-function _isFailedMarginCache(entry) {
-  return !!(entry && typeof entry === 'object' && entry.__failed);
-}
-
-function _cacheFailedMarginQuote(cacheKey, message) {
-  if (!cacheKey) return;
-  _zerodhaMarginQuoteCache.set(cacheKey, {
-    __failed: true,
-    margin_message: message || 'Zerodha Final / Peak unavailable',
-  });
-}
-
-function _marginErrorLooksRateLimited(err) {
-  const msg = (err && err.message) ? String(err.message) : String(err || '');
-  return /rate limit|too many requests|\b429\b/i.test(msg);
-}
-
-async function _zerodhaPreviewWithRetry(sid, body, { attempts = 4, onRetry = null } = {}) {
-  let lastErr;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await API(`/api/suggestion/${encodeURIComponent(sid)}/zerodha-preview`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body || {}),
-      });
-    } catch (err) {
-      lastErr = err;
-      if (!_marginErrorLooksRateLimited(err) || i === attempts - 1) throw err;
-      const waitMs = 1200 * (i + 1);
-      if (typeof onRetry === 'function') onRetry(i + 1, waitMs);
-      await new Promise(r => setTimeout(r, waitMs));
-    }
-  }
-  throw lastErr;
 }
 
 function _collectCardLotsForMargin(card) {
@@ -970,26 +930,9 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
   const lots = _collectCardLotsForMargin(card);
   const cacheKey = _marginQuoteCacheKey(sid, lots);
   const cached = _zerodhaMarginQuoteCache.get(cacheKey);
-  if (cached && !_isFailedMarginCache(cached)) {
+  if (cached) {
     card.dataset.marginHydrated = '1';
     _applyZerodhaMarginToCard(card, cached);
-    return;
-  }
-  if (_isFailedMarginCache(cached)) {
-    card.dataset.marginHydrated = '0';
-    delete card.dataset.marginFinal;
-    card.dataset.marginMessage = cached.margin_message || 'Zerodha Final / Peak unavailable';
-    _setSuggestionMarginStatus(card, card.dataset.marginMessage, { warn: true });
-    refreshPrePlaceReview(card);
-    return;
-  }
-  if (Date.now() < _zerodhaMarginRateLimitedUntil) {
-    card.dataset.marginHydrated = '0';
-    card.dataset.marginRateLimited = '1';
-    delete card.dataset.marginFinal;
-    card.dataset.marginMessage = 'Zerodha rate limit — try again shortly';
-    _setSuggestionMarginStatus(card, card.dataset.marginMessage, { warn: true });
-    refreshPrePlaceReview(card);
     return;
   }
   card.dataset.marginHydrated = 'pending';
@@ -1016,7 +959,6 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
     card.dataset.marginHydrated = '0';
     delete card.dataset.marginFinal;
     card.dataset.marginMessage = (prev?.preview?.margin_message) || 'Zerodha Final / Peak unavailable';
-    _cacheFailedMarginQuote(cacheKey, card.dataset.marginMessage);
     _setSuggestionMarginStatus(
       card,
       card.dataset.marginMessage,
@@ -1027,11 +969,6 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
     card.dataset.marginHydrated = '0';
     delete card.dataset.marginFinal;
     card.dataset.marginMessage = (err && err.message) ? String(err.message) : 'Zerodha Final / Peak unavailable';
-    if (_marginErrorLooksRateLimited(err)) {
-      card.dataset.marginRateLimited = '1';
-      _zerodhaMarginRateLimitedUntil = Date.now() + 45000;
-    }
-    _cacheFailedMarginQuote(cacheKey, card.dataset.marginMessage);
     _setSuggestionMarginStatus(
       card,
       card.dataset.marginMessage,
@@ -1042,16 +979,12 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
 }
 
 async function _hydrateSuggestionZerodhaMargins(root) {
-  // Pending suggestion cards only. Open-trade Amount used used to fire the
-  // same zerodha-preview path and burn Kite's REST budget so Place orders
-  // then 429'd — hydrate those on expand instead (see bindCollapsible…).
+  // Open suggestion cards, and the Original suggestion block on a trade.
   const scope = root
     || document.getElementById('suggestion-container')
     || document;
   const cards = [...scope.querySelectorAll('[data-sug-id]')].filter(
-    el => el.querySelector('.econ-cap-req')
-      && !el.classList.contains('trade-zerodha-margin')
-      && !el.classList.contains('orig-sug-details'),
+    el => el.querySelector('.econ-cap-req'),
   );
   if (!cards.length) return;
   const blockedReason = typeof _zerodhaMarginQuoteDisabledReason === 'function'
@@ -1061,25 +994,10 @@ async function _hydrateSuggestionZerodhaMargins(root) {
     cards.forEach(card => _setSuggestionMarginStatus(card, blockedReason, { warn: true }));
     return;
   }
-  let fetched = 0;
   for (const card of cards) {
     const state = card.dataset.marginHydrated;
     if (state === '1' || state === '0' || state === 'pending') continue;
-    if (Date.now() < _zerodhaMarginRateLimitedUntil) {
-      card.dataset.marginHydrated = '0';
-      card.dataset.marginRateLimited = '1';
-      _setSuggestionMarginStatus(card, 'Zerodha rate limit — try again shortly', { warn: true });
-      continue;
-    }
-    if (fetched > 0) {
-      await new Promise(r => setTimeout(r, 400));
-    }
     await _hydrateOneSuggestionZerodhaMargin(card);
-    fetched += 1;
-    if (card.dataset.marginRateLimited === '1') {
-      // Stop the batch — further Kite quotes will 429 and stall the tab.
-      break;
-    }
   }
 }
 
@@ -3025,15 +2943,14 @@ function _applyIndexSpotLiveUpdate(data) {
     const srcEl = chip.querySelector('.idx-chip-src');
     if (priceEl) priceEl.textContent = _fmtIndexPrice(item.symbol, item.price);
     if (srcEl) srcEl.textContent = 'Live';
-    // Day % must track the live price. Prefer stream change fields only when
-    // we have no ref_close; otherwise recompute so price and % stay in sync.
+    // Day % uses Zerodha's previous close from the tick when the stream has it.
     if (item.ref_close != null && !isNaN(Number(item.ref_close)) && Number(item.ref_close) > 0) {
       chip.dataset.refClose = String(item.ref_close);
     }
     let change = item.change;
     let changePct = item.change_pct;
     const refRaw = chip.dataset.refClose;
-    if (refRaw && item.price != null) {
+    if ((change == null || isNaN(change)) && refRaw && item.price != null) {
       const ref = parseFloat(refRaw);
       const px = parseFloat(item.price);
       if (!isNaN(ref) && ref > 0 && !isNaN(px)) {
@@ -3064,44 +2981,24 @@ function _applyIndexSpotLiveUpdate(data) {
 }
 
 let _indexSpotSource = null;
-let _indexSpotPollTimer = null;
-let _indexSpotLastLiveAt = 0;
 
 function ensureIndexSpotStream() {
   if (_indexSpotSource && _indexSpotSource.readyState !== 2) return;
   try {
     _indexSpotSource = new EventSource('/api/indices/spot/stream');
     _indexSpotSource.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data);
-        if (data && data.feed === 'live' && (data.indices || []).length) {
-          _indexSpotLastLiveAt = Date.now();
-        }
-        _applyIndexSpotLiveUpdate(data);
-      } catch (_) { /* ignore */ }
+      try { _applyIndexSpotLiveUpdate(JSON.parse(ev.data)); } catch (_) { /* ignore */ }
     };
     _indexSpotSource.onerror = () => {
       if (_indexSpotSource && _indexSpotSource.readyState === 2) _indexSpotSource = null;
     };
   } catch (_) { /* SSE unsupported */ }
-  // Safety net: if SSE is quiet (WS has 0 index ticks), re-fetch REST live
-  // quotes so price / % keep moving during market hours.
-  if (!_indexSpotPollTimer) {
-    _indexSpotPollTimer = setInterval(() => {
-      if (Date.now() - _indexSpotLastLiveAt < 8000) return;
-      refreshIndexSpotStrip();
-    }, 5000);
-  }
 }
 
 function stopIndexSpotStream() {
   if (_indexSpotSource) {
     _indexSpotSource.close();
     _indexSpotSource = null;
-  }
-  if (_indexSpotPollTimer) {
-    clearInterval(_indexSpotPollTimer);
-    _indexSpotPollTimer = null;
   }
 }
 
@@ -9258,28 +9155,16 @@ function bindSuggestionActions() {
     const prevLabel = btn.textContent;
     btn.classList.add('is-loading');
     btn.textContent = 'Loading preview…';
-    // Explicit Place always clears the hydrate cooldown so a prior Amount-needed
-    // 429 does not block the operator; preview retries with backoff below.
-    _zerodhaMarginRateLimitedUntil = 0;
-    delete card.dataset.marginRateLimited;
     try {
       const body = {};
       if (spotVal != null) body.spot_at_execution = spotVal;
       if (legLimits.length) body.leg_limits = legLimits;
       const execLots = _collectExecLots(card);
       if (execLots != null) body.lots = execLots;
-      // Drop failed-cache entry so Place can re-quote this suggestion.
-      {
-        const lots = body.lots != null ? body.lots : _collectCardLotsForMargin(card);
-        const ck = _marginQuoteCacheKey(sid, lots);
-        if (_isFailedMarginCache(_zerodhaMarginQuoteCache.get(ck))) {
-          _zerodhaMarginQuoteCache.delete(ck);
-        }
-      }
-      const prev = await _zerodhaPreviewWithRetry(sid, body, {
-        onRetry: (attempt, waitMs) => {
-          btn.textContent = `Waiting for Zerodha… (${attempt})`;
-        },
+      const prev = await API(`/api/suggestion/${sid}/zerodha-preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       });
       const preview = prev?.preview;
       if (!preview || !(preview.legs || []).length) {
@@ -9502,16 +9387,14 @@ function bindCloseFormOnExpand(root) {
 async function _hydrateTradeOutlooks(tradeIds) {
   const ids = (tradeIds || []).filter(Boolean);
   if (!ids.length) return;
-  // Serial — parallel outlooks stack CPU on the B2s advisor and contend with
-  // live MTM / margin quotes. Cards already show last_mtm from the list path.
-  for (const tid of ids) {
+  await Promise.all(ids.map(async (tid) => {
     try {
       const data = await API(`/api/trades/${encodeURIComponent(tid)}/outlook`);
       const lo = data && data.live_outlook;
-      if (!lo) continue;
+      if (!lo) return;
       _updateLiveOutlook(tid, lo);
-    } catch (_) { /* keep last_mtm / snap until a later refresh */ }
-  }
+    } catch (_) { /* keep light outlook from /api/trades/open */ }
+  }));
 }
 
 // ---------------- Tab 2: My Trades ----------------
@@ -11687,56 +11570,27 @@ async function _fillHistoryMarginPnl(row) {
   }
   const lots = row.dataset.lots ? parseInt(row.dataset.lots, 10) : null;
   const cacheKey = _marginQuoteCacheKey(sid, Number.isFinite(lots) ? lots : null);
-  const cached = _zerodhaMarginQuoteCache.get(cacheKey);
-  if (_isFailedMarginCache(cached) || Date.now() < _zerodhaMarginRateLimitedUntil) {
-    row.dataset.marginHydrated = '0';
-    if (act) act.textContent = (cached && cached.margin_message) || 'Zerodha Final unavailable';
-    setUsedFacts('\u2014');
-    return;
-  }
-  if (cached && !_isFailedMarginCache(cached)) {
-    const finCached = cached.margin_final_required != null
-      ? cached.margin_final_required
-      : cached.margin_required;
-    if (Number(finCached) > 0) {
-      const usedHtml = _marginPnlText(row.dataset.netPnl, finCached);
-      if (act) act.innerHTML = usedHtml;
-      if (snapCard) {
-        snapCard.dataset.marginFinal = String(finCached);
-        if (row.dataset.netPnl != null && row.dataset.netPnl !== '') {
-          snapCard.dataset.netPnl = row.dataset.netPnl;
-        }
-        snapCard.querySelectorAll('.trade-snap-margin, .trade-snap-body .econ-cap-req').forEach(el => {
-          el.innerHTML = usedHtml;
-        });
-      }
-      setUsedFacts(usedHtml);
-      if (sug) sug.innerHTML = row.dataset.sugNetPnl != null && row.dataset.sugNetPnl !== ''
-        ? _marginPnlText(row.dataset.sugNetPnl, finCached)
-        : '\u2014';
-      row.dataset.marginHydrated = '1';
-      _paintClosedAmountUsedFromCards();
-      return;
-    }
-  }
   row.dataset.marginHydrated = 'pending';
   if (act) act.textContent = 'Fetching Zerodha Final\u2026';
   setUsedFacts('\u2026');
   try {
-    const body = {};
-    if (Number.isFinite(lots) && lots > 0) body.lots = lots;
-    const prev = await API(`/api/suggestion/${encodeURIComponent(sid)}/zerodha-preview`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const preview = prev && prev.preview;
-    if (preview && (
-      preview.margin_final_required != null
-      || preview.margin_peak_required != null
-      || preview.margin_required != null
-    )) {
-      _zerodhaMarginQuoteCache.set(cacheKey, preview);
+    let preview = _zerodhaMarginQuoteCache.get(cacheKey);
+    if (!preview) {
+      const body = {};
+      if (Number.isFinite(lots) && lots > 0) body.lots = lots;
+      const prev = await API(`/api/suggestion/${encodeURIComponent(sid)}/zerodha-preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      preview = prev && prev.preview;
+      if (preview && (
+        preview.margin_final_required != null
+        || preview.margin_peak_required != null
+        || preview.margin_required != null
+      )) {
+        _zerodhaMarginQuoteCache.set(cacheKey, preview);
+      }
     }
     const fin = preview && (
       preview.margin_final_required != null
@@ -11748,7 +11602,6 @@ async function _fillHistoryMarginPnl(row) {
       if (snapCard) {
         delete snapCard.dataset.marginFinal;
       }
-      _cacheFailedMarginQuote(cacheKey, 'Zerodha Final unavailable');
       if (act) act.textContent = 'Zerodha Final unavailable';
       setUsedFacts('\u2014');
       _paintClosedAmountUsedFromCards();
@@ -11774,10 +11627,6 @@ async function _fillHistoryMarginPnl(row) {
   } catch (err) {
     row.dataset.marginHydrated = '0';
     if (snapCard) delete snapCard.dataset.marginFinal;
-    if (_marginErrorLooksRateLimited(err)) {
-      _zerodhaMarginRateLimitedUntil = Date.now() + 45000;
-    }
-    _cacheFailedMarginQuote(cacheKey, 'Zerodha Final unavailable');
     if (act) act.textContent = 'Zerodha Final unavailable';
     setUsedFacts('\u2014');
     _paintClosedAmountUsedFromCards();

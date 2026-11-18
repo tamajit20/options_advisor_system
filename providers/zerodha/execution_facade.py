@@ -17,7 +17,7 @@ import logging
 import threading
 from typing import Any, List, Optional
 
-from providers.zerodha.rate_limiter import SlidingWindowCap, TokenBucket
+from providers.zerodha.rate_limiter import SlidingWindowCap
 
 
 logger = logging.getLogger(__name__)
@@ -25,16 +25,8 @@ logger = logging.getLogger(__name__)
 # Kite Connect hard limit for order APIs (place / modify / cancel).
 _KITE_ORDER_HARD_CAP = 10
 
-# Non-order REST on the execution client (basket margins, margins, LTP).
-# Kite returns NetworkException "Too many requests" when we burst these —
-# especially multi-leg previews (one basket call per prefix + margins()).
-_REST_RATE_PER_SEC = 2.0
-_REST_BUCKET_CAPACITY = 2.0
-
 _order_cap: Optional[SlidingWindowCap] = None
 _order_cap_lock = threading.Lock()
-_rest_bucket: Optional[TokenBucket] = None
-_rest_bucket_lock = threading.Lock()
 
 
 def _configured_orders_per_sec() -> int:
@@ -82,58 +74,6 @@ def reset_order_rate_cap_for_tests() -> None:
     global _order_cap
     with _order_cap_lock:
         _order_cap = None
-
-
-def rest_rate_bucket() -> TokenBucket:
-    """Process-wide bucket for execution-facade non-order REST."""
-    global _rest_bucket
-    with _rest_bucket_lock:
-        if _rest_bucket is None:
-            _rest_bucket = TokenBucket(
-                rate_per_sec=_REST_RATE_PER_SEC,
-                capacity=_REST_BUCKET_CAPACITY,
-            )
-        return _rest_bucket
-
-
-def reset_rest_rate_bucket_for_tests() -> None:
-    """Drop the shared REST bucket (tests only)."""
-    global _rest_bucket
-    with _rest_bucket_lock:
-        _rest_bucket = None
-
-
-def _acquire_rest_slot() -> None:
-    bucket = rest_rate_bucket()
-    if not bucket.try_acquire():
-        logger.info(
-            "Zerodha execution REST rate (%.1f/s) reached — waiting",
-            _REST_RATE_PER_SEC,
-        )
-        bucket.acquire()
-
-
-def _is_kite_rate_limit_error(exc: BaseException) -> bool:
-    msg = str(exc) or ""
-    if "too many requests" in msg.lower() or "rate limit" in msg.lower():
-        return True
-    return exc.__class__.__name__ == "NetworkException"
-
-
-def _call_kite_rest(fn, *args, **kwargs):
-    """Acquire a REST slot, call Kite, retry once after a short pause on 429."""
-    import time
-
-    _acquire_rest_slot()
-    try:
-        return fn(*args, **kwargs)
-    except Exception as exc:
-        if not _is_kite_rate_limit_error(exc):
-            raise
-        logger.warning("Kite REST rate-limited (%s) — retrying once", exc)
-        time.sleep(1.2)
-        _acquire_rest_slot()
-        return fn(*args, **kwargs)
 
 
 class KiteExecutionFacade:
@@ -189,31 +129,29 @@ class KiteExecutionFacade:
         return list(self._kite.orders())
 
     def ltp(self, keys) -> dict:
-        return _call_kite_rest(self._kite.ltp, list(keys))
+        return self._kite.ltp(list(keys))
 
     def quote(self, keys) -> dict:
-        return _call_kite_rest(self._kite.quote, list(keys))
+        return self._kite.quote(list(keys))
 
     def profile(self) -> dict:
-        return dict(_call_kite_rest(self._kite.profile))
+        return dict(self._kite.profile())
 
     def margins(self, segment: Optional[str] = None) -> dict:
         if segment:
-            return dict(_call_kite_rest(self._kite.margins, segment=segment))
-        return dict(_call_kite_rest(self._kite.margins))
+            return dict(self._kite.margins(segment=segment))
+        return dict(self._kite.margins())
 
     def order_margins(self, orders: list) -> Any:
-        return _call_kite_rest(self._kite.order_margins, list(orders))
+        return self._kite.order_margins(list(orders))
 
     def basket_order_margins(self, orders: list, *, consider_positions: bool = True) -> Any:
-        return _call_kite_rest(
-            self._kite.basket_order_margins,
-            list(orders),
-            consider_positions=consider_positions,
+        return self._kite.basket_order_margins(
+            list(orders), consider_positions=consider_positions,
         )
 
     def positions(self) -> dict:
-        return dict(_call_kite_rest(self._kite.positions))
+        return dict(self._kite.positions())
 
     def get_virtual_contract_note(self, params: list) -> list:
         """Order-wise charges for the given fills (Kite virtual contract note).

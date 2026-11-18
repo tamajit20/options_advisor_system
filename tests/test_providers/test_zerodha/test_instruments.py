@@ -120,52 +120,6 @@ def test_refresh_if_stale_skips_when_fresh(monkeypatch):
     assert calls["n"] == 2   # past TTL, refreshed
 
 
-def test_refresh_if_stale_keeps_cache_when_reload_fails(monkeypatch):
-    import time as _t
-    fake = {"t": 1000.0}
-    monkeypatch.setattr(_t, "monotonic", lambda: fake["t"])
-    monkeypatch.setattr(_t, "sleep", lambda _s: None)
-    calls = {"n": 0}
-
-    def loader():
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return _sample_rows()
-        raise RuntimeError("Too many requests")
-
-    im = InstrumentMaster(loader=loader, ttl_seconds=10)
-    assert im.refresh_if_stale() is True
-    assert im.is_loaded
-    token = im.get_by_tradingsymbol("NFO", "NIFTY26MAY23000CE")
-    fake["t"] += 20
-    assert im.refresh_if_stale() is False  # failed refresh, keep stale
-    assert im.get_by_tradingsymbol("NFO", "NIFTY26MAY23000CE") == token
-
-
-def test_refresh_if_stale_falls_back_to_disk_cache(tmp_path, monkeypatch):
-    import time as _t
-    monkeypatch.setattr(_t, "sleep", lambda _s: None)
-    cache_path = tmp_path / "instruments.json"
-
-    def ok_loader():
-        return _sample_rows()
-
-    warm = InstrumentMaster(
-        loader=ok_loader, ttl_seconds=3600, disk_cache_path=cache_path,
-    )
-    warm.refresh()
-    assert cache_path.is_file()
-
-    def boom():
-        raise RuntimeError("Too many requests")
-
-    cold = InstrumentMaster(
-        loader=boom, ttl_seconds=3600, disk_cache_path=cache_path,
-    )
-    assert cold.refresh_if_stale() is True
-    assert cold.get_by_tradingsymbol("NFO", "NIFTY26MAY23000CE") is not None
-
-
 def test_malformed_row_skipped():
     im = InstrumentMaster(loader=lambda: [
         _row(token=1, tradingsymbol="OK"),

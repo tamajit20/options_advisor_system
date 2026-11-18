@@ -8,17 +8,14 @@ from providers.zerodha.execution_facade import (
     KiteExecutionFacade,
     order_rate_cap,
     reset_order_rate_cap_for_tests,
-    reset_rest_rate_bucket_for_tests,
 )
 
 
 @pytest.fixture(autouse=True)
 def _reset_order_cap():
     reset_order_rate_cap_for_tests()
-    reset_rest_rate_bucket_for_tests()
     yield
     reset_order_rate_cap_for_tests()
-    reset_rest_rate_bucket_for_tests()
 
 
 @pytest.fixture
@@ -77,21 +74,6 @@ def test_margins_proxies(facade, kite_mock):
 
     facade.margins("equity")
     kite_mock.margins.assert_called_with(segment="equity")
-
-
-def test_basket_margins_retry_once_on_rate_limit(facade, kite_mock, mocker):
-    class _Net(Exception):
-        pass
-
-    _Net.__name__ = "NetworkException"
-    kite_mock.basket_order_margins.side_effect = [
-        _Net("Too many requests"),
-        {"data": {"final": {"total": 1000}}},
-    ]
-    mocker.patch("time.sleep", return_value=None)
-    out = facade.basket_order_margins([{"tradingsymbol": "X"}])
-    assert out["data"]["final"]["total"] == 1000
-    assert kite_mock.basket_order_margins.call_count == 2
 
 
 def test_place_modify_cancel_share_order_rate_cap(facade, kite_mock, mocker):
