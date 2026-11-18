@@ -137,9 +137,20 @@ def take_profit_hit(
     current_pnl: float,
     max_profit_rs: float,
     entry_net_credit: float,
+    est_charges_rs: float = 0.0,
 ) -> Tuple[bool, str]:
-    """Whether MTM has reached the configured profit target."""
-    if current_pnl <= 0:
+    """Whether *net* MTM has reached the configured profit target.
+
+    ``current_pnl`` is gross mark-to-market. Estimated round-trip charges
+    are subtracted so TARGET_HIT / TAKE_PROFIT match the Net figure on
+    My Trades (not Gross).
+    """
+    try:
+        charges = max(0.0, float(est_charges_rs or 0.0))
+    except (TypeError, ValueError):
+        charges = 0.0
+    net_pnl = float(current_pnl) - charges
+    if net_pnl <= 0:
         return False, ""
     target_rs, kind, frac = profit_target_trade_rs(
         strategy=strategy,
@@ -149,23 +160,23 @@ def take_profit_hit(
     )
     if target_rs is None or target_rs <= 0:
         return False, ""
-    if current_pnl < target_rs:
+    if net_pnl < target_rs:
         return False, ""
     pct = frac * 100.0
     if kind == "long_premium":
         reason = (
             f"Gained ≥{pct:.0f}% of debit paid "
-            f"(₹{current_pnl:.0f} of ₹{target_rs:.0f})"
+            f"(net ₹{net_pnl:.0f} of ₹{target_rs:.0f})"
         )
     elif kind == "debit_spread":
         reason = (
             f"Spread gained ≥{pct:.0f}% of debit paid "
-            f"(₹{current_pnl:.0f} of ₹{target_rs:.0f})"
+            f"(net ₹{net_pnl:.0f} of ₹{target_rs:.0f})"
         )
     else:
         reason = (
             f"Captured ≥{pct:.0f}% of max profit "
-            f"(₹{current_pnl:.0f} of ₹{max_profit_rs:.0f})"
+            f"(net ₹{net_pnl:.0f} of ₹{max_profit_rs:.0f})"
         )
     return True, reason
 

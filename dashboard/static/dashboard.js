@@ -1409,13 +1409,19 @@ function _updateLiveRiskStrip(tradeId, state) {
     if (state.targetHit) {
       el.className = 'tag tag-ok live-risk-live';
       el.textContent = '\u2705 TARGET HIT';
-      el.title = 'Live MTM reached the profit target';
+      el.title = 'Live net MTM reached the profit target';
       el.hidden = false;
       if (staticRa) staticRa.hidden = true;
       return;
     }
     el.hidden = true;
-    if (staticRa) staticRa.hidden = false;
+    // Do not re-show a sticky TARGET HIT once live net has dropped below target.
+    if (staticRa) {
+      const rn = String((card && card.dataset.riskNotif) || '').toUpperCase();
+      const recoveredTarget = ['TARGET_HIT', 'TARGET_LOCKED'].includes(rn)
+        && state.targetHit === false;
+      staticRa.hidden = !!recoveredTarget;
+    }
   });
   _syncCardSignal(tradeId, state);
 }
@@ -1546,6 +1552,9 @@ function _updateLiveProfitLevels(tradeId, payload) {
   const liveMtm = mtm != null && !isNaN(mtm)
     ? mtm
     : (_lastMtmByTrade[tradeId] && _lastMtmByTrade[tradeId].mtm);
+  const liveNet = _liveNetFromGross(
+    tradeId, liveMtm, payload && payload.est_charges_rs,
+  );
 
   let stripState = null;
   document.querySelectorAll(`.live-profit-levels[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(section => {
@@ -1671,11 +1680,13 @@ function _updateLiveProfitLevels(tradeId, payload) {
     const lossConfirming = !!payload.loss_milestone_confirming;
     const profitInZone = profitLine != null && liveMtm <= profitLine;
     const lossInZone = milestoneRs != null && liveMtm <= -milestoneRs;
+    // Target HIT uses Net (gross − est. charges), matching My Trades Net.
+    const netForTarget = liveNet != null ? liveNet : liveMtm;
 
     _setLiveLevelRowStatus(
       targetRow,
       section.querySelector('.lpl-status-target'),
-      targetRs != null && liveMtm >= targetRs && !profitConfirming,
+      targetRs != null && netForTarget >= targetRs && !profitConfirming,
       'HIT',
       'hit',
     );
@@ -1703,12 +1714,14 @@ function _updateLiveProfitLevels(tradeId, payload) {
 
     stripState = {
       liveMtm,
+      liveNet: netForTarget,
       lossHit: lossRs != null && liveMtm <= -lossRs,
       milestoneHit: lossInZone && !lossConfirming,
       milestoneConfirming: lossConfirming,
       profitMilestoneHit: profitInZone && !profitConfirming,
       profitMilestoneConfirming: profitConfirming,
-      targetHit: targetRs != null && liveMtm >= targetRs && !profitConfirming,
+      targetHit: targetRs != null && netForTarget >= targetRs && !profitConfirming,
+      targetRs,
       milestoneRs,
       profitLine,
       lossRs,
@@ -1902,6 +1915,18 @@ function _canonicalChargesRs(tradeId) {
   return (Number.isFinite(n2) && n2 >= 0) ? n2 : null;
 }
 
+/** Net MTM for symbols / target hit (gross − est. charges). Falls back to gross. */
+function _liveNetFromGross(tradeId, gross, payloadCharges) {
+  if (gross == null || isNaN(Number(gross))) return null;
+  const g = Number(gross);
+  let ch = _canonicalChargesRs(tradeId);
+  if (ch == null && payloadCharges != null && !isNaN(Number(payloadCharges))) {
+    ch = Number(payloadCharges);
+  }
+  if (ch == null || isNaN(ch) || ch < 0) return g;
+  return g - ch;
+}
+
 function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
   // Never blank the header when a tick/outlook event omits MTM (common off-market).
   let displayMtm = mtm;
@@ -1914,9 +1939,11 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
       return;
     }
   }
+  const displayNet = _liveNetFromGross(tradeId, displayMtm);
   _lastMtmByTrade[tradeId] = {
     ...(_lastMtmByTrade[tradeId] || {}),
     mtm: displayMtm,
+    liveNet: displayNet,
     as_of: asOf,
     receivedAt: liveTick ? Date.now() : (_parseMtmAsOf(asOf) || Date.now()),
   };
@@ -3044,6 +3071,14 @@ function _signalKindFromFields({ dailyStatus, exitInstruction, riskNotif, live }
   // Sticky session LOSS_LIMIT / SL_TRIGGER must clear once live MTM recovered.
   const stickySlActive = ['LOSS_LIMIT_HIT', 'SL_TRIGGER'].includes(risk)
     && !(liveMtmKnown && live && live.lossHit === false);
+  // Sticky TARGET_HIT / TAKE_PROFIT clear once live *net* is below target.
+  const stickyTargetActive = (
+    ['TAKE_PROFIT', 'TARGET_HIT', 'TARGET_LOCKED'].includes(daily)
+    || exitTxt.includes('take_profit')
+    || exitTxt.includes('take profit')
+    || exitTxt.includes('target reached')
+    || ['TARGET_HIT', 'TARGET_LOCKED'].includes(risk)
+  ) && !(liveMtmKnown && live && live.targetHit === false);
   if (live && live.lossHit) return 'sl';
   if (['SL_HIT', 'LOSS_LIMIT_HIT'].includes(daily)
       || exitTxt.includes('sl_hit')
@@ -3059,13 +3094,7 @@ function _signalKindFromFields({ dailyStatus, exitInstruction, riskNotif, live }
   if (live && live.profitMilestoneConfirming) {
     /* Confirm window: not auto-close yet. */
   } else if (live && live.targetHit) return 'profit';
-  if (['TAKE_PROFIT', 'TARGET_HIT', 'TARGET_LOCKED'].includes(daily)
-      || exitTxt.includes('take_profit')
-      || exitTxt.includes('take profit')
-      || exitTxt.includes('target reached')
-      || ['TARGET_HIT', 'TARGET_LOCKED'].includes(risk)) {
-    if (!(live && live.profitMilestoneConfirming)) return 'profit';
-  }
+  else if (stickyTargetActive) return 'profit';
   if (exitTxt.includes('close pending')
       || ['EXPIRE', 'EXIT_AT_OPEN'].includes(daily)
       || risk === 'PROFIT_FLOOR_HIT') {
@@ -3075,7 +3104,10 @@ function _signalKindFromFields({ dailyStatus, exitInstruction, riskNotif, live }
       || (live && live.milestoneHit && !live.milestoneConfirming)) {
     return 'milestone';
   }
-  const mtm = live && live.liveMtm != null ? Number(live.liveMtm) : NaN;
+  // In-profit / in-loss symbols use Net when available.
+  const mtm = live && live.liveNet != null
+    ? Number(live.liveNet)
+    : (live && live.liveMtm != null ? Number(live.liveMtm) : NaN);
   if (!isNaN(mtm) && mtm < -_MTM_FLAT_RS) return 'in_loss';
   if (!isNaN(mtm) && mtm > _MTM_FLAT_RS) return 'in_profit';
   return null;
@@ -3096,7 +3128,11 @@ function _syncCardSignal(tradeId, live) {
     const card = host.closest('.card');
     const rec = _lastMtmByTrade[tradeId] || {};
     const liveMtm = (live && live.liveMtm != null) ? live.liveMtm : rec.mtm;
+    const liveNet = (live && live.liveNet != null)
+      ? live.liveNet
+      : (rec.liveNet != null ? rec.liveNet : _liveNetFromGross(tradeId, liveMtm));
     const lossHit = (live && live.lossHit != null) ? live.lossHit : rec.lossHit;
+    const targetHit = (live && live.targetHit != null) ? live.targetHit : rec.targetHit;
     const kind = _signalKindFromFields({
       dailyStatus: card && card.dataset.dailyStatus,
       exitInstruction: card && card.dataset.exitInstruction,
@@ -3104,20 +3140,24 @@ function _syncCardSignal(tradeId, live) {
       live: {
         ...(live || {}),
         liveMtm,
+        liveNet,
         lossHit,
+        targetHit,
       },
     });
     host.innerHTML = _signalMarkHtml(kind);
     host.hidden = !kind;
     // Sticky DB chip vs live strip: only one risk chip should show.
     // _updateLiveRiskStrip hides sticky when live TARGET HIT (etc.) is up; do not
-    // re-show it here. Still hide sticky on SL / PRE_BREACH recovery.
+    // re-show it here. Still hide sticky on SL / PRE_BREACH / TARGET recovery.
     if (card) {
       const sticky = card.querySelector('.risk-alert-static');
       if (sticky) {
         const rn = String(card.dataset.riskNotif || '').toUpperCase();
         const recoveredSl = (rn === 'LOSS_LIMIT_HIT' || rn === 'SL_TRIGGER')
           && liveMtm != null && lossHit === false;
+        const recoveredTarget = ['TARGET_HIT', 'TARGET_LOCKED'].includes(rn)
+          && liveMtm != null && targetHit === false;
         const recoveredPre = rn === 'PRE_BREACH_WARNING'
           && liveMtm != null && lossHit === false
           && !(live && live.preBreachNear);
@@ -3134,7 +3174,8 @@ function _syncCardSignal(tradeId, live) {
           || live.profitMilestoneHit || live.profitMilestoneConfirming
         ));
         sticky.hidden = !!(
-          recoveredSl || recoveredPre || (rn === 'PRE_BREACH_WARNING' && abovePreBreach)
+          recoveredSl || recoveredTarget || recoveredPre
+          || (rn === 'PRE_BREACH_WARNING' && abovePreBreach)
           || liveChipShowing || liveReplacesSticky
         );
       }
@@ -3172,7 +3213,9 @@ function _mergePnlRailSignals(actionSignals) {
   Object.entries(_lastMtmByTrade).forEach(([tid, rec]) => {
     if (!tid || actionIds.has(tid)) return;
     if (rec.lossHit || rec.targetHit || rec.profitMilestoneHit || rec.milestoneHit) return;
-    const kind = _pnlStatusFromMtm(rec && rec.mtm);
+    const kind = _pnlStatusFromMtm(
+      (rec && rec.liveNet != null) ? rec.liveNet : (rec && rec.mtm),
+    );
     if (!kind) return;
     byId[tid] = {
       kind,
@@ -5895,7 +5938,7 @@ function _fmtMtmSigned(v, premiumInfo) {
 
 function _computeTradeActionInstruction(opts) {
   const {
-    liveMtm, lossHit, milestoneHit, profitMilestoneHit, targetHit, preBreachNear,
+    liveMtm, liveNet, lossHit, milestoneHit, profitMilestoneHit, targetHit, preBreachNear,
     milestoneConfirming, profitMilestoneConfirming,
     lossRs, milestoneRs, profitLine, targetRs, strategy,
     dailyStatus, exitInstruction, riskNotif,
@@ -6032,15 +6075,19 @@ function _computeTradeActionInstruction(opts) {
       cta: 'Watch broker orders. If auto-close fails, flatten on Kite then record the close.',
     };
   }
-  if (targetHit || rn === 'TARGET_HIT') {
+  // Sticky TARGET_HIT only when live net is still at/above target (or no live MTM yet).
+  const targetActive = targetHit
+    || (rn === 'TARGET_HIT' && (liveMtm == null || targetHit !== false));
+  if (targetActive) {
+    const netForWhy = (liveNet != null) ? liveNet : liveMtm;
     return {
       tone: 'ok',
       verb: 'TAKE PROFIT',
       title: 'Target reached — your call',
       instruction: 'You may close now to lock profit, or hold for more if you still like the setup. '
         + 'No forced exit on target alone.',
-      why: liveMtm != null && targetRs != null
-        ? `Live MTM ${_fmtMtmSigned(liveMtm, premiumInfo)} · target ₹${fmt(targetRs)}`
+      why: netForWhy != null && targetRs != null
+        ? `Live net ${_fmtMtmSigned(netForWhy, premiumInfo)} · target ₹${fmt(targetRs)}`
         : 'Target alert is active.',
       cta: 'Optional: Close Trade below to book profit.',
     };
@@ -6325,8 +6372,12 @@ function _updateTradeActionPanel(tradeId, payload, stripState) {
       && liveMtm <= -(liveRiskMonitor().pre_breach_fraction * lossRs)
       && liveMtm > -lossRs
     );
+    const liveNet = (stripState && stripState.liveNet != null)
+      ? stripState.liveNet
+      : _liveNetFromGross(tradeId, liveMtm, payload && payload.est_charges_rs);
     const instr = _computeTradeActionInstruction({
       liveMtm,
+      liveNet,
       lossHit: stripState && stripState.lossHit,
       milestoneHit: stripState && stripState.milestoneHit,
       milestoneConfirming: stripState && stripState.milestoneConfirming,
@@ -6337,7 +6388,7 @@ function _updateTradeActionPanel(tradeId, payload, stripState) {
       lossRs,
       milestoneRs: (stripState && stripState.milestoneRs) || (thresholds && thresholds.milestoneRs),
       profitLine: (stripState && stripState.profitLine) || (thresholds && thresholds.profitLine),
-      targetRs: thresholds && thresholds.targetRs,
+      targetRs: (stripState && stripState.targetRs) || (thresholds && thresholds.targetRs),
       strategy: panel.dataset.strategy || '',
       dailyStatus: panel.dataset.dailyStatus,
       exitInstruction: panel.dataset.exitInstruction,

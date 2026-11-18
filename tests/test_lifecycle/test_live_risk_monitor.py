@@ -137,15 +137,27 @@ class TestEvaluation:
         assert kwargs["related_trade_id"] == "T-001"
 
     def test_target_hit_fires_at_eod_take_profit_threshold(self):
-        # Live TARGET_HIT uses the same rupee target as Exit Plan / EOD TAKE_PROFIT
-        # (IC = 50% of max profit). Previously live required a stricter 70%.
+        # Live TARGET_HIT uses the same *net* rupee target as Exit Plan / EOD
+        # TAKE_PROFIT (IC = 50% of max profit). Close cheap enough that net
+        # (gross − est. charges) still clears ₹5000.
         state = _make_state(max_profit=10000.0)
         monitor, notifier, bus = _build_monitor(state, target_fraction=0.70)
-        # Close at 50 each → current_pnl = 5000 = 50% of max profit.
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 50.0))
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 50.0))
+        # Close at 40 each → gross = 6000; net after charges still ≥ 5000.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 40.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 40.0))
         notifier.notify.assert_called_once()
         assert notifier.notify.call_args.kwargs["notif_type"] == "TARGET_HIT"
+
+    def test_target_hit_requires_net_not_just_gross(self):
+        # Gross exactly at 50% target but charges pull net below → no TARGET_HIT.
+        state = _make_state(max_profit=10000.0)
+        monitor, notifier, bus = _build_monitor(state, target_fraction=0.70)
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 50.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 50.0))
+        assert all(
+            c.kwargs.get("notif_type") != "TARGET_HIT"
+            for c in notifier.notify.call_args_list
+        )
 
     def test_sl_trigger_fires_when_loss_crosses_threshold(self):
         state = _make_state(max_loss=10000.0)
@@ -1493,9 +1505,9 @@ class TestDTEAwareTarget:
             },
             clock_at=datetime(2026, 5, 5, 11, 0),  # DTE=1
         )
-        # 50% pnl (close at 50 each → pnl = 5000) → TARGET_HIT (IC 50%).
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 50.0))
-        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 50.0))
+        # Net ≥ 50% of max profit (close at 40 each → gross 6000 − charges).
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 40.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 40.0))
         assert notifier.notify.call_count == 1
         assert notifier.notify.call_args.kwargs["notif_type"] == "TARGET_HIT"
 

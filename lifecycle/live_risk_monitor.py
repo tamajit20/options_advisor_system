@@ -1170,6 +1170,8 @@ class LiveRiskMonitor:
         )
         outlook_dte = int(horizon["outlook_dte"])
 
+        current_pnl = self._current_pnl(state)
+        charges_rs = self._estimated_close_charges_rs(state)
         decision = evaluate_exit(
             trade_id=state.trade_id,
             legs=legs_for_engine,
@@ -1182,9 +1184,8 @@ class LiveRiskMonitor:
             strategy=state.strategy,
             as_of=now,
             greeks=state.trade_greeks,
+            est_charges_rs=charges_rs,
         )
-
-        current_pnl = self._current_pnl(state)
         active_pre_breach = self._active_pre_breach_fraction(now, state.strategy)
         sl_threshold, sl_label = effective_sl_rs(
             strategy=state.strategy, max_loss_rs=state.max_loss)
@@ -1222,7 +1223,6 @@ class LiveRiskMonitor:
                 milestone_rs, milestone_pct = 0.0, (
                     loss_milestone_config().get("pct_of_premium") or 0.0
                 )
-        charges_rs = self._estimated_close_charges_rs(state)
         fixed_arm: Optional[float] = None
         if (
             state.profit_ms_fixed
@@ -1322,6 +1322,7 @@ class LiveRiskMonitor:
                     if state.loss_ms_fixed_rs is not None else None
                 ),
                 "est_charges_rs": round(charges_rs, 2),
+                "net_mtm": round(current_pnl - float(charges_rs or 0.0), 2),
                 "profit_milestone_confirming": False,
                 "loss_milestone_confirming": False,
                 "as_of": now.isoformat(timespec="seconds"),
@@ -1578,11 +1579,13 @@ class LiveRiskMonitor:
                     return stress, mtm_payload, trailing_persist, snapshot_payload
 
         # 5. Target hit — same TAKE_PROFIT rupee target as Exit Plan / EOD.
-        if decision.decision == "TAKE_PROFIT" and current_pnl > 0:
+        # evaluate_exit already compared net (gross − est. charges).
+        net_pnl = current_pnl - float(charges_rs or 0.0)
+        if decision.decision == "TAKE_PROFIT" and net_pnl > 0:
             return self._maybe_alert(
                 state, "TARGET_HIT", "INFO",
                 title=f"Target reached on {state.trade_name}",
-                body=self._format_pnl_body(state, current_pnl, decision.reason),
+                body=self._format_pnl_body(state, net_pnl, decision.reason),
                 breach_key="TARGET", now=now,
                 threshold_rs=target_rs,
             ), mtm_payload, trailing_persist, snapshot_payload

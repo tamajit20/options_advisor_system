@@ -97,6 +97,29 @@ def test_take_profit_not_hit_below_debit_target():
     assert hit is False
 
 
+def test_take_profit_uses_net_after_charges():
+    # Gross 5200 ≥ ₹5000 target, but net after ₹300 charges is below.
+    hit, _ = take_profit_hit(
+        strategy="IRON_CONDOR",
+        dte=10,
+        current_pnl=5200.0,
+        max_profit_rs=10000.0,
+        entry_net_credit=10000.0,
+        est_charges_rs=300.0,
+    )
+    assert hit is False
+    hit2, reason = take_profit_hit(
+        strategy="IRON_CONDOR",
+        dte=10,
+        current_pnl=5400.0,
+        max_profit_rs=10000.0,
+        entry_net_credit=10000.0,
+        est_charges_rs=300.0,
+    )
+    assert hit2 is True
+    assert "net" in reason.lower()
+
+
 def test_pnl_rules_public_has_dashboard_keys():
     rules = pnl_rules_public()
     assert "strategy_sl_limits" in rules

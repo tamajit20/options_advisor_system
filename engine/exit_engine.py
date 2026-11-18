@@ -46,6 +46,7 @@ def evaluate_exit(
     strategy: str = "",              # Phase 2: drives strategy-aware TP and time-decay exit
     as_of: datetime | None = None,
     greeks: Mapping | None = None,
+    est_charges_rs: float = 0.0,     # round-trip charges; TAKE_PROFIT uses net
 ) -> ExitDecision:
     as_of = as_of or now_ist()
 
@@ -86,12 +87,14 @@ def evaluate_exit(
     current_pnl = entry_net_credit + current_value
 
     # Take profit — same rupee target as Exit Plan / live TARGET_HIT.
+    # Compare net (gross MTM − est. round-trip charges), matching My Trades Net.
     tp_hit, tp_reason = take_profit_hit(
         strategy=strategy,
         dte=days_to_expiry,
         current_pnl=current_pnl,
         max_profit_rs=max_profit_rs,
         entry_net_credit=entry_net_credit,
+        est_charges_rs=est_charges_rs,
     )
     if tp_hit:
         return ExitDecision(

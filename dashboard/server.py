@@ -1492,6 +1492,20 @@ def _live_mtm_by_trade() -> Dict[str, Dict[str, Any]]:
                 max_loss = payload.get("max_loss")
                 if max_loss is not None:
                     rec["max_loss"] = float(max_loss)
+                max_profit = payload.get("max_profit")
+                if max_profit is not None:
+                    rec["max_profit"] = float(max_profit)
+                dte = payload.get("dte")
+                if dte is not None:
+                    rec["dte"] = int(dte)
+                charges = payload.get("est_charges_rs")
+                if charges is not None:
+                    rec["est_charges_rs"] = float(charges)
+                net_mtm = payload.get("net_mtm")
+                if net_mtm is not None:
+                    rec["net_mtm"] = float(net_mtm)
+                elif charges is not None:
+                    rec["net_mtm"] = float(mtm) - float(charges)
                 out[str(tid)] = rec
             except (TypeError, ValueError):
                 continue
@@ -1534,6 +1548,28 @@ def _sticky_sl_risk_still_active(
         return True
     # Still at/through SL → keep signal; recovered above SL → clear sticky.
     return mtm_f <= -float(sl_rs)
+
+
+def _sticky_profit_still_active(
+    *,
+    net_mtm: Optional[float],
+    target_rs: Optional[float],
+) -> bool:
+    """True when sticky TARGET_HIT / TAKE_PROFIT should still light the rail.
+
+    Uses *net* MTM (gross − est. charges). Once net drops below the Exit Plan
+    target, sticky session alerts must clear — same recovery rule as SL.
+    """
+    if net_mtm is None or target_rs is None:
+        return True  # no live context — keep alert visible
+    try:
+        net_f = float(net_mtm)
+        target_f = float(target_rs)
+    except (TypeError, ValueError):
+        return True
+    if target_f <= 0:
+        return True
+    return net_f >= target_f
 
 
 def _stored_mtm_payloads(db: Optional[SQLServerConnection] = None) -> Dict[str, Dict[str, Any]]:
@@ -1731,7 +1767,9 @@ def _signal_kind_for_open_trade(
     *,
     risk_type: Optional[str] = None,
     mtm: Optional[float] = None,
+    net_mtm: Optional[float] = None,
     max_loss: Optional[float] = None,
+    target_rs: Optional[float] = None,
     strategy: str = "",
 ) -> Optional[str]:
     """Map an open trade row to a header signal kind, or None if quiet.
@@ -1742,10 +1780,13 @@ def _signal_kind_for_open_trade(
     Action kinds (SL / thesis / take-profit / close pending) beat MTM-only
     in-loss / in-profit status.
     Sticky LOSS_LIMIT_HIT / SL_TRIGGER clear once live MTM recovers above SL.
+    Sticky TARGET_HIT / TAKE_PROFIT clear once live *net* MTM drops below target.
+    In-profit / in-loss symbols use net when available.
     """
     daily = (row.get("daily_status") or "").upper()
     exit_txt = (row.get("exit_instruction") or "").lower()
     risk = (risk_type or "").upper()
+    signal_mtm = net_mtm if net_mtm is not None else mtm
     if daily in _SL_SIGNAL_STATUSES or "sl_hit" in exit_txt:
         return "sl"
     if risk in _SL_RISK_TYPES and _sticky_sl_risk_still_active(
@@ -1758,12 +1799,15 @@ def _signal_kind_for_open_trade(
         return "profit_pct"
     if risk in _PROFIT_MILESTONE_RISK_TYPES:
         return "profit_milestone"
-    if (
+    profit_wanted = (
         daily in _PROFIT_SIGNAL_STATUSES
         or "take_profit" in exit_txt
         or "take profit" in exit_txt
         or "target reached" in exit_txt
         or risk in _PROFIT_RISK_TYPES
+    )
+    if profit_wanted and _sticky_profit_still_active(
+        net_mtm=signal_mtm, target_rs=target_rs,
     ):
         return "profit"
     if (
@@ -1774,10 +1818,10 @@ def _signal_kind_for_open_trade(
         return "exit"
     if risk in _MILESTONE_RISK_TYPES:
         return "milestone"
-    if mtm is None:
+    if signal_mtm is None:
         return None
     try:
-        val = float(mtm)
+        val = float(signal_mtm)
     except (TypeError, ValueError):
         return None
     if val < -_MTM_FLAT_RS:
@@ -1815,12 +1859,34 @@ def _active_trade_signals(db: SQLServerConnection) -> List[Dict[str, Any]]:
         tid = row.get("trade_id")
         mtm_rec = mtm_by_trade.get(str(tid) if tid else "") or {}
         tid_s = str(tid) if tid else ""
+        strategy = strategy_by_trade.get(tid_s) or ""
+        target_rs = None
+        try:
+            from engine.pnl_targets import profit_target_trade_rs
+            max_profit = (
+                mtm_rec.get("max_profit")
+                if mtm_rec.get("max_profit") is not None
+                else row.get("actual_max_profit")
+            )
+            entry_credit = row.get("net_credit_actual")
+            dte = int(mtm_rec.get("dte") or 0)
+            if max_profit is not None and entry_credit is not None:
+                target_rs, _, _ = profit_target_trade_rs(
+                    strategy=strategy,
+                    dte=dte,
+                    max_profit_rs=float(max_profit),
+                    entry_net_credit=float(entry_credit),
+                )
+        except Exception:
+            target_rs = None
         kind = _signal_kind_for_open_trade(
             row,
             risk_type=risk_by_trade.get(tid_s) or risk_by_trade.get(tid),
             mtm=mtm_rec.get("mtm"),
+            net_mtm=mtm_rec.get("net_mtm"),
             max_loss=mtm_rec.get("max_loss") or row.get("actual_max_loss"),
-            strategy=strategy_by_trade.get(tid_s) or "",
+            target_rs=target_rs,
+            strategy=strategy,
         )
         if not kind:
             continue

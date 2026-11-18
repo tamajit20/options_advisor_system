@@ -1085,6 +1085,33 @@ class TestTradeSignalKind:
             strategy="BEAR_PUT_SPREAD",
         ) == "sl"
 
+    def test_sticky_target_hit_clears_when_net_drops_below_target(self):
+        # Earlier TARGET_HIT must clear once live net is below Exit Plan target.
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "OPEN", "exit_instruction": None},
+            risk_type="TARGET_HIT",
+            mtm=4800.0,
+            net_mtm=4500.0,
+            target_rs=5000.0,
+        ) == "in_profit"
+
+    def test_sticky_target_hit_stays_when_net_still_above_target(self):
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "OPEN", "exit_instruction": None},
+            risk_type="TARGET_HIT",
+            mtm=5600.0,
+            net_mtm=5300.0,
+            target_rs=5000.0,
+        ) == "profit"
+
+    def test_in_profit_prefers_net_mtm(self):
+        # Gross positive but net flat/negative → quiet / in_loss, not in_profit.
+        assert server._signal_kind_for_open_trade(
+            {"daily_status": "OPEN", "exit_instruction": None},
+            mtm=200.0,
+            net_mtm=0.1,
+        ) is None
+
 
 class TestApiSystemStatus:
     def test_returns_status_keys(self, client, mocker):
