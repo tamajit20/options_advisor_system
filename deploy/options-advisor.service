@@ -1,0 +1,28 @@
+[Unit]
+Description=Options Advisor Docker Compose stack
+Documentation=file:///home/azureuser/options_advisor_system/README.md
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+# Tailscale is best-effort — stack must still bind on localhost even if
+# tailscaled is slow after reboot (dashboard is reached via Tailscale later).
+After=tailscaled.service
+Wants=tailscaled.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=azureuser
+Group=azureuser
+WorkingDirectory=/home/azureuser/options_advisor_system
+# docker.sock access for the azureuser group membership
+SupplementaryGroups=docker
+Environment=HOME=/home/azureuser
+ExecStartPre=/bin/sleep 5
+ExecStart=/home/azureuser/options_advisor_system/deploy/boot-stack.sh
+ExecStop=/usr/bin/docker compose -f /home/azureuser/options_advisor_system/docker-compose.yml stop
+TimeoutStartSec=180
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

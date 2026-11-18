@@ -1,6 +1,6 @@
 # Options Advisor - Complete Guide
 
-**Last updated:** 2026-11-17
+**Last updated:** 2026-11-18
 
 **Single document** for install, day-to-day ops, and architecture.  
 Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.
@@ -148,6 +148,7 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 | `deploy/azure/backup-database-to-laptop.ps1` / `restore-database-from-laptop.ps1` | Hot DB move                         |
 | `deploy/azure/pull-archive-and-merge.ps1` / `register-laptop-archive-task.ps1`    | Archive pull + ACK (retries every 15m until ACK or ~15:45) |
 | `deploy/vm-restart.sh` / `deploy/update.sh`                                       | Rebuild/restart app                 |
+| `deploy/install-boot-service.sh` / `options-advisor.service` / `boot-stack.sh`   | systemd: `docker compose up -d` after reboot (loads `.env.docker`) |
 | `deploy/backup.sh` / `deploy/restore.sh` / `deploy/archive-export.sh`             | VM backup helpers                   |
 | `deploy/archive-truncate-vm.sh`                                                   | VM ACK truncate after laptop merge  |
 | `scripts/validate_setup_sync.py`                                                  | Repo setup sync check               |
@@ -314,8 +315,9 @@ ACK refuses if `LAST_HOT_BACKUP.json` is missing or older than this export, `PEN
 | Symptom               | Check                                                                 |
 | --------------------- | --------------------------------------------------------------------- |
 | Setup drift           | `python scripts/validate_setup_sync.py` + `Test-EnvironmentSetup.ps1` |
-| SSH fails             | VM up? This laptop on the same Tailscale account? `VmHost` is the 100.x address + `.pem` in `laptop.config.ps1` |
-| Dashboard down        | Tailscale connected? Uptime schedule, `docker compose ps` over SSH    |
+| SSH fails             | VM up? This laptop on the same Tailscale account? `VmHost` is the 100.x address + `.pem` in `laptop.config.ps1`. After a reboot wait ~2–3 min for Tailscale; if still dead: `az vm run-command` or temporary NSG :22 (close after) |
+| Dashboard down        | Tailscale connected? Uptime schedule, `systemctl status options-advisor`, `docker compose ps` over SSH. On boot, `options-advisor.service` runs `deploy/boot-stack.sh` (needs `.env.docker`). Install once: `sudo ./deploy/install-boot-service.sh` |
+| Stuck after VM reboot | `sudo systemctl enable --now docker tailscaled options-advisor`; then `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5001/health` |
 | HTTPS / cert fail     | `docker logs options_caddy`; cert includes the Tailscale IP; see A7   |
 | Archive stuck         | Laptop task; VM `git pull` + `vm-restart`; ACK conditions above. If merge fails with `\var\opt\mssql\...` paths, update `scripts/merge_archive_into_local.py` (RESTORE must WITH MOVE to local SQL data dir) |
 | Zerodha execute fails | `OPT_DASHBOARD_API_KEY` in VM `.env.docker`                           |
