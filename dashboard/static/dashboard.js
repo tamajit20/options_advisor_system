@@ -5333,14 +5333,39 @@ function _bandReachFromSpot(spot, row, kind) {
   );
 }
 
-function _bandCellHtml(row, kind, spot) {
+function _bandZoneNetKey(kind) {
+  if (kind === 'full') return 'full_net_rs';
+  if (kind === 'in') return 'in_net_rs';
+  if (kind === 'in_loss') return 'in_loss_net_rs';
+  if (kind === 'loss') return 'loss_net_rs';
+  return null;
+}
+
+/** Compact "Net 220 (0.3%)" for day-range zone cells. */
+function _bandNetHtml(netRs, premiumInfo) {
+  if (netRs == null || isNaN(Number(netRs))) return '';
+  const n = Math.round(Number(netRs));
+  const signed = (n >= 0 ? '' : '\u2212') + String(Math.abs(n));
+  let pct = '';
+  if (premiumInfo && premiumInfo.rs > 0) {
+    const p = (Number(netRs) / premiumInfo.rs) * 100;
+    const sign = p >= 0 ? '' : '\u2212';
+    pct = ` (${sign}${Math.abs(p).toFixed(1)}%)`;
+  }
+  const cls = n > 0 ? 'pnl-profit' : (n < 0 ? 'pnl-loss' : 'muted');
+  return `<div class="band-net ${cls}" title="Estimated net P&amp;L in this zone (gross mark minus est. round-trip charges)">Net ${signed}${pct}</div>`;
+}
+
+function _bandCellHtml(row, kind, spot, premiumInfo) {
   const label = _bandRangeText(row, kind);
   if (!label || label === '\u2014') return '\u2014';
   const reach = _bandReachFromSpot(spot, row, kind);
   const reachHtml = reach
     ? ` <span class="band-reach ${escapeHtml(reach.cls)}" title="${escapeHtml(reach.title || '')}">${escapeHtml(reach.text)}</span>`
     : '';
-  return `${escapeHtml(label)}${reachHtml}`;
+  const netKey = _bandZoneNetKey(kind);
+  const netHtml = netKey ? _bandNetHtml(row[netKey], premiumInfo) : '';
+  return `${escapeHtml(label)}${reachHtml}${netHtml}`;
 }
 
 function _bandStatus(row, spot) {
@@ -5432,24 +5457,31 @@ function _paintBandCalendar(payload, live) {
       <span class="muted">${entry != null && !isNaN(entry) ? `Entry \u20b9${fmt(entry)}` : ''}</span>
     </div>`;
   }
+  const premRs = payload && payload.premium_rs != null ? Number(payload.premium_rs) : NaN;
+  const premiumInfo = (!isNaN(premRs) && premRs > 0)
+    ? { rs: premRs, kind: (payload && payload.premium_kind) || 'paid' }
+    : null;
   const body = rows.map(r => {
     const iso = String(r.date || '').slice(0, 10);
     const mark = iso === today ? ' class="is-today"' : '';
     return `<tr${mark}>
       <td>${escapeHtml(_fitDayLabel(iso) || iso)}</td>
-      <td>${_bandCellHtml(r, 'full', spot)}</td>
-      <td>${_bandCellHtml(r, 'in', spot)}</td>
-      <td>${_bandCellHtml(r, 'in_loss', spot)}</td>
-      <td>${_bandCellHtml(r, 'loss', spot)}</td>
+      <td>${_bandCellHtml(r, 'full', spot, premiumInfo)}</td>
+      <td>${_bandCellHtml(r, 'in', spot, premiumInfo)}</td>
+      <td>${_bandCellHtml(r, 'in_loss', spot, premiumInfo)}</td>
+      <td>${_bandCellHtml(r, 'loss', spot, premiumInfo)}</td>
     </tr>`;
   }).join('');
   const noteMain = payload && payload.fresh
     ? 'Rebuilt just now from current volatility and the suggested prices. The expiry row stays fixed. Earlier rows move when volatility changes.'
     : 'Saved when this suggestion was created. Each row uses that volatility and the suggested prices, so it stays put.';
+  const chgNote = payload && payload.est_charges_rs != null
+    ? ` Net lines are estimated mark P&amp;L minus ~\u20b9${fmt(payload.est_charges_rs)} round-trip charges.`
+    : ' Net lines are estimated mark P&amp;L minus est. round-trip charges.';
   return `
     <div class="band-cal-head">${nowHtml}</div>
     <p class="muted band-cal-note">${escapeHtml(noteMain)}</p>
-    <p class="muted band-cal-note">\u2713 room = already inside that profit zone (cushion before you leave it). \u2713 clear = not in that loss zone. \u2717 in = already inside that loss zone. %\u2191 / %\u2193 needed = move still required to enter a profit zone.</p>
+    <p class="muted band-cal-note">\u2713 room = already inside that profit zone (cushion before you leave it). \u2713 clear = not in that loss zone. \u2717 in = already inside that loss zone. %\u2191 / %\u2193 needed = move still required to enter a profit zone.${chgNote}</p>
     <table class="band-cal-table">
       <thead><tr><th>Date</th><th>Full profit</th><th>In profit</th><th>In loss</th><th>Full loss</th></tr></thead>
       <tbody>${body || '<tr><td colspan="5">No rows</td></tr>'}</tbody>

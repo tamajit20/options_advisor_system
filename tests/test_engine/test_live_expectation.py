@@ -655,6 +655,8 @@ class TestTodayMarkBands:
             lower_be=22389.1,
             upper_be=23560.9,
             underlying="NIFTY",
+            max_profit_rs=3965.0,
+            max_loss_rs=12285.0,
         )
         assert cal is not None
         assert len(cal["rows"]) == 8
@@ -665,6 +667,11 @@ class TestTodayMarkBands:
         assert cal["rows"][-1]["in_lo"] == 22389
         assert cal["rows"][-1]["in_hi"] == 23561
         assert cal["rows"][0]["full_hi"] < cal["rows"][-1]["full_hi"]
+        # Zone Net lines (gross − charges) on every row.
+        assert cal.get("est_charges_rs") is not None and cal["est_charges_rs"] > 0
+        assert cal["rows"][0].get("full_net_rs") is not None
+        assert cal["rows"][-1].get("full_net_rs") is not None
+        assert cal["rows"][-1]["full_net_rs"] < cal["rows"][-1]["full_pnl_rs"]
         assert mark_band_calendar(
             legs=legs, start=date(2026, 11, 2), expiry=exp, atm_iv=None,
             strategy="IRON_CONDOR", lower_be=22389.1, upper_be=23560.9,

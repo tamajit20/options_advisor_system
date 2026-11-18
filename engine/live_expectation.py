@@ -1322,6 +1322,8 @@ def today_mark_bands(
         "full_side": None, "in_side": None,
         "loss_below": None, "loss_above": None,
         "in_loss_below": None, "in_loss_above": None,
+        "full_pnl_rs": None, "in_pnl_rs": None,
+        "in_loss_pnl_rs": None, "loss_pnl_rs": None,
     }
     rows = []
     for leg in legs or []:
@@ -1508,6 +1510,25 @@ def today_mark_bands(
     else:
         in_loss_below, in_loss_above = in_lo, in_hi
 
+    # Representative gross P&L for each zone (day-range popup Net line).
+    full_pnl_rs = round(peak, 2) if peak > 1.0 else None
+    loss_pnl_rs = round(trough, 2) if trough < -1.0 else None
+    in_only = [p for p in pnls if 1.0 < p < (peak * 0.97 if peak > 1.0 else 1.0)]
+    if in_only:
+        in_pnl_rs = round(float(sorted(in_only)[len(in_only) // 2]), 2)
+    elif peak > 1.0:
+        in_pnl_rs = round(peak * 0.5, 2)
+    else:
+        in_pnl_rs = None
+    loss_thresh = trough * 0.97 if trough < -1.0 else -1.0
+    in_loss_only = [p for p in pnls if p <= 1.0 and p > loss_thresh]
+    if in_loss_only:
+        in_loss_pnl_rs = round(float(sorted(in_loss_only)[len(in_loss_only) // 2]), 2)
+    elif trough < -1.0:
+        in_loss_pnl_rs = round(trough * 0.5, 2)
+    else:
+        in_loss_pnl_rs = None
+
     return {
         "full_lo": full_lo,
         "full_hi": full_hi,
@@ -1519,6 +1540,10 @@ def today_mark_bands(
         "loss_above": loss_above,
         "in_loss_below": in_loss_below,
         "in_loss_above": in_loss_above,
+        "full_pnl_rs": full_pnl_rs,
+        "in_pnl_rs": in_pnl_rs,
+        "in_loss_pnl_rs": in_loss_pnl_rs,
+        "loss_pnl_rs": loss_pnl_rs,
     }
 
 
@@ -1549,12 +1574,44 @@ def _leg_strike(legs: Sequence[Any], action: str, option_type: str) -> Optional[
     return None
 
 
+def _stamp_expiry_zone_pnls(
+    row: dict,
+    *,
+    max_profit_rs: Optional[float],
+    max_loss_rs: Optional[float],
+) -> dict:
+    """Attach representative gross P&Ls for expiry structural zones."""
+    try:
+        mp = float(max_profit_rs) if max_profit_rs is not None else None
+    except (TypeError, ValueError):
+        mp = None
+    try:
+        ml = abs(float(max_loss_rs)) if max_loss_rs is not None else None
+    except (TypeError, ValueError):
+        ml = None
+    if mp is not None and mp > 0:
+        row["full_pnl_rs"] = round(mp, 2)
+        row["in_pnl_rs"] = round(mp * 0.5, 2)
+    else:
+        row["full_pnl_rs"] = None
+        row["in_pnl_rs"] = None
+    if ml is not None and ml > 0:
+        row["loss_pnl_rs"] = round(-ml, 2)
+        row["in_loss_pnl_rs"] = round(-ml * 0.5, 2)
+    else:
+        row["loss_pnl_rs"] = None
+        row["in_loss_pnl_rs"] = None
+    return row
+
+
 def expiry_structural_bands(
     *,
     legs: Sequence[Any],
     strategy: str,
     lower_be: Optional[float],
     upper_be: Optional[float],
+    max_profit_rs: Optional[float] = None,
+    max_loss_rs: Optional[float] = None,
 ) -> dict:
     """Expiry ranges that match the trade page: sold strikes, then breakevens."""
     short_put = _leg_strike(legs, "SELL", "PE")
@@ -1573,6 +1630,10 @@ def expiry_structural_bands(
         "loss_above": None,
         "in_loss_below": None,
         "in_loss_above": None,
+        "full_pnl_rs": None,
+        "in_pnl_rs": None,
+        "in_loss_pnl_rs": None,
+        "loss_pnl_rs": None,
         "expiry": True,
     }
 
@@ -1584,7 +1645,9 @@ def expiry_structural_bands(
         else:
             r["in_loss_below"] = r.get("in_lo")
             r["in_loss_above"] = r.get("in_hi")
-        return r
+        return _stamp_expiry_zone_pnls(
+            r, max_profit_rs=max_profit_rs, max_loss_rs=max_loss_rs,
+        )
 
     credit_range = (
         short_put is not None and short_call is not None
@@ -1651,6 +1714,68 @@ def expiry_structural_bands(
     return row
 
 
+def _band_legs_charges_rs(legs: Sequence[Any]) -> Optional[float]:
+    """Round-trip charges from entry fills (exit ≈ fill when mark unknown)."""
+    from engine.charges import estimated_round_trip_charges_rs
+
+    rows: list[dict] = []
+    for leg in legs or []:
+        getter = leg.get if isinstance(leg, Mapping) else (
+            lambda k, d=None, src=leg: getattr(src, k, d)
+        )
+        action = str(getter("action") or "").upper()
+        if action not in ("BUY", "SELL"):
+            continue
+        fill = _as_float(getter("fill_price"))
+        if fill is None:
+            fill = _as_float(getter("suggested_price"))
+        if fill is None or fill < 0:
+            continue
+        try:
+            lots = int(getter("lots") or 0)
+            lot_size = int(getter("lot_size") or 0)
+        except (TypeError, ValueError):
+            continue
+        if lots <= 0 or lot_size <= 0:
+            continue
+        rows.append({
+            "action": action,
+            "fill_price": fill,
+            "exit_price": fill,
+            "lots": lots,
+            "lot_size": lot_size,
+        })
+    if not rows:
+        return None
+    try:
+        return round(float(estimated_round_trip_charges_rs(rows)), 2)
+    except Exception:
+        return None
+
+
+def _apply_net_pnls(row: dict, charges_rs: Optional[float]) -> dict:
+    """Stamp net = gross − est. charges for each zone P&L on the row."""
+    try:
+        ch = max(0.0, float(charges_rs or 0.0))
+    except (TypeError, ValueError):
+        ch = 0.0
+    for src, dst in (
+        ("full_pnl_rs", "full_net_rs"),
+        ("in_pnl_rs", "in_net_rs"),
+        ("in_loss_pnl_rs", "in_loss_net_rs"),
+        ("loss_pnl_rs", "loss_net_rs"),
+    ):
+        raw = row.get(src)
+        if raw is None:
+            row[dst] = None
+            continue
+        try:
+            row[dst] = round(float(raw) - ch, 2)
+        except (TypeError, ValueError):
+            row[dst] = None
+    return row
+
+
 def mark_band_calendar(
     *,
     legs: Sequence[Any],
@@ -1661,6 +1786,8 @@ def mark_band_calendar(
     lower_be: Optional[float],
     upper_be: Optional[float],
     underlying: str = "",
+    max_profit_rs: Optional[float] = None,
+    max_loss_rs: Optional[float] = None,
 ) -> Optional[dict]:
     """One row per calendar day from the trade date through expiry.
 
@@ -1681,6 +1808,7 @@ def mark_band_calendar(
     band_legs: Sequence[Any] = legs
     if legs and isinstance(legs[0], Mapping):
         band_legs = legs_from_fills(legs, underlying=underlying or "IDX", expiry=expiry_d)
+    charges_rs = _band_legs_charges_rs(band_legs)
     rows = []
     day = start_d
     while day <= expiry_d:
@@ -1690,6 +1818,8 @@ def mark_band_calendar(
                 strategy=strategy,
                 lower_be=_as_float(lower_be),
                 upper_be=_as_float(upper_be),
+                max_profit_rs=max_profit_rs,
+                max_loss_rs=max_loss_rs,
             )
         else:
             bands = today_mark_bands(
@@ -1709,8 +1839,13 @@ def mark_band_calendar(
                 "loss_above": bands.get("loss_above"),
                 "in_loss_below": bands.get("in_loss_below"),
                 "in_loss_above": bands.get("in_loss_above"),
+                "full_pnl_rs": bands.get("full_pnl_rs"),
+                "in_pnl_rs": bands.get("in_pnl_rs"),
+                "in_loss_pnl_rs": bands.get("in_loss_pnl_rs"),
+                "loss_pnl_rs": bands.get("loss_pnl_rs"),
                 "expiry": False,
             }
+        _apply_net_pnls(row, charges_rs)
         row["date"] = day.isoformat()
         rows.append(row)
         day += timedelta(days=1)
@@ -1720,6 +1855,7 @@ def mark_band_calendar(
         "iv": round(iv, 4) if iv is not None else None,
         "start": start_d.isoformat(),
         "expiry": expiry_d.isoformat(),
+        "est_charges_rs": charges_rs,
         "rows": rows,
     }
 

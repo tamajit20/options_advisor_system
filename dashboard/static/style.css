@@ -2747,6 +2747,13 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 .band-reach-safe { color: var(--ok, #22c55e); }
 .band-reach-bad { color: var(--err, #ef4444); }
 .band-reach-need { color: #e8b86d; }
+.band-net {
+  display: block;
+  margin-top: 2px;
+  font-size: .72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .lo-fit-range strong {
   font-size: .84rem;
   font-variant-numeric: tabular-nums;

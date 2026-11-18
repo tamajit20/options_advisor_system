@@ -2445,6 +2445,9 @@ def create_app() -> Flask:
         lower_be = row.get("lower_breakeven")
         upper_be = row.get("upper_breakeven")
         entry = row.get("spot_at_generation")
+        max_profit = row.get("max_profit")
+        max_loss = row.get("max_loss")
+        trade = None
         if fresh and trade_id:
             trade = TradeRepo(db).get(trade_id)
             if trade and str(trade.get("suggestion_id") or "") == str(sid):
@@ -2456,6 +2459,10 @@ def create_app() -> Flask:
                     upper_be = trade.get("actual_upper_breakeven")
                 if trade.get("spot_at_execution") is not None:
                     entry = trade.get("spot_at_execution")
+                if trade.get("actual_max_profit") is not None:
+                    max_profit = trade.get("actual_max_profit")
+                if trade.get("actual_max_loss") is not None:
+                    max_loss = trade.get("actual_max_loss")
 
         def _build(iv):
             return mark_band_calendar(
@@ -2467,7 +2474,16 @@ def create_app() -> Flask:
                 lower_be=lower_be,
                 upper_be=upper_be,
                 underlying=str(row.get("underlying") or ""),
+                max_profit_rs=max_profit,
+                max_loss_rs=max_loss,
             )
+
+        def _calendar_has_nets(cal_obj) -> bool:
+            rows_chk = (cal_obj or {}).get("rows") or []
+            if not rows_chk:
+                return False
+            sample = rows_chk[0] if isinstance(rows_chk[0], dict) else {}
+            return "full_net_rs" in sample
 
         raw = row.get("mark_band_calendar")
         stored = None
@@ -2485,8 +2501,9 @@ def create_app() -> Flask:
             cal = _build(iv)
             if not cal or not cal.get("rows"):
                 return jsonify({"error": "Day ranges are not available for this suggestion."}), 404
-        elif not stored or not stored.get("rows"):
-            cal = _build(latest_iv)
+        elif not stored or not stored.get("rows") or not _calendar_has_nets(stored):
+            iv = latest_iv if latest_iv is not None else (stored or {}).get("iv")
+            cal = _build(iv)
             if not cal or not cal.get("rows"):
                 return jsonify({"error": "Day ranges are not available for this suggestion."}), 404
             repo.save_mark_band_calendar(sid, json.dumps(cal))
@@ -2504,12 +2521,32 @@ def create_app() -> Flask:
             entry_f = float(entry) if entry is not None else None
         except (TypeError, ValueError):
             entry_f = None
+        # Premium for Net % in the day-range cells.
+        premium_rs = None
+        premium_kind = None
+        try:
+            if trade_id:
+                premium_rs, premium_kind = _trade_premium_from_legs(db, trade_id)
+            if premium_rs is None or premium_rs <= 0:
+                credit = row.get("net_credit_suggested")
+                if credit is not None:
+                    c = float(credit)
+                    premium_rs = abs(c)
+                    premium_kind = "received" if c >= 0 else "paid"
+        except (TypeError, ValueError):
+            premium_rs = None
+            premium_kind = None
         return jsonify({
             "suggestion_id": sid,
             "trade_id": trade_id or None,
             "entry_spot": entry_f,
             "spot": spot,
             "fresh": fresh,
+            "max_profit": max_profit,
+            "max_loss": max_loss,
+            "premium_rs": premium_rs,
+            "premium_kind": premium_kind,
+            "est_charges_rs": (cal or {}).get("est_charges_rs"),
             "calendar": cal,
         })
 
