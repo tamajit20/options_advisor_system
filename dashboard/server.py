@@ -880,7 +880,8 @@ _INDEX_KITE_KEYS: Dict[str, str] = {
 }
 _REST_INDEX_CACHE: Dict[str, Any] = {"at": 0.0, "quotes": {}}
 _REST_INDEX_CACHE_LOCK = threading.Lock()
-_REST_INDEX_CACHE_TTL_SEC = 20.0
+# Keep short — SSE + strip poll rely on this when WS has no index ticks.
+_REST_INDEX_CACHE_TTL_SEC = 5.0
 
 
 def _rest_live_index_quotes(
@@ -1227,7 +1228,7 @@ def _load_ws_monitor_snap_or_unavailable() -> dict:
 
 
 def _indices_spot_live_payload(snap: dict) -> dict:
-    """Live-only index strip update from ws_status (no DB)."""
+    """Live index strip update for SSE — WS ticks, else throttled REST OHLC."""
     from utils import market_state_at
 
     now = now_ist()
@@ -1235,10 +1236,11 @@ def _indices_spot_live_payload(snap: dict) -> dict:
     session_open = ms in ("OPEN_VOLATILE", "OPEN_STABLE", "CLOSE_AUCTION")
     symbols = _index_ticker_symbols()
     want = set(symbols)
-    live_quotes = _latest_live_index_quotes(snap, want)
-    tick_age = _ws_tick_age_seconds(snap, now)
+    live_quotes = _latest_live_index_quotes(snap, want) if snap else {}
+    tick_age = _ws_tick_age_seconds(snap, now) if snap else None
     ws_connected = bool(
-        snap.get("connection_state") == "connected"
+        snap
+        and snap.get("connection_state") == "connected"
         and not snap.get("token_expired")
     )
     live_fresh = (
@@ -1246,6 +1248,11 @@ def _indices_spot_live_payload(snap: dict) -> dict:
         and tick_age is not None
         and tick_age <= (120.0 if session_open else 1800.0)
     )
+    # Without this, SSE emits feed=eod/[] while GET /indices/spot still shows
+    # REST live — chips paint once then never move until a full page reload.
+    if not live_fresh and session_open:
+        live_quotes = _rest_live_index_quotes(symbols)
+        live_fresh = bool(live_quotes)
     if not live_fresh:
         return {"feed": "eod", "indices": [], "as_of": _ist_iso(now)}
 

@@ -3064,24 +3064,44 @@ function _applyIndexSpotLiveUpdate(data) {
 }
 
 let _indexSpotSource = null;
+let _indexSpotPollTimer = null;
+let _indexSpotLastLiveAt = 0;
 
 function ensureIndexSpotStream() {
   if (_indexSpotSource && _indexSpotSource.readyState !== 2) return;
   try {
     _indexSpotSource = new EventSource('/api/indices/spot/stream');
     _indexSpotSource.onmessage = (ev) => {
-      try { _applyIndexSpotLiveUpdate(JSON.parse(ev.data)); } catch (_) { /* ignore */ }
+      try {
+        const data = JSON.parse(ev.data);
+        if (data && data.feed === 'live' && (data.indices || []).length) {
+          _indexSpotLastLiveAt = Date.now();
+        }
+        _applyIndexSpotLiveUpdate(data);
+      } catch (_) { /* ignore */ }
     };
     _indexSpotSource.onerror = () => {
       if (_indexSpotSource && _indexSpotSource.readyState === 2) _indexSpotSource = null;
     };
   } catch (_) { /* SSE unsupported */ }
+  // Safety net: if SSE is quiet (WS has 0 index ticks), re-fetch REST live
+  // quotes so price / % keep moving during market hours.
+  if (!_indexSpotPollTimer) {
+    _indexSpotPollTimer = setInterval(() => {
+      if (Date.now() - _indexSpotLastLiveAt < 8000) return;
+      refreshIndexSpotStrip();
+    }, 5000);
+  }
 }
 
 function stopIndexSpotStream() {
   if (_indexSpotSource) {
     _indexSpotSource.close();
     _indexSpotSource = null;
+  }
+  if (_indexSpotPollTimer) {
+    clearInterval(_indexSpotPollTimer);
+    _indexSpotPollTimer = null;
   }
 }
 
