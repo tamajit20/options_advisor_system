@@ -94,6 +94,23 @@ def _cmd_backfill_index_spot(days) -> int:
         db.close()
 
 
+def _cmd_sync_index_session_closes() -> int:
+    from database.connection import SQLServerConnection
+    from lifecycle.sync_index_session_closes import sync_index_session_closes
+
+    db = SQLServerConnection()
+    db.connect()
+    try:
+        out = sync_index_session_closes(db)
+        logger.info("Index session close sync: %s", out)
+        return 0
+    except Exception:
+        logger.exception("Index session close sync failed")
+        return 1
+    finally:
+        db.close()
+
+
 def _cmd_check_db() -> int:
     from database.connection import SQLServerConnection
 
@@ -647,6 +664,11 @@ def main(argv=None) -> int:
         default=None,
         help="Calendar days of history for --backfill-index-spot (default from config)",
     )
+    parser.add_argument(
+        "--sync-index-session-closes",
+        action="store_true",
+        help="Upsert today's index/VIX OHLC from Kite into EOD tables (header strip)",
+    )
     args = parser.parse_args(argv)
 
     _setup_console_logging()
@@ -665,6 +687,8 @@ def main(argv=None) -> int:
         return _cmd_ws_runner()
     if args.backfill_index_spot:
         return _cmd_backfill_index_spot(args.backfill_days)
+    if args.sync_index_session_closes:
+        return _cmd_sync_index_session_closes()
     _install_db_logging()
     if args.dashboard_only:
         _ensure_schema_on_startup()

@@ -98,6 +98,21 @@ class TestTickHandling:
         assert len(events) == 1
         assert events[0]["topic"] == TOPIC_TICK_INDEX
 
+    def test_index_tick_persists_in_last_index_ltps(self, monitor, bus):
+        from providers.base import LiveQuote
+        q = LiveQuote(
+            symbol="NIFTY", expiry=None, strike=None, option_type=None,
+            last_price=25514.3, prev_close=25227.95,
+        )
+        bus.publish(TOPIC_TICK_INDEX, q)
+        snap = monitor.snapshot()
+        idx = snap.get("last_index_ltps") or {}
+        assert "NIFTY" in idx
+        assert idx["NIFTY"]["ltp"] == pytest.approx(25514.3)
+        assert idx["NIFTY"]["prev_close"] == pytest.approx(25227.95)
+        # Equity book stays empty for indexes.
+        assert "NIFTY" not in (snap.get("last_equity_ltps") or {})
+
     def test_tick_handler_swallows_exceptions(self, monitor, bus):
         # An object whose attribute access raises should not crash the handler.
         class _Boom:

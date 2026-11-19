@@ -887,7 +887,12 @@ def _latest_live_index_quotes(
     snap: dict,
     symbols: set[str],
 ) -> dict[str, dict[str, Any]]:
-    """Most recent index tick per symbol from ws_status recent_events."""
+    """Most recent index tick per symbol from ws_status.
+
+    Prefer ``recent_events`` (live ring). Fall back to durable
+    ``last_index_ltps`` so the header strip still has today's last marks
+    after the ring is pruned (events only keep ~5 minutes).
+    """
     out: dict[str, dict[str, Any]] = {}
     for ev in reversed(snap.get("recent_events") or []):
         if ev.get("option_type"):
@@ -910,7 +915,50 @@ def _latest_live_index_quotes(
         if prev > 0:
             quote["prev_close"] = prev
         out[sym] = quote
+    durable = snap.get("last_index_ltps") or {}
+    if isinstance(durable, dict):
+        for sym_raw, payload in durable.items():
+            sym = str(sym_raw or "").upper()
+            if sym not in symbols or sym in out or not isinstance(payload, dict):
+                continue
+            lp = payload.get("ltp")
+            if lp is None:
+                continue
+            try:
+                price = float(lp)
+            except (TypeError, ValueError):
+                continue
+            if price <= 0:
+                continue
+            quote = {
+                "price": price,
+                "as_of": payload.get("as_of"),
+            }
+            raw_prev = payload.get("prev_close")
+            try:
+                prev = float(raw_prev) if raw_prev is not None else 0.0
+            except (TypeError, ValueError):
+                prev = 0.0
+            if prev > 0:
+                quote["prev_close"] = prev
+            out[sym] = quote
     return out
+
+
+def _index_quote_is_today(as_of: Any, today: Any) -> bool:
+    """True when a WS quote timestamp falls on *today* (IST calendar date)."""
+    if as_of is None or today is None:
+        return False
+    try:
+        if hasattr(as_of, "date"):
+            return as_of.date() == today
+        dt = datetime.fromisoformat(str(as_of))
+        if dt.tzinfo is not None:
+            from zoneinfo import ZoneInfo
+            dt = dt.astimezone(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)
+        return dt.date() == today
+    except (TypeError, ValueError):
+        return False
 
 
 def _index_change_fields(
@@ -1150,10 +1198,16 @@ def _indices_spot_live_payload(snap: dict) -> dict:
         snap.get("connection_state") == "connected"
         and not snap.get("token_expired")
     )
+    today = now.date()
+    has_today_marks = any(
+        _index_quote_is_today(q.get("as_of"), today) for q in live_quotes.values()
+    )
+    # During session: require fresh ticks. After close: keep today's last
+    # index marks so the strip does not jump back to yesterday's EOD.
     live_fresh = (
-        ws_connected
-        and tick_age is not None
-        and tick_age <= (120.0 if session_open else 1800.0)
+        (ws_connected and tick_age is not None and tick_age <= 120.0)
+        if session_open
+        else has_today_marks
     )
     if not live_fresh:
         return {"feed": "eod", "indices": [], "as_of": _ist_iso(now)}
@@ -1162,6 +1216,8 @@ def _indices_spot_live_payload(snap: dict) -> dict:
     for sym in symbols:
         live = live_quotes.get(sym)
         if not live or live.get("price") is None:
+            continue
+        if not session_open and not _index_quote_is_today(live.get("as_of"), today):
             continue
         raw_ts = live.get("as_of")
         live_as_of = None
@@ -4727,10 +4783,14 @@ def create_app() -> Flask:
             and snap.get("connection_state") == "connected"
             and not snap.get("token_expired")
         )
+        today = now.date()
+        has_today_marks = any(
+            _index_quote_is_today(q.get("as_of"), today) for q in live_quotes.values()
+        )
         live_fresh = (
-            ws_connected
-            and tick_age is not None
-            and tick_age <= (120.0 if session_open else 1800.0)
+            (ws_connected and tick_age is not None and tick_age <= 120.0)
+            if session_open
+            else has_today_marks
         )
 
         spot_repo = SpotEodRepo(db)
@@ -4740,7 +4800,12 @@ def create_app() -> Flask:
         for sym in symbols:
             label = _INDEX_LABELS.get(sym, sym)
             live = live_quotes.get(sym)
-            use_live = bool(live_fresh and live and live.get("price") is not None)
+            use_live = bool(
+                live_fresh
+                and live
+                and live.get("price") is not None
+                and (session_open or _index_quote_is_today(live.get("as_of"), today))
+            )
 
             if use_live:
                 raw_ts = live.get("as_of")

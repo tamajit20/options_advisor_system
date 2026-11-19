@@ -133,6 +133,8 @@ class WSMonitor:
         self._token_expired: bool = False
         self._recent: Deque[Dict[str, Any]] = deque(maxlen=self._max_events)
         self._last_equity: Dict[str, Dict[str, Any]] = {}
+        # Durable last marks for header indexes (survive recent_events prune).
+        self._last_index: Dict[str, Dict[str, Any]] = {}
 
         self._unsubs: List[Callable[[], None]] = []
         self._writer_thread: Optional[threading.Thread] = None
@@ -217,16 +219,28 @@ class WSMonitor:
                 self._recent.append(event)
                 if opt is None and last_price is not None:
                     sym_u = symbol.upper()
-                    if sym_u not in _INDEX_SYMBOLS:
+                    try:
+                        ltp = float(last_price)
+                    except (TypeError, ValueError):
+                        ltp = 0.0
+                    if ltp > 0 and sym_u in _INDEX_SYMBOLS:
+                        idx: Dict[str, Any] = {
+                            "ltp": ltp,
+                            "as_of": now.isoformat(),
+                        }
+                        raw_prev = getattr(payload, "prev_close", None)
                         try:
-                            ltp = float(last_price)
+                            prev = float(raw_prev) if raw_prev is not None else 0.0
                         except (TypeError, ValueError):
-                            ltp = 0.0
-                        if ltp > 0:
-                            self._last_equity[sym_u] = {
-                                "ltp": ltp,
-                                "as_of": now.isoformat(),
-                            }
+                            prev = 0.0
+                        if prev > 0:
+                            idx["prev_close"] = prev
+                        self._last_index[sym_u] = idx
+                    elif ltp > 0 and sym_u not in _INDEX_SYMBOLS:
+                        self._last_equity[sym_u] = {
+                            "ltp": ltp,
+                            "as_of": now.isoformat(),
+                        }
         except Exception:
             logger.exception("WSMonitor._on_tick swallowed exception")
 
@@ -314,6 +328,7 @@ class WSMonitor:
                 ],
                 "recent_events":          list(self._recent),
                 "last_equity_ltps":       dict(self._last_equity),
+                "last_index_ltps":        dict(self._last_index),
                 "max_recent_events":      self._max_events,
                 "event_retention_seconds": self._retention,
                 **status_extra,
