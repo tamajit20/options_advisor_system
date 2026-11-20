@@ -707,7 +707,11 @@ def _persist_zerodha_margin_quote(
     margin_peak: Any = None,
     lots: Optional[int] = None,
 ) -> None:
-    """One-time write of Kite Final/Peak onto suggestion and/or trade."""
+    """One-time write of Kite Final/Peak onto suggestion and/or trade.
+
+    Commits immediately — ``@_with_db`` closes without commit, so without
+    this the UPDATE is rolled back and every page load re-quotes Kite.
+    """
     try:
         fin = float(margin_final) if margin_final is not None else None
     except (TypeError, ValueError):
@@ -718,14 +722,15 @@ def _persist_zerodha_margin_quote(
         peak = float(margin_peak) if margin_peak is not None else None
     except (TypeError, ValueError):
         peak = None
+    wrote = False
     if suggestion_id:
         try:
-            SuggestionRepo(db).save_zerodha_margin_once(
+            wrote = SuggestionRepo(db).save_zerodha_margin_once(
                 suggestion_id,
                 margin_final=fin,
                 margin_peak=peak,
                 lots=lots,
-            )
+            ) or wrote
         except Exception:
             logger.debug("persist suggestion zerodha margin skipped", exc_info=True)
     tid = trade_id
@@ -737,14 +742,19 @@ def _persist_zerodha_margin_quote(
             tid = None
     if tid:
         try:
-            TradeRepo(db).save_zerodha_margin_once(
+            wrote = TradeRepo(db).save_zerodha_margin_once(
                 str(tid),
                 margin_final=fin,
                 margin_peak=peak,
                 lots=lots,
-            )
+            ) or wrote
         except Exception:
             logger.debug("persist trade zerodha margin skipped", exc_info=True)
+    if wrote:
+        try:
+            db.commit()
+        except Exception:
+            logger.exception("commit zerodha margin quote failed")
 
 
 _CONFIDENCE_LEGACY_TOTAL = 7

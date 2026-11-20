@@ -100,3 +100,22 @@ def test_preview_persists_after_kite_quote(client, mocker):
     assert kwargs["suggestion_id"] == "SUG-2"
     assert kwargs["margin_final"] == 88000
     assert kwargs["lots"] == 1
+
+
+def test_persist_margin_quote_commits(mocker):
+    """Regression: @_with_db closes without commit — must commit here."""
+    db = mocker.Mock()
+    sug = mocker.patch("dashboard.server.SuggestionRepo")
+    sug.return_value.save_zerodha_margin_once.return_value = True
+    trd = mocker.patch("dashboard.server.TradeRepo")
+    trd.return_value.latest_for_suggestion.return_value = {"trade_id": "TRD-1"}
+    trd.return_value.save_zerodha_margin_once.return_value = True
+    server._persist_zerodha_margin_quote(
+        db,
+        suggestion_id="SUG-1",
+        trade_id=None,
+        margin_final=50000,
+        margin_peak=60000,
+        lots=1,
+    )
+    db.commit.assert_called_once()
