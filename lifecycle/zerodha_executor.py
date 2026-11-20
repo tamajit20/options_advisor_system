@@ -356,16 +356,17 @@ def _build_client() -> Tuple[KiteExecutionFacade, InstrumentMaster]:
         raise ZerodhaExecutionError(
             "Zerodha session missing or expired — log in on the dashboard first"
         )
-    read = KiteFacade(
-        api_key=ZERODHA_API_CONFIG["api_key"],
-        access_token=session.access_token,
-    )
     facade = KiteExecutionFacade(
         api_key=ZERODHA_API_CONFIG["api_key"],
         access_token=session.access_token,
     )
-    master = InstrumentMaster(loader=lambda: read.instruments("NFO"))
-    master.refresh_if_stale()
+    # Process-wide NFO master (24h TTL) — do not re-download ~30k rows per call.
+    from providers.zerodha.instrument_cache import get_shared_instrument_master
+    master = get_shared_instrument_master(
+        api_key=ZERODHA_API_CONFIG["api_key"],
+        access_token=session.access_token,
+        segment="NFO",
+    )
     return facade, master
 
 

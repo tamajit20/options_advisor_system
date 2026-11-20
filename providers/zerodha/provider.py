@@ -199,10 +199,30 @@ class ZerodhaProvider:
 
     def _ensure_instruments(self) -> InstrumentMaster:
         with self._init_lock:
+            # Keep constructor-injected masters (tests) and already-bound
+            # shared masters; only honor the 24h TTL.
             if self._instruments is not None:
                 self._instruments.refresh_if_stale()
                 return self._instruments
             facade = self._ensure_facade()
+            session = load_session()
+            token = (
+                session.access_token
+                if session is not None and is_token_valid(session)
+                else getattr(facade, "access_token", None)
+            )
+            api_key = ZERODHA_API_CONFIG.get("api_key") or ""
+            if token and api_key:
+                from providers.zerodha.instrument_cache import (
+                    get_shared_instrument_master,
+                )
+                self._instruments = get_shared_instrument_master(
+                    api_key=api_key,
+                    access_token=str(token),
+                    segment=None,  # full master for chain / equity lookups
+                    facade=facade,
+                )
+                return self._instruments
             self._instruments = InstrumentMaster(loader=lambda: facade.instruments())
             self._instruments.refresh()
             return self._instruments

@@ -579,22 +579,172 @@ def _instrument_overlaps_for_suggestion(db: SQLServerConnection, suggestion_id: 
 
 def _trade_premium_from_legs(db: SQLServerConnection, trade_id: str) -> tuple[float, str]:
     """Return (absolute premium ₹, 'received'|'paid') from executed leg fills."""
-    legs = db.fetch_all(
-        "SELECT tl.lots_actual, sl.lots, sl.lot_size, sl.action, tl.fill_price "
-        "FROM options_trade_legs tl "
-        "JOIN options_suggestion_legs sl ON sl.id = tl.suggestion_leg_id "
-        "WHERE tl.trade_id = ? AND tl.executed = 1",
-        [trade_id],
+    return _trade_premiums_from_legs(db, [trade_id]).get(str(trade_id), (0.0, "paid"))
+
+
+def _trade_premiums_from_legs(
+    db: SQLServerConnection, trade_ids: list,
+) -> dict:
+    """Batch premium lookup: trade_id → (abs ₹, 'received'|'paid')."""
+    ids = sorted({str(t) for t in trade_ids if t and not str(t).startswith("REV-")})
+    out: dict = {tid: (0.0, "paid") for tid in ids}
+    if not ids:
+        return out
+    totals: dict = {tid: 0.0 for tid in ids}
+    chunk = 200
+    for i in range(0, len(ids), chunk):
+        part = ids[i:i + chunk]
+        ph = ",".join("?" * len(part))
+        legs = db.fetch_all(
+            "SELECT tl.trade_id, tl.lots_actual, sl.lots, sl.lot_size, "
+            "       sl.action, tl.fill_price "
+            "FROM options_trade_legs tl "
+            "JOIN options_suggestion_legs sl ON sl.id = tl.suggestion_leg_id "
+            f"WHERE tl.trade_id IN ({ph}) AND tl.executed = 1",
+            part,
+        ) or []
+        for lg in legs:
+            tid = str(lg.get("trade_id") or "")
+            if tid not in totals:
+                continue
+            lots = lg.get("lots_actual") or lg.get("lots") or 0
+            qty = lots * (lg.get("lot_size") or 1)
+            sign = 1 if lg.get("action") == "SELL" else -1
+            totals[tid] += sign * float(lg.get("fill_price") or 0) * qty
+    for tid, total in totals.items():
+        if not total:
+            out[tid] = (0.0, "paid")
+        else:
+            out[tid] = (abs(total), "received" if total > 0 else "paid")
+    return out
+
+
+def _stamp_execution_channels(db: SQLServerConnection, trades: list) -> None:
+    """Batch-stamp ``execution_channel`` on trade dicts (one broker query)."""
+    zids = _zerodha_trade_id_set(db, [t.get("trade_id") for t in trades if t])
+    for t in trades:
+        if not t:
+            continue
+        t["execution_channel"] = _channel_for_trade_id(t.get("trade_id"), zids)
+
+
+def _zerodha_margin_preview_from_row(row: Optional[dict]) -> Optional[dict]:
+    """Build a preview-shaped dict from stored Final/Peak columns."""
+    if not row:
+        return None
+    fin = row.get("zerodha_margin_final")
+    try:
+        fin_f = float(fin) if fin is not None else None
+    except (TypeError, ValueError):
+        fin_f = None
+    if fin_f is None or fin_f <= 0:
+        return None
+    peak = row.get("zerodha_margin_peak")
+    try:
+        peak_f = float(peak) if peak is not None else None
+    except (TypeError, ValueError):
+        peak_f = None
+    return {
+        "margin_final_required": fin_f,
+        "margin_peak_required": peak_f,
+        "margin_required": peak_f if peak_f is not None else fin_f,
+        "margin_ok": True,
+        "margin_message": "Stored Zerodha Final (quoted once)",
+        "zerodha_margin_lots": row.get("zerodha_margin_lots"),
+        "zerodha_margin_quoted_at": row.get("zerodha_margin_quoted_at"),
+        "from_db": True,
+        "legs": [],
+    }
+
+
+def _stored_zerodha_margin_preview(
+    db: SQLServerConnection,
+    suggestion_id: str,
+    *,
+    trade_id: Optional[str] = None,
+    lots: Optional[int] = None,
+) -> Optional[dict]:
+    """Return stored Final/Peak when present (trade preferred over suggestion)."""
+    if trade_id:
+        row = TradeRepo(db).get(trade_id)
+        preview = _zerodha_margin_preview_from_row(row)
+        if preview is not None:
+            return preview
+    # Fallback: any open/closed trade for this suggestion that already has Final.
+    trade_row = db.fetch_one(
+        "SELECT TOP 1 zerodha_margin_final, zerodha_margin_peak, "
+        "       zerodha_margin_lots, zerodha_margin_quoted_at "
+        "FROM options_trades "
+        "WHERE suggestion_id = ? AND zerodha_margin_final IS NOT NULL "
+        "  AND UPPER(ISNULL(status,'')) <> 'VOID' "
+        "ORDER BY executed_on DESC",
+        [suggestion_id],
     )
-    total = 0.0
-    for lg in legs:
-        lots = lg.get("lots_actual") or lg.get("lots") or 0
-        qty = lots * (lg.get("lot_size") or 1)
-        sign = 1 if lg.get("action") == "SELL" else -1
-        total += sign * float(lg.get("fill_price") or 0) * qty
-    if not total:
-        return 0.0, "paid"
-    return abs(total), ("received" if total > 0 else "paid")
+    preview = _zerodha_margin_preview_from_row(trade_row)
+    if preview is not None:
+        return preview
+    sug_row = SuggestionRepo(db).get(suggestion_id)
+    preview = _zerodha_margin_preview_from_row(sug_row)
+    if preview is None:
+        return None
+    # If caller asked for a different lot count than the stored quote, miss
+    # so the first quote for that size can be fetched (still one-time per row).
+    if lots is not None and sug_row.get("zerodha_margin_lots") is not None:
+        try:
+            if int(sug_row["zerodha_margin_lots"]) != int(lots):
+                return None
+        except (TypeError, ValueError):
+            pass
+    return preview
+
+
+def _persist_zerodha_margin_quote(
+    db: SQLServerConnection,
+    *,
+    suggestion_id: Optional[str],
+    trade_id: Optional[str],
+    margin_final: Any,
+    margin_peak: Any = None,
+    lots: Optional[int] = None,
+) -> None:
+    """One-time write of Kite Final/Peak onto suggestion and/or trade."""
+    try:
+        fin = float(margin_final) if margin_final is not None else None
+    except (TypeError, ValueError):
+        fin = None
+    if fin is None or fin <= 0:
+        return
+    try:
+        peak = float(margin_peak) if margin_peak is not None else None
+    except (TypeError, ValueError):
+        peak = None
+    if suggestion_id:
+        try:
+            SuggestionRepo(db).save_zerodha_margin_once(
+                suggestion_id,
+                margin_final=fin,
+                margin_peak=peak,
+                lots=lots,
+            )
+        except Exception:
+            logger.debug("persist suggestion zerodha margin skipped", exc_info=True)
+    tid = trade_id
+    if not tid and suggestion_id:
+        try:
+            latest = TradeRepo(db).latest_for_suggestion(suggestion_id)
+            tid = latest.get("trade_id") if latest else None
+        except Exception:
+            tid = None
+    if tid:
+        try:
+            TradeRepo(db).save_zerodha_margin_once(
+                str(tid),
+                margin_final=fin,
+                margin_peak=peak,
+                lots=lots,
+            )
+        except Exception:
+            logger.debug("persist trade zerodha margin skipped", exc_info=True)
 
 
 _CONFIDENCE_LEGACY_TOTAL = 7
@@ -2701,9 +2851,22 @@ def create_app() -> Flask:
             preview_suggestion_execution,
             zerodha_margin_quote_ready,
         )
+        payload = request.get_json(silent=True) or {}
+        lots_override = parse_lots_override(payload.get("lots"))
+        trade_id = (payload.get("trade_id") or "").strip() or None
+        force_refresh = bool(payload.get("force_refresh"))
+
+        # Prefer DB: Amount used / Amount needed is a one-time Kite quote.
+        if not force_refresh:
+            stored = _stored_zerodha_margin_preview(
+                db, sid, trade_id=trade_id, lots=lots_override,
+            )
+            if stored is not None:
+                stored["instrument_overlaps"] = _instrument_overlaps_for_suggestion(db, sid)
+                return jsonify({"preview": stored, "from_db": True})
+
         if not zerodha_margin_quote_ready():
             return jsonify({"error": "Zerodha session not ready for margin quote"}), 403
-        payload = request.get_json(silent=True) or {}
         spot_raw = payload.get("spot_at_execution")
         leg_limits = parse_leg_limits(payload.get("leg_limits"))
         try:
@@ -2711,13 +2874,22 @@ def create_app() -> Flask:
                 db, sid,
                 leg_limits=leg_limits or None,
                 spot_at_execution=float(spot_raw) if spot_raw is not None else None,
-                lots_override=parse_lots_override(payload.get("lots")),
+                lots_override=lots_override,
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
         preview_dict = preview.to_dict()
         preview_dict["instrument_overlaps"] = _instrument_overlaps_for_suggestion(db, sid)
-        return jsonify({"preview": preview_dict})
+        _persist_zerodha_margin_quote(
+            db,
+            suggestion_id=sid,
+            trade_id=trade_id,
+            margin_final=preview_dict.get("margin_final_required")
+            or preview_dict.get("margin_required"),
+            margin_peak=preview_dict.get("margin_peak_required"),
+            lots=lots_override,
+        )
+        return jsonify({"preview": preview_dict, "from_db": False})
 
     @app.route("/api/suggestion/<sid>/zerodha-execute", methods=["POST"])
     @_with_db
@@ -2830,39 +3002,51 @@ def create_app() -> Flask:
         rows = trd.open_trades()
         stored_mtm = _stored_mtm_payloads(db)
         live_snap = _read_live_mtm_state().get("trades") or {}
+        trade_ids = [r["trade_id"] for r in rows if r.get("trade_id")]
+        legs_by_tid = trd.legs_with_suggestion_info_many(trade_ids)
+        risk_by_tid = notif.latest_risk_alerts_for_trades(trade_ids)
+        # Prefetch unique suggestions once (avoid N× get + legs).
+        sug_cache: dict = {}
+        sug_legs_cache: dict = {}
+        for r in rows:
+            sid = r.get("suggestion_id")
+            if not sid or sid in sug_cache:
+                continue
+            sug_row = sug.get(sid)
+            sug_cache[sid] = sug_row
+            if sug_row:
+                sug_legs_cache[sid] = [_row(l) for l in sug.legs(sid)]
         out = []
         for r in rows:
             r_out = _row(r)
-            r_out["legs"] = [_row(l) for l in trd.legs_with_suggestion_info(r["trade_id"])]
-            snap = stored_mtm.get(str(r["trade_id"])) or {}
-            mtm_live = live_snap.get(str(r["trade_id"])) or {}
+            tid = str(r["trade_id"])
+            r_out["legs"] = [_row(l) for l in legs_by_tid.get(tid, [])]
+            snap = stored_mtm.get(tid) or {}
+            mtm_live = live_snap.get(tid) or {}
             # Live file wins only when it carries priced leg marks. Outlook-only
             # / zero-LTP seed payloads must not wipe the DB snapshot.
             merged_map = _merge_live_over_stored_mtm(
-                {str(r["trade_id"]): snap} if snap else {},
-                {str(r["trade_id"]): mtm_live} if mtm_live else {},
+                {tid: snap} if snap else {},
+                {tid: mtm_live} if mtm_live else {},
             )
-            merged_snap = merged_map.get(str(r["trade_id"])) or dict(snap)
+            merged_snap = merged_map.get(tid) or dict(snap)
             r_out["last_mtm"] = merged_snap.get("mtm")
             r_out["last_mtm_at"] = merged_snap.get("as_of")
             # Live risk alert (TARGET_HIT / LOSS_LIMIT_HIT / PROFIT_FLOOR_HIT /
             # PRE_BREACH_WARNING / PROFIT_FLOOR_SET) so the card can render a prominent badge instead
             # of relying solely on the notification bar.
-            ra = notif.latest_risk_alert_for_trade(r["trade_id"])
+            ra = risk_by_tid.get(tid)
             r_out["risk_alert"] = _row(ra) if ra else None
             # Attach the original suggestion so the UI can show its rationale
-            if r.get("suggestion_id"):
-                sug_row = sug.get(r["suggestion_id"])
-                if sug_row:
-                    sug_out = _row(sug_row)
-                    if "net_credit_suggested" in sug_out:
-                        sug_out["net_credit"] = sug_out.pop("net_credit_suggested")
-                    sug_out["legs"] = [_row(l) for l in sug.legs(r["suggestion_id"])]
-                    r_out["suggestion"] = sug_out
-                    r_out["entry_quality_score"] = sug_out.get("entry_quality_score")
-                else:
-                    r_out["suggestion"] = None
-                    r_out["entry_quality_score"] = None
+            sid = r.get("suggestion_id")
+            sug_row = sug_cache.get(sid) if sid else None
+            if sug_row:
+                sug_out = _row(sug_row)
+                if "net_credit_suggested" in sug_out:
+                    sug_out["net_credit"] = sug_out.pop("net_credit_suggested")
+                sug_out["legs"] = list(sug_legs_cache.get(sid, []))
+                r_out["suggestion"] = sug_out
+                r_out["entry_quality_score"] = sug_out.get("entry_quality_score")
             else:
                 r_out["suggestion"] = None
                 r_out["entry_quality_score"] = None
@@ -2871,10 +3055,11 @@ def create_app() -> Flask:
             r_out["live_outlook"] = _trade_live_outlook(
                 db, r_out, include_scenarios=False, include_today_bands=False,
             )
-            _enrich_trade_execution_channel(db, r_out)
-            if r_out.get("suggestion"):
-                r_out["suggestion"]["execution_channel"] = r_out["execution_channel"]
             out.append(r_out)
+        _stamp_execution_channels(db, out)
+        for r_out in out:
+            if r_out.get("suggestion"):
+                r_out["suggestion"]["execution_channel"] = r_out.get("execution_channel")
         out = _filter_trades_by_execution_channel(out, channel_f)
         return jsonify({"trades": out, "channel": channel_f or "all", "count": len(out)})
 
@@ -3565,13 +3750,17 @@ def create_app() -> Flask:
         total_amount_invested = 0.0
         total_charges = 0.0
 
+        prem_by_tid = _trade_premiums_from_legs(
+            db, [e["trade_id"] for e in events if not e.get("is_reversal")],
+        )
+
         for e in events:
             pnl = e["net_pnl"]
             strat = e["strategy"]
             if e["is_reversal"]:
                 prem_rs, prem_kind = 0.0, "paid"
             else:
-                prem_rs, prem_kind = _trade_premium_from_legs(db, e["trade_id"])
+                prem_rs, prem_kind = prem_by_tid.get(str(e["trade_id"]), (0.0, "paid"))
                 if prem_rs <= 0:
                     prem_rs = abs(e["net_credit_actual"])
             cum_overall += pnl
@@ -3879,6 +4068,11 @@ def create_app() -> Flask:
         strategy_stats = []
         all_pnls = []
         overall_premium = 0.0
+        all_trade_ids = [
+            t.get("trade_id") for trades in buckets.values() for t in trades
+            if t.get("trade_id")
+        ]
+        prem_by_tid = _trade_premiums_from_legs(db, all_trade_ids)
         for strategy, trades in sorted(buckets.items()):
             pnls = [float(t["net_pnl"]) for t in trades]
             all_pnls.extend(pnls)
@@ -3893,7 +4087,7 @@ def create_app() -> Flask:
             for t in trades:
                 tid = t.get("trade_id")
                 if tid:
-                    prem_rs, _ = _trade_premium_from_legs(db, tid)
+                    prem_rs, _ = prem_by_tid.get(str(tid), (0.0, "paid"))
                     strat_premium += prem_rs
             overall_premium += strat_premium
             avg_max_profit = None
@@ -3901,11 +4095,11 @@ def create_app() -> Flask:
             if mps:
                 avg_max_profit = round(sum(mps) / len(mps), 2)
             best_prem, best_kind = (
-                _trade_premium_from_legs(db, best_row["trade_id"])
+                prem_by_tid.get(str(best_row["trade_id"]), (0.0, "paid"))
                 if best_row.get("trade_id") else (0.0, "paid")
             )
             worst_prem, worst_kind = (
-                _trade_premium_from_legs(db, worst_row["trade_id"])
+                prem_by_tid.get(str(worst_row["trade_id"]), (0.0, "paid"))
                 if worst_row.get("trade_id") else (0.0, "paid")
             )
             strategy_stats.append({
@@ -3938,8 +4132,12 @@ def create_app() -> Flask:
         if rows:
             best_row_ov = max(rows, key=lambda t: float(t["net_pnl"]))
             worst_row_ov = min(rows, key=lambda t: float(t["net_pnl"]))
-            best_prem_ov, best_kind_ov = _trade_premium_from_legs(db, best_row_ov["trade_id"])
-            worst_prem_ov, worst_kind_ov = _trade_premium_from_legs(db, worst_row_ov["trade_id"])
+            best_prem_ov, best_kind_ov = prem_by_tid.get(
+                str(best_row_ov["trade_id"]), (0.0, "paid"),
+            )
+            worst_prem_ov, worst_kind_ov = prem_by_tid.get(
+                str(worst_row_ov["trade_id"]), (0.0, "paid"),
+            )
         overall = {
             "total":      len(all_pnls),
             "wins":       len(overall_wins),
@@ -4120,6 +4318,8 @@ def create_app() -> Flask:
             "  t.execution_provider, "
             "  t.actual_max_profit, t.actual_max_loss, "
             "  t.actual_upper_breakeven, t.actual_lower_breakeven, t.actual_stop_loss_level, "
+            "  t.zerodha_margin_final, t.zerodha_margin_peak, "
+            "  t.zerodha_margin_lots, t.zerodha_margin_quoted_at, "
             "  s.underlying, s.strategy, s.generated_on AS sug_generated_on, "
             "  s.net_credit_suggested AS sug_net_credit, s.confidence_score AS sug_confidence, "
             "  s.spot_at_generation AS sug_spot, s.trade_name AS sug_trade_name, "
@@ -4129,7 +4329,9 @@ def create_app() -> Flask:
             "  s.estimated_charges_total AS sug_est_charges, "
             "  s.estimated_net_pnl AS sug_est_net_pnl, "
             "  s.expiry_date AS sug_expiry, s.dte AS sug_dte, "
-            "  s.entry_quality_score AS sug_entry_quality "
+            "  s.entry_quality_score AS sug_entry_quality, "
+            "  s.zerodha_margin_final AS sug_zerodha_margin_final, "
+            "  s.zerodha_margin_peak AS sug_zerodha_margin_peak "
             "FROM options_trades t "
             "LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
             "WHERE t.status IN ('CLOSED', 'EXPIRED') "
@@ -4151,12 +4353,16 @@ def create_app() -> Flask:
         trd_repo = TradeRepo(db)
         sug_repo = SuggestionRepo(db)
 
+        legs_by_tid = trd_repo.legs_with_suggestion_info_many(
+            [r["trade_id"] for r in rows if r.get("trade_id")],
+        )
         out = []
         seen_sug = {}
         seen_full = {}
         for r in rows:
             r = _row(r)
-            trade_legs = [_row(lg) for lg in trd_repo.legs_with_suggestion_info(r["trade_id"])]
+            tid = str(r["trade_id"])
+            trade_legs = [_row(lg) for lg in legs_by_tid.get(tid, [])]
             sid = r.get("suggestion_id")
             if sid and sid not in seen_sug:
                 seen_sug[sid] = [_row(lg) for lg in sug_repo.legs(sid)]
@@ -4183,12 +4389,20 @@ def create_app() -> Flask:
                 "actual_lower_be":   r["actual_lower_breakeven"],
                 "actual_stop_loss":  r["actual_stop_loss_level"],
                 "entry_quality_score": r.get("sug_entry_quality"),
+                "zerodha_margin_final": r.get("zerodha_margin_final")
+                if r.get("zerodha_margin_final") is not None
+                else r.get("sug_zerodha_margin_final"),
+                "zerodha_margin_peak": r.get("zerodha_margin_peak")
+                if r.get("zerodha_margin_peak") is not None
+                else r.get("sug_zerodha_margin_peak"),
+                "zerodha_margin_lots": r.get("zerodha_margin_lots"),
+                "zerodha_margin_quoted_at": r.get("zerodha_margin_quoted_at"),
                 "legs":              trade_legs,
                 "suggestion":        suggestion,
             }
-            _enrich_trade_execution_channel(db, item)
             out.append(item)
 
+        _stamp_execution_channels(db, out)
         out = _filter_trades_by_execution_channel(out, channel_f)
 
         rev_cards, rev_underlyings, rev_strategies = _history_reversal_cards(

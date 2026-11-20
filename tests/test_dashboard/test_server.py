@@ -570,17 +570,17 @@ class TestApiTradesOpen:
             {"trade_id": "TRD-M", "suggestion_id": None, "trade_name": "M", "status": "ACTIVE"},
         ]
         mocker.patch("dashboard.server.TradeRepo.open_trades", return_value=rows)
-        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info", return_value=[])
-        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alert_for_trade", return_value=None)
+        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info_many", return_value={})
+        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alerts_for_trades", return_value={})
         mocker.patch("dashboard.server._stored_mtm_payloads", return_value={})
         mocker.patch("dashboard.server._read_live_mtm_state", return_value={})
         mocker.patch("dashboard.server._trade_live_outlook", return_value=None)
 
-        def _enrich(_db, row):
-            row["execution_channel"] = "zerodha" if row["trade_id"] == "TRD-Z" else "manual"
-            return row
+        def _stamp(_db, trades):
+            for row in trades:
+                row["execution_channel"] = "zerodha" if row["trade_id"] == "TRD-Z" else "manual"
 
-        mocker.patch("dashboard.server._enrich_trade_execution_channel", side_effect=_enrich)
+        mocker.patch("dashboard.server._stamp_execution_channels", side_effect=_stamp)
         z = client.get("/api/trades/open?channel=zerodha").get_json()
         assert [t["trade_id"] for t in z["trades"]] == ["TRD-Z"]
         assert z["channel"] == "zerodha"
@@ -606,10 +606,16 @@ class TestApiTradesOpen:
             "probability_of_profit": 68,
         }
         mocker.patch("dashboard.server.TradeRepo.open_trades", return_value=[trade_row])
-        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info", return_value=[])
-        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alert_for_trade", return_value=None)
+        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info_many", return_value={})
+        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alerts_for_trades", return_value={})
         mocker.patch("dashboard.server.SuggestionRepo.get", return_value=sug_row)
         mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[])
+        mocker.patch(
+            "dashboard.server._stamp_execution_channels",
+            side_effect=lambda _db, trades: [
+                t.__setitem__("execution_channel", "manual") for t in trades
+            ],
+        )
         mocker.patch("dashboard.server._stored_mtm_payloads", return_value={
             "TRD-1": {"mtm": -176.25, "as_of": "2026-08-21 15:29:00"},
         })
@@ -631,8 +637,8 @@ class TestApiTradesOpen:
             "executed_on": datetime(2026, 5, 20, 10, 0),
         }
         mocker.patch("dashboard.server.TradeRepo.open_trades", return_value=[trade_row])
-        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info", return_value=[])
-        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alert_for_trade", return_value=None)
+        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info_many", return_value={})
+        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alerts_for_trades", return_value={})
         mocker.patch("dashboard.server._stored_mtm_payloads", return_value={
             "TRD-2": {"mtm": 420.5, "as_of": "2026-08-21 15:29:00"},
         })
@@ -648,7 +654,7 @@ class TestApiTradesOpen:
             },
         })
         mocker.patch("dashboard.server._trade_live_outlook", return_value=None)
-        mocker.patch("dashboard.server._enrich_trade_execution_channel", return_value=None)
+        mocker.patch("dashboard.server._stamp_execution_channels", return_value=None)
         trade = client.get("/api/trades/open").get_json()["trades"][0]
         assert trade["last_mtm"] == 420.5
         assert trade["last_mtm_at"] == "2026-08-21 15:29:00"
@@ -663,8 +669,8 @@ class TestApiTradesOpen:
             "executed_on": datetime(2026, 5, 20, 10, 0),
         }
         mocker.patch("dashboard.server.TradeRepo.open_trades", return_value=[trade_row])
-        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info", return_value=[])
-        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alert_for_trade", return_value=None)
+        mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info_many", return_value={})
+        mocker.patch("dashboard.server.NotificationRepo.latest_risk_alerts_for_trades", return_value={})
         mocker.patch("dashboard.server._stored_mtm_payloads", return_value={
             "TRD-3": {"mtm": -1200.0, "as_of": "2026-08-21 15:29:00",
                       "leg_ltps": {"NIFTY|2026-08-28|25000.0|CE": 80.0}},
@@ -681,7 +687,7 @@ class TestApiTradesOpen:
             },
         })
         mocker.patch("dashboard.server._trade_live_outlook", return_value=None)
-        mocker.patch("dashboard.server._enrich_trade_execution_channel", return_value=None)
+        mocker.patch("dashboard.server._stamp_execution_channels", return_value=None)
         trade = client.get("/api/trades/open").get_json()["trades"][0]
         assert trade["last_mtm"] == -1200.0
         assert trade["last_mtm_at"] == "2026-08-21 15:29:00"

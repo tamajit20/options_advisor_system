@@ -571,11 +571,13 @@ class TestHistoryRoutes:
 
         fake.fetch_all = MagicMock(side_effect=_fetch_all)
         mocker.patch("dashboard.server.SQLServerConnection", return_value=fake)
-        mocker.patch("dashboard.server.TradeRepo").return_value.legs_with_suggestion_info.return_value = []
+        mocker.patch("dashboard.server.TradeRepo").return_value.legs_with_suggestion_info_many.return_value = {}
         mocker.patch("dashboard.server.SuggestionRepo")
         mocker.patch(
-            "dashboard.server._enrich_trade_execution_channel",
-            side_effect=lambda _db, row: row.__setitem__("execution_channel", "manual") or row,
+            "dashboard.server._stamp_execution_channels",
+            side_effect=lambda _db, trades: [
+                t.__setitem__("execution_channel", "manual") for t in trades
+            ],
         )
         mocker.patch(
             "database.broker_order_repo.BrokerOrderRepo.list_for_trades_or_suggestions",

@@ -513,6 +513,12 @@ def mark_executed(
             "lots_actual":       lots_actual,
         })
     trd.insert_legs(trade_id, trade_legs)
+    try:
+        trd.copy_zerodha_margin_from_suggestion(trade_id, suggestion_id)
+    except Exception:
+        logger.debug(
+            "trade_executor: zerodha margin copy skipped for %s", trade_id, exc_info=True,
+        )
     sug.update_status(suggestion_id, "EXECUTED")
     try:
         _stamp_profit_milestone_plan(

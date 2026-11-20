@@ -188,11 +188,26 @@ def save_session(session: ZerodhaSession, path: Optional[Path] = None) -> Path:
 def clear_session(path: Optional[Path] = None) -> bool:
     """Delete the persisted session file. Returns True if a file was removed."""
     p = path or _session_path()
+    removed = False
     try:
         p.unlink()
-        return True
+        removed = True
     except FileNotFoundError:
-        return False
+        removed = False
+    # Drop process-local Kite instrument / quote caches so the next login
+    # cannot reuse a master built under the old access_token.
+    try:
+        from providers.zerodha.leg_quotes import invalidate_caches
+        invalidate_caches()
+    except Exception:
+        try:
+            from providers.zerodha.instrument_cache import (
+                invalidate_shared_instrument_master,
+            )
+            invalidate_shared_instrument_master()
+        except Exception:
+            pass
+    return removed
 
 
 # ---------------------------------------------------------------------------

@@ -811,6 +811,49 @@ _TABLE_DDL: List[str] = [
     ALTER TABLE options_trades ADD loss_ms_fixed_rs DECIMAL(18,4) NULL
     """,
 
+    # Zerodha Final/Peak margin — quoted once (Amount used / Amount needed).
+    # History and open trades read these; Kite is only called when NULL.
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'zerodha_margin_final')
+    ALTER TABLE options_trades ADD zerodha_margin_final DECIMAL(18,4) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'zerodha_margin_peak')
+    ALTER TABLE options_trades ADD zerodha_margin_peak DECIMAL(18,4) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'zerodha_margin_lots')
+    ALTER TABLE options_trades ADD zerodha_margin_lots INT NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'zerodha_margin_quoted_at')
+    ALTER TABLE options_trades ADD zerodha_margin_quoted_at DATETIME2(0) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'zerodha_margin_final')
+    ALTER TABLE options_suggestions ADD zerodha_margin_final DECIMAL(18,4) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'zerodha_margin_peak')
+    ALTER TABLE options_suggestions ADD zerodha_margin_peak DECIMAL(18,4) NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'zerodha_margin_lots')
+    ALTER TABLE options_suggestions ADD zerodha_margin_lots INT NULL
+    """,
+    """
+    IF NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestions') AND name = 'zerodha_margin_quoted_at')
+    ALTER TABLE options_suggestions ADD zerodha_margin_quoted_at DATETIME2(0) NULL
+    """,
+
     # Notification provenance — links each alert back to its tick / cycle
     """
     IF NOT EXISTS (SELECT 1 FROM sys.columns

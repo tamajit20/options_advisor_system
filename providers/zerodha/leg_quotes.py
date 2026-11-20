@@ -5,8 +5,8 @@ Separate from `lifecycle.zerodha_executor` so the dashboard can show live
 prices on a *pending* suggestion without touching the order write path.
 
 Two caches keep polling cheap:
-  * the Kite instrument master is held at module scope (24h TTL) — rebuilding
-    it per request would re-download ~30k rows;
+  * the Kite instrument master via ``instrument_cache`` (24h TTL, shared with
+    execute/preview) — rebuilding per request would re-download ~30k rows;
   * quotes are cached for a few seconds so several cards refreshing at once
     collapse into one Kite call.
 """
@@ -22,6 +22,10 @@ from typing import Any, Dict, List, Optional
 from config import ZERODHA_API_CONFIG
 from engine.zerodha_price_guard import leg_limit_in_band
 from providers.zerodha.facade import KiteFacade
+from providers.zerodha.instrument_cache import (
+    get_shared_instrument_master,
+    invalidate_shared_instrument_master,
+)
 from providers.zerodha.instruments import Instrument, InstrumentMaster
 from providers.zerodha.session import is_token_valid, load_session
 from utils import now_ist
@@ -30,20 +34,13 @@ logger = logging.getLogger(__name__)
 
 _QUOTE_TTL_SEC = 3.0
 
-_MASTER_LOCK = threading.Lock()
-_MASTER: Optional[InstrumentMaster] = None
-_MASTER_TOKEN: Optional[str] = None
-
 _QUOTE_LOCK = threading.Lock()
 _QUOTES: Dict[str, tuple] = {}
 
 
 def invalidate_caches() -> None:
-    """Drop cached master + quotes (used by tests and on session change)."""
-    global _MASTER, _MASTER_TOKEN
-    with _MASTER_LOCK:
-        _MASTER = None
-        _MASTER_TOKEN = None
+    """Drop shared instrument master + quote cache (tests / session change)."""
+    invalidate_shared_instrument_master()
     with _QUOTE_LOCK:
         _QUOTES.clear()
 
@@ -94,15 +91,13 @@ def _as_date(value: Any) -> Optional[date]:
 
 
 def _get_master(facade: KiteFacade, access_token: str) -> InstrumentMaster:
-    """Module-scoped instrument master, rebuilt only when the token changes."""
-    global _MASTER, _MASTER_TOKEN
-    with _MASTER_LOCK:
-        if _MASTER is None or _MASTER_TOKEN != access_token:
-            _MASTER = InstrumentMaster(loader=lambda: facade.instruments("NFO"))
-            _MASTER_TOKEN = access_token
-        master = _MASTER
-    master.refresh_if_stale()
-    return master
+    """Process-shared NFO master (same cache as execute / margin preview)."""
+    return get_shared_instrument_master(
+        api_key=ZERODHA_API_CONFIG.get("api_key") or "",
+        access_token=access_token,
+        segment="NFO",
+        facade=facade,
+    )
 
 
 def _resolve(leg: dict, master: InstrumentMaster) -> Optional[Instrument]:

@@ -799,6 +799,38 @@ class SuggestionRepo:
             [payload, suggestion_id],
         ).close()
 
+    def save_zerodha_margin_once(
+        self,
+        suggestion_id: str,
+        *,
+        margin_final: Optional[float],
+        margin_peak: Optional[float] = None,
+        lots: Optional[int] = None,
+        quoted_at: Optional[datetime] = None,
+    ) -> bool:
+        """Persist Zerodha Final/Peak only when not already stored (one-time)."""
+        if margin_final is None or float(margin_final) <= 0:
+            return False
+        from utils import now_ist
+        cur = self.db.execute(
+            "UPDATE options_suggestions SET "
+            "  zerodha_margin_final = ?, "
+            "  zerodha_margin_peak = ?, "
+            "  zerodha_margin_lots = ?, "
+            "  zerodha_margin_quoted_at = ? "
+            "WHERE suggestion_id = ? AND zerodha_margin_final IS NULL",
+            [
+                float(margin_final),
+                float(margin_peak) if margin_peak is not None else None,
+                int(lots) if lots is not None else None,
+                quoted_at or now_ist().replace(tzinfo=None),
+                suggestion_id,
+            ],
+        )
+        n = cur.rowcount if cur.rowcount is not None else 0
+        cur.close()
+        return n > 0
+
     def update_status(self, suggestion_id: str, status: str) -> None:
         self.db.execute(
             "UPDATE options_suggestions SET status = ? WHERE suggestion_id = ?",
@@ -1010,6 +1042,58 @@ class TradeRepo:
 
     def get(self, trade_id: str) -> Optional[dict]:
         return self.db.fetch_one("SELECT * FROM options_trades WHERE trade_id = ?", [trade_id])
+
+    def save_zerodha_margin_once(
+        self,
+        trade_id: str,
+        *,
+        margin_final: Optional[float],
+        margin_peak: Optional[float] = None,
+        lots: Optional[int] = None,
+        quoted_at: Optional[datetime] = None,
+    ) -> bool:
+        """Persist Zerodha Final/Peak only when not already stored (one-time)."""
+        if margin_final is None or float(margin_final) <= 0:
+            return False
+        from utils import now_ist
+        cur = self.db.execute(
+            "UPDATE options_trades SET "
+            "  zerodha_margin_final = ?, "
+            "  zerodha_margin_peak = ?, "
+            "  zerodha_margin_lots = ?, "
+            "  zerodha_margin_quoted_at = ? "
+            "WHERE trade_id = ? AND zerodha_margin_final IS NULL",
+            [
+                float(margin_final),
+                float(margin_peak) if margin_peak is not None else None,
+                int(lots) if lots is not None else None,
+                quoted_at or now_ist().replace(tzinfo=None),
+                trade_id,
+            ],
+        )
+        n = cur.rowcount if cur.rowcount is not None else 0
+        cur.close()
+        return n > 0
+
+    def copy_zerodha_margin_from_suggestion(
+        self, trade_id: str, suggestion_id: str,
+    ) -> bool:
+        """One-time copy of stored suggestion margin onto a new trade."""
+        row = self.db.fetch_one(
+            "SELECT zerodha_margin_final, zerodha_margin_peak, "
+            "       zerodha_margin_lots, zerodha_margin_quoted_at "
+            "FROM options_suggestions WHERE suggestion_id = ?",
+            [suggestion_id],
+        )
+        if not row or row.get("zerodha_margin_final") is None:
+            return False
+        return self.save_zerodha_margin_once(
+            trade_id,
+            margin_final=row.get("zerodha_margin_final"),
+            margin_peak=row.get("zerodha_margin_peak"),
+            lots=row.get("zerodha_margin_lots"),
+            quoted_at=row.get("zerodha_margin_quoted_at"),
+        )
 
     def latest_for_suggestion(self, suggestion_id: str) -> Optional[dict]:
         """Newest non-voided trade for this suggestion, if any."""
@@ -1236,22 +1320,49 @@ class TradeRepo:
             [start, end],
         )
 
+    _LEGS_WITH_SUGGESTION_SQL = (
+        "SELECT tl.trade_id, tl.leg_order, tl.executed, tl.fill_price, tl.fill_time, "
+        "  tl.lots_actual, tl.exit_price, tl.exit_time, tl.leg_pnl, "
+        "  tl.suggestion_leg_id, "
+        "  sl.symbol, sl.expiry_date, sl.strike, sl.option_type, sl.action, "
+        "  sl.lots, sl.lot_size, sl.suggested_price, "
+        "  sl.suggested_price_low, sl.suggested_price_high, sl.leg_purpose_note, "
+        "  os.strategy "
+        "FROM options_trade_legs tl "
+        "JOIN options_suggestion_legs sl ON sl.id = tl.suggestion_leg_id "
+        "JOIN options_suggestions os ON os.suggestion_id = sl.suggestion_id "
+    )
+
     def legs_with_suggestion_info(self, trade_id: str) -> List[dict]:
         """Return trade legs joined with suggestion leg details (for supplement/close forms)."""
         return self.db.fetch_all(
-            "SELECT tl.leg_order, tl.executed, tl.fill_price, tl.fill_time, tl.lots_actual, "
-            "  tl.exit_price, tl.exit_time, tl.leg_pnl, "
-            "  tl.suggestion_leg_id, "
-            "  sl.symbol, sl.expiry_date, sl.strike, sl.option_type, sl.action, "
-            "  sl.lots, sl.lot_size, sl.suggested_price, "
-            "  sl.suggested_price_low, sl.suggested_price_high, sl.leg_purpose_note, "
-            "  os.strategy "
-            "FROM options_trade_legs tl "
-            "JOIN options_suggestion_legs sl ON sl.id = tl.suggestion_leg_id "
-            "JOIN options_suggestions os ON os.suggestion_id = sl.suggestion_id "
-            "WHERE tl.trade_id = ? ORDER BY tl.leg_order",
+            self._LEGS_WITH_SUGGESTION_SQL
+            + "WHERE tl.trade_id = ? ORDER BY tl.leg_order",
             [trade_id],
         )
+
+    def legs_with_suggestion_info_many(
+        self, trade_ids: List[str],
+    ) -> Dict[str, List[dict]]:
+        """Batch version of ``legs_with_suggestion_info`` keyed by trade_id."""
+        ids = sorted({str(t) for t in trade_ids if t})
+        out: Dict[str, List[dict]] = {tid: [] for tid in ids}
+        if not ids:
+            return out
+        chunk = 200
+        for i in range(0, len(ids), chunk):
+            part = ids[i:i + chunk]
+            ph = ",".join("?" * len(part))
+            rows = self.db.fetch_all(
+                self._LEGS_WITH_SUGGESTION_SQL
+                + f"WHERE tl.trade_id IN ({ph}) ORDER BY tl.trade_id, tl.leg_order",
+                part,
+            ) or []
+            for row in rows:
+                tid = str(row.get("trade_id") or "")
+                if tid in out:
+                    out[tid].append(row)
+        return out
 
     def update_leg_fill(self, trade_id: str, leg_order: int,
                         fill_price: float, fill_time, lots_actual: Optional[int]) -> None:
@@ -1703,6 +1814,14 @@ class NotificationRepo:
 
         return _batched(self.db, "options_notifications", "created_at", cutoff)
 
+    _RISK_ALERT_TYPES = (
+        "TARGET_HIT", "SL_TRIGGER", "PRE_BREACH_WARNING", "TARGET_LOCKED",
+        "PROFIT_FLOOR_SET", "PROFIT_FLOOR_HIT", "LOSS_MILESTONE_HIT",
+        "LOSS_MILESTONE_CLOSE_FAILED", "PROFIT_MILESTONE_HIT",
+        "PROFIT_MILESTONE_CLOSE_FAILED", "PROFIT_PCT_HIT",
+        "PROFIT_PCT_CLOSE_FAILED", "LOSS_LIMIT_HIT",
+    )
+
     def latest_risk_alert_for_trade(self, trade_id: str) -> Optional[dict]:
         """Return the most recent risk-monitor alert for ``trade_id`` from the
         current IST trading day, or ``None``.
@@ -1712,25 +1831,36 @@ class NotificationRepo:
         ``PRE_BREACH_WARNING`` / ``PROFIT_FLOOR_SET`` badge on the open-trade
         card so the operator doesn't rely solely on the notification bar.
         """
+        return self.latest_risk_alerts_for_trades([trade_id]).get(str(trade_id))
+
+    def latest_risk_alerts_for_trades(
+        self, trade_ids: List[str],
+    ) -> Dict[str, dict]:
+        """Latest today risk alert per trade_id (batch; one query per chunk)."""
+        ids = sorted({str(t) for t in trade_ids if t})
+        if not ids:
+            return {}
         today_start = datetime.combine(now_ist().date(), datetime.min.time())
-        return self.db.fetch_one(
-            "SELECT TOP 1 notif_type, severity, title, body, created_at "
-            "  FROM options_notifications "
-            " WHERE related_trade_id = ? "
-            "   AND created_at >= ? "
-            "   AND notif_type IN ('TARGET_HIT', 'SL_TRIGGER', "
-            "                      'PRE_BREACH_WARNING', 'TARGET_LOCKED', "
-            "                      'PROFIT_FLOOR_SET', 'PROFIT_FLOOR_HIT', "
-            "                      'LOSS_MILESTONE_HIT', "
-            "                      'LOSS_MILESTONE_CLOSE_FAILED', "
-            "                      'PROFIT_MILESTONE_HIT', "
-            "                      'PROFIT_MILESTONE_CLOSE_FAILED', "
-            "                      'PROFIT_PCT_HIT', "
-            "                      'PROFIT_PCT_CLOSE_FAILED', "
-            "                      'LOSS_LIMIT_HIT') "
-            " ORDER BY created_at DESC",
-            [trade_id, today_start],
-        )
+        type_ph = ",".join("?" * len(self._RISK_ALERT_TYPES))
+        out: Dict[str, dict] = {}
+        chunk = 200
+        for i in range(0, len(ids), chunk):
+            part = ids[i:i + chunk]
+            ph = ",".join("?" * len(part))
+            rows = self.db.fetch_all(
+                "SELECT related_trade_id, notif_type, severity, title, body, created_at "
+                "  FROM options_notifications "
+                f" WHERE related_trade_id IN ({ph}) "
+                "   AND created_at >= ? "
+                f"   AND notif_type IN ({type_ph}) "
+                " ORDER BY created_at DESC",
+                part + [today_start] + list(self._RISK_ALERT_TYPES),
+            ) or []
+            for row in rows:
+                tid = str(row.get("related_trade_id") or "")
+                if tid and tid not in out:
+                    out[tid] = row
+        return out
 
 
 # ---------------------------------------------------------------------------

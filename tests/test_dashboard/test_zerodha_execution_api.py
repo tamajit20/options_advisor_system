@@ -166,12 +166,20 @@ def test_open_trades_include_execution_channel(mocker, api_client):
         "status": "OPEN",
         "daily_status": "HOLD",
     }]
-    trade_repo.legs_with_suggestion_info.return_value = []
+    trade_repo.legs_with_suggestion_info_many.return_value = {}
     mocker.patch("dashboard.server.SuggestionRepo").return_value.get.return_value = None
-    mocker.patch("dashboard.server.NotificationRepo").return_value.latest_risk_alert_for_trade.return_value = None
+    mocker.patch(
+        "dashboard.server.NotificationRepo",
+    ).return_value.latest_risk_alerts_for_trades.return_value = {}
     mocker.patch("dashboard.server._stored_mtm_payloads", return_value={})
     mocker.patch("dashboard.server._read_live_mtm_state", return_value={})
     mocker.patch("dashboard.server._trade_live_outlook", return_value={})
+    mocker.patch(
+        "dashboard.server._stamp_execution_channels",
+        side_effect=lambda _db, trades: [
+            t.__setitem__("execution_channel", "zerodha") for t in trades
+        ],
+    )
 
     resp = api_client.get("/api/trades/open")
     assert resp.status_code == 200
