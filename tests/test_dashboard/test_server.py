@@ -1432,3 +1432,9 @@ class TestJsDashboardContracts:
         ).read_text(encoding="utf-8")
         assert 'id="suggestion-run-live"' in html
         assert "Run live engine" in html
+        # Visible to every signed-in user (not gated by admin-only / hidden).
+        btn_line = next(
+            ln for ln in html.splitlines() if 'id="suggestion-run-live"' in ln
+        )
+        assert "admin-only" not in btn_line
+        assert "hidden" not in btn_line

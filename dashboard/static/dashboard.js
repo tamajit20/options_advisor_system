@@ -4023,15 +4023,18 @@ function _stopLiveSugWatch() {
 
 function _startLiveSugWatch() {
   if (_liveSugWatchTimer) return;
+  // Prefer Jobs SSE (open to every signed-in user). Poll /api/jobs/list only
+  // as a fallback — that route is admin-only, so traders rely on the stream.
   _liveSugWatchTimer = setInterval(async () => {
     if (!_liveSugTriggeredAt) {
       _stopLiveSugWatch();
       return;
     }
+    if (_jobsSource && _jobsSource.readyState === 1) return;
     try {
       const data = await API('/api/jobs/list');
       _applyJobsPayload(data);
-    } catch (_) { /* keep watching */ }
+    } catch (_) { /* keep watching; SSE may still deliver */ }
   }, _LIVE_SUG_WATCH_MS);
 }
 
@@ -4090,7 +4093,8 @@ async function runLiveSuggestionFromTab() {
     }
     toast('Live suggestion engine running…', 'ok');
     _startLiveSugWatch();
-    await loadJobs(true);
+    // Jobs grid is admin-only; ignore list errors for traders.
+    try { await loadJobs(true); } catch (_) { /* SSE watch covers completion */ }
   } catch (e) {
     _liveSugTriggeredAt = 0;
     _stopLiveSugWatch();
@@ -13234,6 +13238,9 @@ async function loadJobs(silent = false) {
     const data = await API('/api/jobs/list');
     _applyJobsPayload(data);
   } catch (e) {
+    // Silent refresh after "Run live engine" — traders get 403 on jobs/list;
+    // don't paint that into the hidden Jobs panel.
+    if (silent) return;
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
   }
 }

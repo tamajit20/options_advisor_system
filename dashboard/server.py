@@ -5972,10 +5972,20 @@ def create_app() -> Flask:
     @app.route("/api/jobs/<job_name>/trigger", methods=["POST"])
     @_with_db
     def api_jobs_trigger(db: SQLServerConnection, job_name: str):
+        # Live suggestion is shared catalog work — any signed-in trader may
+        # run it from the Suggestions tab. All other jobs stay admin-only.
         from dashboard.auth import require_admin
-        gate = require_admin()
-        if gate is not None:
-            return gate
+        from dashboard.user_scope import require_login_or_401
+
+        _TRADER_TRIGGERABLE = {"live_suggestion_engine"}
+        if job_name in _TRADER_TRIGGERABLE:
+            denied = require_login_or_401()
+            if denied is not None:
+                return denied
+        else:
+            gate = require_admin()
+            if gate is not None:
+                return gate
 
         from scheduler.scheduler import (
             BLOCKED_MANUAL_JOBS as _BLOCKED_MANUAL,

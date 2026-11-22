@@ -1058,6 +1058,37 @@ class TestJobsTrigger:
         resp = client.post("/api/jobs/no_such_job/trigger")
         assert resp.status_code == 400
 
+    def test_trader_may_trigger_live_suggestion_engine(self, client, mocker):
+        mocker.patch(
+            "dashboard.auth._load_user_from_cookie",
+            return_value={
+                "id": 7,
+                "login": "trader",
+                "is_admin": False,
+                "is_active": True,
+            },
+        )
+        mocker.patch("dashboard.server.JobLogRepo.last_status", return_value=None)
+        mocker.patch("scheduler.scheduler.trigger_job_now", return_value=True)
+        resp = client.post("/api/jobs/live_suggestion_engine/trigger")
+        assert resp.status_code == 200
+        assert resp.get_json()["status"] == "queued"
+
+    def test_trader_cannot_trigger_other_jobs(self, client, mocker):
+        mocker.patch(
+            "dashboard.auth._load_user_from_cookie",
+            return_value={
+                "id": 7,
+                "login": "trader",
+                "is_admin": False,
+                "is_active": True,
+            },
+        )
+        trigger = mocker.patch("scheduler.scheduler.trigger_job_now", return_value=True)
+        resp = client.post("/api/jobs/fo_bhav_download/trigger")
+        assert resp.status_code == 403
+        trigger.assert_not_called()
+
     def test_running_returns_409(self, client, mocker):
         mocker.patch("dashboard.server.JobLogRepo.last_status",
                      return_value="RUNNING")
