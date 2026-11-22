@@ -34,21 +34,13 @@
   <!-- Same marks on rail and cards: octagon SL, diamond thesis, triangle target-hit,
        square close, circle breaker, hexagon − in-loss, hexagon + in-profit. -->
   <div id="signal-rail" class="signal-rail" aria-live="assertive" aria-label="Trade action signals"></div>
-  <div class="brand">
-    <span class="brand-dot"></span>
-    <span class="brand-name">Trading Dashboard</span>
-  </div>
-  <div class="header-center">
+  <div class="header-left">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">Trading Dashboard</span>
+    </div>
     <div id="index-spot-strip" class="index-spot-strip" aria-live="polite" aria-label="Index spot prices"></div>
-    <div id="global-banners" class="global-banners" aria-live="polite" hidden></div>
   </div>
-  <nav class="options-subtabs" id="options-subtabs-bar" role="tablist" aria-label="Options Advisor sections">
-    <button type="button" class="options-subtab active" data-tab="suggestion">Suggestion</button>
-    <button type="button" class="options-subtab" data-tab="trades">Trades</button>
-    <button type="button" class="options-subtab" data-tab="history">History</button>
-    <button type="button" class="options-subtab" data-tab="config">Config</button>
-    <button type="button" class="options-subtab" data-tab="learn">Learning</button>
-  </nav>
   <div class="header-actions">
     <div id="zerodha-profile-chip" class="idx-chip idx-chip-live zerodha-funds-chip" hidden
          title="Available margin — updates every 30 minutes."
@@ -84,6 +76,16 @@
            href="/dashboard-logout">Sign out</a>
       </div>
     </div>
+  </div>
+  <nav class="options-subtabs" id="options-subtabs-bar" role="tablist" aria-label="Options Advisor sections">
+    <button type="button" class="options-subtab active" data-tab="suggestion">Suggestion</button>
+    <button type="button" class="options-subtab" data-tab="trades">Trades</button>
+    <button type="button" class="options-subtab" data-tab="history">History</button>
+    <button type="button" class="options-subtab" data-tab="config">Config</button>
+    <button type="button" class="options-subtab" data-tab="learn">Learning</button>
+  </nav>
+  <div class="header-center">
+    <div id="global-banners" class="global-banners" aria-live="polite" hidden></div>
   </div>
 </header>
 

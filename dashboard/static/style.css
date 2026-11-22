@@ -19,7 +19,7 @@ a { color: var(--accent); text-decoration: none; }
 /* ---------- Header ---------- */
 .app-header {
   position: sticky; top: 0; z-index: 50;
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: flex-start;
   flex-wrap: wrap;
   gap: 10px;
   row-gap: 6px;
@@ -29,7 +29,22 @@ a { color: var(--accent); text-decoration: none; }
   box-shadow: 0 2px 6px rgba(0,0,0,.3);
   overflow: visible;
 }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+.header-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .brand-dot {
   width: 12px; height: 12px; border-radius: 50%;
   background: var(--accent); box-shadow: 0 0 8px var(--accent);
@@ -40,12 +55,15 @@ a { color: var(--accent); text-decoration: none; }
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  order: 5;
+  order: 8;
   flex: 1 1 100%;
   width: 100%;
   min-width: 0;
   margin: 0;
   overflow: visible;
+}
+.header-center:not(:has(.global-banners:not([hidden]))) {
+  display: none;
 }
 .header-actions {
   display: flex;
@@ -1574,8 +1592,8 @@ input:focus, select:focus, textarea:focus {
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
-  flex: 1 1 100%;
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   min-width: 0;
   max-width: 100%;
   overflow: visible;
@@ -1703,25 +1721,27 @@ input:focus, select:focus, textarea:focus {
 }
 .sys-banner-warn .btn:hover { background: rgba(0,0,0,.32); color: #fff; }
 
-/* Index chips stay on their own full-width row so a crowded header cannot clip them. */
 @media (max-width: 900px) {
   .app-header { flex-wrap: wrap; overflow: visible; }
   .signal-rail { order: -1; }
-  .header-center {
-    order: 5;
-    flex: 1 1 100%;
-    width: 100%;
-    margin: 0;
-    flex-wrap: wrap;
-    overflow: visible;
+  .header-left {
+    flex: 1 1 auto;
     min-width: 0;
   }
-  .index-spot-strip { max-width: 100%; flex: 1 1 100%; width: 100%; overflow: visible; }
+  .index-spot-strip {
+    flex: 1 1 auto;
+    max-width: 100%;
+    overflow: visible;
+  }
+  .header-center {
+    order: 8;
+    flex: 1 1 100%;
+    width: 100%;
+  }
   .global-banners { flex: 1 1 100%; max-width: 100%; margin: 0; min-width: 0; }
 }
 
-/* Phones: brand and actions stay on row 1; index chips wrap on a full-width
-   row so BankNifty and FinNifty are not clipped after Nifty. */
+/* Phones: brand + indexes still share a row and wrap only as needed. */
 @media (max-width: 640px) {
   .app-header {
     flex-wrap: wrap;
@@ -1731,25 +1751,23 @@ input:focus, select:focus, textarea:focus {
     row-gap: 4px;
     overflow: visible;
   }
+  .header-left {
+    flex: 1 1 auto;
+    gap: 6px 8px;
+    min-width: 0;
+  }
   .brand { gap: 6px; min-width: 0; flex-shrink: 0; }
   .signal-rail { order: -1; flex-shrink: 0; margin-right: 2px; }
   .brand-dot { width: 9px; height: 9px; }
   .brand-name { display: none; }
   .header-center {
-    order: 5;
+    order: 8;
     flex: 1 1 100%;
-    flex-basis: 100%;
     width: 100%;
-    margin: 0;
-    flex-direction: row;
-    align-items: center;
-    gap: 4px;
-    min-width: 0;
-    overflow: visible;
   }
   .index-spot-strip {
-    flex: 1 1 100%;
-    width: 100%;
+    flex: 1 1 auto;
+    width: auto;
     max-width: 100%;
     flex-wrap: wrap;
     overflow: visible;
