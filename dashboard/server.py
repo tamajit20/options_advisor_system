@@ -126,13 +126,24 @@ def _zerodha_account_for_api(
     )
 
 
+_FEED_OFF_STATES = frozenset({
+    "waiting_for_login", "token_expired", "stopped", "disconnected", "unavailable",
+})
+
+
 def _tick_feed_status_payload() -> dict:
     """Shared WS tick-feed health for every signed-in user (not admin-only).
 
     Personal Zerodha login is separate — this answers “are live marks flowing?”
     so traders do not close on stale prices when admin parked the feed.
+
+    ``mode`` is one of:
+      * ``live`` — market open and ticks healthy (header: green Live)
+      * ``market_off`` — admin feed logged in, market closed (header: Market off)
+      * ``feed_off`` — admin logged out / WS parked / unhealthy in session
     """
     from providers.ws_health import in_nse_session, is_ws_unhealthy, load_ws_status
+    from providers.zerodha.session import is_token_valid, load_admin_session
     from utils import now_ist
 
     now = now_ist()
@@ -142,21 +153,51 @@ def _tick_feed_status_payload() -> dict:
     state = str(snap.get("connection_state") or ("unavailable" if in_session else "outside_session"))
     if snap.get("stale_reason"):
         state = str(snap.get("connection_state") or state)
-    alive = not unhealthy
-    message = None
-    if unhealthy:
+    admin = load_admin_session()
+    admin_ok = bool(admin and is_token_valid(admin))
+    token_expired = bool(snap.get("token_expired"))
+    parked = (not admin_ok) or token_expired or state in _FEED_OFF_STATES
+
+    if parked or (in_session and unhealthy):
+        mode = "feed_off"
+        label = "Offline"
+        short = "Feed off"
+        alive = False
+        off_reason = reason if (in_session and unhealthy) else (
+            "admin_session_missing" if not admin_ok
+            else ("token_expired" if token_expired else f"connection_state={state}")
+        )
         message = (
             "LIVE TICKS ARE OFF — Current P&L and close prices may be outdated. "
             "Do not close a trade from these marks until the shared feed is back "
-            f"({reason})."
+            f"({off_reason})."
         )
+    elif not in_session:
+        mode = "market_off"
+        label = "Market off"
+        short = "Market off"
+        alive = True
+        off_reason = None
+        message = None
+    else:
+        mode = "live"
+        label = "Live"
+        short = "Live"
+        alive = True
+        off_reason = None
+        message = None
+
     return {
         "in_session": in_session,
         "alive": alive,
+        "mode": mode,
+        "label": label,
+        "short": short,
         "state": state,
-        "reason": reason if unhealthy else None,
+        "reason": off_reason,
         "message": message,
-        "token_expired": bool(snap.get("token_expired")),
+        "token_expired": token_expired,
+        "admin_session": admin_ok,
     }
 
 
@@ -2486,6 +2527,7 @@ def create_app() -> Flask:
             return jsonify({"user": None}), 401
         my_sess = load_session_for_user(int(u["id"]))
         admin_sess = load_admin_session()
+        tick_feed = _tick_feed_status_payload()
         return jsonify({
             "user": u,
             "zerodha": {
@@ -2493,9 +2535,12 @@ def create_app() -> Flask:
                 "kite_user_id": (my_sess.user_id if my_sess else None),
             },
             "feed": {
-                "ready": bool(admin_sess and is_token_valid(admin_sess)),
+                "ready": tick_feed.get("mode") != "feed_off",
+                "mode": tick_feed.get("mode"),
+                "label": tick_feed.get("label"),
                 "kite_user_id": (admin_sess.user_id if admin_sess else None),
                 "is_admin_feed": bool(u.get("is_admin")),
+                "tick_feed": tick_feed,
             },
         })
 
@@ -2743,10 +2788,21 @@ def create_app() -> Flask:
 
         invalidate_account_cache()
         removed = removed_db or removed_file
+        tick_feed = _tick_feed_status_payload()
         if feed_disconnected:
+            # Push immediately — do not wait for ws_runner's ~5s poll loop.
+            try:
+                from providers.ws_monitor import default_snapshot_path, write_idle_snapshot
+                write_idle_snapshot(
+                    default_snapshot_path(),
+                    detail="admin Zerodha logout — shared tick feed parked",
+                )
+            except Exception:
+                logger.debug("idle ws_status write after admin logout failed", exc_info=True)
+            tick_feed = _tick_feed_status_payload()
             msg = (
-                "Admin Zerodha cleared; shared tick feed will disconnect within ~5s."
-                if removed else "No persisted session found."
+                "Admin Zerodha cleared; shared tick feed is offline for everyone."
+                if removed else "No persisted session found; feed marked offline."
             )
         else:
             msg = (
@@ -2757,6 +2813,7 @@ def create_app() -> Flask:
             "ok": True,
             "removed": bool(removed),
             "feed_disconnected": feed_disconnected,
+            "tick_feed": tick_feed,
             "message": msg,
         })
 
@@ -5591,6 +5648,31 @@ def create_app() -> Flask:
             if not snap:
                 return {"feed": "eod", "indices": [], "as_of": _ist_iso(now_ist())}
             return _indices_spot_live_payload(snap)
+
+        @stream_with_context
+        def _gen():
+            yield from iter_sse_on_change(_poll, poll_sec)
+
+        return Response(
+            _gen(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.route("/api/tick-feed/stream")
+    def api_tick_feed_stream():
+        """SSE: push shared tick-feed mode to every signed-in user.
+
+        Fires when admin Zerodha login/logout or ws_status.json changes so
+        traders see Feed · Offline without refreshing.
+        """
+        from flask import Response, stream_with_context
+        from dashboard.sse_helpers import iter_sse_on_change
+
+        poll_sec = float(DASHBOARD_CONFIG.get("tick_feed_stream_poll_sec", 1.0))
+
+        def _poll():
+            return _tick_feed_status_payload()
 
         @stream_with_context
         def _gen():

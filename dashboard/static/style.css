@@ -70,6 +70,65 @@ a { color: var(--accent); text-decoration: none; }
   margin-left: auto;
 }
 
+/* Shared tick feed (admin Zerodha) — always visible in the header */
+.tick-feed-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.22);
+  background: rgba(15, 23, 42, .45);
+  color: rgba(255,255,255,.88);
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  line-height: 1.2;
+  white-space: nowrap;
+  user-select: none;
+}
+.tick-feed-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #64748b;
+  flex: 0 0 auto;
+}
+.tick-feed-name {
+  text-transform: uppercase;
+  font-size: .62rem;
+  letter-spacing: .06em;
+  opacity: .8;
+}
+.tick-feed-state { font-variant-numeric: tabular-nums; }
+.tick-feed--live {
+  border-color: rgba(74, 222, 128, .55);
+  background: rgba(6, 78, 59, .45);
+  color: #ecfdf5;
+}
+.tick-feed--live .tick-feed-dot {
+  background: #4ade80;
+  box-shadow: 0 0 8px rgba(74, 222, 128, .85);
+}
+.tick-feed--live .tick-feed-state { color: #86efac; }
+.tick-feed--market-off {
+  border-color: rgba(148, 163, 184, .45);
+  background: rgba(30, 41, 59, .55);
+  color: rgba(226, 232, 240, .9);
+  opacity: .92;
+}
+.tick-feed--market-off .tick-feed-dot { background: #94a3b8; }
+.tick-feed--market-off .tick-feed-state { color: #cbd5e1; }
+.tick-feed--off {
+  border-color: rgba(100, 116, 139, .4);
+  background: rgba(15, 23, 42, .35);
+  color: rgba(148, 163, 184, .95);
+  opacity: .72;
+  filter: grayscale(.35);
+}
+.tick-feed--off .tick-feed-dot { background: #64748b; box-shadow: none; }
+.tick-feed--off .tick-feed-state { color: #94a3b8; font-weight: 600; }
+
 .user-avatar-wrap {
   position: relative;
   flex: 0 0 auto;

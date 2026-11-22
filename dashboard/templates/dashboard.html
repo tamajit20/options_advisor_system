@@ -41,6 +41,13 @@
     <div id="index-spot-strip" class="index-spot-strip" aria-live="polite" aria-label="Index spot prices"></div>
   </div>
   <div class="header-actions">
+    <div id="tick-feed-chip" class="tick-feed-chip tick-feed--off"
+         title="Shared tick feed (admin Zerodha) — Live / Market off / Offline"
+         aria-live="polite" aria-label="Shared tick feed status">
+      <span class="tick-feed-dot" aria-hidden="true"></span>
+      <span class="tick-feed-name">Feed</span>
+      <span class="tick-feed-state" id="tick-feed-state">—</span>
+    </div>
     <div id="zerodha-profile-chip" class="idx-chip idx-chip-live zerodha-funds-chip" hidden
          title="Available margin — updates every 30 minutes."
          aria-label="Zerodha available margin">
@@ -63,7 +70,6 @@
           <strong id="app-user-label">Signed in</strong>
         </div>
         <div class="user-avatar-meta muted">
-          <div>Feed (admin): <span id="feed-status-label">—</span></div>
           <div>Your Zerodha: <span id="zerodha-login-label">—</span>
             <span id="zerodha-login-icon" class="user-avatar-z-icon" aria-hidden="true"></span>
           </div>

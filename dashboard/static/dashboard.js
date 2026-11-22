@@ -114,6 +114,11 @@ let _zerodhaValid = false;
 /** Shared WS tick feed (admin session) — independent of each user's Kite login. */
 let _tickFeedAlive = true;
 let _tickFeedMessage = '';
+/** @type {'live'|'market_off'|'feed_off'|''} */
+let _tickFeedMode = '';
+let _tickFeedSource = null;
+/** Suppress SSE toast briefly after local admin logout (logout toast already fired). */
+let _tickFeedAnnounceMuteUntil = 0;
 let _zerodhaExecutionConfigEnabled = false;
 let _zerodhaExecutionRuntimeEnabled = false;
 let _zerodhaExecutionEnabled = false;
@@ -1343,6 +1348,100 @@ function _updateTickFeedPageBanners() {
       el.textContent = '';
     }
   });
+}
+
+function _tickFeedChipTip(tf) {
+  const mode = (tf && tf.mode) || _tickFeedMode || 'feed_off';
+  if (mode === 'live') {
+    return 'Shared tick feed Live — marks and suggestion LTPs are flowing from admin Zerodha.';
+  }
+  if (mode === 'market_off') {
+    return 'Shared tick feed is on (admin Zerodha logged in) but the market is closed.';
+  }
+  return (tf && tf.message) || _tickFeedMessage || (
+    'Shared tick feed Offline — admin Zerodha is logged out or the WS runner is parked. '
+    + 'Your personal Zerodha login does not restore ticks.'
+  );
+}
+
+function _updateHeaderFeedChip(tf) {
+  const chip = document.getElementById('tick-feed-chip');
+  const stateEl = document.getElementById('tick-feed-state');
+  if (!chip || !stateEl) return;
+  const mode = (tf && tf.mode) || _tickFeedMode || 'feed_off';
+  const label = (tf && (tf.label || tf.short)) || (
+    mode === 'live' ? 'Live' : mode === 'market_off' ? 'Market off' : 'Offline'
+  );
+  stateEl.textContent = label;
+  chip.classList.remove('tick-feed--live', 'tick-feed--market-off', 'tick-feed--off');
+  chip.classList.add(
+    mode === 'live' ? 'tick-feed--live'
+      : mode === 'market_off' ? 'tick-feed--market-off'
+        : 'tick-feed--off'
+  );
+  chip.title = _tickFeedChipTip(tf);
+  chip.setAttribute('aria-label', `Shared tick feed: ${label}`);
+}
+
+function _syncAvatarDotFromFeed() {
+  const dot = document.getElementById('user-avatar-dot');
+  if (!dot) return;
+  const zOk = !!(_zerodhaHasSession && _zerodhaValid);
+  const feedOk = _tickFeedMode === 'live' || _tickFeedMode === 'market_off';
+  if (zOk && feedOk) dot.dataset.state = 'ok';
+  else if (zOk || feedOk) dot.dataset.state = 'warn';
+  else dot.dataset.state = 'bad';
+}
+
+/** Apply shared tick-feed payload (status poll or SSE). Toast when feed drops. */
+function _applyTickFeedPayload(tf, { announce = false } = {}) {
+  if (!tf || typeof tf !== 'object') return;
+  const prevMode = _tickFeedMode;
+  const mode = tf.mode || (tf.alive === false ? 'feed_off' : (tf.in_session ? 'live' : 'market_off'));
+  _tickFeedMode = mode;
+  // Banners / Place warns only care about Offline during market hours.
+  _tickFeedAlive = mode !== 'feed_off';
+  _tickFeedMessage = (tf.message || '').trim();
+  if (window.__OA_ME) {
+    window.__OA_ME.feed = {
+      ...(window.__OA_ME.feed || {}),
+      ready: mode !== 'feed_off',
+      mode,
+      label: tf.label || mode,
+      tick_feed: tf,
+    };
+  }
+  _updateHeaderFeedChip(tf);
+  _updateTickFeedPageBanners();
+  _syncAvatarDotFromFeed();
+  if (typeof _refreshAllFeedTags === 'function') _refreshAllFeedTags();
+  const mayAnnounce = announce && Date.now() >= _tickFeedAnnounceMuteUntil && !!prevMode && prevMode !== mode;
+  if (mayAnnounce && mode === 'feed_off') {
+    toast(_tickFeedMessage || 'Shared tick feed is Offline — live marks may be stale.', 'err');
+  } else if (mayAnnounce && mode === 'live') {
+    toast('Shared tick feed is Live again.', 'ok');
+  } else if (mayAnnounce && mode === 'market_off' && prevMode === 'feed_off') {
+    toast('Admin Zerodha is back — feed on, market closed.', 'ok');
+  }
+}
+
+function _startTickFeedStream() {
+  if (_tickFeedSource) {
+    try { _tickFeedSource.close(); } catch (_) {}
+    _tickFeedSource = null;
+  }
+  try {
+    _tickFeedSource = new EventSource('/api/tick-feed/stream');
+    _tickFeedSource.onmessage = (ev) => {
+      try {
+        const tf = JSON.parse(ev.data || '{}');
+        _applyTickFeedPayload(tf, { announce: true });
+      } catch (_) { /* ignore bad frames */ }
+    };
+    _tickFeedSource.onerror = () => {
+      // Browser auto-reconnects EventSource; keep last known chip state.
+    };
+  } catch (_) { /* SSE unsupported — status poll still updates */ }
 }
 
 function _updateFeedTag(tradeId, opts = {}) {
@@ -3992,11 +4091,31 @@ function _applyLiveCreditBreakdown(card, legs) {
   }
 }
 
+function _suggestionLiveOffTip(reason) {
+  // Shared admin feed — never the viewer's personal Zerodha login.
+  if (_inMarketHours() && _tickFeedAlive === false) {
+    return _tickFeedMessage || _TICK_FEED_OFF_BANNER;
+  }
+  if (reason === 'no_valid_session') {
+    return 'Shared tick feed has no admin Zerodha session — Live prices resume after admin Zerodha login (not your personal login).';
+  }
+  if (!_inMarketHours()) {
+    return 'Market closed — Live LTP resumes next session from the shared tick feed.';
+  }
+  return 'Waiting for shared tick feed quotes (admin Zerodha WS). Your personal Zerodha login is only for Place/Close.';
+}
+
 function _applySuggestionLivePrices(card, payload) {
   const legs = (payload && payload.legs) || [];
-  const unavailable = !payload || payload.available === false;
+  const hasLtp = legs.some(l => l && l.ltp != null);
+  const unavailable = !payload || payload.available === false || !hasLtp;
+  const tip = unavailable
+    ? _suggestionLiveOffTip(payload && payload.reason)
+    : `Live LTP from shared tick feed${payload?.source ? ` (${payload.source})` : ''}`
+      + (payload?.as_of ? ` — ${payload.as_of} IST` : '');
   card.querySelectorAll('.leg-live-row').forEach(row => {
     row.classList.toggle('leg-live-off', unavailable);
+    row.title = tip;
   });
   // Kept on the card so typing a price can refresh the equation immediately
   // instead of waiting out the poll interval.
@@ -4061,9 +4180,23 @@ async function _refreshSuggestionLivePrices({ allowRest = false } = {}) {
     }
   }
 
-  if (!allowRest || !needRest.length) return;
+  if (!needRest.length) return;
+
+  // No REST this pass (throttle / off-hours idle): still clear the green default
+  // so everyone sees the same off state — not "admin green / trader grey".
+  const markNeedRestOff = (reason) => {
+    for (const { card } of needRest) {
+      _applySuggestionLivePrices(card, { available: false, reason });
+    }
+  };
+
+  if (!allowRest) {
+    markNeedRestOff('waiting');
+    return;
+  }
   // Throttle REST so a missing WS quote never becomes a 2s Kite loop.
   if (_sugLastRestAt > 0 && (Date.now() - _sugLastRestAt) < _SUG_REST_FALLBACK_MS) {
+    markNeedRestOff('waiting');
     return;
   }
   _sugLastRestAt = Date.now();
@@ -8837,8 +8970,10 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
           lot ${l.lot_size} @ ₹<span class="leg-price-shown" data-leg-order="${l.leg_order}">${fmt(l.suggested_price)}</span> =
           <strong><span class="leg-total" data-leg-order="${l.leg_order}">₹${fmt(legTotal)}</span></strong></span>
           <span class="leg-price-range muted">(range ₹${fmt(l.suggested_price_low)}–₹${fmt(l.suggested_price_high)})</span>`;
+    // Start grey (leg-live-off) until shared-feed LTP arrives — never imply
+    // Live from the viewer's personal Zerodha login.
     const liveHtml = readOnly ? '' : `
-      <div class="leg-live-row">
+      <div class="leg-live-row leg-live-off" title="Waiting for shared tick feed quotes (admin Zerodha WS).">
         <span class="leg-live-label">Live</span>
         <span class="leg-live-ltp" data-leg-order="${l.leg_order}">—</span>
         <span class="leg-live-band" data-leg-order="${l.leg_order}"></span>
@@ -13552,6 +13687,10 @@ function _wireUserAvatarMenu() {
           body: JSON.stringify({}),
         });
         const d = await r.json().catch(() => ({}));
+        if (d && d.tick_feed) {
+          _tickFeedAnnounceMuteUntil = Date.now() + 2500;
+          _applyTickFeedPayload(d.tick_feed, { announce: false });
+        }
         if (typeof toast === 'function') {
           toast((d && d.message) || 'Zerodha session cleared', r.ok ? 'ok' : 'err');
         }
@@ -13612,9 +13751,15 @@ async function loadAppMe() {
       if (label) label.textContent = u.display_name || u.login || 'User';
       if (initials) initials.textContent = _userAvatarInitials(u);
     }
-    const feedLabel = document.getElementById('feed-status-label');
-    if (feedLabel && data.feed) {
-      feedLabel.textContent = data.feed.ready ? 'OK' : 'Offline';
+    if (data.feed && data.feed.tick_feed) {
+      _applyTickFeedPayload(data.feed.tick_feed, { announce: false });
+    } else if (data.feed) {
+      _applyTickFeedPayload({
+        mode: data.feed.mode || (data.feed.ready ? 'market_off' : 'feed_off'),
+        label: data.feed.label,
+        alive: !!data.feed.ready,
+        in_session: _inMarketHours(),
+      }, { announce: false });
     }
     const zLabel = document.getElementById('zerodha-login-label');
     const zOk = !!(data.zerodha && data.zerodha.ready);
@@ -13624,13 +13769,9 @@ async function loadAppMe() {
         : 'Not logged in';
     }
     _syncZerodhaMenuAction(zOk);
-    const dot = document.getElementById('user-avatar-dot');
-    if (dot) {
-      const feedOk = !!(data.feed && data.feed.ready);
-      if (zOk && feedOk) dot.dataset.state = 'ok';
-      else if (zOk || feedOk) dot.dataset.state = 'warn';
-      else dot.dataset.state = 'bad';
-    }
+    _zerodhaHasSession = zOk;
+    _zerodhaValid = zOk;
+    _syncAvatarDotFromFeed();
     const isAdmin = !!(u && u.is_admin);
     document.querySelectorAll('.admin-only').forEach(el => {
       el.hidden = !isAdmin;
@@ -13909,11 +14050,12 @@ async function loadZerodhaStatus(refreshAccount = false) {
     const d = await r.json();
     _zerodhaHasSession = !!d.has_session;
     _zerodhaValid = !!d.valid;
-    {
-      const tf = d.tick_feed || {};
-      // Default alive when payload omitted (older servers) so we do not false-alarm.
-      _tickFeedAlive = tf.alive !== false;
-      _tickFeedMessage = (tf.message || '').trim();
+    if (d.tick_feed) {
+      _applyTickFeedPayload(d.tick_feed, { announce: false });
+    } else {
+      // Older servers without tick_feed — do not false-alarm.
+      _tickFeedAlive = true;
+      _tickFeedMessage = '';
     }
     _zerodhaExecutionConfigEnabled = !!d.execution_config_enabled;
     _zerodhaExecutionRuntimeEnabled = !!d.execution_runtime_enabled;
@@ -13957,7 +14099,6 @@ async function loadZerodhaStatus(refreshAccount = false) {
       if (trdHost) _hydrateSuggestionZerodhaMargins(trdHost);
     }
     // Update avatar-menu Zerodha row (and status dot)
-    const avatarDot = document.getElementById('user-avatar-dot');
     const sessionOk = !!(d.valid);
     _syncZerodhaMenuAction(sessionOk);
     if (headerLabel) {
@@ -13985,12 +14126,7 @@ async function loadZerodhaStatus(refreshAccount = false) {
         }
       }
     }
-    if (avatarDot) {
-      const feedOk = !!(window.__OA_ME && window.__OA_ME.feed && window.__OA_ME.feed.ready);
-      if (sessionOk && feedOk) avatarDot.dataset.state = 'ok';
-      else if (sessionOk || feedOk) avatarDot.dataset.state = 'warn';
-      else avatarDot.dataset.state = 'bad';
-    }
+    _syncAvatarDotFromFeed();
     // Update Config-tab card if present
     if (el) {
       if (!d.has_session) {
@@ -14283,10 +14419,12 @@ _nfRefreshStats();
 
 refreshIndexSpotStrip();
 ensureIndexSpotStream();
+_startTickFeedStream();
 
 loadZerodhaStatus();
 // Soft refresh every 10 min (session pill / readiness). Kite profile+margins
 // stay cached 30 min unless open/close/login/manual Refresh forces a fetch.
+// Tick-feed Offline pushes arrive sooner via /api/tick-feed/stream SSE.
 setInterval(loadZerodhaStatus, 10 * 60 * 1000);
 
 document.getElementById('zerodha-margin-refresh')?.addEventListener('click', (e) => {
@@ -14429,6 +14567,10 @@ document.addEventListener('click', async (ev) => {
     });
     const d = await r.json();
     if (d.ok) {
+      if (d.tick_feed) {
+        _tickFeedAnnounceMuteUntil = Date.now() + 2500;
+        _applyTickFeedPayload(d.tick_feed, { announce: false });
+      }
       toast(d.message || 'Tick feed disconnect requested.');
       loadZerodhaStatus();
       if (typeof loadAppMe === 'function') loadAppMe();
