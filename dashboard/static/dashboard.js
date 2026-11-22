@@ -2738,11 +2738,24 @@ window.TABS = TABS;
 // Advisor chrome (header subtabs / mobile Advisor mode) — daily workflow tabs.
 const OPTIONS_TABS = ['suggestion', 'trades', 'history', 'config', 'learn'];
 const SYSTEM_TABS = ['users', 'jobs', 'logs', 'wsmon'];
+const ADMIN_TABS = new Set(SYSTEM_TABS);
 const TAB_LOADERS = {};
 const TAB_LEAVE = {};
 
 function isOptionsTab(name) {
   return OPTIONS_TABS.includes(name);
+}
+
+function _isAdminUser() {
+  const u = window.__OA_ME && window.__OA_ME.user;
+  return !!(u && u.is_admin);
+}
+
+function _canOpenTab(name) {
+  if (!ADMIN_TABS.has(name)) return true;
+  // Until /api/me returns, do not open admin tabs (avoids flash for traders).
+  if (!window.__OA_ME) return false;
+  return _isAdminUser();
 }
 
 /** Extension point for separate dashboard tab modules. */
@@ -2754,6 +2767,9 @@ function registerDashboardTab(name, onEnter, onLeave) {
 window.registerDashboardTab = registerDashboardTab;
 
 function switchTab(name) {
+  if (!_canOpenTab(name)) {
+    name = 'suggestion';
+  }
   const prev = TABS.find(t => {
     const panel = document.getElementById(`panel-${t}`);
     return panel && panel.classList.contains('active');
@@ -2837,6 +2853,7 @@ function _restoreActiveTab() {
     } catch (_) {}
   }
   if (logsSubtab) _logsPendingSubtab = logsSubtab;
+  if (initial && !_canOpenTab(initial)) initial = 'suggestion';
   if (initial) switchTab(initial);
 }
 if (document.readyState === 'loading') {
@@ -13415,13 +13432,24 @@ async function loadAppMe() {
       else if (zOk || feedOk) dot.dataset.state = 'warn';
       else dot.dataset.state = 'bad';
     }
+    const isAdmin = !!(u && u.is_admin);
     document.querySelectorAll('.admin-only').forEach(el => {
-      el.hidden = !(u && u.is_admin);
+      el.hidden = !isAdmin;
     });
-    // Hide admin tabs in mobile more-drawer too
-    document.querySelectorAll('.more-drawer-item[data-tab="users"], .more-drawer-item[data-tab="jobs"], .more-drawer-item[data-tab="logs"], .more-drawer-item[data-tab="wsmon"]').forEach(el => {
-      el.hidden = !(u && u.is_admin);
+    // Bounce non-admins off admin tabs; restore admin hash after /api/me.
+    const activeAdmin = SYSTEM_TABS.find(t => {
+      const panel = document.getElementById(`panel-${t}`);
+      return panel && panel.classList.contains('active');
     });
+    if (!isAdmin && activeAdmin) {
+      switchTab('suggestion');
+    } else if (isAdmin) {
+      try {
+        const hash = (window.location.hash || '').replace(/^#/, '');
+        const want = (hash === 'zerodha-logs') ? 'logs' : hash;
+        if (want && ADMIN_TABS.has(want)) switchTab(want === 'logs' && hash === 'zerodha-logs' ? 'logs' : want);
+      } catch (_) {}
+    }
   } catch (e) {
     console.warn('loadAppMe failed', e);
   }

@@ -2582,17 +2582,21 @@ def create_app() -> Flask:
         kite_err = (request.args.get("error") or request.args.get("error_message") or "").strip()
         if kite_err or (status and status != "success"):
             msg = kite_err or f"Kite login status={status or 'unknown'}"
-            return redirect(f"/?tab=wsmon&zerodha_error={quote(msg[:200])}")
+            return redirect(f"/?zerodha_error={quote(msg[:200])}#config")
         if not rt:
-            return redirect("/?tab=wsmon&zerodha_error=missing_request_token")
+            return redirect("/?zerodha_error=missing_request_token#config")
         try:
-            from dashboard.auth import current_user_id
+            from dashboard.auth import current_user, current_user_id
             from providers.zerodha.session import exchange_request_token
             exchange_request_token(rt, app_user_id=current_user_id())
         except Exception as exc:  # noqa: BLE001
             logger.exception("zerodha callback exchange failed")
-            return redirect(f"/?tab=wsmon&zerodha_error={quote(str(exc)[:200])}")
-        return redirect("/?tab=wsmon&zerodha=ok")
+            return redirect(f"/?zerodha_error={quote(str(exc)[:200])}#config")
+        # Admin may land on WS Monitor; traders stay on Config.
+        u = current_user()
+        if u and u.get("is_admin"):
+            return redirect("/?zerodha=ok#wsmon")
+        return redirect("/?zerodha=ok#config")
 
     @app.route("/api/zerodha/exchange", methods=["POST"])
     def api_zerodha_exchange():
@@ -5233,7 +5237,12 @@ def create_app() -> Flask:
 
     @app.route("/api/jobs/stream")
     def api_jobs_stream():
-        """SSE: push job monitor grid when DB/scheduler state changes."""
+        """SSE: push job monitor grid when DB/scheduler state changes.
+
+        Authenticated users may subscribe (Suggestion tab uses this to
+        refresh when live_suggestion_engine finishes). The Jobs UI itself
+        remains admin-only.
+        """
         from flask import Response, stream_with_context
         from dashboard.sse_helpers import iter_sse_on_change
 
@@ -5505,7 +5514,7 @@ def create_app() -> Flask:
 
     @app.route("/api/ws/monitor")
     def api_ws_monitor():
-        """Read-only telemetry from the WS runner.
+        """Read-only telemetry from the WS runner (admin only).
 
         Reads `data/ws_status.json` written by `providers/ws_monitor.py`
         inside the ws_runner container. Performs ZERO Zerodha calls.
@@ -5515,6 +5524,10 @@ def create_app() -> Flask:
             ?symbol=NIFTY                                filter recent_events
             ?limit=50                                    cap recent_events
         """
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
         snap = _load_ws_monitor_snap_or_unavailable()
         if snap.get("available") is False:
             return jsonify(snap)
@@ -5531,9 +5544,14 @@ def create_app() -> Flask:
 
     @app.route("/api/ws/monitor/stream")
     def api_ws_monitor_stream():
-        """SSE: push WS telemetry when ws_status.json changes."""
+        """SSE: push WS telemetry when ws_status.json changes (admin only)."""
         from flask import Response, stream_with_context
+        from dashboard.auth import require_admin
         from dashboard.sse_helpers import iter_sse_on_change
+
+        gate = require_admin()
+        if gate is not None:
+            return gate
 
         topic_f = (request.args.get("topic") or "").strip().lower()
         symbol_f = (request.args.get("symbol") or "").strip().upper()

@@ -138,7 +138,7 @@
     <article class="panel active" id="panel-suggestion" aria-hidden="false">
       <div class="suggestion-header">
         <h2 class="panel-title">Today's Suggestion</h2>
-        <button class="btn" id="suggestion-run-live" type="button"
+        <button class="btn admin-only" id="suggestion-run-live" type="button" hidden
                 title="Run Live Suggestion Engine now (same as Jobs tab)">Run live engine</button>
       </div>
       <div id="suggestion-container" class="loading">Loading…</div>
@@ -498,13 +498,13 @@
   <div class="more-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="more-drawer-title">
     <div class="more-drawer-handle"></div>
     <h3 class="more-drawer-title" id="more-drawer-title">Menu</h3>
-    <div class="more-drawer-section">
+    <div class="more-drawer-section admin-only" id="more-drawer-admin-section" hidden>
       <p class="more-drawer-section-label">Admin / system</p>
       <div class="more-drawer-grid">
         <button type="button" class="more-drawer-item admin-only" data-tab="users" hidden><span class="more-drawer-icon">👤</span>Users</button>
-        <button type="button" class="more-drawer-item" data-tab="jobs"><span class="more-drawer-icon">🔧</span>Jobs</button>
-        <button type="button" class="more-drawer-item" data-tab="logs"><span class="more-drawer-icon">🪵</span>Logs</button>
-        <button type="button" class="more-drawer-item" data-tab="wsmon"><span class="more-drawer-icon">📡</span>WS Monitor</button>
+        <button type="button" class="more-drawer-item admin-only" data-tab="jobs" hidden><span class="more-drawer-icon">🔧</span>Jobs</button>
+        <button type="button" class="more-drawer-item admin-only" data-tab="logs" hidden><span class="more-drawer-icon">🪵</span>Logs</button>
+        <button type="button" class="more-drawer-item admin-only" data-tab="wsmon" hidden><span class="more-drawer-icon">📡</span>WS Monitor</button>
       </div>
     </div>
     <p class="more-drawer-note">Suggestion, Trades, History, Config, and Learning live under <strong>Advisor</strong> (top tabs). Alerts is on the bottom bar.</p>
