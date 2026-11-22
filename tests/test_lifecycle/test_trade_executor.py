@@ -58,7 +58,7 @@ class TestMarkExecuted:
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
                      return_value=None)
         with pytest.raises(ValueError, match="Unknown"):
-            te.mark_executed(mock_db, "SUG-X", [])
+            te.mark_executed(mock_db, "SUG-X", [], owner_user_id=1)
 
     def test_raises_when_no_legs(self, mock_db, mocker, fake_suggestion):
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
@@ -66,31 +66,40 @@ class TestMarkExecuted:
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
                      return_value=[])
         with pytest.raises(ValueError, match="no legs"):
-            te.mark_executed(mock_db, "SUG-X", [])
+            te.mark_executed(mock_db, "SUG-X", [], owner_user_id=1)
 
     def test_void_when_no_fills(self, mock_db, mocker, fake_suggestion, fake_legs):
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
                      return_value=fake_suggestion)
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
                      return_value=fake_legs)
-        update_status = mocker.patch(
-            "lifecycle.trade_executor.SuggestionRepo.update_status")
-        result = te.mark_executed(mock_db, "SUG-X", [])
+        ust = MagicMock()
+        ust.status_for_user.return_value = "PENDING"
+        mocker.patch(
+            "database.suggestion_user_state_repo.SuggestionUserStateRepo",
+            return_value=ust,
+        )
+        result = te.mark_executed(mock_db, "SUG-X", [], owner_user_id=1)
         assert result is None
-        update_status.assert_called_with("SUG-X", "IGNORED")
+        ust.upsert.assert_called_with("SUG-X", 1, "IGNORED")
         mock_db.commit.assert_called()
 
     def test_raises_when_already_executed(self, mock_db, mocker, fake_suggestion, fake_legs):
-        fake_suggestion = dict(fake_suggestion, status="EXECUTED")
+        fake_suggestion = dict(fake_suggestion, status="PENDING")
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
                      return_value=fake_suggestion)
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
                      return_value=fake_legs)
+        mocker.patch(
+            "database.suggestion_user_state_repo.SuggestionUserStateRepo.get",
+            return_value={"status": "EXECUTED", "trade_id": "TRD-MINE"},
+        )
+        mock_db.fetch_one.return_value = None
         fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
                               fill_time=datetime(2026, 5, 4, 9, 30))
                  for i in (1, 2, 3, 4)]
         with pytest.raises(ValueError, match="already executed"):
-            te.mark_executed(mock_db, "SUG-X", fills)
+            te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)
 
     def test_raises_when_trade_already_exists(self, mock_db, mocker, fake_suggestion, fake_legs):
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
@@ -98,14 +107,17 @@ class TestMarkExecuted:
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
                      return_value=fake_legs)
         mocker.patch(
-            "lifecycle.trade_executor.TradeRepo.latest_for_suggestion",
-            return_value={"trade_id": "TRD-OLD", "status": "ACTIVE"},
+            "database.suggestion_user_state_repo.SuggestionUserStateRepo.get",
+            return_value=None,
         )
+        mock_db.fetch_one.return_value = {
+            "trade_id": "TRD-OLD", "status": "ACTIVE",
+        }
         fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
                               fill_time=datetime(2026, 5, 4, 9, 30))
                  for i in (1, 2, 3, 4)]
-        with pytest.raises(ValueError, match="already live as trade TRD-OLD"):
-            te.mark_executed(mock_db, "SUG-X", fills)
+        with pytest.raises(ValueError, match="already live as your trade TRD-OLD"):
+            te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)
 
     def test_full_valid_when_all_filled(self, mock_db, mocker, fake_suggestion, fake_legs):
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.get",
@@ -120,7 +132,7 @@ class TestMarkExecuted:
         fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
                               fill_time=datetime(2026, 5, 4, 9, 30))
                  for i in (1, 2, 3, 4)]
-        tid = te.mark_executed(mock_db, "SUG-X", fills, spot_at_execution=23000.0)
+        tid = te.mark_executed(mock_db, "SUG-X", fills, spot_at_execution=23000.0, owner_user_id=1)
         assert tid == "TRD-001"
         # The position_type should be FULL_VALID since all legs filled
         call_arg = ins.call_args[0][0]
@@ -146,7 +158,7 @@ class TestMarkExecuted:
             TradeLegFill(leg_order=3, executed=True, fill_price=55.0,
                          fill_time=datetime(2026, 5, 4, 9, 30)),
         ]
-        tid = te.mark_executed(mock_db, "SUG-X", fills)
+        tid = te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)
         assert tid == "TRD-002"
         call_arg = ins.call_args[0][0]
         assert call_arg["position_type"] != "FULL_VALID"
@@ -363,11 +375,15 @@ class TestCircuitBreakerBlocks:
             "lifecycle.trade_executor.RuntimeFlagsRepo.get_bool",
             return_value=True,
         )
-        update_status = mocker.patch(
-            "lifecycle.trade_executor.SuggestionRepo.update_status")
-        result = te.mark_executed(mock_db, "SUG-X", [])
+        ust = MagicMock()
+        ust.status_for_user.return_value = "PENDING"
+        mocker.patch(
+            "database.suggestion_user_state_repo.SuggestionUserStateRepo",
+            return_value=ust,
+        )
+        result = te.mark_executed(mock_db, "SUG-X", [], owner_user_id=1)
         assert result is None
-        update_status.assert_called_with("SUG-X", "IGNORED")
+        ust.upsert.assert_called_with("SUG-X", 1, "IGNORED")
 
     def test_blocked_when_circuit_breaker_active(
         self, mock_db, mocker, fake_suggestion, fake_legs
@@ -385,11 +401,11 @@ class TestCircuitBreakerBlocks:
                               fill_time=datetime(2026, 5, 4, 9, 30))
                  for i in (1, 2, 3, 4)]
         with pytest.raises(ValueError, match="Execution blocked"):
-            te.mark_executed(mock_db, "SUG-X", fills)
+            te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)
         with pytest.raises(ValueError, match="Execution blocked"):
             te.mark_executed(
                 mock_db, "SUG-X", [], execute_at_suggested=True,
-            )
+                owner_user_id=1)
 
     def test_fail_closed_when_flag_unreadable(
         self, mock_db, mocker, fake_suggestion, fake_legs
@@ -406,7 +422,7 @@ class TestCircuitBreakerBlocks:
                               fill_time=datetime(2026, 5, 4, 9, 30))
                  for i in (1, 2, 3, 4)]
         with pytest.raises(ValueError, match="circuit-breaker flag could not be read"):
-            te.mark_executed(mock_db, "SUG-X", fills)
+            te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)
 
     def test_execute_at_suggested_skips_stale_gate(
         self, mock_db, mocker, fake_legs,
@@ -448,7 +464,7 @@ class TestCircuitBreakerBlocks:
         )
         tid = te.mark_executed(
             mock_db, "SUG-X", [], execute_at_suggested=True,
-        )
+                owner_user_id=1)
         assert tid == "TRD-STALE"
         call_arg = ins.call_args[0][0]
         assert call_arg["position_type"] == "FULL_VALID"
@@ -505,7 +521,7 @@ class TestCircuitBreakerBlocks:
         )
         tid = te.mark_executed(
             mock_db, "SUG-X", [], execute_at_suggested=True,
-        )
+                owner_user_id=1)
         assert tid == "TRD-VETO"
         assert ins.call_args[0][0]["position_type"] == "FULL_VALID"
 
@@ -549,7 +565,7 @@ class TestCircuitBreakerBlocks:
                               fill_time=datetime(2026, 8, 18, 9, 40))
                  for i in (1, 2)]
         with pytest.raises(ValueError, match="IV rank"):
-            te.mark_executed(mock_db, "SUG-X", fills)
+            te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)
 
     def test_skip_gate_records_manual_fill_prices(
         self, mock_db, mocker, fake_legs,
@@ -590,7 +606,7 @@ class TestCircuitBreakerBlocks:
         ]
         tid = te.mark_executed(
             mock_db, "SUG-X", fills, skip_execution_gate=True,
-        )
+                owner_user_id=1)
         assert tid == "TRD-MANUAL"
         call_arg = ins.call_args[0][0]
         assert call_arg["net_credit_actual"] != 0
@@ -618,7 +634,7 @@ class TestActualNetCreditComputation:
                               fill_price=fill_prices[i],
                               fill_time=datetime(2026, 5, 4, 9, 30))
                  for i in (1, 2, 3, 4)]
-        te.mark_executed(mock_db, "SUG-X", fills)
+        te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)
         call_arg = ins.call_args[0][0]
         # SELL = +1, BUY = -1
         # net = (60 + 55 - 30 - 25) × 75 = 60 × 75 = 4500
@@ -642,7 +658,7 @@ class TestActualNetCreditComputation:
                               fill_time=datetime(2026, 5, 4, 9, 30))
                  for i in (1, 2, 3, 4)]
         with pytest.raises(ValueError, match="already in flight"):
-            te.mark_executed(mock_db, "SUG-X", fills)
+            te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)
 
     def test_blocks_manual_fill_when_orphan_entry_fills_exist(
         self, mock_db, mocker, fake_suggestion, fake_legs
@@ -663,7 +679,7 @@ class TestActualNetCreditComputation:
                               fill_time=datetime(2026, 5, 4, 9, 30))
                  for i in (1, 2, 3, 4)]
         with pytest.raises(ValueError, match="without a recorded trade"):
-            te.mark_executed(mock_db, "SUG-X", fills)
+            te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)
 
     def test_zerodha_path_books_the_fills_it_just_placed(
         self, mock_db, mocker, fake_suggestion, fake_legs
@@ -692,7 +708,7 @@ class TestActualNetCreditComputation:
         tid = te.mark_executed(
             mock_db, "SUG-X", fills, skip_execution_gate=True,
             execution_provider="zerodha",
-        )
+                owner_user_id=1)
         assert tid == "TRD-Z"
         assert ins.called
 
@@ -720,7 +736,7 @@ class TestActualNetCreditComputation:
         fills = [TradeLegFill(leg_order=i, executed=True, fill_price=50.0,
                               fill_time=datetime(2026, 5, 4, 9, 30))
                  for i in (1, 2, 3, 4)]
-        tid = te.mark_executed(mock_db, "SUG-X", fills)
+        tid = te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)
         assert tid == "TRD-KITE"
         assert ins.called
 
@@ -731,12 +747,16 @@ class TestActualNetCreditComputation:
                      return_value=fake_suggestion)
         mocker.patch("lifecycle.trade_executor.SuggestionRepo.legs",
                      return_value=fake_legs)
-        update_status = mocker.patch(
-            "lifecycle.trade_executor.SuggestionRepo.update_status")
+        ust = MagicMock()
+        ust.status_for_user.return_value = "PENDING"
+        mocker.patch(
+            "database.suggestion_user_state_repo.SuggestionUserStateRepo",
+            return_value=ust,
+        )
         mock_db.fetch_all.return_value = [{"status": "OPEN"}]
-        result = te.mark_executed(mock_db, "SUG-X", [])
+        result = te.mark_executed(mock_db, "SUG-X", [], owner_user_id=1)
         assert result is None
-        update_status.assert_called_with("SUG-X", "IGNORED")
+        ust.upsert.assert_called_with("SUG-X", 1, "IGNORED")
 
 
 class TestActualMaxEconomics:
@@ -797,7 +817,7 @@ class TestLotsOverride:
             TradeLegFill(leg_order=4, executed=True, fill_price=25.0,
                          fill_time=datetime(2026, 5, 4, 9, 30), lots_override=1),
         ]
-        te.mark_executed(mock_db, "SUG-X", fills)
+        te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)
         call_arg = ins.call_args[0][0]
         # SELL: (60*2 + 55*2)*75 = 175×75 = 13125
         # BUY:  -(30*1 + 25*1)*75 = -55×75 = -4125
@@ -828,7 +848,7 @@ class TestExecutionFlagsAndLotSize:
         )
         tid = te.mark_executed(
             mock_db, "SUG-X", [], execute_at_suggested=True,
-        )
+                owner_user_id=1)
         assert tid == "TRD-GATE-OK"
         assert prov.call_args.kwargs.get("gate_passed") is True
 
@@ -858,7 +878,7 @@ class TestExecutionFlagsAndLotSize:
         ]
         tid = te.mark_executed(
             mock_db, "SUG-X", fills, skip_execution_gate=True,
-        )
+                owner_user_id=1)
         assert tid == "TRD-SKIP-OK"
         assert prov.call_args.kwargs.get("gate_passed") is True
 
@@ -880,4 +900,4 @@ class TestExecutionFlagsAndLotSize:
             for i in (1, 2, 3, 4)
         ]
         with pytest.raises(ValueError, match="lot_size"):
-            te.mark_executed(mock_db, "SUG-X", fills)
+            te.mark_executed(mock_db, "SUG-X", fills, owner_user_id=1)

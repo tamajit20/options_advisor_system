@@ -74,8 +74,10 @@ def record_reversal_after_flatten(
     trade_id: Optional[str],
     execution_job_id: Optional[int],
     reason: str,
-    owner_user_id: Optional[int] = None,
+    owner_user_id: int,
 ) -> Optional[dict]:
+    from database.owner_scope import require_owner_user_id
+    uid = require_owner_user_id(owner_user_id, what="record_reversal_after_flatten")
     broker = BrokerOrderRepo(db)
     orders: List[dict] = []
     if execution_job_id is not None:
@@ -84,7 +86,7 @@ def record_reversal_after_flatten(
         orders = []
     if not orders and suggestion_id:
         orders = broker.by_suggestion(
-            suggestion_id, owner_user_id=owner_user_id,
+            suggestion_id, owner_user_id=uid,
         )
     if not isinstance(orders, (list, tuple)):
         orders = []
@@ -101,7 +103,7 @@ def record_reversal_after_flatten(
             trade_id=trade_id,
             execution_job_id=execution_job_id,
             reason=reason,
-            owner_user_id=owner_user_id,
+            owner_user_id=uid,
         )
     except Exception:
         logger.exception("failed to record execution reversal P&L")

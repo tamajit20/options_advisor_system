@@ -21,7 +21,7 @@ def test_delete_older_than():
 def test_pending_for_suggestion_only_open_statuses():
     db = MagicMock()
     db.fetch_all.return_value = [{"status": "OPEN"}]
-    rows = BrokerOrderRepo(db).pending_for_suggestion("SUG-1")
+    rows = BrokerOrderRepo(db).pending_for_suggestion("SUG-1", owner_user_id=1)
     assert rows[0]["status"] == "OPEN"
     sql, params = db.fetch_all.call_args[0]
     assert "suggestion_id = ?" in sql
@@ -29,7 +29,8 @@ def test_pending_for_suggestion_only_open_statuses():
     assert "OPEN" in sql
     assert "TRIGGER PENDING" in sql
     assert "COMPLETE" not in sql
-    assert params == ["SUG-1"]
+    assert params[0] == "SUG-1"
+    assert 1 in params
 
 
 def test_orphan_entry_fills_uses_net_unbooked_logic():
@@ -41,7 +42,7 @@ def test_orphan_entry_fills_uses_net_unbooked_logic():
             "quantity": 65, "tradingsymbol": "PE", "execution_job_id": 2,
         },
     ]
-    rows = BrokerOrderRepo(db).orphan_entry_fills("SUG-1")
+    rows = BrokerOrderRepo(db).orphan_entry_fills("SUG-1", owner_user_id=1)
     assert rows == []
 
 

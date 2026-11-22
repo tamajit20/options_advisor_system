@@ -270,4 +270,6 @@ def test_rollback_complete_for_leg_is_owner_scoped():
     )
     sql, params = db.fetch_one.call_args[0]
     assert "execution_job_id = ?" in sql
-    assert params[-1] == 42
+    assert "owner_user_id" in sql
+    assert 42 in params
+    assert params[-1] == 7

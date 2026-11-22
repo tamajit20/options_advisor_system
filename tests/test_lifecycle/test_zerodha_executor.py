@@ -241,9 +241,13 @@ def test_validate_execution_receives_circuit_breaker_flag(
         "lifecycle.zerodha_executor._live_ltp_map",
         return_value=({1: 100.0}, {1: mock_instrument}),
     )
-    from lifecycle.zerodha_executor import _entry_context
+    from lifecycle.zerodha_executor import _ACTING_APP_USER_ID, _entry_context
 
-    _entry_context(db_conn, "SUG-1", None)
+    token = _ACTING_APP_USER_ID.set(1)
+    try:
+        _entry_context(db_conn, "SUG-1", None)
+    finally:
+        _ACTING_APP_USER_ID.reset(token)
     assert validate.call_args.kwargs["circuit_breaker_active"] is True
 
 
@@ -277,9 +281,13 @@ def test_entry_context_soft_allows_non_circuit_gate_failure(
         return_value=({1: 100.0}, {1: mock_instrument}),
     )
     mocker.patch("lifecycle.zerodha_executor._run_pre_trade_checks")
-    from lifecycle.zerodha_executor import _entry_context
+    from lifecycle.zerodha_executor import _ACTING_APP_USER_ID, _entry_context
 
-    suggestion, legs, *_rest = _entry_context(db_conn, "SUG-1", None)
+    token = _ACTING_APP_USER_ID.set(1)
+    try:
+        suggestion, legs, *_rest = _entry_context(db_conn, "SUG-1", None)
+    finally:
+        _ACTING_APP_USER_ID.reset(token)
     assert suggestion["suggestion_id"] == "SUG-1"
     assert legs
 
@@ -303,10 +311,16 @@ def test_entry_context_still_blocks_circuit_breaker_gate(
             vetoes=["daily P&L circuit breaker is active"],
         ),
     )
-    from lifecycle.zerodha_executor import ZerodhaExecutionError, _entry_context
+    from lifecycle.zerodha_executor import (
+        ZerodhaExecutionError, _ACTING_APP_USER_ID, _entry_context,
+    )
 
-    with pytest.raises(ZerodhaExecutionError, match="circuit breaker"):
-        _entry_context(db_conn, "SUG-1", None)
+    token = _ACTING_APP_USER_ID.set(1)
+    try:
+        with pytest.raises(ZerodhaExecutionError, match="circuit breaker"):
+            _entry_context(db_conn, "SUG-1", None)
+    finally:
+        _ACTING_APP_USER_ID.reset(token)
 
 
 def test_execution_disabled_without_config(db_conn, mocker):
@@ -1099,7 +1113,9 @@ def test_assert_ignores_the_job_the_async_worker_just_inserted(db_conn, mocker):
     broker = MagicMock()
     broker.pending_for_suggestion.return_value = []
     mocker.patch("lifecycle.zerodha_executor.BrokerOrderRepo", return_value=broker)
-    _assert_execution_not_in_flight(db_conn, suggestion_id="SUG-1", except_job_id=7)
+    _assert_execution_not_in_flight(
+        db_conn, suggestion_id="SUG-1", except_job_id=7, owner_user_id=1,
+    )
 
 
 def test_assert_still_blocks_a_different_running_job(db_conn, mocker):
@@ -1115,7 +1131,9 @@ def test_assert_still_blocks_a_different_running_job(db_conn, mocker):
     broker.pending_for_suggestion.return_value = []
     mocker.patch("lifecycle.zerodha_executor.BrokerOrderRepo", return_value=broker)
     with pytest.raises(ZerodhaExecutionError, match="already running"):
-        _assert_execution_not_in_flight(db_conn, suggestion_id="SUG-1", except_job_id=7)
+        _assert_execution_not_in_flight(
+            db_conn, suggestion_id="SUG-1", except_job_id=7, owner_user_id=1,
+        )
 
 
 def test_fill_status_note_clears_on_first_attempt_success():

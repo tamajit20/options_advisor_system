@@ -48,73 +48,52 @@ def duplicate_execution_reason(
     db: SQLServerConnection,
     suggestion_id: str,
     *,
+    owner_user_id: int,
     suggestion_status: Optional[str] = None,
-    owner_user_id: Optional[int] = None,
 ) -> Optional[str]:
     """Why a second entry must not be placed. ``None`` if entry is allowed.
 
-    With *owner_user_id*, only that user's prior trade / user-state blocks
-    (other users may still execute the shared suggestion in parallel).
+    *owner_user_id* is mandatory — only that user's prior trade / user-state
+    blocks (other users may still execute the shared suggestion in parallel).
     """
-    if owner_user_id is not None:
-        from database.suggestion_user_state_repo import SuggestionUserStateRepo
-        ust = SuggestionUserStateRepo(db).get(suggestion_id, owner_user_id)
-        if isinstance(ust, dict):
-            st_u = str(ust.get("status") or "").upper()
-            if st_u == "EXECUTED":
-                tid = ust.get("trade_id") or "your book"
-                return (
-                    f"You already executed this suggestion as {tid}. "
-                    "Place orders is blocked to avoid a duplicate position — "
-                    "manage it on My Trades."
-                )
-            if st_u == "IGNORED":
-                return "You already ignored this suggestion."
-        mine = db.fetch_one(
-            "SELECT TOP 1 trade_id, status FROM options_trades "
-            "WHERE suggestion_id = ? AND owner_user_id = ? "
-            "ORDER BY executed_on DESC",
-            [suggestion_id, int(owner_user_id)],
-        )
-        tid = mine.get("trade_id") if isinstance(mine, dict) else None
-        if isinstance(tid, str) and tid.strip():
-            st = str(mine.get("status") or "").upper()
-            if st in ("CLOSED", "EXPIRED"):
-                return (
-                    f"You already executed this suggestion as {tid} ({st.lower()}). "
-                    "Place orders is blocked so you do not open a second position."
-                )
+    from database.owner_scope import require_owner_user_id
+    from database.suggestion_user_state_repo import SuggestionUserStateRepo
+
+    uid = require_owner_user_id(owner_user_id, what="duplicate_execution_reason")
+    ust = SuggestionUserStateRepo(db).get(suggestion_id, uid)
+    if isinstance(ust, dict):
+        st_u = str(ust.get("status") or "").upper()
+        if st_u == "EXECUTED":
+            tid = ust.get("trade_id") or "your book"
             return (
-                f"This suggestion is already live as your trade {tid}. "
+                f"You already executed this suggestion as {tid}. "
                 "Place orders is blocked to avoid a duplicate position — "
                 "manage it on My Trades."
             )
-        return None
-
-    existing = TradeRepo(db).latest_for_suggestion(suggestion_id)
-    tid = existing.get("trade_id") if isinstance(existing, dict) else None
-    if tid:
-        st = str(existing.get("status") or "").upper()
+        if st_u == "IGNORED":
+            return "You already ignored this suggestion."
+    mine = db.fetch_one(
+        "SELECT TOP 1 trade_id, status FROM options_trades "
+        "WHERE suggestion_id = ? AND owner_user_id = ? "
+        "ORDER BY executed_on DESC",
+        [suggestion_id, uid],
+    )
+    tid = mine.get("trade_id") if isinstance(mine, dict) else None
+    if isinstance(tid, str) and tid.strip():
+        st = str(mine.get("status") or "").upper()
         if st in ("CLOSED", "EXPIRED"):
             return (
-                f"This suggestion was already executed as {tid} ({st.lower()}). "
+                f"You already executed this suggestion as {tid} ({st.lower()}). "
                 "Place orders is blocked so you do not open a second position."
             )
         return (
-            f"This suggestion is already live as trade {tid}. "
+            f"This suggestion is already live as your trade {tid}. "
             "Place orders is blocked to avoid a duplicate position — "
             "manage it on My Trades."
         )
-    status = (suggestion_status or "").upper()
-    if status == "EXECUTED":
-        return (
-            "This suggestion was already executed. "
-            "Place orders is blocked to avoid a duplicate position — see My Trades."
-        )
-    if status and status != "PENDING":
-        return (
-            f"This suggestion is {status} — only a PENDING suggestion can be executed."
-        )
+    # Shared suggestion status is informational only for multi-user; this
+    # user's book is what blocks. suggestion_status kept for call-site clarity.
+    _ = suggestion_status
     return None
 
 
@@ -337,10 +316,12 @@ def mark_executed(
     skip_execution_gate: bool = False,
     execution_provider: Optional[str] = None,
     lots_override: Optional[int] = None,
-    owner_user_id: Optional[int] = None,
+    owner_user_id: int,
 ) -> Optional[str]:
     sug = SuggestionRepo(db)
     trd = TradeRepo(db)
+
+    from database.owner_scope import require_owner_user_id
 
     suggestion = sug.get(suggestion_id)
     if suggestion is None:
@@ -348,6 +329,8 @@ def mark_executed(
     legs = sug.legs(suggestion_id)
     if not legs:
         raise ValueError(f"Suggestion {suggestion_id} has no legs")
+
+    owner_user_id = require_owner_user_id(owner_user_id, what="mark_executed")
 
     _check_lots_override(lots_override)
     for f in fills:
@@ -357,29 +340,21 @@ def mark_executed(
         f.executed and f.fill_price is not None for f in fills
     )
 
-    # User clicked Ignore (no fills) — per-user dismiss when owner known.
+    # User clicked Ignore (no fills) — per-user dismiss.
     if not has_executed_fills and not execute_at_suggested and not skip_execution_gate:
-        status = (suggestion.get("status") or "").upper()
-        if owner_user_id is not None:
-            from database.suggestion_user_state_repo import SuggestionUserStateRepo
-            ust = SuggestionUserStateRepo(db)
-            if ust.status_for_user(suggestion_id, owner_user_id) != "PENDING":
-                raise ValueError(
-                    f"Cannot ignore suggestion with per-user status "
-                    f"{ust.status_for_user(suggestion_id, owner_user_id)}"
-                )
-            ust.upsert(suggestion_id, owner_user_id, "IGNORED")
-            db.commit()
-            logger.info(
-                "Suggestion %s marked IGNORED for user_id=%s",
-                suggestion_id, owner_user_id,
+        from database.suggestion_user_state_repo import SuggestionUserStateRepo
+        ust = SuggestionUserStateRepo(db)
+        if ust.status_for_user(suggestion_id, owner_user_id) != "PENDING":
+            raise ValueError(
+                f"Cannot ignore suggestion with per-user status "
+                f"{ust.status_for_user(suggestion_id, owner_user_id)}"
             )
-            return None
-        if status != "PENDING":
-            raise ValueError(f"Cannot ignore suggestion with status {status}")
-        sug.update_status(suggestion_id, "IGNORED")
+        ust.upsert(suggestion_id, owner_user_id, "IGNORED")
         db.commit()
-        logger.info("Suggestion %s marked IGNORED by user", suggestion_id)
+        logger.info(
+            "Suggestion %s marked IGNORED for user_id=%s",
+            suggestion_id, owner_user_id,
+        )
         return None
 
     status = (suggestion.get("status") or "").upper()

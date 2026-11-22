@@ -322,10 +322,12 @@ def _assert_entry_execution_allowed(
     db: SQLServerConnection,
     suggestion_id: str,
     *,
-    owner_user_id: Optional[int] = None,
+    owner_user_id: int,
 ) -> None:
+    from database.owner_scope import require_owner_user_id
+    uid = require_owner_user_id(owner_user_id, what="entry execution guard")
     orphans = BrokerOrderRepo(db).orphan_entry_fills(
-        suggestion_id, owner_user_id=owner_user_id,
+        suggestion_id, owner_user_id=uid,
     )
     if orphans:
         legs = ", ".join(str(r.get("leg_order")) for r in orphans)
@@ -1094,8 +1096,11 @@ def _reverse_partial_leg(
         reverse_txn = "SELL" if close_txn == "BUY" else "BUY"
     else:
         reverse_txn = _transaction_type_for_leg(leg, "rollback")
+    from database.owner_scope import require_owner_user_id
     broker = BrokerOrderRepo(db)
-    acting = _ACTING_APP_USER_ID.get()
+    acting = require_owner_user_id(
+        _ACTING_APP_USER_ID.get(), what="leg rollback",
+    )
     if broker.rollback_complete_for_leg(
         suggestion_id=suggestion_id,
         trade_id=trade_id,
@@ -1177,8 +1182,11 @@ def _rollback_filled_legs(
     )
     master: Optional[InstrumentMaster] = None
     failed: List[int] = []
+    from database.owner_scope import require_owner_user_id
     broker = BrokerOrderRepo(db)
-    acting = _ACTING_APP_USER_ID.get()
+    acting = require_owner_user_id(
+        _ACTING_APP_USER_ID.get(), what="filled-leg rollback",
+    )
     for fill in reversed(completed):
         leg = legs_by_order[fill.leg_order]
         lo = int(leg["leg_order"])
@@ -1296,13 +1304,16 @@ def _rollback_filled_legs(
     try:
         from lifecycle.execution_reversal import record_reversal_after_flatten
 
+        from database.owner_scope import require_owner_user_id
         record_reversal_after_flatten(
             db,
             suggestion_id=suggestion_id,
             trade_id=trade_id,
             execution_job_id=execution_job_id,
             reason="EXIT_ROLLBACK" if mode == "exit" else "ENTRY_ROLLBACK",
-            owner_user_id=_ACTING_APP_USER_ID.get(),
+            owner_user_id=require_owner_user_id(
+                _ACTING_APP_USER_ID.get(), what="execution reversal",
+            ),
         )
     except Exception:
         logger.exception("execution reversal P&L recording failed")
@@ -1653,7 +1664,7 @@ def _assert_execution_not_in_flight(
     suggestion_id: Optional[str] = None,
     trade_id: Optional[str] = None,
     except_job_id: Optional[int] = None,
-    owner_user_id: Optional[int] = None,
+    owner_user_id: int,
 ) -> None:
     """Refuse a second execution while another is genuinely in flight.
 
@@ -1662,10 +1673,15 @@ def _assert_execution_not_in_flight(
     submit writes status=RUNNING, then the worker's preflight sees that
     same row and raises "already running".
 
-    Suggestion-scoped checks are per *owner_user_id* so two traders can Place
-    the same suggestion in parallel.
+    *owner_user_id* is mandatory (suggestion-scoped checks are owner-isolated;
+    trade-scoped checks still require a concrete acting owner for the call).
     """
+    from database.owner_scope import require_owner_user_id
     from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
+
+    acting = require_owner_user_id(
+        owner_user_id, what="in-flight execution guard",
+    )
 
     def _is_other_job(row: Optional[dict]) -> bool:
         if row is None:
@@ -1677,7 +1693,6 @@ def _assert_execution_not_in_flight(
         except (TypeError, ValueError):
             return True
 
-    acting = owner_user_id if owner_user_id is not None else _ACTING_APP_USER_ID.get()
     broker = BrokerOrderRepo(db)
     jobs = ZerodhaExecutionJobRepo(db)
     if suggestion_id:
@@ -1771,7 +1786,10 @@ def _entry_context(
     # Place-orders path keeps hard gates. Margin quote / Amount needed hydrate
     # (soft_live_price_gate) only needs a session + basket margins.
     if not soft_live_price_gate:
-        acting = _ACTING_APP_USER_ID.get()
+        from database.owner_scope import require_owner_user_id
+        acting = require_owner_user_id(
+            _ACTING_APP_USER_ID.get(), what="entry context",
+        )
         dup = duplicate_execution_reason(
             db, suggestion_id, suggestion_status=status,
             owner_user_id=acting,
@@ -1988,23 +2006,24 @@ def execute_suggestion_in_zerodha(
     ack_out_of_band: bool = False,
     execution_job_id: Optional[int] = None,
     lots_override: Optional[int] = None,
-    owner_user_id: Optional[int] = None,
+    owner_user_id: int,
 ) -> ExecutionOutcome:
+    from database.owner_scope import require_owner_user_id
+
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError(
             "Zerodha execution is disabled — enable OPT_ZERODHA_EXECUTION_ENABLED "
             "and the trade_execution_enabled runtime flag"
         )
 
-    if owner_user_id is None:
-        raise ZerodhaExecutionError(
-            "Refusing Zerodha entry: no app user. Orders never use the shared feed session."
-        )
-    lock = _lock_for(f"sugg:{suggestion_id}:u:{int(owner_user_id)}")
+    acting = require_owner_user_id(
+        owner_user_id, what="Zerodha entry execution",
+    )
+    lock = _lock_for(f"sugg:{suggestion_id}:u:{acting}")
     if not lock.acquire(blocking=False):
         raise ZerodhaExecutionError("Execution already in progress for this suggestion")
 
-    token = _ACTING_APP_USER_ID.set(int(owner_user_id))
+    token = _ACTING_APP_USER_ID.set(acting)
     try:
         suggestion, legs, facade, master, live_map, inst_map, ordered, strategy, _margin = (
             _entry_context(
@@ -2239,19 +2258,20 @@ def execute_suggestion_in_zerodha_async(
     leg_limits: Optional[Dict[int, float]] = None,
     ack_out_of_band: bool = False,
     lots_override: Optional[int] = None,
-    owner_user_id: Optional[int] = None,
+    owner_user_id: int,
 ) -> ExecutionOutcome:
     """Start background entry execution; returns immediately with job_id."""
+    from database.owner_scope import require_owner_user_id
+
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
-    if owner_user_id is None:
-        raise ZerodhaExecutionError(
-            "Refusing Zerodha entry: no app user. Orders never use the shared feed session."
-        )
-    _assert_execution_not_in_flight(
-        db, suggestion_id=suggestion_id, owner_user_id=owner_user_id,
+    acting = require_owner_user_id(
+        owner_user_id, what="Zerodha async entry",
     )
-    token = _ACTING_APP_USER_ID.set(int(owner_user_id))
+    _assert_execution_not_in_flight(
+        db, suggestion_id=suggestion_id, owner_user_id=acting,
+    )
+    token = _ACTING_APP_USER_ID.set(acting)
     try:
         # Fail before the job is queued if funds / live prices / gates fail.
         _entry_context(db, suggestion_id, leg_limits, lots_override)
@@ -2272,7 +2292,7 @@ def execute_suggestion_in_zerodha_async(
             ack_out_of_band=ack_out_of_band,
             execution_job_id=job_id,
             lots_override=lots_override,
-            owner_user_id=owner_user_id,
+            owner_user_id=acting,
         )
 
     job_id = submit_execution_job(
@@ -2282,7 +2302,7 @@ def execute_suggestion_in_zerodha_async(
         trade_id=None,
         total_legs=total,
         runner=_runner,
-        owner_user_id=owner_user_id,
+        owner_user_id=acting,
     )
     return ExecutionOutcome(
         ok=True,
@@ -2425,6 +2445,7 @@ def close_trade_in_zerodha(
             )
         _assert_execution_not_in_flight(
             db, trade_id=trade_id, except_job_id=execution_job_id,
+            owner_user_id=owner,
         )
 
         facade, master = _build_client()
@@ -2603,6 +2624,7 @@ def execute_supplement_in_zerodha(
             )
         _assert_execution_not_in_flight(
             db, trade_id=trade_id, except_job_id=execution_job_id,
+            owner_user_id=owner,
         )
 
         facade, master = _build_client()
@@ -2752,7 +2774,9 @@ def close_trade_in_zerodha_async(
     # Resolve / refuse before queueing a job that could touch another book.
     owner = _kite_owner_for_trade(trade, actor_user_id=actor_user_id)
     _require_opening_kite_fills(db, trade_id)
-    _assert_execution_not_in_flight(db, trade_id=trade_id)
+    _assert_execution_not_in_flight(
+        db, trade_id=trade_id, owner_user_id=owner,
+    )
 
     all_legs = trd.legs_with_suggestion_info(trade_id)
     open_exits = [l for l in all_legs if l.get("executed") and l.get("exit_price") is None]

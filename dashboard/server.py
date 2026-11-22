@@ -606,7 +606,7 @@ def _attach_history_zerodha_executions(
     db: SQLServerConnection,
     trades: list,
     *,
-    owner_user_id: Optional[int] = None,
+    owner_user_id: int,
 ) -> None:
     """Embed sequenced Zerodha execution groups on each history trade card."""
     from database.broker_order_repo import BrokerOrderRepo
@@ -621,8 +621,12 @@ def _attach_history_zerodha_executions(
     tids = [t.get("trade_id") for t in trades if t.get("trade_id")]
     sids = [t.get("suggestion_id") for t in trades if t.get("suggestion_id")]
     broker = BrokerOrderRepo(db)
+    from database.owner_scope import require_owner_user_id
+    uid = require_owner_user_id(
+        owner_user_id, what="history zerodha executions",
+    )
     rows = broker.list_for_trades_or_suggestions(
-        trade_ids=tids, suggestion_ids=sids, owner_user_id=owner_user_id,
+        trade_ids=tids, suggestion_ids=sids, owner_user_id=uid,
     )
     if not rows:
         for t in trades:
@@ -638,7 +642,7 @@ def _attach_history_zerodha_executions(
     row_tids = [r.get("trade_id") for r in rows if r.get("trade_id")]
     job_repo = ZerodhaExecutionJobRepo(db)
     jobs_by_key: dict = {}
-    for j in job_repo.list_for_suggestions(row_sids, owner_user_id=owner_user_id):
+    for j in job_repo.list_for_suggestions(row_sids, owner_user_id=uid):
         jobs_by_key[j["id"]] = _row(j)
     for j in job_repo.list_for_trades(row_tids):
         jobs_by_key[j["id"]] = _row(j)
@@ -3734,11 +3738,13 @@ def create_app() -> Flask:
         from lifecycle.zerodha_execution_log import live_suggestion_order_status
 
         uid = current_user_id()
+        if uid is None:
+            return jsonify({"error": "Unauthorized"}), 401
         rows = [_row(r) for r in BrokerOrderRepo(db).by_suggestion(
-            sid, owner_user_id=uid,
+            sid, owner_user_id=int(uid),
         )]
         latest_job = ZerodhaExecutionJobRepo(db).latest_for_suggestion(
-            sid, owner_user_id=uid,
+            sid, owner_user_id=int(uid),
         )
         progress = live_suggestion_order_status(rows, latest_job)
         return jsonify({
@@ -5303,7 +5309,11 @@ def create_app() -> Flask:
         out.extend(rev_cards)
 
         try:
-            _attach_history_zerodha_executions(db, out, owner_user_id=uid)
+            if uid is not None:
+                _attach_history_zerodha_executions(db, out, owner_user_id=int(uid))
+            else:
+                for item in out:
+                    item.setdefault("zerodha_executions", [])
         except Exception:
             logger.debug("history zerodha executions attach skipped", exc_info=True)
             for item in out:
@@ -5403,15 +5413,17 @@ def create_app() -> Flask:
 
         u = current_user()
         uid = current_user_id()
-        owner_filter = None
-        if u and not u.get("is_admin") and uid is not None:
-            owner_filter = int(uid)
+        admin_all = bool(u and u.get("is_admin"))
+        if not admin_all and uid is None:
+            return jsonify({"error": "Unauthorized"}), 401
+        owner_filter = None if admin_all else int(uid)
         rows = BrokerOrderRepo(db).list_since(
             since,
             limit=limit * 20,
             trade_id=trade_id,
             suggestion_id=suggestion_id,
             owner_user_id=owner_filter,
+            admin_all=admin_all,
         )
         trade_ids = {r["trade_id"] for r in rows if r.get("trade_id")}
         trade_names: dict = {}
@@ -5425,7 +5437,9 @@ def create_app() -> Flask:
         tids = [r["trade_id"] for r in rows if r.get("trade_id")]
         job_repo = ZerodhaExecutionJobRepo(db)
         jobs_by_key: dict = {}
-        for j in job_repo.list_for_suggestions(sids, owner_user_id=owner_filter):
+        for j in job_repo.list_for_suggestions(
+            sids, owner_user_id=owner_filter, admin_all=admin_all,
+        ):
             jobs_by_key[j["id"]] = _row(j)
         for j in job_repo.list_for_trades(tids):
             jobs_by_key[j["id"]] = _row(j)
@@ -5701,8 +5715,11 @@ def create_app() -> Flask:
 
         from dashboard.auth import current_user, current_user_id
         u = current_user()
+        uid = current_user_id()
         admin_all = bool(u and u.get("is_admin"))
-        owner_uid = None if admin_all else current_user_id()
+        if not admin_all and uid is None:
+            return jsonify({"error": "Unauthorized"}), 401
+        owner_uid = None if admin_all else int(uid)
 
         # Legacy ?unread=1 path (used by global banner refresh)
         if unread_only and not any([severity, category, notif_type, trade_id, from_dt, to_dt]):
@@ -5748,9 +5765,12 @@ def create_app() -> Flask:
         """Return unread counts by severity and category for badge chips."""
         from dashboard.auth import current_user, current_user_id
         u = current_user()
+        uid = current_user_id()
         admin_all = bool(u and u.get("is_admin"))
+        if not admin_all and uid is None:
+            return jsonify({"error": "Unauthorized"}), 401
         return jsonify(NotificationRepo(db).stats(
-            owner_user_id=None if admin_all else current_user_id(),
+            owner_user_id=None if admin_all else int(uid),
             admin_all=admin_all,
         ))
 

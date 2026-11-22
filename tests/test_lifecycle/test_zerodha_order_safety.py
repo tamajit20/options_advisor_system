@@ -51,6 +51,7 @@ def _leg(lo: int, action: str, opt: str, strike: float = 23000.0) -> dict:
 def test_rollback_reverses_first_leg_partial_when_completed_empty(mocker):
     from lifecycle.zerodha_executor import (
         LegFillOutcome,
+        _ACTING_APP_USER_ID,
         _rollback_filled_legs,
     )
     from utils import now_ist
@@ -73,16 +74,20 @@ def test_rollback_reverses_first_leg_partial_when_completed_empty(mocker):
         filled_quantity=25,
         planned_quantity=50,
     )
-    _rollback_filled_legs(
-        facade, db,
-        suggestion_id="SUG-1",
-        trade_id=None,
-        legs_by_order={1: leg},
-        completed=[],
-        mode="entry",
-        inst_map={1: inst},
-        partial_on_fail=partial,
-    )
+    token = _ACTING_APP_USER_ID.set(1)
+    try:
+        _rollback_filled_legs(
+            facade, db,
+            suggestion_id="SUG-1",
+            trade_id=None,
+            legs_by_order={1: leg},
+            completed=[],
+            mode="entry",
+            inst_map={1: inst},
+            partial_on_fail=partial,
+        )
+    finally:
+        _ACTING_APP_USER_ID.reset(token)
     reverse.assert_called_once()
     assert reverse.call_args.kwargs["partial"].filled_quantity == 25
 

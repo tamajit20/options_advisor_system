@@ -1680,30 +1680,34 @@ class NotificationRepo:
 
     def unread(self, limit: int = 50, *, owner_user_id: Optional[int] = None,
                admin_all: bool = False) -> List[dict]:
-        if admin_all or owner_user_id is None:
+        if admin_all:
             return self.db.fetch_all(
                 "SELECT TOP (?) * FROM options_notifications "
                 "WHERE read_at IS NULL ORDER BY created_at DESC",
                 [limit],
             )
+        from database.owner_scope import require_owner_user_id
+        uid = require_owner_user_id(owner_user_id, what="notifications.unread")
         return self.db.fetch_all(
             "SELECT TOP (?) * FROM options_notifications "
             "WHERE read_at IS NULL AND owner_user_id = ? "
             "ORDER BY created_at DESC",
-            [limit, int(owner_user_id)],
+            [limit, uid],
         )
 
     def recent(self, limit: int = 50, *, owner_user_id: Optional[int] = None,
                admin_all: bool = False) -> List[dict]:
-        if admin_all or owner_user_id is None:
+        if admin_all:
             return self.db.fetch_all(
                 "SELECT TOP (?) * FROM options_notifications ORDER BY created_at DESC",
                 [limit],
             )
+        from database.owner_scope import require_owner_user_id
+        uid = require_owner_user_id(owner_user_id, what="notifications.recent")
         return self.db.fetch_all(
             "SELECT TOP (?) * FROM options_notifications "
             "WHERE owner_user_id = ? ORDER BY created_at DESC",
-            [limit, int(owner_user_id)],
+            [limit, uid],
         )
 
     def recent_for_trade(self, trade_id: str, *, minutes: int = 15) -> List[dict]:
@@ -1792,9 +1796,13 @@ class NotificationRepo:
         wheres: list[str] = []
         params: list = []
 
-        if not admin_all and owner_user_id is not None:
+        if not admin_all:
+            from database.owner_scope import require_owner_user_id
+            uid = require_owner_user_id(
+                owner_user_id, what="notifications.filtered",
+            )
             wheres.append("owner_user_id = ?")
-            params.append(int(owner_user_id))
+            params.append(uid)
         if unread_only:
             wheres.append("read_at IS NULL")
         if severity:
@@ -1853,9 +1861,13 @@ class NotificationRepo:
         }
         wheres: list[str] = []
         params: list = []
-        if not admin_all and owner_user_id is not None:
+        if not admin_all:
+            from database.owner_scope import require_owner_user_id
+            uid = require_owner_user_id(
+                owner_user_id, what="notifications.count_filtered",
+            )
             wheres.append("owner_user_id = ?")
-            params.append(int(owner_user_id))
+            params.append(uid)
         if unread_only:
             wheres.append("read_at IS NULL")
         if severity:
@@ -1886,19 +1898,21 @@ class NotificationRepo:
         admin_all: bool = False,
     ) -> dict:
         """Return unread counts grouped by severity and category for badge display."""
-        if not admin_all and owner_user_id is not None:
+        if admin_all:
+            rows = self.db.fetch_all(
+                "SELECT severity, notif_type, COUNT(*) AS cnt "
+                "FROM options_notifications WHERE read_at IS NULL "
+                "GROUP BY severity, notif_type"
+            )
+        else:
+            from database.owner_scope import require_owner_user_id
+            uid = require_owner_user_id(owner_user_id, what="notifications.stats")
             rows = self.db.fetch_all(
                 "SELECT severity, notif_type, COUNT(*) AS cnt "
                 "FROM options_notifications WHERE read_at IS NULL "
                 "AND owner_user_id = ? "
                 "GROUP BY severity, notif_type",
-                [int(owner_user_id)],
-            )
-        else:
-            rows = self.db.fetch_all(
-                "SELECT severity, notif_type, COUNT(*) AS cnt "
-                "FROM options_notifications WHERE read_at IS NULL "
-                "GROUP BY severity, notif_type"
+                [uid],
             )
         by_sev: dict[str, int] = {}
         by_cat: dict[str, int] = {}

@@ -12,19 +12,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from database.connection import SQLServerConnection
-
-
-def _owner_sql(
-    owner_user_id: Optional[int],
-    *,
-    include_null: bool = False,
-) -> tuple[str, list]:
-    if owner_user_id is None:
-        return "", []
-    uid = int(owner_user_id)
-    if include_null:
-        return " AND (owner_user_id = ? OR owner_user_id IS NULL)", [uid]
-    return " AND owner_user_id = ?", [uid]
+from database.owner_scope import owner_sql, require_owner_user_id
 
 
 class ZerodhaExecutionJobRepo:
@@ -119,12 +107,12 @@ class ZerodhaExecutionJobRepo:
         self,
         suggestion_id: str,
         *,
-        owner_user_id: Optional[int] = None,
+        owner_user_id: int,
     ) -> Optional[dict]:
-        owner_sql, owner_params = _owner_sql(owner_user_id)
+        frag, owner_params = owner_sql(owner_user_id)
         return self.db.fetch_one(
             "SELECT TOP 1 * FROM options_zerodha_execution_jobs "
-            f"WHERE suggestion_id = ?{owner_sql} "
+            f"WHERE suggestion_id = ?{frag} "
             "ORDER BY created_at DESC, id DESC",
             [suggestion_id, *owner_params],
         )
@@ -134,6 +122,7 @@ class ZerodhaExecutionJobRepo:
         suggestion_ids: List[str],
         *,
         owner_user_id: Optional[int] = None,
+        admin_all: bool = False,
     ) -> List[dict]:
         seen: List[str] = []
         for sid in suggestion_ids:
@@ -143,10 +132,15 @@ class ZerodhaExecutionJobRepo:
         if not seen:
             return []
         placeholders = ",".join("?" * len(seen))
-        owner_sql, owner_params = _owner_sql(owner_user_id)
+        if admin_all:
+            frag, owner_params = "", []
+        else:
+            frag, owner_params = owner_sql(
+                require_owner_user_id(owner_user_id, what="list_for_suggestions"),
+            )
         return self.db.fetch_all(
             "SELECT * FROM options_zerodha_execution_jobs "
-            f"WHERE suggestion_id IN ({placeholders}){owner_sql} ORDER BY id",
+            f"WHERE suggestion_id IN ({placeholders}){frag} ORDER BY id",
             [*seen, *owner_params],
         ) or []
 
@@ -183,15 +177,13 @@ class ZerodhaExecutionJobRepo:
         self,
         suggestion_id: str,
         *,
-        owner_user_id: Optional[int] = None,
+        owner_user_id: int,
     ) -> Optional[dict]:
         # Include NULL-owner RUNNING jobs so legacy work still blocks.
-        owner_sql, owner_params = _owner_sql(
-            owner_user_id, include_null=True,
-        )
+        frag, owner_params = owner_sql(owner_user_id, include_null=True)
         return self.db.fetch_one(
             "SELECT TOP 1 * FROM options_zerodha_execution_jobs "
-            f"WHERE suggestion_id = ? AND status = 'RUNNING'{owner_sql} "
+            f"WHERE suggestion_id = ? AND status = 'RUNNING'{frag} "
             "ORDER BY created_at DESC, id DESC",
             [suggestion_id, *owner_params],
         )

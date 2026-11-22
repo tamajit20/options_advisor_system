@@ -23,6 +23,7 @@ def test_submit_rejects_when_suggestion_job_already_running(mock_db, mocker):
             trade_id=None,
             total_legs=2,
             runner=lambda *_a: None,
+            owner_user_id=1,
         )
     repo.insert.assert_not_called()
 
@@ -43,5 +44,6 @@ def test_submit_rejects_when_trade_job_already_running(mock_db, mocker):
             trade_id="TRD-1",
             total_legs=2,
             runner=lambda *_a: None,
+            owner_user_id=1,
         )
     repo.insert.assert_not_called()

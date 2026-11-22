@@ -62,17 +62,22 @@ def submit_execution_job(
     total_legs: int,
     runner: Callable[[SQLServerConnection, int], Any],
     message: Optional[str] = None,
-    owner_user_id: Optional[int] = None,
+    owner_user_id: int,
 ) -> int:
-    """Insert job row and start background thread. Returns job id."""
+    """Insert job row and start background thread. Returns job id.
+
+    *owner_user_id* is mandatory for every job (entry or exit).
+    """
+    from database.owner_scope import require_owner_user_id
+
+    owner = require_owner_user_id(owner_user_id, what="submit_execution_job")
     if not _can_start_job():
         raise RuntimeError(
             "Too many Zerodha executions in progress — wait for one to finish"
         )
     if suggestion_id:
         # Per-user lock so two traders can Place the same suggestion in parallel.
-        uid_part = f":u:{int(owner_user_id)}" if owner_user_id is not None else ""
-        lock_key = f"sugg:{suggestion_id}{uid_part}"
+        lock_key = f"sugg:{suggestion_id}:u:{owner}"
     elif trade_id:
         lock_key = f"trade:{trade_id}"
     else:
@@ -85,7 +90,7 @@ def submit_execution_job(
     try:
         repo = ZerodhaExecutionJobRepo(db)
         if suggestion_id and repo.running_for_suggestion(
-            suggestion_id, owner_user_id=owner_user_id,
+            suggestion_id, owner_user_id=owner,
         ) is not None:
             raise RuntimeError(
                 "Zerodha execution already running for this suggestion"
@@ -105,7 +110,7 @@ def submit_execution_job(
             "message": (message or "").strip() or "Starting…",
             "created_at": now,
             "updated_at": now,
-            "owner_user_id": int(owner_user_id) if owner_user_id is not None else None,
+            "owner_user_id": owner,
         })
         db.commit()
     except Exception:
