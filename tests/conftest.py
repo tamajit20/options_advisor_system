@@ -25,6 +25,30 @@ if str(_REPO_ROOT) not in sys.path:
 
 
 # ---------------------------------------------------------------------------
+# Dashboard multi-user auth (tests)
+# ---------------------------------------------------------------------------
+DASHBOARD_ADMIN_USER = {
+    "id": 1,
+    "login": "admin",
+    "display_name": "Admin",
+    "is_admin": True,
+    "is_active": True,
+}
+
+
+@pytest.fixture
+def mock_dashboard_admin(mocker):
+    """Treat every request as the signed-in admin app user."""
+    mocker.patch(
+        "dashboard.auth._load_user_from_cookie",
+        return_value=dict(DASHBOARD_ADMIN_USER),
+    )
+    mocker.patch("dashboard.auth._admin_break_glass_user", return_value=None)
+    mocker.patch("dashboard.auth.auth_required", return_value=True)
+    return DASHBOARD_ADMIN_USER
+
+
+# ---------------------------------------------------------------------------
 # Date / time fixtures
 # ---------------------------------------------------------------------------
 @pytest.fixture

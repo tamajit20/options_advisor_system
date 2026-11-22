@@ -16,7 +16,7 @@ import dashboard.server as server
 
 
 @pytest.fixture
-def app(mocker):
+def app(mocker, mock_dashboard_admin):
     """Patch SQLServerConnection so _with_db never opens a real DB connection."""
     fake_conn = MagicMock()
     fake_conn.connect = MagicMock(return_value=None)

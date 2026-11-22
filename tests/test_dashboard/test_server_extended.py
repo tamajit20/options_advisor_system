@@ -12,7 +12,7 @@ import dashboard.server as server
 
 
 @pytest.fixture
-def client_with_db(mocker):
+def client_with_db(mocker, mock_dashboard_admin):
     fake_conn = MagicMock()
     fake_conn.fetch_one.return_value = None
     fake_conn.fetch_all.return_value = []
@@ -39,7 +39,8 @@ class TestHistoryAndStatsRoutes:
         assert data["trades"] == []
         sql, params = conn.fetch_all.call_args[0]
         assert "CONVERT(date" not in sql
-        assert params == []
+        # Logged-in user scopes private books via owner_user_id.
+        assert params == [1]
 
     def test_pnl_timeline_applies_date_filters(self, client_with_db):
         client, conn = client_with_db
@@ -49,14 +50,14 @@ class TestHistoryAndStatsRoutes:
         sql, params = conn.fetch_all.call_args[0]
         assert "CONVERT(date, t.closed_on) >= ?" in sql
         assert "CONVERT(date, t.closed_on) <= ?" in sql
-        assert params == ["2026-08-01", "2026-08-15"]
+        assert params == ["2026-08-01", "2026-08-15", 1]
 
     def test_pnl_timeline_swaps_inverted_dates(self, client_with_db):
         client, conn = client_with_db
         conn.fetch_all.return_value = []
         client.get("/api/stats/pnl-timeline?from_date=2026-08-20&to_date=2026-08-01")
         _sql, params = conn.fetch_all.call_args[0]
-        assert params == ["2026-08-01", "2026-08-20"]
+        assert params == ["2026-08-01", "2026-08-20", 1]
 
     def test_strategy_performance_empty(self, client_with_db):
         client, conn = client_with_db
@@ -74,7 +75,7 @@ class TestHistoryAndStatsRoutes:
         assert resp.status_code == 200
         sql, params = conn.fetch_all.call_args[0]
         assert "CONVERT(date, COALESCE(t.closed_on, t.executed_on)) >= ?" in sql
-        assert params == ["2026-07-01", "2026-07-31"]
+        assert params == ["2026-07-01", "2026-07-31", 1]
 
     def test_pnl_timeline_channel_filter_drops_manual(self, client_with_db, mocker):
         client, conn = client_with_db

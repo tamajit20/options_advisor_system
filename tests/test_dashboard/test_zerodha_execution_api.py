@@ -10,7 +10,7 @@ from lifecycle.zerodha_executor import ExecutionOutcome, ZerodhaExecutionError
 
 
 @pytest.fixture
-def exec_app(mocker):
+def exec_app(mocker, mock_dashboard_admin):
     """App with dashboard auth enabled and mocked DB."""
     mocker.patch.dict(
         "config.DASHBOARD_CONFIG",
@@ -36,7 +36,7 @@ def exec_client(exec_app):
 
 
 @pytest.fixture
-def api_app(mocker):
+def api_app(mocker, mock_dashboard_admin):
     import dashboard.server as server
 
     fake_conn = MagicMock()
@@ -55,7 +55,16 @@ def api_client(api_app):
     return api_app.test_client()
 
 
-def test_zerodha_execute_blocked_without_dashboard_api_key(mocker, api_client):
+def test_zerodha_execute_blocked_without_login(mocker):
+    """Execution APIs require a logged-in app user (not only a dashboard API key)."""
+    mocker.patch.dict(
+        "config.DASHBOARD_CONFIG",
+        {"api_key": "test-secret-key", "require_app_login": True},
+        clear=False,
+    )
+    mocker.patch("dashboard.auth.users_exist", return_value=True)
+    mocker.patch("dashboard.auth._load_user_from_cookie", return_value=None)
+    mocker.patch("dashboard.auth._admin_break_glass_user", return_value=None)
     mocker.patch(
         "lifecycle.zerodha_executor.zerodha_execution_config_enabled",
         return_value=True,
@@ -64,12 +73,29 @@ def test_zerodha_execute_blocked_without_dashboard_api_key(mocker, api_client):
         "lifecycle.zerodha_executor.zerodha_execution_ready",
         return_value=True,
     )
-    resp = api_client.post("/api/suggestion/SUG-1/zerodha-execute", json={})
-    assert resp.status_code == 503
-    assert "OPT_DASHBOARD_API_KEY" in resp.get_json()["error"]
+    import dashboard.server as server
+
+    fake_conn = MagicMock()
+    fake_conn.connect = MagicMock(return_value=None)
+    fake_conn.close = MagicMock(return_value=None)
+    fake_conn.fetch_one.return_value = None
+    fake_conn.fetch_all.return_value = []
+    mocker.patch("dashboard.server.SQLServerConnection", return_value=fake_conn)
+    app = server.create_app()
+    app.config["TESTING"] = True
+    resp = app.test_client().post("/api/suggestion/SUG-1/zerodha-execute", json={})
+    assert resp.status_code == 401
 
 
-def test_zerodha_execute_requires_auth_when_key_configured(exec_client, mocker):
+def test_zerodha_execute_requires_auth_when_key_configured(mocker):
+    mocker.patch.dict(
+        "config.DASHBOARD_CONFIG",
+        {"api_key": "test-secret-key", "require_app_login": True},
+        clear=False,
+    )
+    mocker.patch("dashboard.auth.users_exist", return_value=True)
+    mocker.patch("dashboard.auth._load_user_from_cookie", return_value=None)
+    mocker.patch("dashboard.auth._admin_break_glass_user", return_value=None)
     mocker.patch(
         "lifecycle.zerodha_executor.zerodha_execution_config_enabled",
         return_value=True,
@@ -78,7 +104,17 @@ def test_zerodha_execute_requires_auth_when_key_configured(exec_client, mocker):
         "lifecycle.zerodha_executor.zerodha_execution_ready",
         return_value=True,
     )
-    resp = exec_client.post("/api/suggestion/SUG-1/zerodha-execute", json={})
+    import dashboard.server as server
+
+    fake_conn = MagicMock()
+    fake_conn.connect = MagicMock(return_value=None)
+    fake_conn.close = MagicMock(return_value=None)
+    fake_conn.fetch_one.return_value = None
+    fake_conn.fetch_all.return_value = []
+    mocker.patch("dashboard.server.SQLServerConnection", return_value=fake_conn)
+    app = server.create_app()
+    app.config["TESTING"] = True
+    resp = app.test_client().post("/api/suggestion/SUG-1/zerodha-execute", json={})
     assert resp.status_code == 401
 
 
@@ -103,7 +139,6 @@ def test_zerodha_execute_success(exec_client, mocker):
     resp = exec_client.post(
         "/api/suggestion/SUG-1/zerodha-execute",
         json={"async": False},
-        headers={"X-API-Key": "test-secret-key"},
     )
     assert resp.status_code == 200
     body = resp.get_json()
@@ -127,7 +162,6 @@ def test_zerodha_execute_returns_400_on_execution_error(exec_client, mocker):
     resp = exec_client.post(
         "/api/suggestion/SUG-1/zerodha-execute",
         json={"async": False},
-        headers={"X-API-Key": "test-secret-key"},
     )
     assert resp.status_code == 400
     assert "stale" in resp.get_json()["error"]
@@ -145,7 +179,6 @@ def test_zerodha_execute_not_ready_returns_403(exec_client, mocker):
     resp = exec_client.post(
         "/api/suggestion/SUG-1/zerodha-execute",
         json={},
-        headers={"X-API-Key": "test-secret-key"},
     )
     assert resp.status_code == 403
 

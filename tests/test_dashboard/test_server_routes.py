@@ -11,7 +11,7 @@ import dashboard.server as server
 
 
 @pytest.fixture
-def app(mocker):
+def app(mocker, mock_dashboard_admin):
     fake_conn = MagicMock()
     fake_conn.connect = MagicMock(return_value=None)
     fake_conn.close = MagicMock(return_value=None)
@@ -565,7 +565,13 @@ class TestHistoryRoutes:
 
         def _fetch_all(sql, params=None):
             text = str(sql)
-            if "FROM options_trades t" in text and "DISTINCT" not in text:
+            # Main closed-trades SELECT (not DISTINCT facets, not owner-scope subqueries).
+            if (
+                "FROM options_trades t" in text
+                and "DISTINCT" not in text
+                and "options_execution_reversals" not in text
+                and "SELECT TOP 1" not in text
+            ):
                 return [closed]
             return []
 

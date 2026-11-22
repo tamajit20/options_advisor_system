@@ -212,7 +212,7 @@ def test_multi_leg_entry_order_and_side(mock_db, mocker):
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.insert", side_effect=lambda row: row["leg_order"])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.update_status")
 
-    execute_suggestion_in_zerodha(mock_db, "SUG-1")
+    execute_suggestion_in_zerodha(mock_db, "SUG-1", owner_user_id=1)
 
     assert kite.place_order.call_count == 2
     first = kite.place_order.call_args_list[0].kwargs
