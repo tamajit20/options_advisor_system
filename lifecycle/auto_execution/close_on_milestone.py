@@ -63,10 +63,16 @@ def flatten_open_trade(db: SQLServerConnection, ctx: AutoExecContext) -> str:
             return "manual_fallback_no_entry"
         if _flatten_already_moving(db, ctx.trade_id):
             return "in_flight"
-        if not zerodha_execution_ready(db):
+        owner_raw = trade.get("owner_user_id")
+        if owner_raw is None:
             raise ZerodhaExecutionError(
-                "Zerodha execution is not ready — cannot auto-flatten. "
-                "Enable trade execution, log in, then flatten on Kite."
+                f"Trade {ctx.trade_id} has no owner — refusing auto-flatten "
+                "so it cannot use another user's Zerodha session"
+            )
+        if not zerodha_execution_ready(db, app_user_id=int(owner_raw)):
+            raise ZerodhaExecutionError(
+                "Trade owner's Zerodha session is not ready — cannot auto-flatten. "
+                "That user must log in to Zerodha."
             )
         close_trade_in_zerodha_async(db, ctx.trade_id, close_trigger=ctx.notif_type)
         return "zerodha"

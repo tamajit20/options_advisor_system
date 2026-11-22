@@ -171,7 +171,7 @@ def test_zerodha_flattens_on_kite(mocker):
     mocker.patch(
         "lifecycle.auto_execution.close_on_milestone.TradeRepo.get",
         return_value={"trade_id": "T-1", "status": "ACTIVE",
-                      "execution_provider": "zerodha"},
+                      "execution_provider": "zerodha", "owner_user_id": 1},
     )
     mocker.patch(
         "lifecycle.auto_execution.close_on_milestone.trade_execution_channel",
@@ -299,7 +299,7 @@ def test_zerodha_not_ready_raises(mocker):
     db = MagicMock()
     mocker.patch(
         "lifecycle.auto_execution.close_on_milestone.TradeRepo.get",
-        return_value={"trade_id": "T-1", "status": "ACTIVE"},
+        return_value={"trade_id": "T-1", "status": "ACTIVE", "owner_user_id": 1},
     )
     mocker.patch(
         "lifecycle.auto_execution.close_on_milestone.trade_execution_channel",

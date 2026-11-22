@@ -317,7 +317,7 @@ def test_execution_disabled_without_config(db_conn, mocker):
     )
     assert not zerodha_execution_enabled(db_conn)
     with pytest.raises(ZerodhaExecutionError, match="disabled"):
-        execute_suggestion_in_zerodha(db_conn, "SUG-1")
+        execute_suggestion_in_zerodha(db_conn, "SUG-1", owner_user_id=1)
 
 
 def test_execute_rejects_non_pending(db_conn, mocker, mock_instrument):
@@ -344,7 +344,7 @@ def test_execute_rejects_non_pending(db_conn, mocker, mock_instrument):
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_suggestion", return_value=[])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.orphan_entry_fills", return_value=[])
     with pytest.raises(ZerodhaExecutionError, match="already executed"):
-        execute_suggestion_in_zerodha(db_conn, "SUG-1")
+        execute_suggestion_in_zerodha(db_conn, "SUG-1", owner_user_id=1)
 
 
 def test_execute_rejects_existing_trade_even_if_pending(db_conn, mocker, mock_instrument):
@@ -375,7 +375,7 @@ def test_execute_rejects_existing_trade_even_if_pending(db_conn, mocker, mock_in
         return_value={"trade_id": "TRD-9", "status": "ACTIVE"},
     )
     with pytest.raises(ZerodhaExecutionError, match="already live as trade TRD-9"):
-        execute_suggestion_in_zerodha(db_conn, "SUG-1")
+        execute_suggestion_in_zerodha(db_conn, "SUG-1", owner_user_id=1)
 
 
 def test_execute_blocks_orphan_broker_fills(db_conn, mocker):
@@ -405,7 +405,7 @@ def test_execute_blocks_orphan_broker_fills(db_conn, mocker):
         return_value=[{"leg_order": 1, "status": "COMPLETE"}],
     )
     with pytest.raises(ZerodhaExecutionError, match="Prior Zerodha entry"):
-        execute_suggestion_in_zerodha(db_conn, "SUG-1")
+        execute_suggestion_in_zerodha(db_conn, "SUG-1", owner_user_id=1)
 
 
 def test_execute_blocks_circuit_breaker_before_orders(db_conn, mocker):
@@ -437,7 +437,7 @@ def test_execute_blocks_circuit_breaker_before_orders(db_conn, mocker):
         return_value=MagicMock(ok=False, reason=lambda: "circuit breaker"),
     )
     with pytest.raises(ZerodhaExecutionError, match="circuit breaker"):
-        execute_suggestion_in_zerodha(db_conn, "SUG-1")
+        execute_suggestion_in_zerodha(db_conn, "SUG-1", owner_user_id=1)
 
 
 def test_execute_happy_path_single_leg(
@@ -455,7 +455,7 @@ def test_execute_happy_path_single_leg(
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.update_status")
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.by_suggestion", return_value=[])
 
-    out = execute_suggestion_in_zerodha(db_conn, "SUG-1")
+    out = execute_suggestion_in_zerodha(db_conn, "SUG-1", owner_user_id=1)
     assert out.ok
     assert out.trade_id == "TRD-1"
     kite.place_order.assert_called_once()
@@ -482,7 +482,7 @@ def test_execute_rolls_back_when_mark_executed_fails(
     rollback = mocker.patch("lifecycle.zerodha_executor._rollback_entry_legs")
 
     with pytest.raises(ValueError, match="circuit breaker"):
-        execute_suggestion_in_zerodha(db_conn, "SUG-1")
+        execute_suggestion_in_zerodha(db_conn, "SUG-1", owner_user_id=1)
     rollback.assert_called_once()
 
 
@@ -490,7 +490,7 @@ def test_close_trade_rejects_without_opening_kite_fills(db_conn, mocker):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
     mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.TradeRepo.get", return_value={
-        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1", "owner_user_id": 1,
     })
     mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[{
         "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
@@ -507,7 +507,7 @@ def test_close_trade_blocks_pending_exit_orders(db_conn, mocker):
     mocker.patch("lifecycle.zerodha_executor.zerodha_execution_enabled", return_value=True)
     mocker.patch("lifecycle.zerodha_executor.zerodha_margin_quote_ready", return_value=True)
     mocker.patch("database.models.TradeRepo.get", return_value={
-        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1", "owner_user_id": 1,
     })
     mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[{
         "leg_order": 1, "executed": True, "exit_price": None, "action": "BUY",
@@ -540,7 +540,7 @@ def test_close_trade_rolls_back_when_second_leg_fails(db_conn, mocker, mock_inst
         },
     ]
     mocker.patch("database.models.TradeRepo.get", return_value={
-        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1", "owner_user_id": 1,
     })
     mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=legs)
     mocker.patch("database.models.SuggestionRepo.get", return_value={"strategy": "LONG_STRADDLE"})
@@ -600,7 +600,7 @@ def test_close_trade_happy_path(db_conn, mocker, mock_instrument):
         "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
     }
     mocker.patch("database.models.TradeRepo.get", return_value={
-        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1", "owner_user_id": 1,
     })
     mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_trade", return_value=[])
@@ -636,7 +636,7 @@ def test_close_reconciles_kite_pnl_for_this_trade_only(db_conn, mocker, mock_ins
         "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
     }
     mocker.patch("database.models.TradeRepo.get", return_value={
-        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1", "owner_user_id": 1,
     })
     mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_trade", return_value=[])
@@ -678,7 +678,7 @@ def test_close_syncs_db_when_kite_already_flat(db_conn, mocker, mock_instrument)
         "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
     }
     mocker.patch("database.models.TradeRepo.get", return_value={
-        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1", "owner_user_id": 1,
     })
     mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_trade", return_value=[])
@@ -733,7 +733,7 @@ def test_preview_close_sync_from_kite_when_flat(db_conn, mocker, mock_instrument
         "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
     }
     mocker.patch("database.models.TradeRepo.get", return_value={
-        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1", "owner_user_id": 1,
         "trade_name": "t",
     })
     mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
@@ -771,7 +771,7 @@ def test_close_passes_execution_job_id_to_place(db_conn, mocker, mock_instrument
         "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
     }
     mocker.patch("database.models.TradeRepo.get", return_value={
-        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1", "owner_user_id": 1,
     })
     mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
     mocker.patch("database.broker_order_repo.BrokerOrderRepo.pending_for_trade", return_value=[])
@@ -802,7 +802,7 @@ def test_supplement_continues_when_live_band_drifts(
     filled = {**sample_leg, "leg_order": 1, "executed": True, "fill_price": 100.0}
     pending = {**sample_leg, "leg_order": 2, "executed": False, "action": "BUY"}
     mocker.patch("database.models.TradeRepo.get", return_value={
-        "trade_id": "TRD-1", "suggestion_id": "SUG-1",
+        "trade_id": "TRD-1", "suggestion_id": "SUG-1", "owner_user_id": 1,
     })
     mocker.patch(
         "database.models.TradeRepo.legs_with_suggestion_info",
@@ -878,7 +878,7 @@ def test_preview_close_execution_ignores_entry_price_band(db_conn, mocker, mock_
         "suggested_price": 100, "suggested_price_low": 95, "suggested_price_high": 105,
     }
     mocker.patch("database.models.TradeRepo.get", return_value={
-        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1",
+        "trade_id": "TRD-1", "status": "OPEN", "suggestion_id": "SUG-1", "owner_user_id": 1,
     })
     mocker.patch("database.models.TradeRepo.legs_with_suggestion_info", return_value=[leg])
     _mock_kite_facade(mocker, mock_instrument)
@@ -955,7 +955,7 @@ def test_preview_includes_margin_snapshot(
         ),
     )
     mocker.patch("lifecycle.zerodha_executor._spot_ltp", return_value=23010.0)
-    preview = preview_suggestion_execution(db_conn, "SUG-1")
+    preview = preview_suggestion_execution(db_conn, "SUG-1", app_user_id=1)
     body = preview.to_dict()
     assert body["margin_required"] == 18450.0
     assert body["margin_peak_required"] == 18450.0
@@ -1000,7 +1000,7 @@ def test_preview_softens_live_price_gate_for_margin(
         ),
     )
     mocker.patch("lifecycle.zerodha_executor._spot_ltp", return_value=23010.0)
-    preview = preview_suggestion_execution(db_conn, "SUG-1")
+    preview = preview_suggestion_execution(db_conn, "SUG-1", app_user_id=1)
     assert preview.margin_peak_required == 8855.0
     assert preview.margin_final_required == 8000.0
 
@@ -1036,7 +1036,7 @@ def test_preview_margin_ignores_execution_gate(
         ),
     )
     mocker.patch("lifecycle.zerodha_executor._spot_ltp", return_value=23010.0)
-    preview = preview_suggestion_execution(db_conn, "SUG-1")
+    preview = preview_suggestion_execution(db_conn, "SUG-1", app_user_id=1)
     assert preview.margin_peak_required == 1200.0
     assert preview.margin_final_required == 1000.0
     validate.assert_not_called()
@@ -1069,7 +1069,7 @@ def test_preview_uses_suggested_price_when_ltp_missing(
         ),
     )
     mocker.patch("lifecycle.zerodha_executor._spot_ltp", return_value=23010.0)
-    preview = preview_suggestion_execution(db_conn, "SUG-1")
+    preview = preview_suggestion_execution(db_conn, "SUG-1", app_user_id=1)
     assert preview.margin_peak_required == 500.0
     assert preview.legs  # suggested-price fallback built plans
     assert preview.legs[0].ltp == float(sample_leg["suggested_price"])

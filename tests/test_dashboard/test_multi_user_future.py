@@ -189,6 +189,19 @@ def test_order_placement_uses_logged_in_user_zerodha_token(monkeypatch):
         zex._ACTING_APP_USER_ID.reset(token)
 
 
+def test_order_placement_refuses_admin_feed_fallback():
+    from lifecycle import zerodha_executor as zex
+    from lifecycle.zerodha_executor import ZerodhaExecutionError
+
+    assert zex._ACTING_APP_USER_ID.get() is None
+    try:
+        zex._build_client()
+    except ZerodhaExecutionError as exc:
+        assert "shared admin feed" in str(exc).lower() or "no app user" in str(exc).lower()
+    else:
+        raise AssertionError("expected refusal when no user is bound")
+
+
 def test_suggestion_execute_does_not_hide_card_for_other_users():
     """User A EXECUTED state must not block User B via duplicate_execution_reason."""
     db = MagicMock()

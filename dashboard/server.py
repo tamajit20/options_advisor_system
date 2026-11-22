@@ -131,7 +131,8 @@ def _zerodha_status_payload(
     *,
     refresh_account: bool = False,
 ) -> dict:
-    from providers.zerodha.session import is_token_valid, load_session, token_valid_until
+    from dashboard.auth import current_user_id
+    from providers.zerodha.session import is_token_valid, load_session_for_user, token_valid_until
     from lifecycle.zerodha_executor import (
         zerodha_execution_config_enabled,
         zerodha_execution_enabled,
@@ -146,11 +147,12 @@ def _zerodha_status_payload(
     runtime_flag_on = False
     exec_on = False
     ready = False
-    if db is not None:
+    uid = current_user_id()
+    if db is not None and uid is not None:
         try:
             runtime_flag_on = zerodha_execution_runtime_enabled(db)
             exec_on = zerodha_execution_enabled(db)
-            ready = zerodha_execution_ready(db)
+            ready = zerodha_execution_ready(db, app_user_id=uid)
         except Exception:
             logger.debug("zerodha status: execution flag read failed", exc_info=True)
     base = {
@@ -165,7 +167,7 @@ def _zerodha_status_payload(
         "execution_enabled": exec_on,
         "execution_ready": ready,
     }
-    s = load_session()
+    s = load_session_for_user(int(uid)) if uid is not None else None
     if s is None:
         return {
             **base,
@@ -197,8 +199,12 @@ def _zerodha_status_payload(
 
 def _zerodha_execution_ready(db: SQLServerConnection) -> bool:
     try:
+        from dashboard.auth import current_user_id
         from lifecycle.zerodha_executor import zerodha_execution_ready
-        return bool(zerodha_execution_ready(db))
+        uid = current_user_id()
+        if uid is None:
+            return False
+        return bool(zerodha_execution_ready(db, app_user_id=uid))
     except Exception:
         logger.debug("zerodha_execution_ready probe failed", exc_info=True)
         return False
@@ -3107,8 +3113,10 @@ def create_app() -> Flask:
                 stored["instrument_overlaps"] = _instrument_overlaps_for_suggestion(db, sid)
                 return jsonify({"preview": stored, "from_db": True})
 
-        if not zerodha_margin_quote_ready():
-            return jsonify({"error": "Zerodha session not ready for margin quote"}), 403
+        from dashboard.auth import current_user_id
+        quote_uid = current_user_id()
+        if not zerodha_margin_quote_ready(app_user_id=quote_uid):
+            return jsonify({"error": "Your Zerodha session is not ready for a margin quote"}), 403
         spot_raw = payload.get("spot_at_execution")
         leg_limits = parse_leg_limits(payload.get("leg_limits"))
         try:
@@ -3117,6 +3125,7 @@ def create_app() -> Flask:
                 leg_limits=leg_limits or None,
                 spot_at_execution=float(spot_raw) if spot_raw is not None else None,
                 lots_override=lots_override,
+                app_user_id=quote_uid,
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -3452,13 +3461,15 @@ def create_app() -> Flask:
             preview_close_execution,
             zerodha_execution_ready,
         )
-        if not zerodha_execution_ready(db):
-            return jsonify({"error": "Zerodha execution is not ready"}), 403
+        from dashboard.auth import current_user_id
+        actor_uid = current_user_id()
+        if not zerodha_execution_ready(db, app_user_id=actor_uid):
+            return jsonify({"error": "Your Zerodha session is not ready"}), 403
         payload = request.get_json(silent=True) or {}
         leg_limits = parse_leg_limits(payload.get("leg_limits"))
         try:
             preview = preview_close_execution(
-                db, trade_id, leg_limits=leg_limits or None,
+                db, trade_id, leg_limits=leg_limits or None, actor_user_id=actor_uid,
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -3477,11 +3488,13 @@ def create_app() -> Flask:
             zerodha_execution_ready,
         )
         from config import ZERODHA_EXECUTION_CONFIG
-        if not zerodha_execution_ready(db):
+        from dashboard.auth import current_user_id
+        actor_uid = current_user_id()
+        if not zerodha_execution_ready(db, app_user_id=actor_uid):
             return jsonify({
                 "error": (
-                    "Zerodha execution is not ready — enable the feature, "
-                    "log in to Zerodha, and turn on trade_execution_enabled"
+                    "Your Zerodha session is not ready — log in to your own "
+                    "Zerodha account and turn on trade_execution_enabled"
                 ),
             }), 403
         payload = request.get_json(silent=True) or {}
@@ -3499,6 +3512,7 @@ def create_app() -> Flask:
                     db, trade_id,
                     leg_limits=leg_limits or None,
                     ack_out_of_band=ack_oob,
+                    actor_user_id=actor_uid,
                 )
                 return jsonify({
                     "ok": True,
@@ -3510,6 +3524,7 @@ def create_app() -> Flask:
                 db, trade_id,
                 leg_limits=leg_limits or None,
                 ack_out_of_band=ack_oob,
+                actor_user_id=actor_uid,
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -3579,8 +3594,10 @@ def create_app() -> Flask:
             parse_leg_limits,
             zerodha_execution_ready,
         )
-        if not zerodha_execution_ready(db):
-            return jsonify({"error": "Zerodha execution is not ready"}), 403
+        from dashboard.auth import current_user_id
+        actor_uid = current_user_id()
+        if not zerodha_execution_ready(db, app_user_id=actor_uid):
+            return jsonify({"error": "Your Zerodha session is not ready"}), 403
         payload = request.get_json(silent=True) or {}
         leg_limits = parse_leg_limits(payload.get("leg_limits"))
         ack_oob = bool(payload.get("ack_out_of_band"))
@@ -3589,6 +3606,7 @@ def create_app() -> Flask:
                 db, trade_id,
                 leg_limits=leg_limits or None,
                 ack_out_of_band=ack_oob,
+                actor_user_id=actor_uid,
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -4629,6 +4647,7 @@ def create_app() -> Flask:
             "estimated_net_pnl": row.get("sug_est_net_pnl"),
             "expiry":      row.get("sug_expiry"),
             "expiry_date": row.get("sug_expiry"),
+            "expiry_type": row.get("sug_expiry_type"),
             "dte":         row.get("sug_dte"),
             "entry_quality_score": row.get("sug_entry_quality"),
             "legs":        sug_legs,
@@ -4671,6 +4690,7 @@ def create_app() -> Flask:
             "  s.estimated_charges_total AS sug_est_charges, "
             "  s.estimated_net_pnl AS sug_est_net_pnl, "
             "  s.expiry_date AS sug_expiry, s.dte AS sug_dte, "
+            "  s.expiry_type AS sug_expiry_type, "
             "  s.entry_quality_score AS sug_entry_quality, "
             "  s.zerodha_margin_final AS sug_zerodha_margin_final, "
             "  s.zerodha_margin_peak AS sug_zerodha_margin_peak "

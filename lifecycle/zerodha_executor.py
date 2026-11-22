@@ -148,16 +148,20 @@ def zerodha_execution_enabled(db: SQLServerConnection) -> bool:
 
 
 def zerodha_session_ready(*, app_user_id: Optional[int] = None) -> bool:
-    if app_user_id is not None:
-        from providers.zerodha.session import load_session_for_user
-        session = load_session_for_user(int(app_user_id))
-    else:
-        session = load_session()
+    """True only for this app user's own Kite token.
+
+    Never falls back to the admin/feed session — that token is for ticks, not
+    for another user's orders or "your Zerodha" status.
+    """
+    if app_user_id is None:
+        return False
+    from providers.zerodha.session import load_session_for_user
+    session = load_session_for_user(int(app_user_id))
     return session is not None and is_token_valid(session)
 
 
-def zerodha_margin_quote_ready() -> bool:
-    """True when Kite can quote basket margins (session + API key).
+def zerodha_margin_quote_ready(*, app_user_id: Optional[int] = None) -> bool:
+    """True when this user's Kite token can quote basket margins.
 
     Does **not** require ``trade_execution_enabled`` — Amount needed Final/Peak
     should still hydrate while place-orders is toggled off.
@@ -166,7 +170,7 @@ def zerodha_margin_quote_ready() -> bool:
         return False
     if not ZERODHA_API_CONFIG.get("api_key"):
         return False
-    return zerodha_session_ready()
+    return zerodha_session_ready(app_user_id=app_user_id)
 
 
 def zerodha_execution_ready(
@@ -361,21 +365,45 @@ def _lock_for(key: str) -> threading.Lock:
         return _LOCKS[key]
 
 
+def _resolve_order_user_id(app_user_id: Optional[int] = None) -> int:
+    """App user whose Kite token may place or flatten orders. Never the feed fallback."""
+    uid = app_user_id if app_user_id is not None else _ACTING_APP_USER_ID.get()
+    if uid is None:
+        raise ZerodhaExecutionError(
+            "Refusing Zerodha order: no app user bound. "
+            "Orders never use the shared admin feed session."
+        )
+    return int(uid)
+
+
+def _kite_owner_for_trade(trade: dict, *, actor_user_id: Optional[int] = None) -> int:
+    """Owner whose token must be used. A different signed-in user cannot act."""
+    raw = trade.get("owner_user_id")
+    if raw is None:
+        raise ZerodhaExecutionError(
+            "Trade has no owner — refusing Zerodha orders so they cannot "
+            "hit another user's broker account"
+        )
+    owner = int(raw)
+    if actor_user_id is not None and int(actor_user_id) != owner:
+        raise ZerodhaExecutionError(
+            "Refusing Zerodha order: this trade belongs to a different user"
+        )
+    return owner
+
+
 def _build_client(
     *,
     app_user_id: Optional[int] = None,
 ) -> Tuple[KiteExecutionFacade, InstrumentMaster]:
+    uid = _resolve_order_user_id(app_user_id)
     if not ZERODHA_API_CONFIG.get("api_key"):
         raise ZerodhaExecutionError("OPT_ZERODHA_API_KEY is not configured")
-    uid = app_user_id if app_user_id is not None else _ACTING_APP_USER_ID.get()
-    if uid is not None:
-        from providers.zerodha.session import load_session_for_user
-        session = load_session_for_user(int(uid))
-    else:
-        session = load_session()
+    from providers.zerodha.session import load_session_for_user
+    session = load_session_for_user(uid)
     if session is None or not is_token_valid(session):
         raise ZerodhaExecutionError(
-            "Zerodha session missing or expired — log in on the dashboard first"
+            "Your Zerodha session is missing or expired — log in on the dashboard first"
         )
     facade = KiteExecutionFacade(
         api_key=ZERODHA_API_CONFIG["api_key"],
@@ -1770,17 +1798,26 @@ def preview_suggestion_execution(
     leg_limits: Optional[Dict[int, float]] = None,
     spot_at_execution: Optional[float] = None,
     lots_override: Optional[int] = None,
+    app_user_id: Optional[int] = None,
 ) -> ExecutionPreview:
-    if not zerodha_margin_quote_ready():
+    if app_user_id is None:
         raise ZerodhaExecutionError(
-            "Zerodha session not ready for margin quote — log in first"
+            "Zerodha margin quote requires your own login — refusing the shared feed session"
         )
-    suggestion, legs, facade, _master, live_map, inst_map, ordered, strategy, margin = (
-        _entry_context(
-            db, suggestion_id, leg_limits, lots_override,
-            soft_live_price_gate=True,
+    if not zerodha_margin_quote_ready(app_user_id=int(app_user_id)):
+        raise ZerodhaExecutionError(
+            "Your Zerodha session is not ready for a margin quote — log in first"
         )
-    )
+    token = _ACTING_APP_USER_ID.set(int(app_user_id))
+    try:
+        suggestion, legs, facade, _master, live_map, inst_map, ordered, strategy, margin = (
+            _entry_context(
+                db, suggestion_id, leg_limits, lots_override,
+                soft_live_price_gate=True,
+            )
+        )
+    finally:
+        _ACTING_APP_USER_ID.reset(token)
     # Prefer live LTP; fall back to suggested mid so Amount needed still hydrates
     # when a quote is briefly missing (confirm modal has the same need).
     enriched_live = dict(live_map)
@@ -1917,11 +1954,15 @@ def execute_suggestion_in_zerodha(
             "and the trade_execution_enabled runtime flag"
         )
 
-    lock = _lock_for(f"sugg:{suggestion_id}:u:{owner_user_id or 0}")
+    if owner_user_id is None:
+        raise ZerodhaExecutionError(
+            "Refusing Zerodha entry: no app user. Orders never use the shared feed session."
+        )
+    lock = _lock_for(f"sugg:{suggestion_id}:u:{int(owner_user_id)}")
     if not lock.acquire(blocking=False):
         raise ZerodhaExecutionError("Execution already in progress for this suggestion")
 
-    token = _ACTING_APP_USER_ID.set(int(owner_user_id) if owner_user_id else None)
+    token = _ACTING_APP_USER_ID.set(int(owner_user_id))
     try:
         suggestion, legs, facade, master, live_map, inst_map, ordered, strategy, _margin = (
             _entry_context(
@@ -2139,8 +2180,12 @@ def execute_suggestion_in_zerodha_async(
     """Start background entry execution; returns immediately with job_id."""
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
+    if owner_user_id is None:
+        raise ZerodhaExecutionError(
+            "Refusing Zerodha entry: no app user. Orders never use the shared feed session."
+        )
     _assert_execution_not_in_flight(db, suggestion_id=suggestion_id)
-    token = _ACTING_APP_USER_ID.set(int(owner_user_id) if owner_user_id else None)
+    token = _ACTING_APP_USER_ID.set(int(owner_user_id))
     try:
         # Fail before the job is queued if funds / live prices / gates fail.
         _entry_context(db, suggestion_id, leg_limits, lots_override)
@@ -2185,6 +2230,7 @@ def preview_close_execution(
     trade_id: str,
     *,
     leg_limits: Optional[Dict[int, float]] = None,
+    actor_user_id: Optional[int] = None,
 ) -> ExecutionPreview:
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
@@ -2192,12 +2238,17 @@ def preview_close_execution(
     trade = trd.get(trade_id)
     if trade is None:
         raise ZerodhaExecutionError(f"Unknown trade: {trade_id}")
+    owner = _kite_owner_for_trade(trade, actor_user_id=actor_user_id)
     all_legs = trd.legs_with_suggestion_info(trade_id)
     open_exits = [l for l in all_legs if l.get("executed") and l.get("exit_price") is None]
     if not open_exits:
         raise ZerodhaExecutionError("No open legs to close")
     _require_opening_kite_fills(db, trade_id)
-    facade, master = _build_client()
+    token = _ACTING_APP_USER_ID.set(owner)
+    try:
+        facade, master = _build_client()
+    finally:
+        _ACTING_APP_USER_ID.reset(token)
     live_map, inst_map = _live_ltp_map(facade, master, open_exits)
     strategy = ""
     if trade.get("suggestion_id"):
@@ -2261,6 +2312,7 @@ def close_trade_in_zerodha(
     leg_limits: Optional[Dict[int, float]] = None,
     ack_out_of_band: bool = False,
     execution_job_id: Optional[int] = None,
+    actor_user_id: Optional[int] = None,
 ) -> ExecutionOutcome:
     # Entry suggestion bands do not apply when flattening a live trade.
     _ = ack_out_of_band
@@ -2284,10 +2336,9 @@ def close_trade_in_zerodha(
             raise ZerodhaExecutionError(
                 f"Trade status is {trade.get('status')!r} — cannot close"
             )
-        # Auto-close / dashboard close must use the trade owner's Kite token.
-        owner_raw = trade.get("owner_user_id")
-        if owner_raw is not None:
-            owner_token = _ACTING_APP_USER_ID.set(int(owner_raw))
+        # Auto-close and dashboard close use only the trade owner's Kite token.
+        owner = _kite_owner_for_trade(trade, actor_user_id=actor_user_id)
+        owner_token = _ACTING_APP_USER_ID.set(owner)
 
         all_legs = trd.legs_with_suggestion_info(trade_id)
         executed_legs = [l for l in all_legs if l.get("executed")]
@@ -2455,6 +2506,7 @@ def execute_supplement_in_zerodha(
     leg_limits: Optional[Dict[int, float]] = None,
     ack_out_of_band: bool = False,
     execution_job_id: Optional[int] = None,
+    actor_user_id: Optional[int] = None,
 ) -> ExecutionOutcome:
     """Fill remaining unexecuted legs on a partial/broken trade via Zerodha."""
     if not zerodha_execution_enabled(db):
@@ -2464,11 +2516,14 @@ def execute_supplement_in_zerodha(
     if not lock.acquire(blocking=False):
         raise ZerodhaExecutionError("Supplement already in progress for this trade")
 
+    token = None
     try:
         trd = TradeRepo(db)
         trade = trd.get(trade_id)
         if trade is None:
             raise ZerodhaExecutionError(f"Unknown trade: {trade_id}")
+        owner = _kite_owner_for_trade(trade, actor_user_id=actor_user_id)
+        token = _ACTING_APP_USER_ID.set(owner)
         all_legs = trd.legs_with_suggestion_info(trade_id)
         pending_legs = [l for l in all_legs if not l.get("executed")]
         if not pending_legs:
@@ -2607,6 +2662,8 @@ def execute_supplement_in_zerodha(
             job_id=execution_job_id,
         )
     finally:
+        if token is not None:
+            _ACTING_APP_USER_ID.reset(token)
         lock.release()
 
 
@@ -2617,6 +2674,7 @@ def close_trade_in_zerodha_async(
     leg_limits: Optional[Dict[int, float]] = None,
     ack_out_of_band: bool = False,
     close_trigger: Optional[str] = None,
+    actor_user_id: Optional[int] = None,
 ) -> ExecutionOutcome:
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
@@ -2638,6 +2696,7 @@ def close_trade_in_zerodha_async(
             leg_limits=leg_limits,
             ack_out_of_band=ack_out_of_band,
             execution_job_id=job_id,
+            actor_user_id=actor_user_id,
         )
         if trigger and out.message and trigger not in out.message.upper():
             out.message = f"{trigger}: {out.message}"
