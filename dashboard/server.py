@@ -2637,6 +2637,7 @@ def create_app() -> Flask:
         u = current_user()
         if not u:
             return jsonify({"user": None}), 401
+        from providers.zerodha.session import user_has_kite_app
         my_sess = load_session_for_user(int(u["id"]))
         admin_sess = load_admin_session()
         tick_feed = _tick_feed_status_payload()
@@ -2645,6 +2646,7 @@ def create_app() -> Flask:
             "zerodha": {
                 "ready": bool(my_sess and is_token_valid(my_sess)),
                 "kite_user_id": (my_sess.user_id if my_sess else None),
+                "kite_app_configured": user_has_kite_app(int(u["id"])),
             },
             "feed": {
                 "ready": tick_feed.get("mode") != "feed_off",
@@ -2661,12 +2663,44 @@ def create_app() -> Flask:
     def api_users_list(db: SQLServerConnection):
         from dashboard.auth import require_admin
         from database.app_user_repo import AppUserRepo
+        from database.zerodha_session_repo import ZerodhaSessionRepo
         gate = require_admin()
         if gate is not None:
             return gate
         rows = AppUserRepo(db).list_users()
+        zrepo = ZerodhaSessionRepo(db)
+        users = []
+        for r in rows:
+            pub = AppUserRepo.public_row(r)
+            pub["kite_app"] = zrepo.public_kite_app(int(r["id"]))
+            users.append(pub)
+        return jsonify({"users": users})
+
+    @app.route("/api/users/<int:user_id>/kite-app", methods=["PUT"])
+    @_with_db
+    def api_users_set_kite_app(db: SQLServerConnection, user_id: int):
+        """Admin: bind a Kite Connect app (api_key + secret) to this trader."""
+        from dashboard.auth import require_admin
+        from database.app_user_repo import AppUserRepo
+        from database.zerodha_session_repo import ZerodhaSessionRepo
+        gate = require_admin()
+        if gate is not None:
+            return gate
+        if AppUserRepo(db).get(user_id) is None:
+            return jsonify({"error": "user not found"}), 404
+        body = request.get_json(silent=True) or {}
+        try:
+            ZerodhaSessionRepo(db).set_app_credentials(
+                user_id,
+                api_key=str(body.get("api_key") or ""),
+                api_secret=str(body.get("api_secret") or ""),
+            )
+            db.commit()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         return jsonify({
-            "users": [AppUserRepo.public_row(r) for r in rows],
+            "ok": True,
+            "kite_app": ZerodhaSessionRepo(db).public_kite_app(user_id),
         })
 
     @app.route("/api/users", methods=["POST"])
@@ -2783,9 +2817,10 @@ def create_app() -> Flask:
     @app.route("/zerodha/login")
     def zerodha_login_redirect():
         try:
+            from dashboard.auth import current_user_id
             from providers.zerodha.session import build_login_url
-            url = build_login_url()
-        except (RuntimeError, ImportError) as exc:
+            url = build_login_url(app_user_id=current_user_id())
+        except (RuntimeError, ImportError, ValueError) as exc:
             return jsonify({"ok": False, "error": str(exc)}), 500
         return redirect(url, code=302)
 

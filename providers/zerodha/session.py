@@ -139,12 +139,76 @@ def _session_from_db_row(row: dict) -> Optional[ZerodhaSession]:
         gen = gen.replace(tzinfo=_IST)
     from config import ZERODHA_API_CONFIG
     api_key = str(row.get("api_key") or ZERODHA_API_CONFIG.get("api_key") or "")
+    if not api_key:
+        return None
     return ZerodhaSession(
         api_key=api_key,
         access_token=str(row["access_token"]),
         user_id=str(row.get("kite_user_id") or ""),
         generated_at=gen,
     )
+
+
+def resolve_kite_app_credentials(
+    app_user_id: Optional[int] = None,
+) -> tuple[str, str]:
+    """Return ``(api_key, api_secret)`` for this dashboard user.
+
+    Prefers the per-user row in ``zerodha_sessions``. Env
+    ``OPT_ZERODHA_API_KEY`` / ``OPT_ZERODHA_API_SECRET`` is only a fallback for
+    the admin (feed bootstrap) — never for other traders.
+    """
+    from config import ZERODHA_API_CONFIG
+
+    allow_env_fallback = app_user_id is None
+    if app_user_id is not None:
+        try:
+            from database.connection import SQLServerConnection
+            from database.app_user_repo import AppUserRepo
+            from database.zerodha_session_repo import ZerodhaSessionRepo
+            db = SQLServerConnection()
+            db.connect()
+            try:
+                row = ZerodhaSessionRepo(db).get(int(app_user_id)) or {}
+                admin = AppUserRepo(db).get_admin()
+                allow_env_fallback = bool(
+                    admin and int(admin["id"]) == int(app_user_id)
+                )
+            finally:
+                db.close()
+            key = str(row.get("api_key") or "").strip()
+            secret = str(row.get("api_secret") or "").strip()
+            if key and secret:
+                return key, secret
+        except Exception:
+            logger.debug(
+                "resolve_kite_app_credentials(%s) DB read failed",
+                app_user_id, exc_info=True,
+            )
+
+    if allow_env_fallback:
+        key = str(ZERODHA_API_CONFIG.get("api_key") or "").strip()
+        secret = str(ZERODHA_API_CONFIG.get("api_secret") or "").strip()
+        if key and secret:
+            return key, secret
+
+    raise RuntimeError(
+        "No Kite Connect app configured for this user. "
+        "On the Users tab, set API key + secret to the Kite app whose "
+        "Zerodha Client ID matches this trader. Admin may also use "
+        "OPT_ZERODHA_API_KEY / OPT_ZERODHA_API_SECRET for the feed app."
+    )
+
+
+def user_has_kite_app(app_user_id: Optional[int]) -> bool:
+    """True when this user can start a Kite login (DB creds or env fallback)."""
+    if app_user_id is None:
+        return False
+    try:
+        resolve_kite_app_credentials(int(app_user_id))
+        return True
+    except Exception:
+        return False
 
 
 def load_session_from_file(path: Optional[Path] = None) -> Optional[ZerodhaSession]:
@@ -283,14 +347,11 @@ def clear_session(path: Optional[Path] = None) -> bool:
 # OAuth exchange — shared between CLI (`main.py --zerodha-login`) and the
 # Flask dashboard's /zerodha/login flow.
 # ---------------------------------------------------------------------------
-def build_login_url() -> str:
-    """Return the Kite Connect login URL for the configured api_key."""
-    from config import ZERODHA_API_CONFIG
+def build_login_url(*, app_user_id: Optional[int] = None) -> str:
+    """Return the Kite Connect login URL for *this* user's API key."""
     from kiteconnect import KiteConnect  # type: ignore[import-not-found]
 
-    api_key = ZERODHA_API_CONFIG.get("api_key", "")
-    if not api_key:
-        raise RuntimeError("OPT_ZERODHA_API_KEY is not set")
+    api_key, _secret = resolve_kite_app_credentials(app_user_id)
     return KiteConnect(api_key=api_key).login_url()
 
 
@@ -305,7 +366,7 @@ def save_session_for_user(app_user_id: int, session: ZerodhaSession) -> None:
     db = SQLServerConnection()
     db.connect()
     try:
-        ZerodhaSessionRepo(db).upsert(
+        ZerodhaSessionRepo(db).upsert_token(
             int(app_user_id),
             access_token=session.access_token,
             kite_user_id=session.user_id or "",
@@ -328,23 +389,31 @@ def exchange_request_token(
 ) -> ZerodhaSession:
     """Exchange a Kite ``request_token`` for an access_token and persist it.
 
-    When *app_user_id* is set, store under ``zerodha_sessions`` for that user
-    (and mirror to file if they are admin). Otherwise write the legacy file only.
+    Uses the per-user Kite app (key/secret) when *app_user_id* is set.
+    Admin tokens also mirror to ``data/zerodha_session.json`` for the feed.
     """
-    from config import ZERODHA_API_CONFIG
     from kiteconnect import KiteConnect  # type: ignore[import-not-found]
 
-    api_key = ZERODHA_API_CONFIG.get("api_key", "")
-    api_secret = ZERODHA_API_CONFIG.get("api_secret", "")
-    if not api_key or not api_secret:
-        raise RuntimeError("OPT_ZERODHA_API_KEY / OPT_ZERODHA_API_SECRET not set")
+    api_key, api_secret = resolve_kite_app_credentials(app_user_id)
 
     request_token = (request_token or "").strip()
     if not request_token:
         raise ValueError("empty request_token")
 
     kite = KiteConnect(api_key=api_key)
-    data = kite.generate_session(request_token, api_secret=api_secret)
+    try:
+        data = kite.generate_session(request_token, api_secret=api_secret)
+    except Exception as exc:  # noqa: BLE001 — kiteconnect raises varied types
+        msg = str(exc) or exc.__class__.__name__
+        low = msg.lower()
+        if "not enabled for the app" in low:
+            raise ValueError(
+                "Zerodha rejected this login: the Kite app's Client ID does not "
+                "match the Zerodha account that just signed in. On the Users tab, "
+                "set this trader's API key/secret to the Kite app tagged with "
+                f"their client id. Raw: {msg}"
+            ) from exc
+        raise
 
     session = ZerodhaSession(
         api_key=api_key,

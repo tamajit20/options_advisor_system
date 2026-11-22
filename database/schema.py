@@ -1160,11 +1160,39 @@ _TABLE_DDL: List[str] = [
     CREATE TABLE zerodha_sessions (
         user_id         BIGINT        NOT NULL PRIMARY KEY,
         kite_user_id    NVARCHAR(40)  NULL,
-        access_token    NVARCHAR(512) NOT NULL,
+        access_token    NVARCHAR(512) NULL,
         api_key         NVARCHAR(80)  NULL,
-        generated_at    DATETIME2(0)  NOT NULL,
+        api_secret      NVARCHAR(120) NULL,
+        generated_at    DATETIME2(0)  NULL,
         updated_at      DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME()
     )
+    """,
+    # Per-trader Kite Connect apps: key+secret stay after logout; token clears.
+    """
+    IF OBJECT_ID('zerodha_sessions', 'U') IS NOT NULL
+       AND NOT EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('zerodha_sessions') AND name = 'api_secret'
+    )
+    ALTER TABLE zerodha_sessions ADD api_secret NVARCHAR(120) NULL
+    """,
+    """
+    IF OBJECT_ID('zerodha_sessions', 'U') IS NOT NULL
+       AND EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('zerodha_sessions')
+          AND name = 'access_token' AND is_nullable = 0
+    )
+    ALTER TABLE zerodha_sessions ALTER COLUMN access_token NVARCHAR(512) NULL
+    """,
+    """
+    IF OBJECT_ID('zerodha_sessions', 'U') IS NOT NULL
+       AND EXISTS (
+        SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('zerodha_sessions')
+          AND name = 'generated_at' AND is_nullable = 0
+    )
+    ALTER TABLE zerodha_sessions ALTER COLUMN generated_at DATETIME2(0) NULL
     """,
 
     """

@@ -168,7 +168,8 @@ def zerodha_margin_quote_ready(*, app_user_id: Optional[int] = None) -> bool:
     """
     if not zerodha_execution_config_enabled():
         return False
-    if not ZERODHA_API_CONFIG.get("api_key"):
+    from providers.zerodha.session import user_has_kite_app
+    if not user_has_kite_app(app_user_id):
         return False
     return zerodha_session_ready(app_user_id=app_user_id)
 
@@ -180,7 +181,8 @@ def zerodha_execution_ready(
 ) -> bool:
     if not zerodha_execution_enabled(db):
         return False
-    if not ZERODHA_API_CONFIG.get("api_key"):
+    from providers.zerodha.session import user_has_kite_app
+    if not user_has_kite_app(app_user_id):
         return False
     return zerodha_session_ready(app_user_id=app_user_id)
 
@@ -397,22 +399,26 @@ def _build_client(
     app_user_id: Optional[int] = None,
 ) -> Tuple[KiteExecutionFacade, InstrumentMaster]:
     uid = _resolve_order_user_id(app_user_id)
-    if not ZERODHA_API_CONFIG.get("api_key"):
-        raise ZerodhaExecutionError("OPT_ZERODHA_API_KEY is not configured")
     from providers.zerodha.session import load_session_for_user
     session = load_session_for_user(uid)
     if session is None or not is_token_valid(session):
         raise ZerodhaExecutionError(
             "Your Zerodha session is missing or expired — log in on the dashboard first"
         )
+    api_key = (session.api_key or "").strip()
+    if not api_key:
+        raise ZerodhaExecutionError(
+            "No Kite API key on your session — ask admin to set your Kite app "
+            "on the Users tab, then log in to Zerodha again"
+        )
     facade = KiteExecutionFacade(
-        api_key=ZERODHA_API_CONFIG["api_key"],
+        api_key=api_key,
         access_token=session.access_token,
     )
     # Process-wide NFO master (24h TTL) — do not re-download ~30k rows per call.
     from providers.zerodha.instrument_cache import get_shared_instrument_master
     master = get_shared_instrument_master(
-        api_key=ZERODHA_API_CONFIG["api_key"],
+        api_key=api_key,
         access_token=session.access_token,
         segment="NFO",
     )

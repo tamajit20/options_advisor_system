@@ -13850,19 +13850,28 @@ async function loadUsersPane() {
           <th scope="col">Login</th>
           <th scope="col">Name</th>
           <th scope="col">Role</th>
+          <th scope="col">Kite app</th>
           <th scope="col">Active</th>
           <th scope="col">Actions</th>
         </tr>
       </thead>
-      <tbody>${users.map(u => `
+      <tbody>${users.map(u => {
+        const ka = u.kite_app || {};
+        const kiteLabel = ka.configured
+          ? `OK · ${escapeHtml(ka.api_key_masked || '••••')}`
+          : 'Not set';
+        return `
         <tr>
           <td class="users-col-id">${escapeHtml(String(u.id))}</td>
           <td><code>${escapeHtml(u.login || '')}</code></td>
           <td>${escapeHtml(u.display_name || '—')}</td>
           <td><span class="users-role ${u.is_admin ? 'users-role-admin' : 'users-role-user'}">${u.is_admin ? 'Admin' : 'User'}</span></td>
+          <td><span class="users-kite ${ka.configured ? 'is-yes' : 'is-no'}" title="Kite Connect app for this trader">${kiteLabel}</span></td>
           <td><span class="users-active ${u.is_active ? 'is-yes' : 'is-no'}">${u.is_active ? 'Yes' : 'No'}</span></td>
           <td class="users-col-actions">
             <div class="users-actions">
+              <button type="button" class="btn btn-sm" data-set-kite-app="${u.id}"
+                      data-login="${escapeHtml(u.login || '')}">Kite app</button>
               <button type="button" class="btn btn-sm" data-set-password="${u.id}" data-login="${escapeHtml(u.login || '')}">Password</button>
               ${u.is_admin ? '' : `<button type="button" class="btn btn-sm" data-transfer-admin="${u.id}">Make admin</button>`}
               ${u.is_admin ? '' : (u.is_active
@@ -13870,9 +13879,34 @@ async function loadUsersPane() {
                 : `<button type="button" class="btn btn-sm" data-enable-user="${u.id}">Enable</button>`)}
             </div>
           </td>
-        </tr>`).join('')}
+        </tr>`;
+      }).join('')}
       </tbody>
     </table>`;
+    box.querySelectorAll('[data-set-kite-app]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const uid = Number(btn.dataset.setKiteApp);
+        const who = btn.dataset.login || String(uid);
+        const api_key = prompt(
+          `Kite API key for ${who}\n(Use the app whose Zerodha Client ID matches this trader)`,
+          ''
+        );
+        if (api_key == null) return;
+        const api_secret = prompt(`Kite API secret for ${who}`, '');
+        if (api_secret == null) return;
+        try {
+          await API(`/api/users/${uid}/kite-app`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key, api_secret }),
+          });
+          toast(`Kite app saved for ${who}`, 'ok');
+          loadUsersPane();
+        } catch (e) {
+          toast((e && e.message) || 'Save failed', 'err');
+        }
+      });
+    });
     box.querySelectorAll('[data-set-password]').forEach(btn => {
       btn.addEventListener('click', () => {
         _openPasswordPage({
@@ -14484,7 +14518,15 @@ document.getElementById('zerodha-margin-refresh')?.addEventListener('click', (e)
         if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
       if (err) {
-        toast('Zerodha login failed: ' + decodeURIComponent(err), 'err');
+        let decoded = err;
+        try { decoded = decodeURIComponent(err); } catch (_) {}
+        const notEnabled = /not enabled for the app/i.test(decoded);
+        toast(
+          notEnabled
+            ? 'Zerodha login failed: this API key only allows the Zerodha account that owns the Kite app (usually admin). Ask Zerodha for multi-user access, or use that account’s own Kite app.'
+            : ('Zerodha login failed: ' + decoded),
+          'err'
+        );
         const inp = document.getElementById('zerodha-token-input');
         if (inp) inp.focus();
       }
