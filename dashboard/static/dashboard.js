@@ -13440,24 +13440,37 @@ async function loadUsersPane() {
       box.textContent = 'No users yet.';
       return;
     }
-    box.className = '';
-    box.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Id</th><th>Login</th><th>Name</th><th>Role</th><th>Active</th><th>Actions</th>
-    </tr></thead><tbody>${users.map(u => `
-      <tr>
-        <td>${escapeHtml(String(u.id))}</td>
-        <td>${escapeHtml(u.login || '')}</td>
-        <td>${escapeHtml(u.display_name || '')}</td>
-        <td>${u.is_admin ? 'Admin' : 'User'}</td>
-        <td>${u.is_active ? 'Yes' : 'No'}</td>
-        <td style="white-space:nowrap">
-          <button type="button" class="btn btn-sm" data-set-password="${u.id}" data-login="${escapeHtml(u.login || '')}">Set password</button>
-          ${u.is_admin ? '' : `<button type="button" class="btn btn-sm" data-transfer-admin="${u.id}">Make admin</button>`}
-          ${u.is_admin ? '' : (u.is_active
-            ? `<button type="button" class="btn btn-sm" data-disable-user="${u.id}">Disable</button>`
-            : `<button type="button" class="btn btn-sm" data-enable-user="${u.id}">Enable</button>`)}
-        </td>
-      </tr>`).join('')}</tbody></table>`;
+    box.className = 'users-table-wrap';
+    box.innerHTML = `<table class="dt users-table">
+      <thead>
+        <tr>
+          <th scope="col">Id</th>
+          <th scope="col">Login</th>
+          <th scope="col">Name</th>
+          <th scope="col">Role</th>
+          <th scope="col">Active</th>
+          <th scope="col">Actions</th>
+        </tr>
+      </thead>
+      <tbody>${users.map(u => `
+        <tr>
+          <td class="users-col-id">${escapeHtml(String(u.id))}</td>
+          <td><code>${escapeHtml(u.login || '')}</code></td>
+          <td>${escapeHtml(u.display_name || '—')}</td>
+          <td><span class="users-role ${u.is_admin ? 'users-role-admin' : 'users-role-user'}">${u.is_admin ? 'Admin' : 'User'}</span></td>
+          <td><span class="users-active ${u.is_active ? 'is-yes' : 'is-no'}">${u.is_active ? 'Yes' : 'No'}</span></td>
+          <td class="users-col-actions">
+            <div class="users-actions">
+              <button type="button" class="btn btn-sm" data-set-password="${u.id}" data-login="${escapeHtml(u.login || '')}">Set password</button>
+              ${u.is_admin ? '' : `<button type="button" class="btn btn-sm" data-transfer-admin="${u.id}">Make admin</button>`}
+              ${u.is_admin ? '' : (u.is_active
+                ? `<button type="button" class="btn btn-sm btn-ghost" data-disable-user="${u.id}">Disable</button>`
+                : `<button type="button" class="btn btn-sm" data-enable-user="${u.id}">Enable</button>`)}
+            </div>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
     box.querySelectorAll('[data-set-password]').forEach(btn => {
       btn.addEventListener('click', async () => {
         const login = btn.dataset.login || btn.dataset.setPassword;

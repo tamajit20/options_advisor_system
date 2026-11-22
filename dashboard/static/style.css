@@ -827,6 +827,73 @@ table.dt {
 }
 .dt th { color: var(--text-dim); font-weight: 600; font-size: .8rem; }
 
+.users-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #2a3744;
+  border-radius: 10px;
+  background: var(--surface-alt, #1a2332);
+}
+.users-table {
+  margin: 0;
+  min-width: 640px;
+}
+.users-table thead th {
+  position: sticky;
+  top: 0;
+  background: #121a24;
+  border-bottom: 1px solid #3a4754;
+  padding: 10px 12px;
+  white-space: nowrap;
+}
+.users-table tbody td {
+  padding: 10px 12px;
+  vertical-align: middle;
+}
+.users-table tbody tr:hover td {
+  background: rgba(20, 184, 166, .06);
+}
+.users-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.users-col-id {
+  width: 4rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.users-col-actions {
+  width: 1%;
+  white-space: nowrap;
+}
+.users-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.users-role {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 600;
+}
+.users-role-admin {
+  background: rgba(20, 184, 166, .18);
+  color: #5eead4;
+}
+.users-role-user {
+  background: rgba(148, 163, 184, .16);
+  color: #cbd5e1;
+}
+.users-active.is-yes { color: #6ee7b7; font-weight: 600; }
+.users-active.is-no { color: #fca5a5; font-weight: 600; }
+.btn-sm {
+  padding: 4px 10px;
+  font-size: .75rem;
+  line-height: 1.3;
+  border-radius: 6px;
+}
+
 /* ---------- Config page ---------- */
 .cfg-panel-intro { margin: 0 0 12px; max-width: 90ch; }
 .cfg-page { display: grid; gap: 18px; width: 100%; }
