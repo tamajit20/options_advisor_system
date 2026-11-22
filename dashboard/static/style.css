@@ -45,10 +45,6 @@ a { color: var(--accent); text-decoration: none; }
   flex: 0 0 auto;
   white-space: nowrap;
 }
-.brand-dot {
-  width: 12px; height: 12px; border-radius: 50%;
-  background: var(--accent); box-shadow: 0 0 8px var(--accent);
-}
 .brand-name { letter-spacing: .3px; }
 .header-center {
   display: flex;
@@ -1758,7 +1754,6 @@ input:focus, select:focus, textarea:focus {
   }
   .brand { gap: 6px; min-width: 0; flex-shrink: 0; }
   .signal-rail { order: -1; flex-shrink: 0; margin-right: 2px; }
-  .brand-dot { width: 9px; height: 9px; }
   .brand-name { display: none; }
   .header-center {
     order: 8;
