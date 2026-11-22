@@ -70,8 +70,6 @@
       <div class="user-avatar-menu" id="user-avatar-menu" role="menu" hidden>
         <div class="user-avatar-head">
           <strong id="app-user-label">Signed in</strong>
-          <span class="user-avatar-role" id="app-user-role"></span>
-          <span class="user-avatar-id muted" id="app-user-id"></span>
         </div>
         <div class="user-avatar-meta muted">
           <div>Feed (admin): <span id="feed-status-label">—</span></div>
@@ -82,7 +80,6 @@
         <a id="zerodha-login-btn" class="user-avatar-item" role="menuitem" href="/zerodha/login">Zerodha login</a>
         <button type="button" class="user-avatar-item" role="menuitem" id="user-menu-zerodha-logout" hidden>Zerodha logout</button>
         <button type="button" class="user-avatar-item" role="menuitem" id="user-menu-change-password">Change my password…</button>
-        <button type="button" class="user-avatar-item admin-only" role="menuitem" id="user-menu-users" hidden>Users…</button>
         <a class="user-avatar-item user-avatar-danger" role="menuitem" id="user-menu-sign-out"
            href="/dashboard-logout">Sign out</a>
       </div>
@@ -122,6 +119,9 @@
         </button>
         <button class="nav-item" data-tab="learn">
           <span class="nav-icon">📘</span><span class="nav-label">Learning</span>
+        </button>
+        <button class="nav-item admin-only" data-tab="users" hidden>
+          <span class="nav-icon">👤</span><span class="nav-label">Users</span>
         </button>
         <button class="nav-item admin-only" data-tab="jobs" hidden>
           <span class="nav-icon">🔧</span><span class="nav-label">Jobs</span>
@@ -281,6 +281,28 @@
         </div>
       </div>
       <div id="users-container" class="loading">Loading…</div>
+    </article>
+
+    <article class="panel" id="panel-password" aria-hidden="true">
+      <h2 class="panel-title">Change password</h2>
+      <p class="muted" style="font-size:.85rem;margin:0 0 12px">Choose a new password for your dashboard login.</p>
+      <div class="card password-page" style="padding:16px 18px">
+        <div class="filter-row" style="margin:0">
+          <div>
+            <label for="pw-new">New password</label>
+            <input id="pw-new" type="password" autocomplete="new-password" />
+          </div>
+          <div>
+            <label for="pw-confirm">Confirm password</label>
+            <input id="pw-confirm" type="password" autocomplete="new-password" />
+          </div>
+          <div class="password-page-actions">
+            <button type="button" class="btn" id="pw-save-btn">Save password</button>
+            <button type="button" class="btn btn-ghost" id="pw-cancel-btn">Cancel</button>
+          </div>
+          <p id="pw-form-error" class="err" hidden style="margin:0;color:#f87171;font-size:.85rem"></p>
+        </div>
+      </div>
     </article>
 
     <article class="panel" id="panel-logs" aria-hidden="true">

@@ -2733,7 +2733,7 @@ const toast = (msg, kind='info') => {
 window.toast = toast;
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'history', 'notifications', 'config', 'learn', 'users', 'jobs', 'logs', 'wsmon'];
+const TABS = ['suggestion', 'trades', 'history', 'notifications', 'config', 'learn', 'password', 'users', 'jobs', 'logs', 'wsmon'];
 window.TABS = TABS;
 // Advisor chrome (header subtabs / mobile Advisor mode) — daily workflow tabs.
 const OPTIONS_TABS = ['suggestion', 'trades', 'history', 'config', 'learn'];
@@ -2807,6 +2807,7 @@ function switchTab(name) {
     if (typeof window.renderLearningPage === 'function') window.renderLearningPage();
   }
   if (name === 'history')       loadHistory();
+  if (name === 'password')      _resetPasswordForm();
   if (name === 'users')         loadUsersPane();
   if (name === 'logs')          loadLogsPane();
   if (name === 'jobs')          loadJobs();
@@ -13283,12 +13284,75 @@ function _syncZerodhaMenuAction(sessionOk) {
   const ok = !!sessionOk;
   if (loginBtn) {
     loginBtn.hidden = ok;
+    loginBtn.style.display = ok ? 'none' : '';
     if (!ok) {
       loginBtn.setAttribute('href', '/zerodha/login');
       loginBtn.textContent = 'Zerodha login';
     }
   }
-  if (logoutBtn) logoutBtn.hidden = !ok;
+  if (logoutBtn) {
+    logoutBtn.hidden = !ok;
+    logoutBtn.style.display = ok ? '' : 'none';
+  }
+}
+
+function _resetPasswordForm() {
+  const err = document.getElementById('pw-form-error');
+  if (err) { err.hidden = true; err.textContent = ''; }
+  ['pw-new', 'pw-confirm'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+}
+
+function _wirePasswordPage() {
+  const save = document.getElementById('pw-save-btn');
+  const cancel = document.getElementById('pw-cancel-btn');
+  if (save && save.dataset.wired !== '1') {
+    save.dataset.wired = '1';
+    save.addEventListener('click', async () => {
+      const err = document.getElementById('pw-form-error');
+      const showErr = (msg) => {
+        if (err) { err.hidden = false; err.textContent = msg; }
+        else if (typeof toast === 'function') toast(msg, 'err');
+      };
+      if (err) { err.hidden = true; err.textContent = ''; }
+      const me = window.__OA_ME && window.__OA_ME.user;
+      if (!me || me.id == null) {
+        showErr('Not signed in');
+        return;
+      }
+      const password = String((document.getElementById('pw-new') || {}).value || '');
+      const confirm = String((document.getElementById('pw-confirm') || {}).value || '');
+      if (!password.trim()) {
+        showErr('Enter a new password.');
+        return;
+      }
+      if (password !== confirm) {
+        showErr('Password and confirm password do not match.');
+        return;
+      }
+      try {
+        await API(`/api/users/${me.id}/password`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        });
+        if (typeof toast === 'function') toast('Password updated', 'ok');
+        _resetPasswordForm();
+        if (typeof switchTab === 'function') switchTab('suggestion');
+      } catch (e) {
+        showErr((e && e.message) || 'Password update failed');
+      }
+    });
+  }
+  if (cancel && cancel.dataset.wired !== '1') {
+    cancel.dataset.wired = '1';
+    cancel.addEventListener('click', () => {
+      _resetPasswordForm();
+      if (typeof switchTab === 'function') switchTab('suggestion');
+    });
+  }
 }
 
 function _wireUserAvatarMenu() {
@@ -13307,17 +13371,6 @@ function _wireUserAvatarMenu() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') _setUserAvatarMenuOpen(false);
   });
-  const usersBtn = document.getElementById('user-menu-users');
-  if (usersBtn) {
-    usersBtn.addEventListener('click', () => {
-      _setUserAvatarMenuOpen(false);
-      if (typeof switchTab === 'function') switchTab('users');
-      else {
-        const nav = document.querySelector('.nav-item[data-tab="users"]');
-        if (nav) nav.click();
-      }
-    });
-  }
   const zLogout = document.getElementById('user-menu-zerodha-logout');
   if (zLogout) {
     zLogout.addEventListener('click', async () => {
@@ -13342,29 +13395,9 @@ function _wireUserAvatarMenu() {
   }
   const changePw = document.getElementById('user-menu-change-password');
   if (changePw) {
-    changePw.addEventListener('click', async () => {
+    changePw.addEventListener('click', () => {
       _setUserAvatarMenuOpen(false);
-      const me = window.__OA_ME && window.__OA_ME.user;
-      if (!me || me.id == null) {
-        toast('Not signed in', 'err');
-        return;
-      }
-      const password = window.prompt('New password for your account:');
-      if (password == null) return;
-      if (!String(password).trim()) {
-        toast('Password required', 'err');
-        return;
-      }
-      try {
-        await API(`/api/users/${me.id}/password`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: String(password) }),
-        });
-        toast('Password updated', 'ok');
-      } catch (err) {
-        toast((err && err.message) || 'Password update failed', 'err');
-      }
+      if (typeof switchTab === 'function') switchTab('password');
     });
   }
   const signOut = document.getElementById('user-menu-sign-out');
@@ -13397,20 +13430,17 @@ window.addEventListener('pageshow', (ev) => {
 
 async function loadAppMe() {
   _wireUserAvatarMenu();
+  _wirePasswordPage();
   try {
     const data = await API('/api/me');
     window.__OA_ME = data;
     const u = data && data.user;
     const label = document.getElementById('app-user-label');
-    const role = document.getElementById('app-user-role');
-    const idEl = document.getElementById('app-user-id');
     const initials = document.getElementById('user-avatar-initials');
     const wrap = document.getElementById('user-avatar-wrap');
     if (wrap) wrap.hidden = !u;
     if (u) {
       if (label) label.textContent = u.display_name || u.login || 'User';
-      if (role) role.textContent = u.is_admin ? 'Admin' : 'User';
-      if (idEl) idEl.textContent = `id ${u.id}`;
       if (initials) initials.textContent = _userAvatarInitials(u);
     }
     const feedLabel = document.getElementById('feed-status-label');

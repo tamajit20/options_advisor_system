@@ -150,11 +150,47 @@ a { color: var(--accent); text-decoration: none; }
   text-decoration: none;
   cursor: pointer;
 }
+/* Author display:block must not override the hidden attribute. */
+.user-avatar-item[hidden],
+.user-avatar-menu [hidden],
+.admin-only[hidden] {
+  display: none !important;
+}
 .user-avatar-item:hover {
   background: rgba(20, 184, 166, .12);
 }
 .user-avatar-danger { color: #fca5a5; }
 .user-avatar-danger:hover { background: rgba(248, 113, 113, .12); }
+
+.password-page {
+  max-width: 420px;
+}
+.password-page .filter-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.password-page label {
+  display: block;
+  font-size: .82rem;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.password-page input[type="password"] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #2a3744;
+  background: var(--surface, #0f1419);
+  color: var(--text, #e6edf3);
+  font-size: 1rem;
+}
+.password-page-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
 
 .signal-rail {
   display: flex;
