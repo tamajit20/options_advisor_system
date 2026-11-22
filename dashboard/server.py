@@ -1017,6 +1017,21 @@ def _stored_zerodha_margin_preview(
         preview = _zerodha_margin_preview_from_row(trade_row)
         if preview is not None:
             return preview
+        # Per-user Amount needed on suggestion_user_state (before trade exists).
+        try:
+            from database.suggestion_user_state_repo import SuggestionUserStateRepo
+            ust = SuggestionUserStateRepo(db).get(suggestion_id, int(owner_user_id))
+        except Exception:
+            ust = None
+        preview = _zerodha_margin_preview_from_row(ust)
+        if preview is not None:
+            if lots is not None and ust and ust.get("zerodha_margin_lots") is not None:
+                try:
+                    if int(ust["zerodha_margin_lots"]) != int(lots):
+                        return None
+                except (TypeError, ValueError):
+                    pass
+            return preview
         # Multi-user: do not serve another user's suggestion-level quote.
         return None
     trade_row = db.fetch_one(
@@ -1054,11 +1069,13 @@ def _persist_zerodha_margin_quote(
     margin_final: Any,
     margin_peak: Any = None,
     lots: Optional[int] = None,
+    owner_user_id: Optional[int] = None,
 ) -> None:
-    """One-time write of Kite Final/Peak onto suggestion and/or trade.
+    """One-time write of Kite Final/Peak for THIS user (user_state and/or trade).
 
-    Commits immediately — ``@_with_db`` closes without commit, so without
-    this the UPDATE is rolled back and every page load re-quotes Kite.
+    Never writes shared ``options_suggestions.zerodha_margin_*`` — that leaks
+    Amount needed across traders. Commits immediately (``@_with_db`` otherwise
+    rolls back).
     """
     try:
         fin = float(margin_final) if margin_final is not None else None
@@ -1071,21 +1088,29 @@ def _persist_zerodha_margin_quote(
     except (TypeError, ValueError):
         peak = None
     wrote = False
-    if suggestion_id:
+    if suggestion_id and owner_user_id is not None:
         try:
-            wrote = SuggestionRepo(db).save_zerodha_margin_once(
+            from database.suggestion_user_state_repo import SuggestionUserStateRepo
+            wrote = SuggestionUserStateRepo(db).save_zerodha_margin_once(
                 suggestion_id,
+                int(owner_user_id),
                 margin_final=fin,
                 margin_peak=peak,
                 lots=lots,
             ) or wrote
         except Exception:
-            logger.debug("persist suggestion zerodha margin skipped", exc_info=True)
+            logger.debug("persist user-state zerodha margin skipped", exc_info=True)
     tid = trade_id
-    if not tid and suggestion_id:
+    if not tid and suggestion_id and owner_user_id is not None:
         try:
-            latest = TradeRepo(db).latest_for_suggestion(suggestion_id)
-            tid = latest.get("trade_id") if latest else None
+            own = db.fetch_one(
+                "SELECT TOP 1 trade_id FROM options_trades "
+                "WHERE suggestion_id = ? AND owner_user_id = ? "
+                "  AND UPPER(ISNULL(status,'')) <> 'VOID' "
+                "ORDER BY executed_on DESC",
+                [suggestion_id, int(owner_user_id)],
+            )
+            tid = own.get("trade_id") if own else None
         except Exception:
             tid = None
     if tid:
@@ -3213,8 +3238,8 @@ def create_app() -> Flask:
                     continue
             r_out["user_status"] = user_status
             r_out["user_trade_id"] = user_trade_id
-            # Shared suggestion Final/Peak is not user-scoped — never stamp
-            # another trader's quote (or a stale shared quote) on this card.
+            # Shared suggestion Final/Peak is not user-scoped — strip, then
+            # stamp THIS user's quote from suggestion_user_state only.
             for _mk in (
                 "zerodha_margin_final",
                 "zerodha_margin_peak",
@@ -3222,6 +3247,15 @@ def create_app() -> Flask:
                 "zerodha_margin_quoted_at",
             ):
                 r_out.pop(_mk, None)
+            if uid is not None and sid:
+                ust = user_state_by_sid.get(str(sid)) or {}
+                if ust.get("zerodha_margin_final") is not None:
+                    r_out["zerodha_margin_final"] = ust.get("zerodha_margin_final")
+                    r_out["zerodha_margin_peak"] = ust.get("zerodha_margin_peak")
+                    r_out["zerodha_margin_lots"] = ust.get("zerodha_margin_lots")
+                    r_out["zerodha_margin_quoted_at"] = ust.get(
+                        "zerodha_margin_quoted_at"
+                    )
             r_out["execution_gate"] = {
                 "ok": gate.ok,
                 "vetoes": list(gate.vetoes),
@@ -3551,12 +3585,13 @@ def create_app() -> Flask:
         # Live preview already ran check_margin_for_orders on this user's session.
         _persist_zerodha_margin_quote(
             db,
-            suggestion_id=None,  # never share Final across traders via suggestion row
+            suggestion_id=sid,
             trade_id=trade_id,
             margin_final=preview_dict.get("margin_final_required")
             or preview_dict.get("margin_required"),
             margin_peak=preview_dict.get("margin_peak_required"),
             lots=lots_override,
+            owner_user_id=quote_uid,
         )
         return jsonify({"preview": preview_dict, "from_db": False})
 

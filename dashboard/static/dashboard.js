@@ -898,6 +898,44 @@ function _collectCardLotsForMargin(card) {
   return lots;
 }
 
+/** Disable Place when THIS user's available margin fails peak + buffer. */
+function _syncSuggestionPlaceFundsGate(card) {
+  if (!card) return;
+  const btn = card.querySelector('.btn-zerodha-exec');
+  if (!btn) return;
+  if (card.dataset.marginOk === '0') {
+    btn.classList.add('is-disabled');
+    btn.setAttribute('aria-disabled', 'true');
+    btn.dataset.fundsBlocked = '1';
+    const msg = card.dataset.marginMessage
+      || 'Insufficient Zerodha funds for your account (peak + buffer)';
+    btn.title = msg;
+    return;
+  }
+  if (btn.dataset.fundsBlocked === '1') {
+    delete btn.dataset.fundsBlocked;
+    // Restore readiness-driven title when funds are OK / unknown again.
+    const requireLiveGate = card.dataset.requireLiveGate === '1';
+    const st = (typeof _zerodhaExecButtonState === 'function')
+      ? _zerodhaExecButtonState(
+        requireLiveGate,
+        card.dataset.liveGateWarning
+          ? `Place entry orders in Zerodha (warning: ${card.dataset.liveGateWarning})`
+          : 'Place entry orders in Zerodha (monitored until filled)',
+      )
+      : null;
+    if (st && st.ready) {
+      btn.classList.remove('is-disabled');
+      btn.removeAttribute('aria-disabled');
+      btn.title = st.title || 'Place entry orders in Zerodha';
+    } else if (st) {
+      btn.classList.add('is-disabled');
+      btn.setAttribute('aria-disabled', 'true');
+      btn.title = st.title || '';
+    }
+  }
+}
+
 function _applyZerodhaMarginToCard(card, preview) {
   const info = _formatZerodhaMarginOnCard(preview);
   if (!info) {
@@ -906,6 +944,7 @@ function _applyZerodhaMarginToCard(card, preview) {
     delete card.dataset.marginAvail;
     card.dataset.marginMessage = 'Zerodha Final / Peak unavailable';
     _setSuggestionMarginStatus(card, 'Zerodha Final / Peak unavailable', { warn: true });
+    _syncSuggestionPlaceFundsGate(card);
     refreshPrePlaceReview(card);
     return;
   }
@@ -920,6 +959,7 @@ function _applyZerodhaMarginToCard(card, preview) {
   card.dataset.marginMessage = preview.margin_message
     ? String(preview.margin_message)
     : (info.blocked ? 'Not enough funds for peak margin + buffer' : '');
+  _syncSuggestionPlaceFundsGate(card);
   const showFunds = _showsPlacementFunds(card);
   const hint = card.querySelector('[data-econ-cap-hint]');
   if (hint && showFunds) {
@@ -960,17 +1000,8 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
   // Final when already stored (one-time Kite quote).
   const state = card.dataset.marginHydrated;
   if (state === '1' || state === '0' || state === 'pending') return;
-  // Card already stamped from list API stored Final — no network.
-  const stamped = Number(card.dataset.marginFinal);
-  if (Number.isFinite(stamped) && stamped > 0) {
-    card.dataset.marginHydrated = '1';
-    _applyZerodhaMarginToCard(card, {
-      margin_final_required: stamped,
-      margin_peak_required: Number(card.dataset.marginPeak) || null,
-      from_db: true,
-    });
-    return;
-  }
+  // List may stamp THIS user's Final for Amount needed display, but funds
+  // (margin_ok) must still come from a per-user preview / account check.
   const blockedReason = typeof _zerodhaMarginQuoteDisabledReason === 'function'
     ? _zerodhaMarginQuoteDisabledReason()
     : '';
@@ -9263,7 +9294,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
     data-live-gate-warning="${escapeHtml(liveGateWarn)}"
     data-short-call-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='CE')||{}).strike||''}"
     data-short-put-strike="${((s.legs||[]).find(l=>l.action==='SELL'&&l.option_type==='PE')||{}).strike||''}"
-    ${hasStoredMargin ? `data-margin-final="${storedFin}" data-margin-hydrated="1"` : ''}
+    ${hasStoredMargin ? `data-margin-final="${storedFin}"` : ''}
     ${hasStoredMargin && Number.isFinite(storedPeak) && storedPeak > 0 ? `data-margin-peak="${storedPeak}"` : ''}`;
   return wrapCollapsibleCard(summaryHtml, bodyHtml, {
     open: expanded && !isRetired,
@@ -9550,6 +9581,14 @@ function bindSuggestionActions() {
     const blocked = _zerodhaExecuteDisabledReason(requireLiveGate);
     if (blocked) {
       toast(blocked, 'warn');
+      return;
+    }
+    if (card.dataset.marginOk === '0' || btn.dataset.fundsBlocked === '1') {
+      toast(
+        card.dataset.marginMessage
+          || 'Insufficient Zerodha funds for your account (peak margin + buffer).',
+        'err',
+      );
       return;
     }
     if (_rejectInvalidExecLots(card)) return;

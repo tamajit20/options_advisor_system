@@ -1209,6 +1209,36 @@ _TABLE_DDL: List[str] = [
     "CREATE INDEX IF NOT EXISTS IX_sug_user_state_user "
     "ON options_suggestion_user_state (user_id, status)",
 
+    # Per-user Amount needed (Final/Peak) — never share across traders.
+    """
+    IF OBJECT_ID('options_suggestion_user_state', 'U') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestion_user_state')
+          AND name = 'zerodha_margin_final')
+    ALTER TABLE options_suggestion_user_state ADD zerodha_margin_final DECIMAL(18,4) NULL
+    """,
+    """
+    IF OBJECT_ID('options_suggestion_user_state', 'U') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestion_user_state')
+          AND name = 'zerodha_margin_peak')
+    ALTER TABLE options_suggestion_user_state ADD zerodha_margin_peak DECIMAL(18,4) NULL
+    """,
+    """
+    IF OBJECT_ID('options_suggestion_user_state', 'U') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestion_user_state')
+          AND name = 'zerodha_margin_lots')
+    ALTER TABLE options_suggestion_user_state ADD zerodha_margin_lots INT NULL
+    """,
+    """
+    IF OBJECT_ID('options_suggestion_user_state', 'U') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_suggestion_user_state')
+          AND name = 'zerodha_margin_quoted_at')
+    ALTER TABLE options_suggestion_user_state ADD zerodha_margin_quoted_at DATETIME2(0) NULL
+    """,
+
     # owner_user_id columns (migration-safe ALTERs)
     """
     IF OBJECT_ID('options_trades', 'U') IS NOT NULL

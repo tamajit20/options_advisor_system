@@ -159,7 +159,7 @@ def test_preview_returns_stored_with_live_funds_gate(client, mocker):
     kite.assert_not_called()
 
 
-def test_preview_persists_trade_only_not_shared_suggestion(client, mocker):
+def test_preview_persists_per_user_state_not_shared_suggestion(client, mocker):
     mocker.patch("dashboard.server._zerodha_execution_auth_required", return_value=None)
     mocker.patch("dashboard.auth.current_user_id", return_value=7)
     mocker.patch("dashboard.server._stored_zerodha_margin_preview", return_value=None)
@@ -194,20 +194,21 @@ def test_preview_persists_trade_only_not_shared_suggestion(client, mocker):
     assert body["preview"]["margin_final_required"] == 88000
     persist.assert_called_once()
     kwargs = persist.call_args.kwargs
-    # Do not write shared suggestion Final (cross-user leak).
-    assert kwargs["suggestion_id"] is None
+    # Persist on per-user state (suggestion_id + owner), not shared suggestion row.
+    assert kwargs["suggestion_id"] == "SUG-2"
+    assert kwargs["owner_user_id"] == 7
     assert kwargs["margin_final"] == 88000
     assert kwargs["lots"] == 1
 
 
-def test_persist_margin_quote_commits(mocker):
+def test_persist_margin_quote_commits_user_state(mocker):
     """Regression: @_with_db closes without commit — must commit here."""
     db = mocker.Mock()
-    sug = mocker.patch("dashboard.server.SuggestionRepo")
-    sug.return_value.save_zerodha_margin_once.return_value = True
+    ust = mocker.patch("database.suggestion_user_state_repo.SuggestionUserStateRepo")
+    ust.return_value.save_zerodha_margin_once.return_value = True
     trd = mocker.patch("dashboard.server.TradeRepo")
-    trd.return_value.latest_for_suggestion.return_value = {"trade_id": "TRD-1"}
-    trd.return_value.save_zerodha_margin_once.return_value = True
+    trd.return_value.save_zerodha_margin_once.return_value = False
+    db.fetch_one.return_value = None
     server._persist_zerodha_margin_quote(
         db,
         suggestion_id="SUG-1",
@@ -215,5 +216,26 @@ def test_persist_margin_quote_commits(mocker):
         margin_final=50000,
         margin_peak=60000,
         lots=1,
+        owner_user_id=7,
     )
+    ust.return_value.save_zerodha_margin_once.assert_called_once()
     db.commit.assert_called_once()
+
+
+def test_stored_preview_reads_user_state_margin(mocker):
+    db = MagicMock()
+    db.fetch_one.return_value = None  # no trade
+    mocker.patch(
+        "database.suggestion_user_state_repo.SuggestionUserStateRepo.get",
+        return_value={
+            "zerodha_margin_final": 77000,
+            "zerodha_margin_peak": 81000,
+            "zerodha_margin_lots": 1,
+        },
+    )
+    out = server._stored_zerodha_margin_preview(
+        db, "SUG-9", owner_user_id=3, lots=1,
+    )
+    assert out is not None
+    assert out["margin_final_required"] == 77000
+    assert out["margin_ok"] is None

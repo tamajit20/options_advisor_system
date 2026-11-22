@@ -1,4 +1,4 @@
-"""Per-user suggestion status so parallel execute does not hide cards."""
+"""Per-user suggestion status + Amount needed so parallel execute stays isolated."""
 
 from __future__ import annotations
 
@@ -50,6 +50,59 @@ class SuggestionUserStateRepo:
                 "VALUES (?, ?, ?, ?, ?)",
                 [suggestion_id, int(user_id), status_u, trade_id, now],
             ).close()
+
+    def save_zerodha_margin_once(
+        self,
+        suggestion_id: str,
+        user_id: int,
+        *,
+        margin_final: float,
+        margin_peak: Optional[float] = None,
+        lots: Optional[int] = None,
+    ) -> bool:
+        """One-time write of this user's Final/Peak for the suggestion card."""
+        try:
+            fin = float(margin_final)
+        except (TypeError, ValueError):
+            return False
+        if fin <= 0:
+            return False
+        existing = self.get(suggestion_id, user_id)
+        if existing and existing.get("zerodha_margin_final") is not None:
+            return False
+        now = now_ist().replace(tzinfo=None)
+        peak = None
+        if margin_peak is not None:
+            try:
+                peak = float(margin_peak)
+            except (TypeError, ValueError):
+                peak = None
+        lots_i = None
+        if lots is not None:
+            try:
+                lots_i = int(lots)
+            except (TypeError, ValueError):
+                lots_i = None
+        if existing:
+            self.db.execute(
+                "UPDATE options_suggestion_user_state "
+                "SET zerodha_margin_final = ?, zerodha_margin_peak = ?, "
+                "    zerodha_margin_lots = ?, zerodha_margin_quoted_at = ?, "
+                "    updated_at = ? "
+                "WHERE suggestion_id = ? AND user_id = ? "
+                "  AND zerodha_margin_final IS NULL",
+                [fin, peak, lots_i, now, now, suggestion_id, int(user_id)],
+            ).close()
+        else:
+            self.db.execute(
+                "INSERT INTO options_suggestion_user_state "
+                "(suggestion_id, user_id, status, trade_id, updated_at, "
+                " zerodha_margin_final, zerodha_margin_peak, "
+                " zerodha_margin_lots, zerodha_margin_quoted_at) "
+                "VALUES (?, ?, 'PENDING', NULL, ?, ?, ?, ?, ?)",
+                [suggestion_id, int(user_id), now, fin, peak, lots_i, now],
+            ).close()
+        return True
 
     def map_for_user(self, suggestion_ids: List[str], user_id: int) -> Dict[str, dict]:
         ids = [s for s in suggestion_ids if s]
