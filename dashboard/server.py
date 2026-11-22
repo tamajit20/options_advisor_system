@@ -638,6 +638,20 @@ def _stamp_execution_channels(db: SQLServerConnection, trades: list) -> None:
         t["execution_channel"] = _channel_for_trade_id(t.get("trade_id"), zids)
 
 
+def _fill_missing_spot_at_close(db: SQLServerConnection, trades: list) -> None:
+    """Backfill display-only spot_at_close for older closed trades (no stored value)."""
+    from lifecycle.trade_executor import resolve_spot_at_close
+    for t in trades:
+        if not t or t.get("spot_at_close") is not None:
+            continue
+        try:
+            spot = resolve_spot_at_close(db, t)
+        except Exception:
+            spot = None
+        if spot is not None:
+            t["spot_at_close"] = spot
+
+
 def _zerodha_margin_preview_from_row(row: Optional[dict]) -> Optional[dict]:
     """Build a preview-shaped dict from stored Final/Peak columns."""
     if not row:
@@ -4642,7 +4656,7 @@ def create_app() -> Flask:
         sql = (
             "SELECT t.trade_id, t.suggestion_id, t.trade_name, t.executed_on, t.closed_on, "
             "  t.status, t.position_type, t.net_credit_actual, t.gross_pnl, t.net_pnl, "
-            "  t.total_charges, t.spot_at_execution, t.exit_instruction, "
+            "  t.total_charges, t.spot_at_execution, t.spot_at_close, t.exit_instruction, "
             "  t.execution_provider, "
             "  t.actual_max_profit, t.actual_max_loss, "
             "  t.actual_upper_breakeven, t.actual_lower_breakeven, t.actual_stop_loss_level, "
@@ -4714,6 +4728,7 @@ def create_app() -> Flask:
                 "total_charges":     r["total_charges"],
                 "net_pnl":           r["net_pnl"],
                 "spot_at_execution": r["spot_at_execution"],
+                "spot_at_close":     r.get("spot_at_close"),
                 "exit_instruction":  r["exit_instruction"],
                 "execution_provider": r.get("execution_provider"),
                 "actual_max_profit": r["actual_max_profit"],
@@ -4735,6 +4750,7 @@ def create_app() -> Flask:
             }
             out.append(item)
 
+        _fill_missing_spot_at_close(db, out)
         _stamp_execution_channels(db, out)
         out = _filter_trades_by_execution_channel(out, channel_f)
 

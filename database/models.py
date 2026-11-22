@@ -1286,12 +1286,28 @@ class TradeRepo:
             [gross, charges, net, trade_id],
         ).close()
 
-    def close_trade(self, trade_id: str, gross: float, charges: float, net: float) -> None:
-        self.db.execute(
-            "UPDATE options_trades SET status = 'CLOSED', closed_on = ?, "
-            "gross_pnl = ?, total_charges = ?, net_pnl = ? WHERE trade_id = ?",
-            [now_ist(), gross, charges, net, trade_id],
-        ).close()
+    def close_trade(
+        self,
+        trade_id: str,
+        gross: float,
+        charges: float,
+        net: float,
+        *,
+        spot_at_close: Optional[float] = None,
+    ) -> None:
+        if spot_at_close is not None:
+            self.db.execute(
+                "UPDATE options_trades SET status = 'CLOSED', closed_on = ?, "
+                "gross_pnl = ?, total_charges = ?, net_pnl = ?, spot_at_close = ? "
+                "WHERE trade_id = ?",
+                [now_ist(), gross, charges, net, float(spot_at_close), trade_id],
+            ).close()
+        else:
+            self.db.execute(
+                "UPDATE options_trades SET status = 'CLOSED', closed_on = ?, "
+                "gross_pnl = ?, total_charges = ?, net_pnl = ? WHERE trade_id = ?",
+                [now_ist(), gross, charges, net, trade_id],
+            ).close()
         try:
             TradeMtmSnapshotRepo(self.db).archive_trade(trade_id)
         except Exception:

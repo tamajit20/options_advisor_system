@@ -304,6 +304,7 @@ _TABLE_DDL: List[str] = [
         actual_lower_breakeven DECIMAL(18,4) NULL,
         actual_stop_loss_level DECIMAL(18,4) NULL,
         spot_at_execution      DECIMAL(18,4) NULL,
+        spot_at_close          DECIMAL(18,4) NULL,
         status                 NVARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
         daily_status           NVARCHAR(20) NULL,
         exit_instruction       NVARCHAR(500) NULL,
@@ -352,6 +353,15 @@ _TABLE_DDL: List[str] = [
         WHERE TABLE_NAME='options_trades' AND COLUMN_NAME='spot_at_execution'
     )
     ALTER TABLE options_trades ADD spot_at_execution DECIMAL(18,4) NULL
+    """,
+
+    # Spot index level recorded when the trade was closed (History comparison).
+    """
+    IF NOT EXISTS (
+        SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME='options_trades' AND COLUMN_NAME='spot_at_close'
+    )
+    ALTER TABLE options_trades ADD spot_at_close DECIMAL(18,4) NULL
     """,
 
     """

@@ -2313,6 +2313,7 @@ def close_trade_in_zerodha(
         live_map, inst_map = _live_ltp_map(facade, master, open_exits)
 
         strategy = ""
+        sug_row = None
         if trade.get("suggestion_id"):
             sug_row = SuggestionRepo(db).get(trade["suggestion_id"])
             strategy = str((sug_row or {}).get("strategy") or "")
@@ -2323,7 +2324,12 @@ def close_trade_in_zerodha(
         # COMPLETE exit fills instead of placing new EXIT orders.
         if is_structure_flat_on_broker(facade, ordered, inst_map):
             fills = _match_external_exit_fills(facade, ordered, inst_map)
-            close_trade_with_fills(db, trade_id, _exits_from_external_fills(fills))
+            close_spot = _spot_ltp(
+                facade, str((sug_row or {}).get("underlying") or "NIFTY"),
+            )
+            close_trade_with_fills(
+                db, trade_id, _exits_from_external_fills(fills), spot_at_close=close_spot,
+            )
             completed = _leg_fills_from_external(fills)
             _try_reconcile_closed_trade_from_kite(db, trade_id, facade, completed)
             broker_rows = (
@@ -2407,7 +2413,13 @@ def close_trade_in_zerodha(
             }
             for f in completed
         ]
-        close_trade_with_fills(db, trade_id, exits)
+        close_spot = None
+        try:
+            sug = SuggestionRepo(db).get(str(trade.get("suggestion_id") or "")) if trade.get("suggestion_id") else None
+            close_spot = _spot_ltp(facade, str((sug or {}).get("underlying") or "NIFTY"))
+        except Exception:
+            logger.debug("close spot LTP failed for %s", trade_id, exc_info=True)
+        close_trade_with_fills(db, trade_id, exits, spot_at_close=close_spot)
         _try_reconcile_closed_trade_from_kite(db, trade_id, facade, completed)
 
         recon = reconcile_positions_after_fill(

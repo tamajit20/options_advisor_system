@@ -711,10 +711,72 @@ def supplement_trade(
     db.commit()
 
 
+def resolve_spot_at_close(
+    db: SQLServerConnection,
+    trade: dict,
+    *,
+    supplied: Optional[float] = None,
+) -> Optional[float]:
+    """Best available underlying spot when a trade closes.
+
+    Order: caller-supplied → last level-event spot → EOD close on/before close day.
+    """
+    if supplied is not None:
+        try:
+            return float(supplied)
+        except (TypeError, ValueError):
+            pass
+    trade_id = str(trade.get("trade_id") or "")
+    if trade_id:
+        try:
+            row = db.fetch_one(
+                "SELECT TOP 1 spot FROM options_trade_level_events "
+                "WHERE trade_id = ? AND spot IS NOT NULL "
+                "ORDER BY event_at DESC, id DESC",
+                [trade_id],
+            )
+            if row and row.get("spot") is not None:
+                return float(row["spot"])
+        except Exception:
+            logger.debug("spot_at_close level-event lookup failed for %s", trade_id, exc_info=True)
+    underlying = None
+    nested = trade.get("suggestion") if isinstance(trade.get("suggestion"), dict) else None
+    if nested and nested.get("underlying"):
+        underlying = nested.get("underlying")
+    sid = trade.get("suggestion_id") or (nested.get("suggestion_id") if nested else None)
+    if not underlying and sid:
+        try:
+            sug = SuggestionRepo(db).get(str(sid))
+            if sug:
+                underlying = sug.get("underlying")
+        except Exception:
+            logger.debug("spot_at_close suggestion lookup failed for %s", sid, exc_info=True)
+    if not underlying:
+        return None
+    try:
+        from datetime import date as date_cls
+        from database.models import SpotEodRepo
+        as_of = trade.get("closed_on") or now_ist()
+        if hasattr(as_of, "date"):
+            day = as_of.date()
+        elif isinstance(as_of, date_cls):
+            day = as_of
+        else:
+            day = now_ist().date()
+        spot_row = SpotEodRepo(db).for_date(str(underlying).upper(), day)
+        if spot_row and spot_row.get("close_price") is not None:
+            return float(spot_row["close_price"])
+    except Exception:
+        logger.debug("spot_at_close EOD lookup failed for %s", underlying, exc_info=True)
+    return None
+
+
 def close_trade_with_fills(
     db: SQLServerConnection,
     trade_id: str,
     exits: list,
+    *,
+    spot_at_close: Optional[float] = None,
 ) -> None:
     """Record closing fills for each executed leg and mark trade as CLOSED.
 
@@ -783,7 +845,10 @@ def close_trade_with_fills(
 
     total_charges = estimate_charges_per_txn(txn_legs).total if txn_legs else 0.0
     net_pnl = gross_pnl - total_charges
-    trd.close_trade(trade_id, gross_pnl, total_charges, net_pnl)
+    close_spot = resolve_spot_at_close(db, trade, supplied=spot_at_close)
+    trd.close_trade(
+        trade_id, gross_pnl, total_charges, net_pnl, spot_at_close=close_spot,
+    )
     db.commit()
     logger.info("Trade %s closed, gross_pnl=%.2f, charges=%.2f, net_pnl=%.2f",
                 trade_id, gross_pnl, total_charges, net_pnl)

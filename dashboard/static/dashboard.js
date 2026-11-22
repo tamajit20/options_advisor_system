@@ -2653,6 +2653,10 @@ const TERM_HELP = {
     label: 'Spot at entry',
     html: '<strong>Spot at entry</strong> — Underlying index level when you executed. Compare with live spot to see how far price has moved.',
   },
+  spot_at_close: {
+    label: 'Spot at close',
+    html: '<strong>Spot at close</strong> — Underlying index level when the trade was closed (live quote at close when available, else last session sample / EOD). Compare with Spot at entry to see how far the index moved during the hold.',
+  },
   live_outlook: {
     label: 'Live outlook',
     html: '<strong>Live outlook</strong> — Forward-looking stats for open trades: win chance, hold vs close, and whether index position still fits the strategy. Tap <strong>?</strong> for a full field guide.',
@@ -12087,6 +12091,7 @@ function renderHistoryTrade(t) {
         <span class="hcmp-act hist-margin-act">${histStoredFin != null ? histUsedHtml : '\u2014'}</span>
       </div>` : ''}
       ${cmp('Spot at entry',     s.spot != null ? fmt(s.spot) : '—',  t.spot_at_execution != null ? fmt(t.spot_at_execution) : '—')}
+      ${cmp(labelWithHelp('Spot at close', 'spot_at_close'), '—', t.spot_at_close != null ? fmt(t.spot_at_close) : '—')}
       ${cmp('Upper breakeven',   s.upper_be != null ? fmt(s.upper_be) : '—',  t.actual_upper_be != null ? fmt(t.actual_upper_be) : '—')}
       ${cmp('Lower breakeven',   s.lower_be != null ? fmt(s.lower_be) : '—',  t.actual_lower_be != null ? fmt(t.actual_lower_be) : '—')}
       ${cmp('Stop loss level',

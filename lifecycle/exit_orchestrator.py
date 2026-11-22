@@ -42,13 +42,17 @@ def _close_trade_with_charges(db: SQLServerConnection, trade_id: str,
                               gross_pnl: float) -> None:
     """Close the trade — for now we use the existing P&L and assume charges
     were captured at suggestion time (re-using suggestion estimate)."""
+    from lifecycle.trade_executor import resolve_spot_at_close
     trd = TradeRepo(db)
     trade = trd.get(trade_id)
     if trade is None:
         return
     charges = float(trade.get("total_charges") or 0.0)
     net = gross_pnl - charges
-    trd.close_trade(trade_id, gross=gross_pnl, charges=charges, net=net)
+    close_spot = resolve_spot_at_close(db, trade)
+    trd.close_trade(
+        trade_id, gross=gross_pnl, charges=charges, net=net, spot_at_close=close_spot,
+    )
 
 
 def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> int:
@@ -318,9 +322,14 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
                             )
                         charges = float(trade.get("total_charges") or 0.0)
                         net_pnl = settle_gross - charges
+                        from lifecycle.trade_executor import resolve_spot_at_close
+                        close_spot = resolve_spot_at_close(
+                            db, trade, supplied=spot_close,
+                        )
                         trd.close_trade(
                             trade_id=trade_id, gross=settle_gross,
                             charges=charges, net=net_pnl,
+                            spot_at_close=close_spot,
                         )
                         auto_settled += 1
                         notif.insert(Notification(
