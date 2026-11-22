@@ -4928,10 +4928,14 @@ def create_app() -> Flask:
             rows.append(row)
         return jsonify({"jobs": rows})
 
-    # ---------- Tab 5: Config ----------
+    # ---------- Tab 5: Config (admin only) ----------
     @app.route("/api/config")
     @_with_db
     def api_config_list(db: SQLServerConnection):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
         from database.config_overlay import apply_strategy_overrides, catalog_payload
         from database.runtime_flags import RuntimeFlagsRepo
         try:
@@ -4953,11 +4957,19 @@ def create_app() -> Flask:
     @app.route("/api/config/<key>", methods=["GET"])
     @_with_db
     def api_config_get(db: SQLServerConnection, key: str):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
         return jsonify({"key": key, "value": ConfigRepo(db).get(key)})
 
     @app.route("/api/config/<key>", methods=["PUT"])
     @_with_db
     def api_config_set(db: SQLServerConnection, key: str):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
         from database.config_overlay import (
             apply_config_overrides, default_value_for, resolve_spec, resolved_value,
         )
@@ -5001,6 +5013,10 @@ def create_app() -> Flask:
     @app.route("/api/config/<key>", methods=["DELETE"])
     @_with_db
     def api_config_reset(db: SQLServerConnection, key: str):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
         from database.config_overlay import apply_config_overrides, default_value_for, resolve_spec
         try:
             spec = resolve_spec(key)
@@ -5030,6 +5046,10 @@ def create_app() -> Flask:
     @app.route("/api/config/bulk", methods=["PUT"])
     @_with_db
     def api_config_bulk_save(db: SQLServerConnection):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
         from database.config_overlay import (
             apply_config_overrides, default_value_for, resolve_spec, resolved_value,
         )
@@ -5332,6 +5352,10 @@ def create_app() -> Flask:
     @app.route("/api/runtime-flags")
     @_with_db
     def api_runtime_flags_list(db: SQLServerConnection):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
         from database.runtime_flags import RuntimeFlagsRepo
         repo = RuntimeFlagsRepo(db, cache_ttl_seconds=0)
         return jsonify({

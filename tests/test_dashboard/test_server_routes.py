@@ -674,6 +674,21 @@ class TestJobsLatest:
 
 
 class TestConfigRoutes:
+    @pytest.fixture(autouse=True)
+    def _as_admin(self, mocker):
+        mocker.patch(
+            "dashboard.auth.current_user",
+            return_value={"id": 1, "login": "admin", "is_admin": True},
+        )
+
+    def test_list_forbidden_for_non_admin(self, client, mocker):
+        mocker.patch(
+            "dashboard.auth.current_user",
+            return_value={"id": 2, "login": "trader", "is_admin": False},
+        )
+        resp = client.get("/api/config")
+        assert resp.status_code == 403
+
     def test_list(self, client, mocker):
         mocker.patch("dashboard.server.ConfigRepo.get_all", return_value=[])
         resp = client.get("/api/config")

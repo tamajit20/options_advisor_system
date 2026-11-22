@@ -2738,7 +2738,7 @@ window.TABS = TABS;
 // Advisor chrome (header subtabs / mobile Advisor mode) — daily workflow tabs.
 const OPTIONS_TABS = ['suggestion', 'trades', 'history', 'config', 'learn'];
 const SYSTEM_TABS = ['users', 'jobs', 'logs', 'wsmon'];
-const ADMIN_TABS = new Set(SYSTEM_TABS);
+const ADMIN_TABS = new Set(['config', ...SYSTEM_TABS]);
 const TAB_LOADERS = {};
 const TAB_LEAVE = {};
 
@@ -13296,6 +13296,31 @@ function _syncZerodhaMenuAction(sessionOk) {
   }
 }
 
+/** null = change own password; else { userId, login } for admin reset via Users tab. */
+let _passwordTarget = null;
+
+function _openPasswordPage(target) {
+  _passwordTarget = target || null;
+  if (typeof switchTab === 'function') switchTab('password');
+}
+
+function _passwordReturnTab() {
+  return (_passwordTarget && _isAdminUser()) ? 'users' : 'suggestion';
+}
+
+function _syncPasswordPageChrome() {
+  const title = document.getElementById('pw-page-title');
+  const blurb = document.getElementById('pw-page-blurb');
+  if (_passwordTarget && _passwordTarget.userId != null) {
+    const who = _passwordTarget.login || ('user #' + _passwordTarget.userId);
+    if (title) title.textContent = 'Set password';
+    if (blurb) blurb.textContent = `Choose a new dashboard password for ${who}.`;
+  } else {
+    if (title) title.textContent = 'Change password';
+    if (blurb) blurb.textContent = 'Choose a new password for your dashboard login.';
+  }
+}
+
 function _resetPasswordForm() {
   const err = document.getElementById('pw-form-error');
   if (err) { err.hidden = true; err.textContent = ''; }
@@ -13303,6 +13328,7 @@ function _resetPasswordForm() {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
+  _syncPasswordPageChrome();
 }
 
 function _wirePasswordPage() {
@@ -13318,7 +13344,11 @@ function _wirePasswordPage() {
       };
       if (err) { err.hidden = true; err.textContent = ''; }
       const me = window.__OA_ME && window.__OA_ME.user;
-      if (!me || me.id == null) {
+      const targetId = (_passwordTarget && _passwordTarget.userId != null)
+        ? _passwordTarget.userId
+        : (me && me.id);
+      const targetLogin = (_passwordTarget && _passwordTarget.login) || null;
+      if (targetId == null) {
         showErr('Not signed in');
         return;
       }
@@ -13333,14 +13363,18 @@ function _wirePasswordPage() {
         return;
       }
       try {
-        await API(`/api/users/${me.id}/password`, {
+        await API(`/api/users/${targetId}/password`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password }),
         });
-        if (typeof toast === 'function') toast('Password updated', 'ok');
+        if (typeof toast === 'function') {
+          toast(targetLogin ? `Password updated for ${targetLogin}` : 'Password updated', 'ok');
+        }
+        const back = _passwordReturnTab();
+        _passwordTarget = null;
         _resetPasswordForm();
-        if (typeof switchTab === 'function') switchTab('suggestion');
+        if (typeof switchTab === 'function') switchTab(back);
       } catch (e) {
         showErr((e && e.message) || 'Password update failed');
       }
@@ -13349,8 +13383,10 @@ function _wirePasswordPage() {
   if (cancel && cancel.dataset.wired !== '1') {
     cancel.dataset.wired = '1';
     cancel.addEventListener('click', () => {
+      const back = _passwordReturnTab();
+      _passwordTarget = null;
       _resetPasswordForm();
-      if (typeof switchTab === 'function') switchTab('suggestion');
+      if (typeof switchTab === 'function') switchTab(back);
     });
   }
 }
@@ -13397,7 +13433,7 @@ function _wireUserAvatarMenu() {
   if (changePw) {
     changePw.addEventListener('click', () => {
       _setUserAvatarMenuOpen(false);
-      if (typeof switchTab === 'function') switchTab('password');
+      _openPasswordPage(null);
     });
   }
   const signOut = document.getElementById('user-menu-sign-out');
@@ -13467,7 +13503,7 @@ async function loadAppMe() {
       el.hidden = !isAdmin;
     });
     // Bounce non-admins off admin tabs; restore admin hash after /api/me.
-    const activeAdmin = SYSTEM_TABS.find(t => {
+    const activeAdmin = [...ADMIN_TABS].find(t => {
       const panel = document.getElementById(`panel-${t}`);
       return panel && panel.classList.contains('active');
     });
@@ -13530,24 +13566,11 @@ async function loadUsersPane() {
       </tbody>
     </table>`;
     box.querySelectorAll('[data-set-password]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const login = btn.dataset.login || btn.dataset.setPassword;
-        const password = window.prompt(`New password for ${login}:`);
-        if (password == null) return;
-        if (!String(password).trim()) {
-          toast('Password required', 'err');
-          return;
-        }
-        try {
-          await API(`/api/users/${btn.dataset.setPassword}/password`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: String(password) }),
-          });
-          toast(`Password updated for ${login}`, 'ok');
-        } catch (err) {
-          toast((err && err.message) || 'Password update failed', 'err');
-        }
+      btn.addEventListener('click', () => {
+        _openPasswordPage({
+          userId: Number(btn.dataset.setPassword),
+          login: btn.dataset.login || btn.dataset.setPassword,
+        });
       });
     });
     box.querySelectorAll('[data-transfer-admin]').forEach(btn => {

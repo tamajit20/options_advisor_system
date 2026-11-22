@@ -123,10 +123,6 @@ def _apply_no_store(response):
 def _login_page_html(*, error: str = "", next_path: str = "/", signed_out: bool = False) -> str:
     err = f'<p class="err">{error}</p>' if error else ""
     nxt = quote(next_path or "/", safe="/")
-    signed = (
-        '<p class="ok">Signed out. Live market feed is unchanged for other users.</p>'
-        if signed_out else ""
-    )
     return f"""<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -142,7 +138,6 @@ def _login_page_html(*, error: str = "", next_path: str = "/", signed_out: bool 
   h1 {{ margin: 0 0 8px; font-size: 1.15rem; }}
   p {{ margin: 0 0 16px; color: #8b9cb3; font-size: .9rem; line-height: 1.45; }}
   .err {{ color: #f87171; }}
-  .ok {{ color: #6ee7b7; }}
   label {{ display: block; font-size: .85rem; margin: 12px 0 6px; color: #8b9cb3; }}
   input {{ width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px;
     border: 1px solid #2a3744; background: #0f1419; color: #e6edf3; font-size: 1rem; }}
@@ -170,7 +165,6 @@ def _login_page_html(*, error: str = "", next_path: str = "/", signed_out: bool 
 <div class="card">
   <h1>Trading Dashboard</h1>
   <p>Sign in with your app username and password.</p>
-  {signed}
   {err}
   <form method="post" action="{LOGIN_PATH}?next={nxt}">
     <label for="login">Username</label>
