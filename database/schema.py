@@ -1177,6 +1177,16 @@ _TABLE_DDL: List[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS IX_options_notifications_owner "
     "ON options_notifications (owner_user_id, created_at DESC)",
+
+    """
+    IF OBJECT_ID('options_zerodha_capital_snapshots', 'U') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_zerodha_capital_snapshots')
+          AND name = 'owner_user_id')
+    ALTER TABLE options_zerodha_capital_snapshots ADD owner_user_id BIGINT NULL
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_zerodha_capital_snapshots_owner "
+    "ON options_zerodha_capital_snapshots (owner_user_id, recorded_at DESC)",
 ]
 
 

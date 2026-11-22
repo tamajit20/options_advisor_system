@@ -229,7 +229,7 @@ Enable flags / handlers live in `SCHEDULER_CONFIG["jobs"]` and `JOB_FUNCS` in `s
 | `data/zerodha_session.json`      | Admin feed Kite token (mirrored from admin `zerodha_sessions`) | **No**  |
 | `*.example` templates            | Starters                                 | Yes     |
 
-**Multi-user:** First boot creates the `app_users` admin from `OPT_BOOTSTRAP_ADMIN_*` (empty DB only). New trades/orders/alerts get `owner_user_id` from the signed-in user at execute time — no legacy trade backfill. Admin: Users tab, Logs/Jobs/WS. Each trader logs into Zerodha separately; place/close use that trader's token; ticks use admin. Avatar **Sign out** clears only the app cookie (Back stays on `/dashboard-login`); it does **not** stop ticks. Park the shared feed only via WS Monitor → **Disconnect tick feed**.
+**Multi-user:** First boot creates the `app_users` admin from `OPT_BOOTSTRAP_ADMIN_*` (empty DB only). New trades/orders/alerts get `owner_user_id` from the signed-in user at execute time — no legacy trade backfill. History tabs (Trades, Charts, Performance, Capital, reversals) and capital snapshots are scoped to the signed-in user; Suggestions History overlays that user's execute/ignore state and only links their trades. Admin: Users (avatar), Logs/Jobs/WS. Each trader logs into Zerodha separately; place/close use that trader's token; ticks use admin. Avatar **Sign out** clears only the app cookie (Back stays on `/dashboard-login`); it does **not** stop ticks. Park the shared feed only via WS Monitor → **Disconnect tick feed**.
 
 
 Trading knobs: `config.py` + DB `options_config` (Part B4).

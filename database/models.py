@@ -2587,7 +2587,14 @@ class ZerodhaCapitalSnapshotRepo:
             return None
         return round(f, 2)
 
-    def latest(self) -> Optional[dict]:
+    def latest(self, *, owner_user_id: Optional[int] = None) -> Optional[dict]:
+        if owner_user_id is not None:
+            return self.db.fetch_one(
+                "SELECT TOP 1 * FROM options_zerodha_capital_snapshots "
+                "WHERE owner_user_id = ? "
+                "ORDER BY recorded_at DESC, id DESC",
+                [int(owner_user_id)],
+            )
         return self.db.fetch_one(
             "SELECT TOP 1 * FROM options_zerodha_capital_snapshots "
             "ORDER BY recorded_at DESC, id DESC"
@@ -2607,6 +2614,7 @@ class ZerodhaCapitalSnapshotRepo:
         *,
         trigger_reason: str = "fetch",
         recorded_at: Optional[datetime] = None,
+        owner_user_id: Optional[int] = None,
     ) -> bool:
         """Insert one row when watched capital fields changed. Returns True if inserted."""
         if not snapshot or not snapshot.get("available"):
@@ -2629,7 +2637,7 @@ class ZerodhaCapitalSnapshotRepo:
         # Need at least one capital figure to store.
         if all(row.get(k) is None for k in self._WATCH):
             return False
-        prev = self.latest()
+        prev = self.latest(owner_user_id=owner_user_id)
         if not self._changed(prev, row):
             return False
         at = recorded_at or now_ist()
@@ -2639,8 +2647,8 @@ class ZerodhaCapitalSnapshotRepo:
             "INSERT INTO options_zerodha_capital_snapshots "
             "(recorded_at, user_id, net, usable_balance, available_cash, live_balance, "
             " opening_balance, utilised_debits, utilised_span, utilised_exposure, "
-            " utilised_option_premium, trigger_reason) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " utilised_option_premium, trigger_reason, owner_user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 at,
                 row["user_id"],
@@ -2654,6 +2662,7 @@ class ZerodhaCapitalSnapshotRepo:
                 row["utilised_exposure"],
                 row["utilised_option_premium"],
                 (trigger_reason or "fetch")[:40],
+                int(owner_user_id) if owner_user_id is not None else None,
             ],
         ).close()
         return True
@@ -2663,6 +2672,8 @@ class ZerodhaCapitalSnapshotRepo:
         *,
         from_dt: Optional[datetime] = None,
         to_dt: Optional[datetime] = None,
+        owner_user_id: Optional[int] = None,
+        kite_user_id: Optional[str] = None,
     ) -> List[dict]:
         filters = ["1=1"]
         params: List[Any] = []
@@ -2672,11 +2683,25 @@ class ZerodhaCapitalSnapshotRepo:
         if to_dt is not None:
             filters.append("recorded_at <= ?")
             params.append(to_dt)
+        if owner_user_id is not None:
+            # Prefer app-owner rows; fall back to legacy rows with this Kite id.
+            if kite_user_id:
+                filters.append(
+                    "(owner_user_id = ? OR (owner_user_id IS NULL AND user_id = ?))"
+                )
+                params.extend([int(owner_user_id), str(kite_user_id)])
+            else:
+                filters.append("owner_user_id = ?")
+                params.append(int(owner_user_id))
+        elif kite_user_id:
+            filters.append("user_id = ?")
+            params.append(str(kite_user_id))
         where = " AND ".join(filters)
         rows = self.db.fetch_all(
             f"SELECT recorded_at, user_id, net, usable_balance, available_cash, "
             f"       live_balance, opening_balance, utilised_debits, utilised_span, "
-            f"       utilised_exposure, utilised_option_premium, trigger_reason "
+            f"       utilised_exposure, utilised_option_premium, trigger_reason, "
+            f"       owner_user_id "
             f"FROM options_zerodha_capital_snapshots "
             f"WHERE {where} "
             f"ORDER BY recorded_at ASC, id ASC",

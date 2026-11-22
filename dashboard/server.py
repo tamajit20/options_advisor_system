@@ -113,6 +113,7 @@ def _zerodha_account_for_api(
     force_refresh: bool = False,
     trigger_reason: str = "dashboard",
 ) -> dict:
+    from dashboard.auth import current_user_id
     from providers.zerodha.account_snapshot import fetch_account_snapshot, invalidate_account_cache
 
     if force_refresh:
@@ -121,6 +122,7 @@ def _zerodha_account_for_api(
         force_refresh=force_refresh,
         persist_capital=True,
         trigger_reason=trigger_reason if force_refresh else "poll",
+        app_user_id=current_user_id(),
     )
 
 
@@ -3770,17 +3772,20 @@ def create_app() -> Flask:
         if status_f and status_f not in valid_statuses:
             status_f = ""
 
+        from dashboard.auth import current_user_id
+        uid = current_user_id()
         filters: list[str] = ["CONVERT(date, generated_on) >= ?", "CONVERT(date, generated_on) <= ?"]
         params: list = [from_date, to_date]
         if underlying:
             filters.append("underlying = ?")
             params.append(underlying)
-        if status_f:
+        # Global suggestion.status is shared; per-user outcomes live in
+        # suggestion_user_state — apply status_f after overlay when logged in.
+        if status_f and uid is None:
             filters.append("status = ?")
             params.append(status_f)
-        else:
-            # Default: show all non-trivial statuses
-            filters.append("status IN ('PENDING','EXECUTED','IGNORED')")
+        elif not status_f:
+            filters.append("status IN ('PENDING','EXECUTED','IGNORED','NO_SUGGESTION')")
 
         strategy_f = request.args.get("strategy", "").strip()
         if strategy_f:
@@ -3805,14 +3810,31 @@ def create_app() -> Flask:
             r_out["confidence_display"] = _confidence_display(r)
             suggestions.append(r_out)
         sids = [s.get("suggestion_id") for s in suggestions if s.get("suggestion_id")]
+        user_state_by_sid: dict = {}
+        if uid is not None and sids:
+            ph = ",".join("?" * len(sids))
+            state_rows = db.fetch_all(
+                "SELECT suggestion_id, status, trade_id FROM options_suggestion_user_state "
+                f"WHERE user_id = ? AND suggestion_id IN ({ph})",
+                [int(uid), *sids],
+            ) or []
+            for st in state_rows:
+                st = _row(st)
+                sid = st.get("suggestion_id")
+                if sid:
+                    user_state_by_sid[sid] = st
         if sids:
             ph = ",".join("?" * len(sids))
-            trade_rows = db.fetch_all(
+            trade_sql = (
                 "SELECT suggestion_id, trade_id FROM options_trades "
                 f"WHERE suggestion_id IN ({ph}) AND UPPER(ISNULL(status,'')) <> 'VOID' "
-                "ORDER BY executed_on DESC",
-                sids,
             )
+            trade_params: list = list(sids)
+            if uid is not None:
+                trade_sql += "AND owner_user_id = ? "
+                trade_params.append(int(uid))
+            trade_sql += "ORDER BY executed_on DESC"
+            trade_rows = db.fetch_all(trade_sql, trade_params)
             by_sug: dict = {}
             for tr in trade_rows:
                 tr = _row(tr)
@@ -3820,9 +3842,21 @@ def create_app() -> Flask:
                 if sid and sid not in by_sug:
                     by_sug[sid] = tr.get("trade_id")
             for s in suggestions:
-                tid = by_sug.get(s.get("suggestion_id"))
+                sid = s.get("suggestion_id")
+                st = user_state_by_sid.get(sid) if sid else None
+                if st and st.get("status"):
+                    s["status"] = st.get("status")
+                    s["user_status"] = st.get("status")
+                tid = by_sug.get(sid) or (st.get("trade_id") if st else None)
                 if tid:
                     s["trade_id"] = tid
+                elif uid is not None:
+                    s.pop("trade_id", None)
+            if status_f:
+                suggestions = [
+                    s for s in suggestions
+                    if str(s.get("status") or "").upper() == status_f
+                ]
         if channel_f:
             zids = _zerodha_trade_id_set(
                 db, [s.get("trade_id") for s in suggestions if s.get("trade_id")],
@@ -4080,6 +4114,14 @@ def create_app() -> Flask:
         from_dt = _parse_day(from_date, end=False)
         to_dt = _parse_day(to_date, end=True)
 
+        from dashboard.auth import current_user_id
+        from providers.zerodha.session import load_session_for_user
+        uid = current_user_id()
+        kite_uid = None
+        if uid is not None:
+            sess = load_session_for_user(int(uid))
+            kite_uid = (sess.user_id if sess else None) or None
+
         # Trades whose lifetime overlaps the window (for concurrent capital).
         open_filters = [
             "t.executed_on IS NOT NULL",
@@ -4093,6 +4135,9 @@ def create_app() -> Flask:
         if from_dt is not None:
             open_filters.append("(t.closed_on IS NULL OR t.closed_on >= ?)")
             open_params.append(from_dt)
+        if uid is not None:
+            open_filters.append("t.owner_user_id = ?")
+            open_params.append(int(uid))
         open_rows = db.fetch_all(
             "SELECT t.trade_id, t.trade_name, t.executed_on, t.closed_on, "
             "       t.actual_max_loss, t.status, t.net_pnl "
@@ -4152,6 +4197,10 @@ def create_app() -> Flask:
             from_date, to_date, date_expr="t.closed_on",
         )
         pnl_filters.extend(date_filters)
+        pnl_params = list(date_params)
+        if uid is not None:
+            pnl_filters.append("t.owner_user_id = ?")
+            pnl_params.append(int(uid))
         pnl_rows = db.fetch_all(
             "SELECT t.trade_id, t.trade_name, t.closed_on, t.executed_on, "
             "       t.net_pnl, t.actual_max_loss, "
@@ -4160,7 +4209,7 @@ def create_app() -> Flask:
             "LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
             f"WHERE {' AND '.join(pnl_filters)} "
             "ORDER BY t.closed_on ASC",
-            date_params,
+            pnl_params,
         )
         zids_pnl = (
             _zerodha_trade_id_set(db, [r["trade_id"] for r in pnl_rows])
@@ -4186,7 +4235,10 @@ def create_app() -> Flask:
             })
 
         snap_rows = ZerodhaCapitalSnapshotRepo(db).list_between(
-            from_dt=from_dt, to_dt=to_dt,
+            from_dt=from_dt,
+            to_dt=to_dt,
+            owner_user_id=int(uid) if uid is not None else None,
+            kite_user_id=str(kite_uid) if kite_uid else None,
         )
         snapshots = []
         for s in snap_rows:
@@ -4433,19 +4485,41 @@ def create_app() -> Flask:
     def api_history_paired(db: SQLServerConnection):
         days = int(request.args.get("days", 30))
         since = today_ist() - timedelta(days=days)
-        rows = db.fetch_all(
-            "SELECT TOP 200 "
-            "  s.suggestion_id, s.underlying, s.strategy, s.generated_on, s.plain_english, "
-            "  s.confidence_score, s.net_credit_suggested, s.status AS sug_status, "
-            "  s.trade_name AS sug_trade_name, "
-            "  t.trade_id, t.trade_name, t.executed_on, t.net_credit_actual, t.net_pnl, "
-            "  t.status AS trade_status, t.closed_on, t.exit_instruction, t.position_type "
-            "FROM options_suggestions s "
-            "LEFT JOIN options_trades t ON t.suggestion_id = s.suggestion_id "
-            "WHERE s.generated_on >= ? AND s.status IN ('EXECUTED', 'IGNORED') "
-            "ORDER BY s.generated_on DESC",
-            [since],
-        )
+        from dashboard.auth import current_user_id
+        uid = current_user_id()
+        if uid is not None:
+            rows = db.fetch_all(
+                "SELECT TOP 200 "
+                "  s.suggestion_id, s.underlying, s.strategy, s.generated_on, s.plain_english, "
+                "  s.confidence_score, s.net_credit_suggested, "
+                "  COALESCE(u.status, s.status) AS sug_status, "
+                "  s.trade_name AS sug_trade_name, "
+                "  t.trade_id, t.trade_name, t.executed_on, t.net_credit_actual, t.net_pnl, "
+                "  t.status AS trade_status, t.closed_on, t.exit_instruction, t.position_type "
+                "FROM options_suggestions s "
+                "INNER JOIN options_suggestion_user_state u "
+                "  ON u.suggestion_id = s.suggestion_id AND u.user_id = ? "
+                " AND u.status IN ('EXECUTED', 'IGNORED') "
+                "LEFT JOIN options_trades t "
+                "  ON t.suggestion_id = s.suggestion_id AND t.owner_user_id = ? "
+                "WHERE s.generated_on >= ? "
+                "ORDER BY s.generated_on DESC",
+                [int(uid), int(uid), since],
+            )
+        else:
+            rows = db.fetch_all(
+                "SELECT TOP 200 "
+                "  s.suggestion_id, s.underlying, s.strategy, s.generated_on, s.plain_english, "
+                "  s.confidence_score, s.net_credit_suggested, s.status AS sug_status, "
+                "  s.trade_name AS sug_trade_name, "
+                "  t.trade_id, t.trade_name, t.executed_on, t.net_credit_actual, t.net_pnl, "
+                "  t.status AS trade_status, t.closed_on, t.exit_instruction, t.position_type "
+                "FROM options_suggestions s "
+                "LEFT JOIN options_trades t ON t.suggestion_id = s.suggestion_id "
+                "WHERE s.generated_on >= ? AND s.status IN ('EXECUTED', 'IGNORED') "
+                "ORDER BY s.generated_on DESC",
+                [since],
+            )
         sug_repo = SuggestionRepo(db)
         trd_repo = TradeRepo(db)
         pairs = []

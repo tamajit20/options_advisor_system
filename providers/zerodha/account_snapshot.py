@@ -80,6 +80,7 @@ def _build_facade(session: ZerodhaSession) -> KiteExecutionFacade:
 
 def invalidate_account_cache() -> None:
     with _CACHE_LOCK:
+        _CACHE.clear()
         _CACHE["payload"] = None
         _CACHE["at"] = 0.0
 
@@ -88,6 +89,7 @@ def persist_capital_snapshot_if_changed(
     snapshot: dict,
     *,
     trigger_reason: str = "fetch",
+    owner_user_id: Optional[int] = None,
 ) -> bool:
     """Write a DB row when Zerodha capital figures changed. Never raises."""
     if not snapshot or not snapshot.get("available"):
@@ -100,6 +102,7 @@ def persist_capital_snapshot_if_changed(
             return ZerodhaCapitalSnapshotRepo(db).insert_if_changed(
                 snapshot,
                 trigger_reason=trigger_reason,
+                owner_user_id=owner_user_id,
             )
     except Exception:
         logger.debug(
@@ -115,23 +118,30 @@ def fetch_account_snapshot(
     force_refresh: bool = False,
     persist_capital: bool = True,
     trigger_reason: str = "fetch",
+    app_user_id: Optional[int] = None,
 ) -> dict:
     """Return profile + margin block for dashboard APIs.
 
     Fresh (non-cached) pulls also persist a capital history row when net /
     idle / utilised figures change vs the last stored snapshot.
     """
-    session = load_session()
+    if app_user_id is not None:
+        from providers.zerodha.session import load_session_for_user
+        session = load_session_for_user(int(app_user_id))
+    else:
+        session = load_session()
     if session is None or not is_token_valid(session):
         return {"available": False, "reason": "no_valid_session"}
 
     if not ZERODHA_API_CONFIG.get("api_key"):
         return {"available": False, "reason": "api_key_not_configured"}
 
+    cache_key = f"u:{int(app_user_id)}" if app_user_id is not None else "default"
     if not force_refresh:
         with _CACHE_LOCK:
-            cached = _CACHE.get("payload")
-            age = time.monotonic() - float(_CACHE.get("at") or 0)
+            bucket = _CACHE.get(cache_key) or {}
+            cached = bucket.get("payload")
+            age = time.monotonic() - float(bucket.get("at") or 0)
             if cached is not None and age < _CACHE_TTL_SEC:
                 return {**cached, "cached": True}
 
@@ -145,13 +155,28 @@ def fetch_account_snapshot(
         body["fetched_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         stored = {k: v for k, v in body.items() if k != "cached"}
         with _CACHE_LOCK:
-            _CACHE["payload"] = stored
-            _CACHE["at"] = time.monotonic()
+            _CACHE[cache_key] = {"payload": stored, "at": time.monotonic()}
+            # Keep legacy keys for older callers / invalidate_account_cache.
+            if app_user_id is None:
+                _CACHE["payload"] = stored
+                _CACHE["at"] = time.monotonic()
         if persist_capital:
             reason = trigger_reason if force_refresh else (trigger_reason or "poll")
+            owner_uid = int(app_user_id) if app_user_id is not None else None
+            if owner_uid is None:
+                try:
+                    from database.app_user_repo import AppUserRepo
+                    from database.connection import SQLServerConnection
+                    with SQLServerConnection() as db:
+                        admin = AppUserRepo(db).get_admin()
+                        if admin:
+                            owner_uid = int(admin["id"])
+                except Exception:
+                    owner_uid = None
             body["capital_persisted"] = persist_capital_snapshot_if_changed(
                 stored,
                 trigger_reason=reason,
+                owner_user_id=owner_uid,
             )
         return body
     except Exception as exc:
