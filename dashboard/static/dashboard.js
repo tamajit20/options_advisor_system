@@ -7621,6 +7621,14 @@ function renderConfidenceChecks(s) {
 }
 
 // Helper: parse plain_english text into structured display
+/** Monthly / Weekly chip — same look on Suggestion, My Trades, and History. */
+function expiryTypeBadge(expiryType) {
+  const t = String(expiryType || '').trim();
+  if (!t) return '';
+  const cls = t === 'Monthly' ? 'ctx-chip ctx-expiry-monthly' : 'ctx-chip ctx-expiry-weekly';
+  return `<span class="${cls}">${escapeHtml(t)}</span>`;
+}
+
 function renderPlainEnglishStructured(s) {
   const text = (s.plain_english || '').trim();
   if (!text) {
@@ -7655,9 +7663,9 @@ function renderPlainEnglishStructured(s) {
   const ivRank = ivMatch   ? ivMatch[1]   : null;
   const chips = [];
   if (s.underlying)       chips.push(`<span class="ctx-chip">${escapeHtml(s.underlying)}</span>`);
-  if (s.expiry_type) {
-    const badgeClass = s.expiry_type === 'Monthly' ? 'ctx-chip ctx-expiry-monthly' : 'ctx-chip ctx-expiry-weekly';
-    chips.push(`<span class="${badgeClass}">${escapeHtml(s.expiry_type)}</span>`);
+  {
+    const expChip = expiryTypeBadge(s.expiry_type);
+    if (expChip) chips.push(expChip);
   }
   if (spot)               chips.push(`<span class="ctx-chip">Spot ₹${escapeHtml(spot)}</span>`);
   if (ivRank)             chips.push(`<span class="ctx-chip ctx-iv">IV Rank ${escapeHtml(ivRank)}%</span>`);
@@ -10549,6 +10557,7 @@ function renderTrade(t, expanded = false) {
         }))}</span>
       <h3>${escapeHtml(t.trade_name || t.trade_id)}</h3>
         ${strategyGuideInfoBtn((t.suggestion && t.suggestion.strategy) || t.strategy)}
+        ${expiryTypeBadge((t.suggestion && t.suggestion.expiry_type) || t.expiry_type)}
       </div>
       <div class="card-head-tags">
         <div class="card-head-badges">
@@ -11651,9 +11660,9 @@ function renderHistorySuggestion(s) {
         <strong class="hist-instr">${escapeHtml(s.underlying || '')}</strong>
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
         ${strategyGuideInfoBtn(s.strategy)}
+        ${expiryTypeBadge(s.expiry_type)}
         <span class="tag ${statusCls}">${escapeHtml(s.status || '')}</span>
         ${_qualityBadge(s.entry_quality_score)}
-        ${s.expiry_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(s.expiry_type)}</span>` : ''}
         ${_idChipsHtml(s.trade_id, s.suggestion_id)}
       </div>
       <div class="hist-card-pnl">
@@ -11877,6 +11886,7 @@ function renderTradeCloseSnapshot(t) {
         <div class="card-head-title">
           <h3>${escapeHtml(t.trade_name || t.trade_id || '')}</h3>
           ${strategyGuideInfoBtn(strat)}
+          ${expiryTypeBadge(sug.expiry_type)}
         </div>
         <div class="card-head-tags">
           ${strat ? `<span class="tag tag-accent">${escapeHtml(strat)}</span>` : ''}
@@ -12046,6 +12056,7 @@ function renderHistoryTrade(t) {
         <strong class="hist-instr">${escapeHtml(s.underlying || t.trade_id)}</strong>
         <span class="tag tag-accent">${escapeHtml(s.strategy || '')}</span>
         ${strategyGuideInfoBtn(s.strategy)}
+        ${expiryTypeBadge(s.expiry_type)}
         <span class="tag ${statusCls}">${escapeHtml(t.status || '')}</span>
         ${_qualityBadge(t.entry_quality_score, 'Entry quality: ')}
         ${t.position_type ? `<span class="muted" style="font-size:.78rem">${escapeHtml(t.position_type)}</span>` : ''}
