@@ -2733,10 +2733,11 @@ const toast = (msg, kind='info') => {
 window.toast = toast;
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'learn', 'history', 'users', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
+const TABS = ['suggestion', 'trades', 'history', 'notifications', 'config', 'learn', 'users', 'jobs', 'logs', 'wsmon'];
 window.TABS = TABS;
-const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'config'];
-const SYSTEM_TABS = ['logs', 'jobs', 'wsmon'];
+// Advisor chrome (header subtabs / mobile Advisor mode) — daily workflow tabs.
+const OPTIONS_TABS = ['suggestion', 'trades', 'history', 'config', 'learn'];
+const SYSTEM_TABS = ['users', 'jobs', 'logs', 'wsmon'];
 const TAB_LOADERS = {};
 const TAB_LEAVE = {};
 
@@ -13258,6 +13259,21 @@ function _setUserAvatarMenuOpen(open) {
   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
+/** Avatar menu: show Zerodha login OR logout — never both. */
+function _syncZerodhaMenuAction(sessionOk) {
+  const loginBtn = document.getElementById('zerodha-login-btn');
+  const logoutBtn = document.getElementById('user-menu-zerodha-logout');
+  const ok = !!sessionOk;
+  if (loginBtn) {
+    loginBtn.hidden = ok;
+    if (!ok) {
+      loginBtn.setAttribute('href', '/zerodha/login');
+      loginBtn.textContent = 'Zerodha login';
+    }
+  }
+  if (logoutBtn) logoutBtn.hidden = !ok;
+}
+
 function _wireUserAvatarMenu() {
   const btn = document.getElementById('user-avatar-btn');
   const menu = document.getElementById('user-avatar-menu');
@@ -13385,14 +13401,15 @@ async function loadAppMe() {
       feedLabel.textContent = data.feed.ready ? 'OK' : 'Offline';
     }
     const zLabel = document.getElementById('zerodha-login-label');
+    const zOk = !!(data.zerodha && data.zerodha.ready);
     if (zLabel && data.zerodha) {
-      zLabel.textContent = data.zerodha.ready
+      zLabel.textContent = zOk
         ? (`OK${data.zerodha.kite_user_id ? ' · ' + data.zerodha.kite_user_id : ''}`)
         : 'Not logged in';
     }
+    _syncZerodhaMenuAction(zOk);
     const dot = document.getElementById('user-avatar-dot');
     if (dot) {
-      const zOk = !!(data.zerodha && data.zerodha.ready);
       const feedOk = !!(data.feed && data.feed.ready);
       if (zOk && feedOk) dot.dataset.state = 'ok';
       else if (zOk || feedOk) dot.dataset.state = 'warn';
@@ -13402,7 +13419,7 @@ async function loadAppMe() {
       el.hidden = !(u && u.is_admin);
     });
     // Hide admin tabs in mobile more-drawer too
-    document.querySelectorAll('.more-drawer-item[data-tab="logs"], .more-drawer-item[data-tab="jobs"], .more-drawer-item[data-tab="wsmon"]').forEach(el => {
+    document.querySelectorAll('.more-drawer-item[data-tab="users"], .more-drawer-item[data-tab="jobs"], .more-drawer-item[data-tab="logs"], .more-drawer-item[data-tab="wsmon"]').forEach(el => {
       el.hidden = !(u && u.is_admin);
     });
   } catch (e) {
@@ -13708,30 +13725,37 @@ async function loadZerodhaStatus(refreshAccount = false) {
     }
     // Update avatar-menu Zerodha row (and status dot)
     const avatarDot = document.getElementById('user-avatar-dot');
-    if (headerBtn && headerIcon && headerLabel) {
+    const sessionOk = !!(d.valid);
+    _syncZerodhaMenuAction(sessionOk);
+    if (headerLabel) {
       if (!d.has_session) {
-        headerIcon.textContent = '';
+        if (headerIcon) headerIcon.textContent = '';
         headerLabel.textContent = 'Not logged in';
-        headerBtn.style.color = '#fca5a5';
-        headerBtn.title = 'Zerodha — no session. Click to log in.';
+        if (headerBtn) {
+          headerBtn.style.color = '#fca5a5';
+          headerBtn.title = 'Zerodha — no session. Click to log in.';
+        }
       } else if (d.valid) {
-        headerIcon.textContent = '✓';
+        if (headerIcon) headerIcon.textContent = '✓';
         headerLabel.textContent = d.user_id ? `OK · ${d.user_id}` : 'OK';
-        headerBtn.style.color = '#6ee7b7';
-        const untilTip = d.valid_until ? ` until ${d.valid_until.slice(0, 16)}` : '';
-        headerBtn.title = `Zerodha session valid (user_id ${d.user_id || ''}${untilTip}).`;
+        if (headerBtn) {
+          headerBtn.style.color = '#6ee7b7';
+          const untilTip = d.valid_until ? ` until ${d.valid_until.slice(0, 16)}` : '';
+          headerBtn.title = `Zerodha session valid (user_id ${d.user_id || ''}${untilTip}).`;
+        }
       } else {
-        headerIcon.textContent = '⚠';
+        if (headerIcon) headerIcon.textContent = '⚠';
         headerLabel.textContent = 'Expired — re-login';
-        headerBtn.style.color = '#fbbf24';
-        headerBtn.title = 'Zerodha session expired. Click to re-login.';
+        if (headerBtn) {
+          headerBtn.style.color = '#fbbf24';
+          headerBtn.title = 'Zerodha session expired. Click to re-login.';
+        }
       }
     }
     if (avatarDot) {
-      const zOk = !!(d.valid);
       const feedOk = !!(window.__OA_ME && window.__OA_ME.feed && window.__OA_ME.feed.ready);
-      if (zOk && feedOk) avatarDot.dataset.state = 'ok';
-      else if (zOk || feedOk) avatarDot.dataset.state = 'warn';
+      if (sessionOk && feedOk) avatarDot.dataset.state = 'ok';
+      else if (sessionOk || feedOk) avatarDot.dataset.state = 'warn';
       else avatarDot.dataset.state = 'bad';
     }
     // Update Config-tab card if present

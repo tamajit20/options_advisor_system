@@ -80,7 +80,7 @@
           </div>
         </div>
         <a id="zerodha-login-btn" class="user-avatar-item" role="menuitem" href="/zerodha/login">Zerodha login</a>
-        <button type="button" class="user-avatar-item" role="menuitem" id="user-menu-zerodha-logout">Zerodha logout</button>
+        <button type="button" class="user-avatar-item" role="menuitem" id="user-menu-zerodha-logout" hidden>Zerodha logout</button>
         <button type="button" class="user-avatar-item" role="menuitem" id="user-menu-change-password">Change my password…</button>
         <button type="button" class="user-avatar-item admin-only" role="menuitem" id="user-menu-users" hidden>Users…</button>
         <a class="user-avatar-item user-avatar-danger" role="menuitem" id="user-menu-sign-out"
@@ -112,28 +112,25 @@
         <button class="nav-item" data-tab="history">
           <span class="nav-icon">📜</span><span class="nav-label">History</span>
         </button>
-        <button class="nav-item admin-only" data-tab="logs" hidden>
-          <span class="nav-icon">🪵</span><span class="nav-label">Logs</span>
-        </button>
-        <button class="nav-item admin-only" data-tab="jobs" hidden>
-          <span class="nav-icon">🔧</span><span class="nav-label">Jobs</span>
-        </button>
-        <button class="nav-item admin-only" data-tab="wsmon" hidden>
-          <span class="nav-icon">📡</span><span class="nav-label">WS Monitor</span>
-        </button>
         <button class="nav-item" data-tab="notifications">
           <span class="nav-icon">🔔</span>
           <span class="nav-label">Alerts</span>
           <span id="notif-tab-badge" class="notif-tab-badge" hidden>0</span>
-        </button>
-        <button class="nav-item admin-only" data-tab="users" hidden>
-          <span class="nav-icon">👤</span><span class="nav-label">Users</span>
         </button>
         <button class="nav-item" data-tab="config">
           <span class="nav-icon">⚙️</span><span class="nav-label">Config</span>
         </button>
         <button class="nav-item" data-tab="learn">
           <span class="nav-icon">📘</span><span class="nav-label">Learning</span>
+        </button>
+        <button class="nav-item admin-only" data-tab="jobs" hidden>
+          <span class="nav-icon">🔧</span><span class="nav-label">Jobs</span>
+        </button>
+        <button class="nav-item admin-only" data-tab="logs" hidden>
+          <span class="nav-icon">🪵</span><span class="nav-label">Logs</span>
+        </button>
+        <button class="nav-item admin-only" data-tab="wsmon" hidden>
+          <span class="nav-icon">📡</span><span class="nav-label">WS Monitor</span>
         </button>
   </nav>
 
@@ -502,14 +499,15 @@
     <div class="more-drawer-handle"></div>
     <h3 class="more-drawer-title" id="more-drawer-title">Menu</h3>
     <div class="more-drawer-section">
-      <p class="more-drawer-section-label">Options Advisor — tools</p>
+      <p class="more-drawer-section-label">Admin / system</p>
       <div class="more-drawer-grid">
-        <button type="button" class="more-drawer-item" data-tab="logs"><span class="more-drawer-icon">🪵</span>Logs</button>
+        <button type="button" class="more-drawer-item admin-only" data-tab="users" hidden><span class="more-drawer-icon">👤</span>Users</button>
         <button type="button" class="more-drawer-item" data-tab="jobs"><span class="more-drawer-icon">🔧</span>Jobs</button>
+        <button type="button" class="more-drawer-item" data-tab="logs"><span class="more-drawer-icon">🪵</span>Logs</button>
         <button type="button" class="more-drawer-item" data-tab="wsmon"><span class="more-drawer-icon">📡</span>WS Monitor</button>
       </div>
     </div>
-    <p class="more-drawer-note">Suggestion, Trades, History, Config, and Learning live under <strong>Advisor</strong> (top tabs).</p>
+    <p class="more-drawer-note">Suggestion, Trades, History, Config, and Learning live under <strong>Advisor</strong> (top tabs). Alerts is on the bottom bar.</p>
     <button type="button" class="btn btn-ghost" data-more-close style="width:100%;margin-top:10px">Close</button>
   </div>
 </div>
