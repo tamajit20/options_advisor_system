@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
@@ -126,9 +127,92 @@ def _zerodha_account_for_api(
     )
 
 
-_FEED_OFF_STATES = frozenset({
-    "waiting_for_login", "token_expired", "stopped", "disconnected", "unavailable",
+_FEED_CONNECTING_STATES = frozenset({
+    "waiting_for_login", "connecting", "unavailable",
 })
+_TICK_FEED_SIGNAL_PATH = os.path.join("data", "tick_feed_signal.json")
+
+
+def _read_tick_feed_signal() -> dict:
+    try:
+        if not os.path.isfile(_TICK_FEED_SIGNAL_PATH):
+            return {}
+        with open(_TICK_FEED_SIGNAL_PATH, encoding="utf-8") as fh:
+            data = json.load(fh) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _bump_tick_feed_signal(event: str) -> dict:
+    """Touch a small signal file so every open SSE client sees login/logout now."""
+    from utils import now_ist
+
+    payload = {
+        "event": str(event or "update"),
+        "at": now_ist().isoformat(timespec="seconds"),
+    }
+    try:
+        os.makedirs(os.path.dirname(_TICK_FEED_SIGNAL_PATH) or ".", exist_ok=True)
+        tmp = _TICK_FEED_SIGNAL_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, _TICK_FEED_SIGNAL_PATH)
+    except Exception:
+        logger.debug("tick_feed signal write failed", exc_info=True)
+    return payload
+
+
+def _publish_tick_feed_logout() -> None:
+    """Park shared feed and notify SSE clients immediately."""
+    try:
+        from providers.ws_monitor import default_snapshot_path, write_idle_snapshot
+        write_idle_snapshot(
+            default_snapshot_path(),
+            detail="admin Zerodha logout — shared tick feed parked",
+        )
+    except Exception:
+        logger.debug("idle ws_status write after admin logout failed", exc_info=True)
+    _bump_tick_feed_signal("admin_logout")
+
+
+def _publish_tick_feed_login() -> None:
+    """Admin Zerodha login — flip signal so other dashboards leave Offline now."""
+    try:
+        from providers.ws_monitor import default_snapshot_path
+        from providers.ws_health import load_ws_status
+        from utils import now_ist
+
+        path = default_snapshot_path()
+        snap = load_ws_status() or {}
+        state = str(snap.get("connection_state") or "")
+        if state in ("", "waiting_for_login", "stopped", "disconnected", "unavailable"):
+            now = now_ist()
+            connecting = {
+                "provider": snap.get("provider") or "zerodha",
+                "generated_at": now.isoformat(),
+                "started_at": snap.get("started_at") or now.isoformat(),
+                "uptime_seconds": snap.get("uptime_seconds") or 0.0,
+                "connection_state": "connecting",
+                "token_expired": False,
+                "last_tick_at": snap.get("last_tick_at"),
+                "last_state_change_at": now.isoformat(),
+                "last_error": "admin Zerodha login — waiting for WS runner",
+                "tick_count_total": snap.get("tick_count_total") or 0,
+                "tick_rate_per_sec": 0.0,
+                "top_symbols": [],
+                "recent_events": [],
+                "runner_state": "connecting",
+                "subscribed_tokens": snap.get("subscribed_tokens") or 0,
+            }
+            os.makedirs(path.parent, exist_ok=True)
+            tmp = str(path) + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(connecting, fh, default=str)
+            os.replace(tmp, path)
+    except Exception:
+        logger.debug("connecting ws_status write after admin login failed", exc_info=True)
+    _bump_tick_feed_signal("admin_login")
 
 
 def _tick_feed_status_payload() -> dict:
@@ -140,6 +224,7 @@ def _tick_feed_status_payload() -> dict:
     ``mode`` is one of:
       * ``live`` — market open and ticks healthy (header: green Live)
       * ``market_off`` — admin feed logged in, market closed (header: Market off)
+      * ``connecting`` — admin logged in, market open, WS still catching up
       * ``feed_off`` — admin logged out / WS parked / unhealthy in session
     """
     from providers.ws_health import in_nse_session, is_ws_unhealthy, load_ws_status
@@ -156,14 +241,16 @@ def _tick_feed_status_payload() -> dict:
     admin = load_admin_session()
     admin_ok = bool(admin and is_token_valid(admin))
     token_expired = bool(snap.get("token_expired"))
-    parked = (not admin_ok) or token_expired or state in _FEED_OFF_STATES
+    signal = _read_tick_feed_signal()
 
-    if parked or (in_session and unhealthy):
+    # Admin session is the source of truth for "feed on". Do not keep Offline
+    # solely because ws_status still says waiting_for_login after a fresh login.
+    if not admin_ok or token_expired:
         mode = "feed_off"
         label = "Offline"
         short = "Feed off"
         alive = False
-        off_reason = reason if (in_session and unhealthy) else (
+        off_reason = (
             "admin_session_missing" if not admin_ok
             else ("token_expired" if token_expired else f"connection_state={state}")
         )
@@ -179,6 +266,30 @@ def _tick_feed_status_payload() -> dict:
         alive = True
         off_reason = None
         message = None
+    elif unhealthy:
+        catching_up = (
+            state in _FEED_CONNECTING_STATES
+            or str(reason or "").startswith("last_tick")
+            or str(reason or "") == "ws_status_missing"
+        )
+        if catching_up:
+            mode = "connecting"
+            label = "Connecting"
+            short = "Connecting"
+            alive = True
+            off_reason = reason
+            message = None
+        else:
+            mode = "feed_off"
+            label = "Offline"
+            short = "Feed off"
+            alive = False
+            off_reason = reason or f"connection_state={state}"
+            message = (
+                "LIVE TICKS ARE OFF — Current P&L and close prices may be outdated. "
+                "Do not close a trade from these marks until the shared feed is back "
+                f"({off_reason})."
+            )
     else:
         mode = "live"
         label = "Live"
@@ -198,6 +309,7 @@ def _tick_feed_status_payload() -> dict:
         "message": message,
         "token_expired": token_expired,
         "admin_session": admin_ok,
+        "signal": signal,
     }
 
 
@@ -2698,6 +2810,7 @@ def create_app() -> Flask:
         # Admin may land on WS Monitor; traders stay on Config.
         u = current_user()
         if u and u.get("is_admin"):
+            _publish_tick_feed_login()
             return redirect("/?zerodha=ok#wsmon")
         return redirect("/?zerodha=ok#config")
 
@@ -2722,12 +2835,17 @@ def create_app() -> Flask:
             ws_wake = ensure_ws_runner_running()
         except Exception:
             logger.exception("ws_runner wake after exchange failed (non-fatal)")
+        from dashboard.auth import current_user as _cu
+        u = _cu()
+        if u and u.get("is_admin"):
+            _publish_tick_feed_login()
         return jsonify({
             "ok": True,
             "user_id": session.user_id,
             "generated_at": session.generated_at.isoformat(),
             "ws_runner": ws_wake,
             "account": _zerodha_account_for_api(force_refresh=True),
+            "tick_feed": _tick_feed_status_payload(),
         })
 
     @app.route("/api/zerodha/status")
@@ -2788,18 +2906,9 @@ def create_app() -> Flask:
 
         invalidate_account_cache()
         removed = removed_db or removed_file
-        tick_feed = _tick_feed_status_payload()
         if feed_disconnected:
             # Push immediately — do not wait for ws_runner's ~5s poll loop.
-            try:
-                from providers.ws_monitor import default_snapshot_path, write_idle_snapshot
-                write_idle_snapshot(
-                    default_snapshot_path(),
-                    detail="admin Zerodha logout — shared tick feed parked",
-                )
-            except Exception:
-                logger.debug("idle ws_status write after admin logout failed", exc_info=True)
-            tick_feed = _tick_feed_status_payload()
+            _publish_tick_feed_logout()
             msg = (
                 "Admin Zerodha cleared; shared tick feed is offline for everyone."
                 if removed else "No persisted session found; feed marked offline."
@@ -2813,7 +2922,7 @@ def create_app() -> Flask:
             "ok": True,
             "removed": bool(removed),
             "feed_disconnected": feed_disconnected,
-            "tick_feed": tick_feed,
+            "tick_feed": _tick_feed_status_payload(),
             "message": msg,
         })
 
@@ -5669,7 +5778,7 @@ def create_app() -> Flask:
         from flask import Response, stream_with_context
         from dashboard.sse_helpers import iter_sse_on_change
 
-        poll_sec = float(DASHBOARD_CONFIG.get("tick_feed_stream_poll_sec", 1.0))
+        poll_sec = float(DASHBOARD_CONFIG.get("tick_feed_stream_poll_sec", 0.5))
 
         def _poll():
             return _tick_feed_status_payload()

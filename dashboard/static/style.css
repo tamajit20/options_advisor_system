@@ -119,6 +119,17 @@ a { color: var(--accent); text-decoration: none; }
 }
 .tick-feed--market-off .tick-feed-dot { background: #94a3b8; }
 .tick-feed--market-off .tick-feed-state { color: #cbd5e1; }
+.tick-feed--connecting {
+  border-color: rgba(251, 191, 36, .5);
+  background: rgba(69, 46, 10, .45);
+  color: #fef3c7;
+  opacity: .95;
+}
+.tick-feed--connecting .tick-feed-dot {
+  background: #fbbf24;
+  box-shadow: 0 0 8px rgba(251, 191, 36, .7);
+}
+.tick-feed--connecting .tick-feed-state { color: #fcd34d; }
 .tick-feed--off {
   border-color: rgba(100, 116, 139, .4);
   background: rgba(15, 23, 42, .35);

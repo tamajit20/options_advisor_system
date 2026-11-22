@@ -114,7 +114,7 @@ let _zerodhaValid = false;
 /** Shared WS tick feed (admin session) — independent of each user's Kite login. */
 let _tickFeedAlive = true;
 let _tickFeedMessage = '';
-/** @type {'live'|'market_off'|'feed_off'|''} */
+/** @type {'live'|'market_off'|'connecting'|'feed_off'|''} */
 let _tickFeedMode = '';
 let _tickFeedSource = null;
 /** Suppress SSE toast briefly after local admin logout (logout toast already fired). */
@@ -1352,6 +1352,14 @@ function _updateTickFeedPageBanners() {
   });
 }
 
+function _tickFeedLabelForMode(mode, tf) {
+  if (tf && (tf.label || tf.short)) return tf.label || tf.short;
+  if (mode === 'live') return 'Live';
+  if (mode === 'market_off') return 'Market off';
+  if (mode === 'connecting') return 'Connecting';
+  return 'Offline';
+}
+
 function _tickFeedChipTip(tf) {
   const mode = (tf && tf.mode) || _tickFeedMode || 'feed_off';
   if (mode === 'live') {
@@ -1359,6 +1367,9 @@ function _tickFeedChipTip(tf) {
   }
   if (mode === 'market_off') {
     return 'Shared tick feed is on (admin Zerodha logged in) but the market is closed.';
+  }
+  if (mode === 'connecting') {
+    return 'Admin Zerodha is logged in — waiting for the shared WS runner to connect.';
   }
   return (tf && tf.message) || _tickFeedMessage || (
     'Shared tick feed Offline — admin Zerodha is logged out or the WS runner is parked. '
@@ -1371,25 +1382,40 @@ function _updateHeaderFeedChip(tf) {
   const stateEl = document.getElementById('tick-feed-state');
   if (!chip || !stateEl) return;
   const mode = (tf && tf.mode) || _tickFeedMode || 'feed_off';
-  const label = (tf && (tf.label || tf.short)) || (
-    mode === 'live' ? 'Live' : mode === 'market_off' ? 'Market off' : 'Offline'
-  );
+  const label = _tickFeedLabelForMode(mode, tf);
   stateEl.textContent = label;
-  chip.classList.remove('tick-feed--live', 'tick-feed--market-off', 'tick-feed--off');
+  chip.classList.remove(
+    'tick-feed--live', 'tick-feed--market-off', 'tick-feed--connecting', 'tick-feed--off'
+  );
   chip.classList.add(
     mode === 'live' ? 'tick-feed--live'
       : mode === 'market_off' ? 'tick-feed--market-off'
-        : 'tick-feed--off'
+        : mode === 'connecting' ? 'tick-feed--connecting'
+          : 'tick-feed--off'
   );
   chip.title = _tickFeedChipTip(tf);
   chip.setAttribute('aria-label', `Shared tick feed: ${label}`);
+}
+
+function _updateAvatarFeedLabel(tf) {
+  const feedLabel = document.getElementById('feed-status-label');
+  if (!feedLabel) return;
+  const mode = (tf && tf.mode) || _tickFeedMode || 'feed_off';
+  const label = _tickFeedLabelForMode(mode, tf);
+  feedLabel.textContent = label;
+  feedLabel.dataset.mode = mode;
+  feedLabel.title = _tickFeedChipTip(tf);
 }
 
 function _syncAvatarDotFromFeed() {
   const dot = document.getElementById('user-avatar-dot');
   if (!dot) return;
   const zOk = !!(_zerodhaHasSession && _zerodhaValid);
-  const feedOk = _tickFeedMode === 'live' || _tickFeedMode === 'market_off';
+  const feedOk = (
+    _tickFeedMode === 'live'
+    || _tickFeedMode === 'market_off'
+    || _tickFeedMode === 'connecting'
+  );
   if (zOk && feedOk) dot.dataset.state = 'ok';
   else if (zOk || feedOk) dot.dataset.state = 'warn';
   else dot.dataset.state = 'bad';
@@ -1414,6 +1440,7 @@ function _applyTickFeedPayload(tf, { announce = false } = {}) {
     };
   }
   _updateHeaderFeedChip(tf);
+  _updateAvatarFeedLabel(tf);
   _updateTickFeedPageBanners();
   _syncAvatarDotFromFeed();
   if (typeof _refreshAllFeedTags === 'function') _refreshAllFeedTags();
@@ -1422,8 +1449,13 @@ function _applyTickFeedPayload(tf, { announce = false } = {}) {
     toast(_tickFeedMessage || 'Shared tick feed is Offline — live marks may be stale.', 'err');
   } else if (mayAnnounce && mode === 'live') {
     toast('Shared tick feed is Live again.', 'ok');
-  } else if (mayAnnounce && mode === 'market_off' && prevMode === 'feed_off') {
-    toast('Admin Zerodha is back — feed on, market closed.', 'ok');
+  } else if (mayAnnounce && (mode === 'market_off' || mode === 'connecting') && prevMode === 'feed_off') {
+    toast(
+      mode === 'connecting'
+        ? 'Admin Zerodha is back — shared feed connecting…'
+        : 'Admin Zerodha is back — feed on, market closed.',
+      'ok'
+    );
   }
 }
 
