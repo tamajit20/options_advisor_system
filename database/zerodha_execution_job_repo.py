@@ -145,7 +145,13 @@ class ZerodhaExecutionJobRepo:
             [*seen, *owner_params],
         ) or []
 
-    def list_for_trades(self, trade_ids: List[str]) -> List[dict]:
+    def list_for_trades(
+        self,
+        trade_ids: List[str],
+        *,
+        owner_user_id: Optional[int] = None,
+        admin_all: bool = False,
+    ) -> List[dict]:
         seen: List[str] = []
         for tid in trade_ids:
             text = (tid or "").strip()
@@ -154,10 +160,16 @@ class ZerodhaExecutionJobRepo:
         if not seen:
             return []
         placeholders = ",".join("?" * len(seen))
+        if admin_all:
+            frag, owner_params = "", []
+        else:
+            frag, owner_params = owner_sql(
+                require_owner_user_id(owner_user_id, what="list_for_trades"),
+            )
         return self.db.fetch_all(
             "SELECT * FROM options_zerodha_execution_jobs "
-            f"WHERE trade_id IN ({placeholders}) ORDER BY id",
-            seen,
+            f"WHERE trade_id IN ({placeholders}){frag} ORDER BY id",
+            [*seen, *owner_params],
         ) or []
 
     def latest_for_trade(self, trade_id: str, *, operation: Optional[str] = None) -> Optional[dict]:

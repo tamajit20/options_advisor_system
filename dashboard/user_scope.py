@@ -7,16 +7,17 @@ from typing import Any, Iterator, Optional, Tuple
 
 from flask import jsonify
 
-from dashboard.auth import current_user, current_user_id, require_admin
+from dashboard import auth as dashboard_auth
 from database.owner_scope import acting_owner, resolve_owner_user_id
 
 
 def acting_user_id() -> Optional[int]:
-    return current_user_id()
+    # Look up via module so test patches on dashboard.auth.current_user_id apply.
+    return dashboard_auth.current_user_id()
 
 
 def is_admin_user() -> bool:
-    u = current_user()
+    u = dashboard_auth.current_user()
     return bool(u and u.get("is_admin"))
 
 
@@ -82,4 +83,4 @@ def require_bound_owner_or_401():
 
 
 def admin_gate():
-    return require_admin()
+    return dashboard_auth.require_admin()

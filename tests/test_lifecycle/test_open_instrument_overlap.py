@@ -67,7 +67,7 @@ def test_contract_key_normalises_strike_and_case():
 
 def test_load_open_contracts_ignores_a_non_list():
     class _Db:
-        def fetch_all(self, sql):
+        def fetch_all(self, sql, params=None):
             return None
 
-    assert load_open_contracts(_Db()) == []
+    assert load_open_contracts(_Db(), admin_all=True) == []

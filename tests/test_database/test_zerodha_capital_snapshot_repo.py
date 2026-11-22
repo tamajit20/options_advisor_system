@@ -29,7 +29,9 @@ def test_insert_if_changed_writes_first_row():
     db = MagicMock()
     db.fetch_one.return_value = None
     repo = ZerodhaCapitalSnapshotRepo(db)
-    assert repo.insert_if_changed(_snap(), trigger_reason="test") is True
+    assert repo.insert_if_changed(
+        _snap(), trigger_reason="test", owner_user_id=1,
+    ) is True
     assert db.execute.called
 
 
@@ -45,7 +47,9 @@ def test_insert_if_changed_skips_unchanged():
         "utilised_option_premium": 5000.0,
     }
     repo = ZerodhaCapitalSnapshotRepo(db)
-    assert repo.insert_if_changed(_snap(), trigger_reason="test") is False
+    assert repo.insert_if_changed(
+        _snap(), trigger_reason="test", owner_user_id=1,
+    ) is False
     db.execute.assert_not_called()
 
 
@@ -64,6 +68,7 @@ def test_insert_if_changed_on_idle_move():
     assert repo.insert_if_changed(
         _snap(usable_balance=70000.0, live_balance=70000.0),
         trigger_reason="withdraw",
+        owner_user_id=1,
     ) is True
     assert db.execute.called
 
@@ -71,5 +76,7 @@ def test_insert_if_changed_on_idle_move():
 def test_insert_if_changed_ignores_unavailable():
     db = MagicMock()
     repo = ZerodhaCapitalSnapshotRepo(db)
-    assert repo.insert_if_changed({"available": False}, trigger_reason="x") is False
+    assert repo.insert_if_changed(
+        {"available": False}, trigger_reason="x", owner_user_id=1,
+    ) is False
     db.execute.assert_not_called()

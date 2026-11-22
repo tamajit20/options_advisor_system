@@ -263,7 +263,7 @@ class TestMilestoneOverridePatch:
 
     def test_rejects_bad_kind(self, client, mocker):
         mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-1"})
+                     return_value={"trade_id": "TRD-1", "owner_user_id": 1})
         resp = client.patch(
             "/api/trades/TRD-1/milestones",
             data=json.dumps({"kind": "peak", "fixed": True, "rs": 1000}),
@@ -273,7 +273,11 @@ class TestMilestoneOverridePatch:
 
     def test_saves_fixed_profit(self, client, mocker):
         mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-1", "profit_ms_fixed_rs": None})
+                     return_value={
+                         "trade_id": "TRD-1",
+                         "owner_user_id": 1,
+                         "profit_ms_fixed_rs": None,
+                     })
         wr = mocker.patch("dashboard.server.TradeRepo.write_milestone_override")
         resp = client.patch(
             "/api/trades/TRD-1/milestones",
@@ -293,7 +297,11 @@ class TestMilestoneOverridePatch:
 
     def test_uncheck_keeps_last_rs(self, client, mocker):
         mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-1", "loss_ms_fixed_rs": 800.0})
+                     return_value={
+                         "trade_id": "TRD-1",
+                         "owner_user_id": 1,
+                         "loss_ms_fixed_rs": 800.0,
+                     })
         wr = mocker.patch("dashboard.server.TradeRepo.write_milestone_override")
         resp = client.patch(
             "/api/trades/TRD-1/milestones",
@@ -310,7 +318,7 @@ class TestMilestoneOverridePatch:
 
     def test_rejects_zero_loss(self, client, mocker):
         mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-1"})
+                     return_value={"trade_id": "TRD-1", "owner_user_id": 1})
         resp = client.patch(
             "/api/trades/TRD-1/milestones",
             data=json.dumps({"kind": "loss", "fixed": True, "rs": 0}),

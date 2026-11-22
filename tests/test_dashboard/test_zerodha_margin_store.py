@@ -10,12 +10,23 @@ import dashboard.server as server
 
 
 @pytest.fixture
-def app(mocker):
+def app(mocker, mock_dashboard_admin):
     fake_conn = MagicMock()
     fake_conn.connect = MagicMock(return_value=None)
     fake_conn.close = MagicMock(return_value=None)
     fake_conn.fetch_one.return_value = None
     mocker.patch("dashboard.server.SQLServerConnection", return_value=fake_conn)
+    # Preview tests assert owner_user_id == 7 (not the default admin id).
+    mocker.patch(
+        "dashboard.auth._load_user_from_cookie",
+        return_value={
+            "id": 7,
+            "login": "trader7",
+            "display_name": "Trader",
+            "is_admin": False,
+            "is_active": True,
+        },
+    )
     app = server.create_app()
     app.config["TESTING"] = True
     return app
@@ -120,7 +131,6 @@ def test_apply_user_funds_gate_ok_when_covers(mocker):
 
 def test_preview_returns_stored_with_live_funds_gate(client, mocker):
     mocker.patch("dashboard.server._zerodha_execution_auth_required", return_value=None)
-    mocker.patch("dashboard.auth.current_user_id", return_value=7)
     mocker.patch(
         "dashboard.server._stored_zerodha_margin_preview",
         return_value={
@@ -161,7 +171,6 @@ def test_preview_returns_stored_with_live_funds_gate(client, mocker):
 
 def test_preview_persists_per_user_state_not_shared_suggestion(client, mocker):
     mocker.patch("dashboard.server._zerodha_execution_auth_required", return_value=None)
-    mocker.patch("dashboard.auth.current_user_id", return_value=7)
     mocker.patch("dashboard.server._stored_zerodha_margin_preview", return_value=None)
     mocker.patch(
         "lifecycle.zerodha_executor.zerodha_margin_quote_ready",

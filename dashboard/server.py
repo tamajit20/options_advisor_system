@@ -644,7 +644,7 @@ def _attach_history_zerodha_executions(
     jobs_by_key: dict = {}
     for j in job_repo.list_for_suggestions(row_sids, owner_user_id=uid):
         jobs_by_key[j["id"]] = _row(j)
-    for j in job_repo.list_for_trades(row_tids):
+    for j in job_repo.list_for_trades(row_tids, owner_user_id=uid):
         jobs_by_key[j["id"]] = _row(j)
 
     close_triggers: dict = {}
@@ -2671,11 +2671,26 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
 
 def _build_alerts_stream_payload(db: SQLServerConnection) -> Dict[str, Any]:
     """Combined system-status + notification stats + unread rows for SSE."""
+    from dashboard.auth import current_user, current_user_id
+
     repo = NotificationRepo(db)
-    unread_rows = repo.unread(limit=100)
+    u = current_user()
+    uid = current_user_id()
+    admin_all = bool(u and u.get("is_admin"))
+    if not admin_all and uid is None:
+        # SSE still needs a body; empty notifications rather than OwnerScopeError.
+        return {
+            "system_status": _build_system_status_payload(db),
+            "stats": {"by_severity": {}, "by_category": {}, "total_unread": 0},
+            "notifications": [],
+        }
+    owner_uid = None if admin_all else int(uid)
+    unread_rows = repo.unread(
+        limit=100, owner_user_id=owner_uid, admin_all=admin_all,
+    )
     return {
         "system_status": _build_system_status_payload(db),
-        "stats": repo.stats(),
+        "stats": repo.stats(owner_user_id=owner_uid, admin_all=admin_all),
         "notifications": [_notif_row_simple(r) for r in unread_rows],
     }
 
@@ -3604,6 +3619,10 @@ def create_app() -> Flask:
     @app.route("/api/suggestion/<sid>/zerodha-preview", methods=["POST"])
     @_with_db
     def api_zerodha_preview(db: SQLServerConnection, sid: str):
+        from dashboard.user_scope import require_login_or_401
+        denied = require_login_or_401()
+        if denied is not None:
+            return denied
         auth_block = _zerodha_execution_auth_required()
         if auth_block is not None:
             return auth_block
@@ -3863,11 +3882,12 @@ def create_app() -> Flask:
     @_with_db
     def api_trade_outlook(db: SQLServerConnection, trade_id: str):
         """Full live outlook for one open trade (today bands + scenarios)."""
+        from dashboard.user_scope import owned_trade_or_error
         trd = TradeRepo(db)
         sug = SuggestionRepo(db)
-        r = trd.get(trade_id)
-        if r is None:
-            return jsonify({"error": "Not found"}), 404
+        r, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         r_out = _row(r)
         r_out["legs"] = [_row(l) for l in trd.legs_with_suggestion_info(trade_id)]
         if r.get("suggestion_id"):
@@ -4251,10 +4271,11 @@ def create_app() -> Flask:
     @_with_db
     def api_trade_milestones(db: SQLServerConnection, trade_id: str):
         """Per-trade profit arm (peak ₹) or loss line. Unchecked = overlay math."""
+        from dashboard.user_scope import owned_trade_or_error
         trd = TradeRepo(db)
-        row = trd.get(trade_id)
-        if row is None:
-            return jsonify({"error": "Not found"}), 404
+        row, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         payload = request.get_json(silent=True) or {}
         kind = str(payload.get("kind") or "").strip().lower()
         if kind not in ("profit", "loss"):
@@ -4289,6 +4310,10 @@ def create_app() -> Flask:
     @_with_db
     def api_trade_gap_replay(db: SQLServerConnection, trade_id: str):
         """EOD MTM replay for weekdays after the last live monitor snapshot."""
+        from dashboard.user_scope import owned_trade_or_error
+        _trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         payload = replay_gap_for_trade(db, trade_id)
         err = payload.get("error")
         if err == "not_found":
@@ -4303,9 +4328,11 @@ def create_app() -> Flask:
         """Historical live_pop / live_ev points for outlook sparkline."""
         import json as _json
 
+        from dashboard.user_scope import owned_trade_or_error
+        _trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         trd = TradeRepo(db)
-        if trd.get(trade_id) is None:
-            return jsonify({"error": "Not found"}), 404
         limit = min(int(request.args.get("limit", 96)), 500)
         rows = TradeMtmSnapshotRepo(db).list_for_trade(trade_id, limit=limit)
         points: list = []
@@ -4387,6 +4414,11 @@ def create_app() -> Flask:
     @app.route("/api/history/suggestions")
     @_with_db
     def api_history_suggestions(db: SQLServerConnection):
+        from dashboard.auth import current_user_id
+        from dashboard.user_scope import require_login_or_401
+        denied = require_login_or_401()
+        if denied is not None:
+            return denied
         from_date  = request.args.get("from_date")
         to_date    = request.args.get("to_date")
         underlying = request.args.get("underlying", "").strip()
@@ -4403,7 +4435,6 @@ def create_app() -> Flask:
         if status_f and status_f not in valid_statuses:
             status_f = ""
 
-        from dashboard.auth import current_user_id
         uid = current_user_id()
         filters: list[str] = ["CONVERT(date, generated_on) >= ?", "CONVERT(date, generated_on) <= ?"]
         params: list = [from_date, to_date]
@@ -4411,11 +4442,8 @@ def create_app() -> Flask:
             filters.append("underlying = ?")
             params.append(underlying)
         # Global suggestion.status is shared; per-user outcomes live in
-        # suggestion_user_state — apply status_f after overlay when logged in.
-        if status_f and uid is None:
-            filters.append("status = ?")
-            params.append(status_f)
-        elif not status_f:
+        # suggestion_user_state — apply status_f after overlay.
+        if not status_f:
             filters.append("status IN ('PENDING','EXECUTED','IGNORED','NO_SUGGESTION')")
 
         strategy_f = request.args.get("strategy", "").strip()
@@ -4442,7 +4470,7 @@ def create_app() -> Flask:
             suggestions.append(r_out)
         sids = [s.get("suggestion_id") for s in suggestions if s.get("suggestion_id")]
         user_state_by_sid: dict = {}
-        if uid is not None and sids:
+        if sids:
             ph = ",".join("?" * len(sids))
             state_rows = db.fetch_all(
                 "SELECT suggestion_id, status, trade_id FROM options_suggestion_user_state "
@@ -4461,9 +4489,8 @@ def create_app() -> Flask:
                 f"WHERE suggestion_id IN ({ph}) AND UPPER(ISNULL(status,'')) <> 'VOID' "
             )
             trade_params: list = list(sids)
-            if uid is not None:
-                trade_sql += "AND owner_user_id = ? "
-                trade_params.append(int(uid))
+            trade_sql += "AND owner_user_id = ? "
+            trade_params.append(int(uid))
             trade_sql += "ORDER BY executed_on DESC"
             trade_rows = db.fetch_all(trade_sql, trade_params)
             by_sug: dict = {}
@@ -4481,7 +4508,7 @@ def create_app() -> Flask:
                 tid = by_sug.get(sid) or (st.get("trade_id") if st else None)
                 if tid:
                     s["trade_id"] = tid
-                elif uid is not None:
+                else:
                     s.pop("trade_id", None)
             if status_f:
                 suggestions = [
@@ -4541,24 +4568,20 @@ def create_app() -> Flask:
     @_with_db
     def api_history_trades(db: SQLServerConnection):
         from dashboard.auth import current_user_id
+        from dashboard.user_scope import require_login_or_401
+        denied = require_login_or_401()
+        if denied is not None:
+            return denied
         days = int(request.args.get("days", 30))
         since = (today_ist() - timedelta(days=days))
         uid = current_user_id()
-        if uid is not None:
-            rows = db.fetch_all(
-                "SELECT TOP 200 * FROM options_trades "
-                "WHERE executed_on >= ? AND status IN ('CLOSED', 'EXPIRED') "
-                "AND owner_user_id = ? "
-                "ORDER BY executed_on DESC",
-                [since, int(uid)],
-            )
-        else:
-            rows = db.fetch_all(
-                "SELECT TOP 200 * FROM options_trades "
-                "WHERE executed_on >= ? AND status IN ('CLOSED', 'EXPIRED') "
-                "ORDER BY executed_on DESC",
-                [since],
-            )
+        rows = db.fetch_all(
+            "SELECT TOP 200 * FROM options_trades "
+            "WHERE executed_on >= ? AND status IN ('CLOSED', 'EXPIRED') "
+            "AND owner_user_id = ? "
+            "ORDER BY executed_on DESC",
+            [since, int(uid)],
+        )
         return jsonify({"trades": [_row(r) for r in rows]})
 
     @app.route("/api/stats/pnl-timeline")
@@ -4583,10 +4606,13 @@ def create_app() -> Flask:
         )
         filters.extend(date_filters)
         from dashboard.auth import current_user_id
+        from dashboard.user_scope import require_login_or_401
+        denied = require_login_or_401()
+        if denied is not None:
+            return denied
         uid = current_user_id()
-        if uid is not None:
-            filters.append("t.owner_user_id = ?")
-            params.append(int(uid))
+        filters.append("t.owner_user_id = ?")
+        params.append(int(uid))
 
         from database.execution_reversal_repo import ExecutionReversalRepo
 
@@ -4594,7 +4620,7 @@ def create_app() -> Flask:
         rev_to = next((p for f, p in zip(date_filters, params) if "<=" in f), None)
         try:
             rev_rows = ExecutionReversalRepo(db).list_between(
-                from_date=rev_from, to_date=rev_to, owner_user_id=uid,
+                from_date=rev_from, to_date=rev_to, owner_user_id=int(uid),
             )
         except Exception:
             logger.debug("execution reversals unavailable", exc_info=True)
@@ -4830,9 +4856,8 @@ def create_app() -> Flask:
         )
         pnl_filters.extend(date_filters)
         pnl_params = list(date_params)
-        if uid is not None:
-            pnl_filters.append("t.owner_user_id = ?")
-            pnl_params.append(int(uid))
+        pnl_filters.append("t.owner_user_id = ?")
+        pnl_params.append(int(uid))
         pnl_rows = db.fetch_all(
             "SELECT t.trade_id, t.trade_name, t.closed_on, t.executed_on, "
             "       t.net_pnl, t.actual_max_loss, "
@@ -4869,7 +4894,7 @@ def create_app() -> Flask:
         snap_rows = ZerodhaCapitalSnapshotRepo(db).list_between(
             from_dt=from_dt,
             to_dt=to_dt,
-            owner_user_id=int(uid) if uid is not None else None,
+            owner_user_id=int(uid),
             kite_user_id=str(kite_uid) if kite_uid else None,
         )
         snapshots = []
@@ -4924,13 +4949,16 @@ def create_app() -> Flask:
             request.args.get("channel") or request.args.get("execution_channel"),
         )
         from dashboard.auth import current_user_id
+        from dashboard.user_scope import require_login_or_401
+        denied = require_login_or_401()
+        if denied is not None:
+            return denied
         uid = current_user_id()
         where = "t.status IN ('CLOSED', 'EXPIRED') AND t.net_pnl IS NOT NULL"
         if date_filters:
             where += " AND " + " AND ".join(date_filters)
-        if uid is not None:
-            where += " AND t.owner_user_id = ? "
-            params = list(params) + [int(uid)]
+        where += " AND t.owner_user_id = ? "
+        params = list(params) + [int(uid)]
 
         from database.execution_reversal_repo import ExecutionReversalRepo
 
@@ -4938,7 +4966,7 @@ def create_app() -> Flask:
         rev_to = next((p for f, p in zip(date_filters, params) if "<=" in f), None)
         try:
             rev_rows = ExecutionReversalRepo(db).list_between(
-                from_date=rev_from, to_date=rev_to, owner_user_id=uid,
+                from_date=rev_from, to_date=rev_to, owner_user_id=int(uid),
             )
         except Exception:
             logger.debug("execution reversals unavailable", exc_info=True)
@@ -5115,12 +5143,15 @@ def create_app() -> Flask:
     @app.route("/api/history/paired")
     @_with_db
     def api_history_paired(db: SQLServerConnection):
+        from dashboard.auth import current_user_id
+        from dashboard.user_scope import require_login_or_401
+        denied = require_login_or_401()
+        if denied is not None:
+            return denied
         days = int(request.args.get("days", 30))
         since = today_ist() - timedelta(days=days)
-        from dashboard.auth import current_user_id
         uid = current_user_id()
-        if uid is not None:
-            rows = db.fetch_all(
+        rows = db.fetch_all(
                 "SELECT TOP 200 "
                 "  s.suggestion_id, s.underlying, s.strategy, s.generated_on, s.plain_english, "
                 "  s.confidence_score, s.net_credit_suggested, "
@@ -5137,20 +5168,6 @@ def create_app() -> Flask:
                 "WHERE s.generated_on >= ? "
                 "ORDER BY s.generated_on DESC",
                 [int(uid), int(uid), since],
-            )
-        else:
-            rows = db.fetch_all(
-                "SELECT TOP 200 "
-                "  s.suggestion_id, s.underlying, s.strategy, s.generated_on, s.plain_english, "
-                "  s.confidence_score, s.net_credit_suggested, s.status AS sug_status, "
-                "  s.trade_name AS sug_trade_name, "
-                "  t.trade_id, t.trade_name, t.executed_on, t.net_credit_actual, t.net_pnl, "
-                "  t.status AS trade_status, t.closed_on, t.exit_instruction, t.position_type "
-                "FROM options_suggestions s "
-                "LEFT JOIN options_trades t ON t.suggestion_id = s.suggestion_id "
-                "WHERE s.generated_on >= ? AND s.status IN ('EXECUTED', 'IGNORED') "
-                "ORDER BY s.generated_on DESC",
-                [since],
             )
         sug_repo = SuggestionRepo(db)
         trd_repo = TradeRepo(db)
@@ -5298,10 +5315,13 @@ def create_app() -> Flask:
         )
         params = [from_date_str, to_date_str]
         from dashboard.auth import current_user_id
+        from dashboard.user_scope import require_login_or_401
+        denied = require_login_or_401()
+        if denied is not None:
+            return denied
         uid = current_user_id()
-        if uid is not None:
-            sql += " AND t.owner_user_id = ? "
-            params.append(int(uid))
+        sql += " AND t.owner_user_id = ? "
+        params.append(int(uid))
         if underlying:
             sql += " AND s.underlying = ? "
             params.append(underlying)
@@ -5384,11 +5404,7 @@ def create_app() -> Flask:
         out.extend(rev_cards)
 
         try:
-            if uid is not None:
-                _attach_history_zerodha_executions(db, out, owner_user_id=int(uid))
-            else:
-                for item in out:
-                    item.setdefault("zerodha_executions", [])
+            _attach_history_zerodha_executions(db, out, owner_user_id=int(uid))
         except Exception:
             logger.debug("history zerodha executions attach skipped", exc_info=True)
             for item in out:
@@ -5401,9 +5417,10 @@ def create_app() -> Flask:
             "WHERE t.status IN ('CLOSED','EXPIRED') "
             f"  AND CONVERT(date, {_CLOSED_TRADE_DATE_EXPR}) >= ? "
             f"  AND CONVERT(date, {_CLOSED_TRADE_DATE_EXPR}) <= ? "
+            "  AND t.owner_user_id = ? "
             "  AND s.underlying IS NOT NULL"
         )
-        facet_rows = db.fetch_all(facet_sql, [from_date_str, to_date_str])
+        facet_rows = db.fetch_all(facet_sql, [from_date_str, to_date_str, int(uid)])
         underlyings = sorted(
             {u["underlying"] for u in facet_rows if u.get("underlying")} | rev_underlyings
         )
@@ -5516,7 +5533,9 @@ def create_app() -> Flask:
             sids, owner_user_id=owner_filter, admin_all=admin_all,
         ):
             jobs_by_key[j["id"]] = _row(j)
-        for j in job_repo.list_for_trades(tids):
+        for j in job_repo.list_for_trades(
+            tids, owner_user_id=owner_filter, admin_all=admin_all,
+        ):
             jobs_by_key[j["id"]] = _row(j)
         jobs = list(jobs_by_key.values())
 
@@ -5878,14 +5897,33 @@ def create_app() -> Flask:
     @app.route("/api/notifications/<int:nid>/read", methods=["POST"])
     @_with_db
     def api_notifications_read(db: SQLServerConnection, nid: int):
-        NotificationRepo(db).mark_read(nid)
+        from dashboard.auth import current_user, current_user_id
+        u = current_user()
+        uid = current_user_id()
+        admin_all = bool(u and u.get("is_admin"))
+        if not admin_all and uid is None:
+            return jsonify({"error": "Unauthorized"}), 401
+        NotificationRepo(db).mark_read(
+            nid,
+            owner_user_id=None if admin_all else int(uid),
+            admin_all=admin_all,
+        )
         db.commit()
         return jsonify({"ok": True})
 
     @app.route("/api/notifications/read-all", methods=["POST"])
     @_with_db
     def api_notifications_read_all(db: SQLServerConnection):
-        NotificationRepo(db).mark_all_read()
+        from dashboard.auth import current_user, current_user_id
+        u = current_user()
+        uid = current_user_id()
+        admin_all = bool(u and u.get("is_admin"))
+        if not admin_all and uid is None:
+            return jsonify({"error": "Unauthorized"}), 401
+        NotificationRepo(db).mark_all_read(
+            owner_user_id=None if admin_all else int(uid),
+            admin_all=admin_all,
+        )
         db.commit()
         return jsonify({"ok": True})
 

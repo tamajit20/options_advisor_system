@@ -1954,16 +1954,45 @@ class NotificationRepo:
             total_unread += cnt
         return {"total_unread": total_unread, "by_severity": by_sev, "by_category": by_cat}
 
-    def mark_read(self, notification_id: int) -> None:
+    def mark_read(
+        self,
+        notification_id: int,
+        *,
+        owner_user_id: Optional[int] = None,
+        admin_all: bool = False,
+    ) -> None:
+        if admin_all:
+            self.db.execute(
+                "UPDATE options_notifications SET read_at = ? WHERE id = ?",
+                [now_ist(), notification_id],
+            ).close()
+            return
+        from database.owner_scope import require_owner_user_id
+        uid = require_owner_user_id(owner_user_id, what="notifications.mark_read")
         self.db.execute(
-            "UPDATE options_notifications SET read_at = ? WHERE id = ?",
-            [now_ist(), notification_id],
+            "UPDATE options_notifications SET read_at = ? "
+            "WHERE id = ? AND owner_user_id = ?",
+            [now_ist(), notification_id, uid],
         ).close()
 
-    def mark_all_read(self) -> None:
+    def mark_all_read(
+        self,
+        *,
+        owner_user_id: Optional[int] = None,
+        admin_all: bool = False,
+    ) -> None:
+        if admin_all:
+            self.db.execute(
+                "UPDATE options_notifications SET read_at = ? WHERE read_at IS NULL",
+                [now_ist()],
+            ).close()
+            return
+        from database.owner_scope import require_owner_user_id
+        uid = require_owner_user_id(owner_user_id, what="notifications.mark_all_read")
         self.db.execute(
-            "UPDATE options_notifications SET read_at = ? WHERE read_at IS NULL",
-            [now_ist()],
+            "UPDATE options_notifications SET read_at = ? "
+            "WHERE read_at IS NULL AND owner_user_id = ?",
+            [now_ist(), uid],
         ).close()
 
     def delete_older_than(self, cutoff: date) -> int:

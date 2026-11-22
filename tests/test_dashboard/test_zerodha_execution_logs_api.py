@@ -7,7 +7,7 @@ import pytest
 
 
 @pytest.fixture
-def logs_app(mocker):
+def logs_app(mocker, mock_dashboard_admin):
     import dashboard.server as server
 
     fake_conn = MagicMock()

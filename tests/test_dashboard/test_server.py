@@ -621,7 +621,6 @@ class TestApiTradesOpen:
             "confidence_score": 10,
             "probability_of_profit": 68,
         }
-        mocker.patch("dashboard.auth.current_user_id", return_value=None)
         mocker.patch("dashboard.server.TradeRepo.open_trades", return_value=[trade_row])
         mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info_many", return_value={})
         mocker.patch("dashboard.server.NotificationRepo.latest_risk_alerts_for_trades", return_value={})
