@@ -1173,19 +1173,27 @@ class TradeRepo:
             [trade_id],
         )
 
-    def open_trades(self, *, owner_user_id: Optional[int] = None) -> List[dict]:
-        if owner_user_id is not None:
+    def open_trades(
+        self,
+        *,
+        owner_user_id: Optional[int] = None,
+        admin_all: bool = False,
+    ) -> List[dict]:
+        """Open trades for one owner, or all books when *admin_all* (system jobs)."""
+        if admin_all:
             return self.db.fetch_all(
                 "SELECT * FROM options_trades "
                 "WHERE status NOT IN ('CLOSED', 'EXPIRED', 'VOID') "
-                "AND owner_user_id = ? "
-                "ORDER BY executed_on DESC",
-                [int(owner_user_id)],
+                "ORDER BY executed_on DESC"
             )
+        from database.owner_scope import resolve_owner_user_id
+        uid = resolve_owner_user_id(owner_user_id, what="open_trades")
         return self.db.fetch_all(
             "SELECT * FROM options_trades "
             "WHERE status NOT IN ('CLOSED', 'EXPIRED', 'VOID') "
-            "ORDER BY executed_on DESC"
+            "AND owner_user_id = ? "
+            "ORDER BY executed_on DESC",
+            [uid],
         )
 
     def void_trade(self, trade_id: str) -> None:
@@ -2680,17 +2688,24 @@ class ZerodhaCapitalSnapshotRepo:
             return None
         return round(f, 2)
 
-    def latest(self, *, owner_user_id: Optional[int] = None) -> Optional[dict]:
-        if owner_user_id is not None:
+    def latest(
+        self,
+        *,
+        owner_user_id: Optional[int] = None,
+        admin_all: bool = False,
+    ) -> Optional[dict]:
+        if admin_all:
             return self.db.fetch_one(
                 "SELECT TOP 1 * FROM options_zerodha_capital_snapshots "
-                "WHERE owner_user_id = ? "
-                "ORDER BY recorded_at DESC, id DESC",
-                [int(owner_user_id)],
+                "ORDER BY recorded_at DESC, id DESC"
             )
+        from database.owner_scope import resolve_owner_user_id
+        uid = resolve_owner_user_id(owner_user_id, what="capital.latest")
         return self.db.fetch_one(
             "SELECT TOP 1 * FROM options_zerodha_capital_snapshots "
-            "ORDER BY recorded_at DESC, id DESC"
+            "WHERE owner_user_id = ? "
+            "ORDER BY recorded_at DESC, id DESC",
+            [uid],
         )
 
     def _changed(self, prev: Optional[dict], row: dict) -> bool:
@@ -2767,6 +2782,7 @@ class ZerodhaCapitalSnapshotRepo:
         to_dt: Optional[datetime] = None,
         owner_user_id: Optional[int] = None,
         kite_user_id: Optional[str] = None,
+        admin_all: bool = False,
     ) -> List[dict]:
         filters = ["1=1"]
         params: List[Any] = []
@@ -2776,16 +2792,18 @@ class ZerodhaCapitalSnapshotRepo:
         if to_dt is not None:
             filters.append("recorded_at <= ?")
             params.append(to_dt)
-        if owner_user_id is not None:
+        if not admin_all:
+            from database.owner_scope import resolve_owner_user_id
+            uid = resolve_owner_user_id(owner_user_id, what="capital.list_between")
             # Prefer app-owner rows; fall back to legacy rows with this Kite id.
             if kite_user_id:
                 filters.append(
                     "(owner_user_id = ? OR (owner_user_id IS NULL AND user_id = ?))"
                 )
-                params.extend([int(owner_user_id), str(kite_user_id)])
+                params.extend([uid, str(kite_user_id)])
             else:
                 filters.append("owner_user_id = ?")
-                params.append(int(owner_user_id))
+                params.append(uid)
         elif kite_user_id:
             filters.append("user_id = ?")
             params.append(str(kite_user_id))

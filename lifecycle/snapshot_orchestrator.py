@@ -108,7 +108,7 @@ def run_intraday_close_snapshot(
     p = provider if provider is not None else get_market_data()
     captured_at = now_ist()
 
-    trades = TradeRepo(db).open_trades()
+    trades = TradeRepo(db).open_trades(admin_all=True)
     if not trades:
         logger.info("intraday_close_snapshot: no ACTIVE trades — nothing to capture")
         return 0

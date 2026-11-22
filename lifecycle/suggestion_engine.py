@@ -805,7 +805,7 @@ def _evaluate_underlying(
                 or STRATEGY_CONFIG["default_lot_sizes"].get(symbol, 50))
     sug_repo = SuggestionRepo(db)
     trade_repo = TradeRepo(db)
-    existing_names = [t.get("trade_name") for t in trade_repo.open_trades()
+    existing_names = [t.get("trade_name") for t in trade_repo.open_trades(admin_all=True)
                       if t.get("trade_name")]
 
     # FII positioning — anchored to trade_date (never future data).

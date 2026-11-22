@@ -48,7 +48,7 @@ def run_trade_greeks_update(
     grk  = TradeGreeksRepo(db)
     grk.ensure_table()
 
-    open_trades = trd.open_trades()
+    open_trades = trd.open_trades(admin_all=True)
     updated = 0
 
     for trade in open_trades:

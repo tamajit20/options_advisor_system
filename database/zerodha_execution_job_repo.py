@@ -12,7 +12,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from database.connection import SQLServerConnection
-from database.owner_scope import owner_sql, require_owner_user_id
+from database.owner_scope import owner_sql, require_owner_user_id, resolve_owner_user_id
 
 
 class ZerodhaExecutionJobRepo:
@@ -107,9 +107,10 @@ class ZerodhaExecutionJobRepo:
         self,
         suggestion_id: str,
         *,
-        owner_user_id: int,
+        owner_user_id: Optional[int] = None,
     ) -> Optional[dict]:
-        frag, owner_params = owner_sql(owner_user_id)
+        uid = resolve_owner_user_id(owner_user_id, what="latest_for_suggestion")
+        frag, owner_params = owner_sql(uid)
         return self.db.fetch_one(
             "SELECT TOP 1 * FROM options_zerodha_execution_jobs "
             f"WHERE suggestion_id = ?{frag} "
@@ -177,10 +178,11 @@ class ZerodhaExecutionJobRepo:
         self,
         suggestion_id: str,
         *,
-        owner_user_id: int,
+        owner_user_id: Optional[int] = None,
     ) -> Optional[dict]:
         # Include NULL-owner RUNNING jobs so legacy work still blocks.
-        frag, owner_params = owner_sql(owner_user_id, include_null=True)
+        uid = resolve_owner_user_id(owner_user_id, what="running_for_suggestion")
+        frag, owner_params = owner_sql(uid, include_null=True)
         return self.db.fetch_one(
             "SELECT TOP 1 * FROM options_zerodha_execution_jobs "
             f"WHERE suggestion_id = ? AND status = 'RUNNING'{frag} "

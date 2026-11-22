@@ -197,13 +197,16 @@ def job_status_dict(
     allow_admin: bool = False,
 ) -> Optional[dict]:
     """Return job payload, or None when missing / not owned by the caller."""
+    from database.owner_scope import resolve_owner_user_id
+
     repo = ZerodhaExecutionJobRepo(db)
     row = repo.get(job_id)
     if row is None:
         return None
-    if owner_user_id is not None and not allow_admin:
+    if not allow_admin:
+        uid = resolve_owner_user_id(owner_user_id, what="job_status_dict")
         job_owner = row.get("owner_user_id")
-        if job_owner is not None and int(job_owner) != int(owner_user_id):
+        if job_owner is not None and int(job_owner) != uid:
             return None
     out = dict(row)
     parsed = repo.result_dict(row)

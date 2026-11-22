@@ -270,7 +270,7 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
     def _load() -> _Snapshot:
         snap = _Snapshot()
         trd = TradeRepo(db)
-        for trade in trd.open_trades():
+        for trade in trd.open_trades(admin_all=True):
             if (trade.get("status") or "").upper() != "ACTIVE":
                 continue
             trade_id = trade["trade_id"]

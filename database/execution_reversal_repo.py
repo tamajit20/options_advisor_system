@@ -86,6 +86,7 @@ class ExecutionReversalRepo:
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
         owner_user_id: Optional[int] = None,
+        admin_all: bool = False,
     ) -> List[dict]:
         filters = ["1 = 1"]
         params: list = []
@@ -95,9 +96,13 @@ class ExecutionReversalRepo:
         if to_date:
             filters.append("CONVERT(date, r.created_at) <= ?")
             params.append(to_date)
-        if owner_user_id is not None:
+        if not admin_all:
+            from database.owner_scope import resolve_owner_user_id
+            uid = resolve_owner_user_id(
+                owner_user_id, what="execution_reversals.list_between",
+            )
             filters.append(f"{self._owner_scope_sql('r')} = ?")
-            params.append(int(owner_user_id))
+            params.append(uid)
         where = " AND ".join(filters)
         return self.db.fetch_all(
             f"SELECT r.* FROM options_execution_reversals r WHERE {where} "

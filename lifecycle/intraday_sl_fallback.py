@@ -270,7 +270,7 @@ def run_intraday_sl_fallback(
 
     trade_date = trade_date or today_ist()
     p = provider if provider is not None else get_market_data()
-    trades = [t for t in TradeRepo(db).open_trades() if str(t.get("status") or "") == "ACTIVE"]
+    trades = [t for t in TradeRepo(db).open_trades(admin_all=True) if str(t.get("status") or "") == "ACTIVE"]
     if not trades:
         logger.debug("intraday_sl_fallback: no ACTIVE trades")
         return 0

@@ -12,7 +12,7 @@ from datetime import datetime, date
 from typing import Any, Dict, Iterable, List, Optional
 
 from database.connection import SQLServerConnection
-from database.owner_scope import owner_sql, require_owner_user_id
+from database.owner_scope import owner_sql, require_owner_user_id, resolve_owner_user_id
 
 
 def net_unbooked_entry_fills(
@@ -198,12 +198,13 @@ class BrokerOrderRepo:
         self,
         suggestion_id: str,
         *,
-        owner_user_id: int,
+        owner_user_id: Optional[int] = None,
         include_null_owner: bool = False,
     ) -> List[dict]:
-        """Suggestion-scoped broker rows — *owner_user_id* is mandatory."""
+        """Suggestion-scoped broker rows — owner from arg or acting context."""
+        uid = resolve_owner_user_id(owner_user_id, what="by_suggestion")
         frag, owner_params = owner_sql(
-            owner_user_id, include_null=include_null_owner,
+            uid, include_null=include_null_owner,
         )
         return self.db.fetch_all(
             "SELECT * FROM options_broker_orders WHERE suggestion_id = ? "
@@ -258,10 +259,11 @@ class BrokerOrderRepo:
         self,
         suggestion_id: str,
         *,
-        owner_user_id: int,
+        owner_user_id: Optional[int] = None,
     ) -> List[dict]:
         # Include NULL-owner rows so legacy in-flight orders still block.
-        frag, owner_params = owner_sql(owner_user_id, include_null=True)
+        uid = resolve_owner_user_id(owner_user_id, what="pending_for_suggestion")
+        frag, owner_params = owner_sql(uid, include_null=True)
         return self.db.fetch_all(
             "SELECT * FROM options_broker_orders WHERE suggestion_id = ? "
             "AND status IN ('PENDING', 'OPEN', 'TRIGGER PENDING')"
@@ -273,7 +275,7 @@ class BrokerOrderRepo:
         self,
         suggestion_id: str,
         *,
-        owner_user_id: int,
+        owner_user_id: Optional[int] = None,
         except_job_id: Optional[int] = None,
     ) -> List[dict]:
         """Unbooked COMPLETE ENTRY fills that still mean an open Kite position.
@@ -283,13 +285,14 @@ class BrokerOrderRepo:
         - a prior attempt that filled and was fully rolled back
         - the current job's own fills, which are about to be booked
 
-        *owner_user_id* is mandatory. Legacy NULL-owner rows still match so
-        old leftovers keep blocking the right trader's retries.
+        Owner from arg or acting context (fail closed). Legacy NULL-owner
+        rows still match so old leftovers keep blocking retries.
         """
+        uid = resolve_owner_user_id(owner_user_id, what="orphan_entry_fills")
         return net_unbooked_entry_fills(
             self.by_suggestion(
                 suggestion_id,
-                owner_user_id=owner_user_id,
+                owner_user_id=uid,
                 include_null_owner=True,
             ),
             except_job_id=except_job_id,
@@ -439,16 +442,17 @@ class BrokerOrderRepo:
         suggestion_id: Optional[str],
         trade_id: Optional[str],
         leg_order: int,
-        owner_user_id: int,
+        owner_user_id: Optional[int] = None,
         execution_job_id: Optional[int] = None,
     ) -> bool:
         """True when THIS user's leg already has a COMPLETE ROLLBACK.
 
-        *owner_user_id* is mandatory. Must not treat another trader's rollback
-        of the same suggestion leg as done — that would skip flattening a live
-        Kite position.
+        Owner from arg or acting context. Must not treat another trader's
+        rollback of the same suggestion leg as done.
         """
-        uid = require_owner_user_id(owner_user_id, what="rollback_complete_for_leg")
+        uid = resolve_owner_user_id(
+            owner_user_id, what="rollback_complete_for_leg",
+        )
         clauses = ["operation = 'ROLLBACK'", "leg_order = ?", "status = 'COMPLETE'"]
         params: list = [leg_order]
         if trade_id:

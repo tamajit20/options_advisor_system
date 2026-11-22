@@ -103,7 +103,7 @@ def active_short_premium_trades(
 ) -> List[Dict[str, Any]]:
     """ACTIVE trades that are short/credit premium (enriched with strategy)."""
     out: List[Dict[str, Any]] = []
-    for trade in TradeRepo(db).open_trades():
+    for trade in TradeRepo(db).open_trades(admin_all=True):
         if str(trade.get("status") or "").upper() != "ACTIVE":
             continue
         sug = _strategy_for_trade(db, trade)
@@ -254,7 +254,7 @@ def run_event_eve_review(
     trd = TradeRepo(db)
     notif = NotificationRepo(db)
     inserted = 0
-    for trade in trd.open_trades():
+    for trade in trd.open_trades(admin_all=True):
         status = str(trade.get("status") or "").upper()
         if status != "ACTIVE":
             continue

@@ -54,13 +54,16 @@ def load_open_contracts(
     db,
     *,
     owner_user_id: Optional[int] = None,
+    admin_all: bool = False,
 ) -> list[dict]:
     """Filled, not-yet-exited legs on ACTIVE trades.
 
-    When *owner_user_id* is set, only that user's books are scanned so the
-    overlap warning (and the join) stay per-user after multi-user login.
+    Owner is required unless *admin_all* (system-wide scan). Overlap
+    warnings stay per-user after multi-user login.
     """
     try:
+        from database.owner_scope import resolve_owner_user_id
+
         sql = """
             SELECT t.trade_id, t.trade_name, t.suggestion_id,
                    sl.symbol, sl.expiry_date, sl.strike, sl.option_type, sl.action
@@ -72,9 +75,10 @@ def load_open_contracts(
               AND tl.exit_time IS NULL
             """
         params: list = []
-        if owner_user_id is not None:
+        if not admin_all:
+            uid = resolve_owner_user_id(owner_user_id, what="load_open_contracts")
             sql += " AND t.owner_user_id = ?"
-            params.append(int(owner_user_id))
+            params.append(uid)
         rows = db.fetch_all(sql, params) if params else db.fetch_all(sql)
     except Exception:
         logger.exception("open instrument lookup failed")

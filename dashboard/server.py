@@ -765,9 +765,13 @@ def _row(d: Dict[str, Any]) -> Dict[str, Any]:
 def _attach_instrument_overlaps(db: SQLServerConnection, suggestions: list) -> None:
     """Mark pending cards that reuse a contract an open trade still holds."""
     from dashboard.auth import current_user_id
+    from database.owner_scope import OwnerScopeError
     from lifecycle.open_instrument_overlap import load_open_contracts, overlaps_for_legs
 
-    open_rows = load_open_contracts(db, owner_user_id=current_user_id())
+    try:
+        open_rows = load_open_contracts(db, owner_user_id=current_user_id())
+    except OwnerScopeError:
+        open_rows = []
     for row in suggestions:
         row["instrument_overlaps"] = overlaps_for_legs(
             open_rows,
@@ -778,6 +782,7 @@ def _attach_instrument_overlaps(db: SQLServerConnection, suggestions: list) -> N
 
 def _instrument_overlaps_for_suggestion(db: SQLServerConnection, suggestion_id: str) -> list:
     from dashboard.auth import current_user_id
+    from database.owner_scope import OwnerScopeError
     from lifecycle.open_instrument_overlap import load_open_contracts, overlaps_for_legs
 
     try:
@@ -785,8 +790,12 @@ def _instrument_overlaps_for_suggestion(db: SQLServerConnection, suggestion_id: 
     except Exception:
         logger.exception("suggestion legs unavailable for overlap check %s", suggestion_id)
         return []
+    try:
+        open_rows = load_open_contracts(db, owner_user_id=current_user_id())
+    except OwnerScopeError:
+        open_rows = []
     return overlaps_for_legs(
-        load_open_contracts(db, owner_user_id=current_user_id()),
+        open_rows,
         legs,
         exclude_suggestion_id=suggestion_id,
     )
@@ -2455,7 +2464,15 @@ def _active_trade_signals(db: SQLServerConnection) -> List[Dict[str, Any]]:
     alert read must not hide a trade that is still in SL_HIT.
     """
     try:
-        rows = TradeRepo(db).open_trades() or []
+        from dashboard.auth import current_user, current_user_id
+        u = current_user()
+        uid = current_user_id()
+        if u and u.get("is_admin"):
+            rows = TradeRepo(db).open_trades(admin_all=True) or []
+        elif uid is not None:
+            rows = TradeRepo(db).open_trades(owner_user_id=int(uid)) or []
+        else:
+            return []
         if not isinstance(rows, (list, tuple)):
             return []
     except Exception:
@@ -3538,6 +3555,10 @@ def create_app() -> Flask:
     @app.route("/api/suggestion/<sid>/mark-executed", methods=["POST"])
     @_with_db
     def api_mark_executed(db: SQLServerConnection, sid: str):
+        from dashboard.user_scope import bind_acting_owner_from_session, require_login_or_401
+        denied = require_login_or_401()
+        if denied is not None:
+            return denied
         payload = request.get_json(silent=True) or {}
         fills_in = payload.get("fills") or []
         fills = []
@@ -3566,16 +3587,16 @@ def create_app() -> Flask:
             if sug_row:
                 spot_val = fetch_underlying_spot(str(sug_row.get("underlying") or "NIFTY"))
         try:
-            from dashboard.auth import current_user_id
-            trade_id = mark_executed(
-                db, sid, fills,
-                spot_at_execution=spot_val,
-                actual_stop_loss_level=float(adj_sl) if adj_sl is not None else None,
-                execute_at_suggested=execute_at_suggested,
-                skip_execution_gate=skip_execution_gate,
-                lots_override=int(lots_raw) if lots_raw else None,
-                owner_user_id=current_user_id(),
-            )
+            with bind_acting_owner_from_session() as owner_uid:
+                trade_id = mark_executed(
+                    db, sid, fills,
+                    spot_at_execution=spot_val,
+                    actual_stop_loss_level=float(adj_sl) if adj_sl is not None else None,
+                    execute_at_suggested=execute_at_suggested,
+                    skip_execution_gate=skip_execution_gate,
+                    lots_override=int(lots_raw) if lots_raw else None,
+                    owner_user_id=owner_uid,
+                )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"trade_id": trade_id})
@@ -3649,6 +3670,10 @@ def create_app() -> Flask:
     @app.route("/api/suggestion/<sid>/zerodha-execute", methods=["POST"])
     @_with_db
     def api_zerodha_execute(db: SQLServerConnection, sid: str):
+        from dashboard.user_scope import bind_acting_owner_from_session, require_login_or_401
+        denied = require_login_or_401()
+        if denied is not None:
+            return denied
         auth_block = _zerodha_execution_auth_required()
         if auth_block is not None:
             return auth_block
@@ -3680,8 +3705,23 @@ def create_app() -> Flask:
             use_async = bool(use_async)
         try:
             lots_override = parse_lots_override(payload.get("lots"))
-            if use_async:
-                outcome = execute_suggestion_in_zerodha_async(
+            with bind_acting_owner_from_session():
+                if use_async:
+                    outcome = execute_suggestion_in_zerodha_async(
+                        db, sid,
+                        spot_at_execution=float(spot_raw) if spot_raw is not None else None,
+                        leg_limits=leg_limits or None,
+                        ack_out_of_band=ack_oob,
+                        lots_override=lots_override,
+                        owner_user_id=owner_uid,
+                    )
+                    return jsonify({
+                        "ok": True,
+                        "async": True,
+                        "job_id": outcome.job_id,
+                        "message": outcome.message,
+                    }), 202
+                outcome = execute_suggestion_in_zerodha(
                     db, sid,
                     spot_at_execution=float(spot_raw) if spot_raw is not None else None,
                     leg_limits=leg_limits or None,
@@ -3689,20 +3729,6 @@ def create_app() -> Flask:
                     lots_override=lots_override,
                     owner_user_id=owner_uid,
                 )
-                return jsonify({
-                    "ok": True,
-                    "async": True,
-                    "job_id": outcome.job_id,
-                    "message": outcome.message,
-                }), 202
-            outcome = execute_suggestion_in_zerodha(
-                db, sid,
-                spot_at_execution=float(spot_raw) if spot_raw is not None else None,
-                leg_limits=leg_limits or None,
-                ack_out_of_band=ack_oob,
-                lots_override=lots_override,
-                owner_user_id=owner_uid,
-            )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
         except Exception as exc:  # noqa: BLE001
@@ -3760,6 +3786,10 @@ def create_app() -> Flask:
     @app.route("/api/trades/open")
     @_with_db
     def api_trades_open(db: SQLServerConnection):
+        from dashboard.user_scope import require_login_or_401
+        denied = require_login_or_401()
+        if denied is not None:
+            return denied
         trd = TradeRepo(db)
         sug = SuggestionRepo(db)
         notif = NotificationRepo(db)
@@ -3884,6 +3914,10 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/resuggest", methods=["POST"])
     @_with_db
     def api_resuggest(db: SQLServerConnection, trade_id: str):
+        from dashboard.user_scope import owned_trade_or_error
+        _trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         try:
             inserted = generate_resuggestion(db, trade_id)
         except ValueError as exc:
@@ -3893,6 +3927,10 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/remaining-legs")
     @_with_db
     def api_remaining_legs(db: SQLServerConnection, trade_id: str):
+        from dashboard.user_scope import owned_trade_or_error
+        _trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         trd = TradeRepo(db)
         legs = trd.legs_with_suggestion_info(trade_id)
         remaining = [_row(l) for l in legs if not l.get("executed")]
@@ -3901,6 +3939,10 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/executed-legs")
     @_with_db
     def api_executed_legs(db: SQLServerConnection, trade_id: str):
+        from dashboard.user_scope import owned_trade_or_error
+        _trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         trd = TradeRepo(db)
         legs = trd.legs_with_suggestion_info(trade_id)
         executed = [_row(l) for l in legs if l.get("executed")]
@@ -3909,6 +3951,10 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/supplement", methods=["POST"])
     @_with_db
     def api_supplement_trade(db: SQLServerConnection, trade_id: str):
+        from dashboard.user_scope import owned_trade_or_error
+        _trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         payload = request.get_json(silent=True) or {}
         fills_in = payload.get("fills") or []
         fills = []
@@ -3930,13 +3976,14 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/close", methods=["POST"])
     @_with_db
     def api_close_trade(db: SQLServerConnection, trade_id: str):
+        from dashboard.user_scope import owned_trade_or_error
         from lifecycle.zerodha_executor import (
             EXECUTION_CHANNEL_ZERODHA,
             trade_execution_channel,
         )
-        trade = TradeRepo(db).get(trade_id)
-        if trade is None:
-            return jsonify({"error": f"Unknown trade: {trade_id}"}), 404
+        trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         if trade_execution_channel(db, trade) == EXECUTION_CHANNEL_ZERODHA:
             return jsonify({
                 "error": (
@@ -3962,6 +4009,10 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/zerodha-close-preview", methods=["POST"])
     @_with_db
     def api_zerodha_close_preview(db: SQLServerConnection, trade_id: str):
+        from dashboard.user_scope import bind_acting_owner_from_session, owned_trade_or_error
+        _trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         auth_block = _zerodha_execution_auth_required()
         if auth_block is not None:
             return auth_block
@@ -3978,9 +4029,10 @@ def create_app() -> Flask:
         payload = request.get_json(silent=True) or {}
         leg_limits = parse_leg_limits(payload.get("leg_limits"))
         try:
-            preview = preview_close_execution(
-                db, trade_id, leg_limits=leg_limits or None, actor_user_id=actor_uid,
-            )
+            with bind_acting_owner_from_session():
+                preview = preview_close_execution(
+                    db, trade_id, leg_limits=leg_limits or None, actor_user_id=actor_uid,
+                )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"preview": preview.to_dict()})
@@ -3988,6 +4040,10 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/zerodha-close", methods=["POST"])
     @_with_db
     def api_zerodha_close(db: SQLServerConnection, trade_id: str):
+        from dashboard.user_scope import bind_acting_owner_from_session, owned_trade_or_error
+        _trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         auth_block = _zerodha_execution_auth_required()
         if auth_block is not None:
             return auth_block
@@ -4017,25 +4073,26 @@ def create_app() -> Flask:
         else:
             use_async = bool(use_async)
         try:
-            if use_async:
-                outcome = close_trade_in_zerodha_async(
+            with bind_acting_owner_from_session():
+                if use_async:
+                    outcome = close_trade_in_zerodha_async(
+                        db, trade_id,
+                        leg_limits=leg_limits or None,
+                        ack_out_of_band=ack_oob,
+                        actor_user_id=actor_uid,
+                    )
+                    return jsonify({
+                        "ok": True,
+                        "async": True,
+                        "job_id": outcome.job_id,
+                        "message": outcome.message,
+                    }), 202
+                outcome = close_trade_in_zerodha(
                     db, trade_id,
                     leg_limits=leg_limits or None,
                     ack_out_of_band=ack_oob,
                     actor_user_id=actor_uid,
                 )
-                return jsonify({
-                    "ok": True,
-                    "async": True,
-                    "job_id": outcome.job_id,
-                    "message": outcome.message,
-                }), 202
-            outcome = close_trade_in_zerodha(
-                db, trade_id,
-                leg_limits=leg_limits or None,
-                ack_out_of_band=ack_oob,
-                actor_user_id=actor_uid,
-            )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
         except Exception as exc:  # noqa: BLE001
@@ -4066,11 +4123,10 @@ def create_app() -> Flask:
         """Live broker-order status for in-flight Zerodha close execution."""
         from database.broker_order_repo import BrokerOrderRepo
         from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
-        from dashboard.user_scope import trade_owned_or_404
+        from dashboard.user_scope import owned_trade_or_error
         from lifecycle.zerodha_execution_log import live_suggestion_order_status
 
-        trade = TradeRepo(db).get(trade_id)
-        denied = trade_owned_or_404(trade)
+        _trade, denied = owned_trade_or_error(db, trade_id)
         if denied is not None:
             return denied
         rows = [_row(r) for r in BrokerOrderRepo(db).by_trade(trade_id)]
@@ -4092,12 +4148,18 @@ def create_app() -> Flask:
     @_with_db
     def api_zerodha_execution_job(db: SQLServerConnection, job_id: int):
         from dashboard.auth import current_user, current_user_id
+        from dashboard.user_scope import require_login_or_401
         from lifecycle.zerodha_execution_job import job_status_dict
         u = current_user()
+        admin_all = bool(u and u.get("is_admin"))
+        if not admin_all:
+            denied = require_login_or_401()
+            if denied is not None:
+                return denied
         row = job_status_dict(
             db, job_id,
             owner_user_id=current_user_id(),
-            allow_admin=bool(u and u.get("is_admin")),
+            allow_admin=admin_all,
         )
         if row is None:
             return jsonify({"error": "Job not found"}), 404
@@ -4106,6 +4168,10 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>/zerodha-supplement", methods=["POST"])
     @_with_db
     def api_zerodha_supplement(db: SQLServerConnection, trade_id: str):
+        from dashboard.user_scope import bind_acting_owner_from_session, owned_trade_or_error
+        _trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         auth_block = _zerodha_execution_auth_required()
         if auth_block is not None:
             return auth_block
@@ -4123,12 +4189,13 @@ def create_app() -> Flask:
         leg_limits = parse_leg_limits(payload.get("leg_limits"))
         ack_oob = bool(payload.get("ack_out_of_band"))
         try:
-            outcome = execute_supplement_in_zerodha(
-                db, trade_id,
-                leg_limits=leg_limits or None,
-                ack_out_of_band=ack_oob,
-                actor_user_id=actor_uid,
-            )
+            with bind_acting_owner_from_session():
+                outcome = execute_supplement_in_zerodha(
+                    db, trade_id,
+                    leg_limits=leg_limits or None,
+                    ack_out_of_band=ack_oob,
+                    actor_user_id=actor_uid,
+                )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({
@@ -4151,9 +4218,11 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>", methods=["DELETE"])
     @_with_db
     def api_void_trade(db: SQLServerConnection, trade_id: str):
+        from dashboard.user_scope import owned_trade_or_error
+        _trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         trd = TradeRepo(db)
-        if trd.get(trade_id) is None:
-            return jsonify({"error": "Not found"}), 404
         trd.void_trade(trade_id)
         db.commit()
         return jsonify({"ok": True})
@@ -4162,6 +4231,10 @@ def create_app() -> Flask:
     @_with_db
     def api_update_monitor(db: SQLServerConnection, trade_id: str):
         """Update the Nifty SL level and/or spot price at execution for a trade."""
+        from dashboard.user_scope import owned_trade_or_error
+        _trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         payload = request.get_json(silent=True) or {}
         sl = payload.get("actual_stop_loss_level")
         spot = payload.get("spot_at_execution")
@@ -4262,10 +4335,11 @@ def create_app() -> Flask:
         """Suggest per-leg closing prices using the latest chain mid prices.
         Returns: {legs: [{leg_order, suggested_price, action, ...}], est_gross_pnl}
         """
+        from dashboard.user_scope import owned_trade_or_error
+        trade, denied = owned_trade_or_error(db, trade_id)
+        if denied is not None:
+            return denied
         trd = TradeRepo(db)
-        trade = trd.get(trade_id)
-        if trade is None:
-            return jsonify({"error": "unknown trade"}), 404
         legs = trd.legs_with_suggestion_info(trade_id)
         executed = [l for l in legs if l.get("executed")]
         if not executed:
@@ -4672,29 +4746,30 @@ def create_app() -> Flask:
         to_dt = _parse_day(to_date, end=True)
 
         from dashboard.auth import current_user_id
+        from dashboard.user_scope import require_login_or_401
         from providers.zerodha.session import load_session_for_user
+        denied = require_login_or_401()
+        if denied is not None:
+            return denied
         uid = current_user_id()
         kite_uid = None
-        if uid is not None:
-            sess = load_session_for_user(int(uid))
-            kite_uid = (sess.user_id if sess else None) or None
+        sess = load_session_for_user(int(uid))
+        kite_uid = (sess.user_id if sess else None) or None
 
         # Trades whose lifetime overlaps the window (for concurrent capital).
         open_filters = [
             "t.executed_on IS NOT NULL",
             "t.actual_max_loss IS NOT NULL",
             "t.actual_max_loss > 0",
+            "t.owner_user_id = ?",
         ]
-        open_params: list = []
+        open_params: list = [int(uid)]
         if to_dt is not None:
             open_filters.append("t.executed_on <= ?")
             open_params.append(to_dt)
         if from_dt is not None:
             open_filters.append("(t.closed_on IS NULL OR t.closed_on >= ?)")
             open_params.append(from_dt)
-        if uid is not None:
-            open_filters.append("t.owner_user_id = ?")
-            open_params.append(int(uid))
         open_rows = db.fetch_all(
             "SELECT t.trade_id, t.trade_name, t.executed_on, t.closed_on, "
             "       t.actual_max_loss, t.status, t.net_pnl "
@@ -6305,8 +6380,17 @@ def create_app() -> Flask:
         # ---- counts -------------------------------------------------
         try:
             from database.models import SuggestionRepo, TradeRepo
+            from dashboard.auth import current_user, current_user_id
+            u = current_user()
+            uid = current_user_id()
+            if u and u.get("is_admin"):
+                open_n = len(TradeRepo(db).open_trades(admin_all=True))
+            elif uid is not None:
+                open_n = len(TradeRepo(db).open_trades(owner_user_id=int(uid)))
+            else:
+                open_n = 0
             out["counts"] = {
-                "open_trades":      len(TradeRepo(db).open_trades()),
+                "open_trades": open_n,
                 "pending_suggestions": len(SuggestionRepo(db).active_pending()),
             }
         except Exception as exc:

@@ -29,6 +29,17 @@ def client(app):
     return app.test_client()
 
 
+@pytest.fixture(autouse=True)
+def _default_owned_trade(mocker, mock_dashboard_admin):
+    """Trade mutate routes require an owned book; default to admin owner."""
+    owned = {
+        "trade_id": "TRD-1",
+        "owner_user_id": int(mock_dashboard_admin["id"]),
+    }
+    mocker.patch("dashboard.server.TradeRepo.get", return_value=dict(owned))
+    mocker.patch("database.models.TradeRepo.get", return_value=dict(owned))
+
+
 # ---------------------------------------------------------------------------
 class TestIndexRoute:
     def test_index_renders_html(self, client):
@@ -67,10 +78,15 @@ class TestTradeDetail:
         resp = client.get("/api/trades/TRD-X")
         assert resp.status_code == 404
 
-    def test_returns_trade_with_legs(self, client, mocker):
-        mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-1",
-                                   "executed_on": datetime(2026, 5, 4)})
+    def test_returns_trade_with_legs(self, client, mocker, mock_dashboard_admin):
+        mocker.patch(
+            "dashboard.server.TradeRepo.get",
+            return_value={
+                "trade_id": "TRD-1",
+                "owner_user_id": int(mock_dashboard_admin["id"]),
+                "executed_on": datetime(2026, 5, 4),
+            },
+        )
         mocker.patch("dashboard.server.TradeRepo.legs",
                      return_value=[{"leg_order": 1}])
         resp = client.get("/api/trades/TRD-1")
@@ -135,8 +151,14 @@ class TestCloseRoute:
             "lifecycle.zerodha_executor.trade_execution_channel",
             return_value="manual",
         )
-        mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-X"})
+        mocker.patch(
+            "dashboard.server.TradeRepo.get",
+            return_value={"trade_id": "TRD-X", "owner_user_id": 1},
+        )
+        mocker.patch(
+            "database.models.TradeRepo.get",
+            return_value={"trade_id": "TRD-X", "owner_user_id": 1},
+        )
         mocker.patch("dashboard.server.close_trade_with_fills",
                      side_effect=ValueError("no legs"))
         resp = client.post("/api/trades/TRD-X/close",
@@ -149,8 +171,14 @@ class TestCloseRoute:
             "lifecycle.zerodha_executor.trade_execution_channel",
             return_value="manual",
         )
-        mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-1"})
+        mocker.patch(
+            "dashboard.server.TradeRepo.get",
+            return_value={"trade_id": "TRD-1", "owner_user_id": 1},
+        )
+        mocker.patch(
+            "database.models.TradeRepo.get",
+            return_value={"trade_id": "TRD-1", "owner_user_id": 1},
+        )
         mocker.patch("dashboard.server.close_trade_with_fills", return_value=None)
         resp = client.post("/api/trades/TRD-1/close",
                             data=json.dumps({"exits": [
@@ -160,8 +188,14 @@ class TestCloseRoute:
         assert resp.status_code == 200
 
     def test_rejects_db_only_close_for_zerodha_channel(self, client, mocker):
-        mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-Z"})
+        mocker.patch(
+            "dashboard.server.TradeRepo.get",
+            return_value={"trade_id": "TRD-Z", "owner_user_id": 1},
+        )
+        mocker.patch(
+            "database.models.TradeRepo.get",
+            return_value={"trade_id": "TRD-Z", "owner_user_id": 1},
+        )
         mocker.patch(
             "lifecycle.zerodha_executor.trade_execution_channel",
             return_value="zerodha",
@@ -184,8 +218,14 @@ class TestVoidTrade:
         assert resp.status_code == 404
 
     def test_voids_and_commits(self, client, mocker):
-        mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-1"})
+        mocker.patch(
+            "dashboard.server.TradeRepo.get",
+            return_value={"trade_id": "TRD-1", "owner_user_id": 1},
+        )
+        mocker.patch(
+            "database.models.TradeRepo.get",
+            return_value={"trade_id": "TRD-1", "owner_user_id": 1},
+        )
         void = mocker.patch("dashboard.server.TradeRepo.void_trade")
         resp = client.delete("/api/trades/TRD-1")
         assert resp.status_code == 200
@@ -194,6 +234,14 @@ class TestVoidTrade:
 
 class TestMonitorPatch:
     def test_updates_monitor(self, client, mocker):
+        mocker.patch(
+            "dashboard.server.TradeRepo.get",
+            return_value={"trade_id": "TRD-1", "owner_user_id": 1},
+        )
+        mocker.patch(
+            "database.models.TradeRepo.get",
+            return_value={"trade_id": "TRD-1", "owner_user_id": 1},
+        )
         upd = mocker.patch("dashboard.server.TradeRepo.update_monitor")
         resp = client.patch("/api/trades/TRD-1/monitor",
                              data=json.dumps({"actual_stop_loss_level": 23250.0,
@@ -299,7 +347,9 @@ class TestCloseSuggestion:
 
     def test_empty_when_no_executed_legs(self, client, mocker):
         mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-1"})
+                     return_value={"owner_user_id": 1, "trade_id": "TRD-1"})
+        mocker.patch("database.models.TradeRepo.get",
+                     return_value={"owner_user_id": 1, "trade_id": "TRD-1"})
         mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info",
                      return_value=[{"leg_order": 1, "executed": False}])
         resp = client.get("/api/trades/TRD-1/close-suggestion")
@@ -308,7 +358,9 @@ class TestCloseSuggestion:
 
     def test_computes_close_with_chain(self, client, mocker):
         mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-1"})
+                     return_value={"owner_user_id": 1, "trade_id": "TRD-1"})
+        mocker.patch("database.models.TradeRepo.get",
+                     return_value={"owner_user_id": 1, "trade_id": "TRD-1"})
         mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info",
                      return_value=[
                          {"leg_order": 1, "executed": True, "symbol": "NIFTY",
@@ -336,7 +388,9 @@ class TestCloseSuggestion:
         premium). The dashboard MUST substitute intrinsic settlement value
         when the chain row is clearly bogus."""
         mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-20260506-002"})
+                     return_value={"owner_user_id": 1, "trade_id": "TRD-20260506-002"})
+        mocker.patch("database.models.TradeRepo.get",
+                     return_value={"owner_user_id": 1, "trade_id": "TRD-20260506-002"})
         mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info",
                      return_value=[
                          {"leg_order": 1, "executed": True, "symbol": "NIFTY",
@@ -379,7 +433,9 @@ class TestCloseSuggestion:
         """Same strike CE on two expiries must not share one mid (TRD-20260817-005)."""
         near, far = date(2026, 8, 25), date(2026, 9, 29)
         mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-20260817-005"})
+                     return_value={"owner_user_id": 1, "trade_id": "TRD-20260817-005"})
+        mocker.patch("database.models.TradeRepo.get",
+                     return_value={"owner_user_id": 1, "trade_id": "TRD-20260817-005"})
         mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info",
                      return_value=[
                          {"leg_order": 1, "executed": True, "symbol": "BANKNIFTY",
@@ -415,7 +471,9 @@ class TestCloseSuggestion:
     def test_iron_condor_same_expiry_keeps_distinct_strikes(self, client, mocker):
         exp = date(2026, 8, 27)
         mocker.patch("dashboard.server.TradeRepo.get",
-                     return_value={"trade_id": "TRD-IC"})
+                     return_value={"owner_user_id": 1, "trade_id": "TRD-IC"})
+        mocker.patch("database.models.TradeRepo.get",
+                     return_value={"owner_user_id": 1, "trade_id": "TRD-IC"})
         mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info",
                      return_value=[
                          {"leg_order": 1, "executed": True, "symbol": "NIFTY",

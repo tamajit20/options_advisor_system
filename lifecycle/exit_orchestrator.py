@@ -74,7 +74,7 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
         "JADE_LIZARD",
     })
 
-    open_trades = trd.open_trades()
+    open_trades = trd.open_trades(admin_all=True)
     decisions_made = 0
     aggregate_mtm = 0.0  # sum of current_pnl across all open trades for circuit breaker
     auto_settled = 0     # count of trades auto-closed at DTE=0 (fix B)

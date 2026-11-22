@@ -13,7 +13,6 @@ checks before any order leaves the app.
 
 from __future__ import annotations
 
-import contextvars
 import logging
 import threading
 import time
@@ -21,15 +20,12 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-_ACTING_APP_USER_ID: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
-    "zerodha_acting_app_user_id", default=None,
-)
-
 from config import STRATEGY_CONFIG, ZERODHA_API_CONFIG, ZERODHA_EXECUTION_CONFIG
 from contracts import TradeLegFill
 from database.broker_order_repo import BrokerOrderRepo
 from database.connection import SQLServerConnection
 from database.models import SuggestionRepo, TradeRepo
+from database.owner_scope import ACTING_OWNER_USER_ID as _ACTING_APP_USER_ID
 from database.runtime_flags import FLAG_TRADE_EXECUTION_ENABLED, RuntimeFlagsRepo
 from engine.execution_validator import validate_execution
 from engine.zerodha_price_guard import (

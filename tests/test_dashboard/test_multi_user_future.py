@@ -273,3 +273,81 @@ def test_rollback_complete_for_leg_is_owner_scoped():
     assert "owner_user_id" in sql
     assert 42 in params
     assert params[-1] == 7
+
+
+def test_resolve_owner_uses_acting_context():
+    from database.owner_scope import (
+        OwnerScopeError,
+        acting_owner,
+        resolve_owner_user_id,
+    )
+
+    with pytest.raises(OwnerScopeError):
+        resolve_owner_user_id(None, what="ctx")
+    with acting_owner(3):
+        assert resolve_owner_user_id(what="ctx") == 3
+        assert resolve_owner_user_id(9, what="ctx") == 9  # explicit wins
+
+
+def test_pending_for_suggestion_reads_acting_context():
+    from database.broker_order_repo import BrokerOrderRepo
+    from database.owner_scope import acting_owner
+
+    db = MagicMock()
+    db.fetch_all.return_value = []
+    with acting_owner(5):
+        BrokerOrderRepo(db).pending_for_suggestion("SUG-1")
+    sql, params = db.fetch_all.call_args[0]
+    assert "owner_user_id" in sql
+    assert 5 in params
+
+
+def test_open_trades_fail_closed_without_owner():
+    from database.models import TradeRepo
+    from database.owner_scope import OwnerScopeError
+
+    db = MagicMock()
+    with pytest.raises(OwnerScopeError):
+        TradeRepo(db).open_trades()
+    TradeRepo(db).open_trades(admin_all=True)
+    db.fetch_all.assert_called()
+
+
+def test_trade_owned_or_404_hides_other_users_book():
+    from flask import Flask, g
+
+    from dashboard.user_scope import trade_owned_or_404
+
+    app = Flask(__name__)
+    trade = {"trade_id": "TRD-1", "owner_user_id": 1}
+    with app.app_context():
+        g.app_user = {"id": 2, "is_admin": False}
+        denied = trade_owned_or_404(trade)
+        assert denied is not None
+        _body, status = denied
+        assert status == 404
+        g.app_user = {"id": 1, "is_admin": False}
+        assert trade_owned_or_404(trade) is None
+        # Unowned mutate: fail closed
+        assert trade_owned_or_404({"trade_id": "TRD-X"}) is not None
+
+
+def test_two_users_place_guards_are_independent():
+    """User 2 may still Place when user 1 already executed the shared suggestion."""
+    db = MagicMock()
+    db.fetch_one.return_value = None
+
+    class _SugState:
+        def get(self, sid, uid):
+            if uid == 1:
+                return {"status": "EXECUTED", "trade_id": "TRD-A"}
+            return None
+
+    import database.suggestion_user_state_repo as mod
+    real = mod.SuggestionUserStateRepo
+    mod.SuggestionUserStateRepo = lambda _db: _SugState()  # type: ignore
+    try:
+        assert duplicate_execution_reason(db, "SUG-PLACE", owner_user_id=1)
+        assert duplicate_execution_reason(db, "SUG-PLACE", owner_user_id=2) is None
+    finally:
+        mod.SuggestionUserStateRepo = real
