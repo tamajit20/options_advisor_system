@@ -142,11 +142,13 @@
         <button class="btn admin-only" id="suggestion-run-live" type="button" hidden
                 title="Run Live Suggestion Engine now (same as Jobs tab)">Run live engine</button>
       </div>
+      <div id="suggestion-tick-feed-banner" class="live-feed-banner live-feed-banner--feed_off" hidden role="alert"></div>
       <div id="suggestion-container" class="loading">Loading…</div>
     </article>
 
     <article class="panel" id="panel-trades" aria-hidden="true">
       <h2 class="panel-title">My Trades</h2>
+      <div id="trades-tick-feed-banner" class="live-feed-banner live-feed-banner--feed_off" hidden role="alert"></div>
       <div class="filter-row hist-filter-bar">
         <select id="trades-channel" title="Zerodha broker vs manual/paper fills">
           <option value="">All channels</option>
@@ -270,7 +272,6 @@
 
     <article class="panel" id="panel-users" aria-hidden="true">
       <h2 class="panel-title">Users</h2>
-      <p class="muted" style="font-size:.85rem;margin:0 0 12px">Admin only — create traders, set passwords, disable accounts, transfer admin (exactly one admin at a time).</p>
       <div class="card users-create-card" style="margin-bottom:16px;padding:14px 16px">
         <h3 style="margin:0 0 10px;font-size:.95rem">Add new user</h3>
         <p class="muted" style="font-size:.8rem;margin:0 0 10px">Give them a login + temporary password. They sign in at <code>/dashboard-login</code>, then connect their own Zerodha.</p>

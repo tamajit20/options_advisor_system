@@ -22,6 +22,39 @@ const API = (path, opts={}) => {
   });
 };
 
+/** Put a spinner on one button and block re-clicks until the request finishes. */
+function _beginButtonBusy(btn, busyLabel) {
+  if (!btn) return null;
+  if (btn.dataset.busy === '1') return null;
+  const prevHtml = btn.innerHTML;
+  const prevDisabled = btn.disabled;
+  btn.dataset.busy = '1';
+  btn.disabled = true;
+  btn.classList.add('is-loading');
+  btn.setAttribute('aria-busy', 'true');
+  const label = busyLabel || 'Working…';
+  btn.innerHTML =
+    `<span class="btn-spinner" aria-hidden="true"></span>` +
+    `<span class="btn-busy-label">${escapeHtml(label)}</span>`;
+  return () => {
+    btn.dataset.busy = '';
+    btn.disabled = prevDisabled;
+    btn.classList.remove('is-loading');
+    btn.removeAttribute('aria-busy');
+    btn.innerHTML = prevHtml;
+  };
+}
+
+async function withButtonBusy(btn, busyLabel, fn) {
+  const release = _beginButtonBusy(btn, busyLabel);
+  if (!release) return undefined;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
 // Normalize leg keys so SSE/poll prices match DOM spans regardless of
 // strike formatting (26000 vs 26000.0 vs 26000.0000). Expiry is required
 // so calendar legs (same strike CE, different expiry) do not collide.
@@ -78,6 +111,9 @@ function _inMarketHours() {
 const LIVE_FEED_STALE_SEC = 45;
 let _zerodhaHasSession = false;
 let _zerodhaValid = false;
+/** Shared WS tick feed (admin session) — independent of each user's Kite login. */
+let _tickFeedAlive = true;
+let _tickFeedMessage = '';
 let _zerodhaExecutionConfigEnabled = false;
 let _zerodhaExecutionRuntimeEnabled = false;
 let _zerodhaExecutionEnabled = false;
@@ -1182,19 +1218,35 @@ function showZerodhaConfirmModal(preview, { title, submitLabel, onConfirm }) {
     return;
   }
   submit.onclick = async () => {
-    submit.disabled = true;
+    if (submit.disabled || submit.dataset.busy === '1') return;
+    const release = _beginButtonBusy(submit, 'Working…');
+    if (!release) return;
+    let keepBusyUi = false;
     try {
       const keepOpen = await onConfirm();
-      if (!keepOpen) _closeZerodhaConfirmModal();
+      if (!keepOpen) {
+        _closeZerodhaConfirmModal();
+      } else {
+        // onConfirm left the modal open (Done / progress) — do not restore Place.
+        keepBusyUi = true;
+        submit.dataset.busy = '';
+        submit.classList.remove('is-loading');
+        submit.removeAttribute('aria-busy');
+      }
     } catch (err) {
       toast(err.message, 'err');
     } finally {
-      if (!submit.hidden) submit.disabled = false;
+      if (!keepBusyUi) release();
     }
   };
   modal.hidden = false;
   document.body.classList.add('sg-modal-open');
 }
+
+const _TICK_FEED_OFF_BANNER = (
+  'LIVE TICKS ARE OFF — Current P&L and close prices may be outdated. '
+  + 'Do not close a trade from these marks until the shared feed is back.'
+);
 
 /** Describe live-price / P&L feed state for UI labels and banners. */
 function _liveFeedInfo(tradeId, opts = {}) {
@@ -1204,13 +1256,23 @@ function _liveFeedInfo(tradeId, opts = {}) {
   const fresh = _mtmAgeSec(tradeId) <= LIVE_FEED_STALE_SEC;
 
   if (inMarket) {
+    // Shared tick feed (everyone) — checked before personal Zerodha login.
+    if (_tickFeedAlive === false) {
+      return {
+        mode: 'feed_off',
+        label: 'Ticks OFF',
+        tip: _tickFeedMessage || _TICK_FEED_OFF_BANNER,
+        cls: 'tag-err',
+        banner: _tickFeedMessage || _TICK_FEED_OFF_BANNER,
+      };
+    }
     if (!_zerodhaHasSession || !_zerodhaValid) {
       return {
         mode: 'login',
         label: 'No login',
-        tip: 'Zerodha session missing or expired — log in to receive live prices and P&L.',
-        cls: 'tag-err',
-        banner: 'No live feed — Zerodha login required',
+        tip: 'Your Zerodha login is missing or expired — needed for broker orders. Live ticks still use the shared feed when it is on.',
+        cls: 'tag-warn',
+        banner: 'Your Zerodha login is off — broker Place/Close stay disabled. Live marks still need the shared tick feed.',
       };
     }
     if (fresh || (forCloseForm && hasLivePrices)) {
@@ -1229,7 +1291,7 @@ function _liveFeedInfo(tradeId, opts = {}) {
         label: 'Stale',
         tip: `No fresh ticks — last P&L${rec.as_of ? ' at ' + rec.as_of + ' IST' : ''}.`,
         cls: 'tag-warn',
-        banner: 'No live feed — showing last known prices (may be outdated)',
+        banner: 'No fresh ticks — showing last known prices (may be outdated). Do not close from these marks if prices look frozen.',
       };
     }
     return {
@@ -1237,7 +1299,7 @@ function _liveFeedInfo(tradeId, opts = {}) {
       label: 'No feed',
       tip: 'Market is open but no live ticks received yet.',
       cls: 'tag-warn',
-      banner: 'No live feed — waiting for Zerodha ticks',
+      banner: 'No live ticks yet — waiting for the shared Zerodha feed',
     };
   }
   if (forCloseForm && usingEod) {
@@ -1267,6 +1329,22 @@ function _liveFeedInfo(tradeId, opts = {}) {
   };
 }
 
+function _updateTickFeedPageBanners() {
+  const text = _tickFeedMessage || _TICK_FEED_OFF_BANNER;
+  const show = _inMarketHours() && _tickFeedAlive === false;
+  ['suggestion-tick-feed-banner', 'trades-tick-feed-banner'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (show) {
+      el.hidden = false;
+      el.textContent = text;
+    } else {
+      el.hidden = true;
+      el.textContent = '';
+    }
+  });
+}
+
 function _updateFeedTag(tradeId, opts = {}) {
   const feed = _liveFeedInfo(tradeId, opts);
   document.querySelectorAll(`.live-feed-tag[data-trade-id="${CSS.escape(tradeId)}"]`).forEach(el => {
@@ -1274,16 +1352,19 @@ function _updateFeedTag(tradeId, opts = {}) {
     el.className = `tag live-feed-tag ${feed.cls}`;
     el.title = feed.tip;
   });
-  const banner = document.getElementById(`live-feed-banner-${tradeId}`);
-  if (banner) {
+  document.querySelectorAll(
+    `#live-feed-banner-${CSS.escape(tradeId)}, .live-feed-banner[data-trade-id="${CSS.escape(tradeId)}"]`
+  ).forEach(banner => {
     if (feed.banner && feed.mode !== 'live') {
       banner.hidden = false;
       banner.textContent = feed.banner;
       banner.className = `live-feed-banner live-feed-banner--${feed.mode}`;
+      banner.dataset.tradeId = tradeId;
     } else {
       banner.hidden = true;
     }
-  }
+  });
+  _updateTickFeedPageBanners();
 }
 
 /** True when a live/snap MTM row has at least one positive leg mark (real book). */
@@ -3703,6 +3784,7 @@ async function loadSuggestion() {
     if (!parts.length) {
       c.className = '';
       c.innerHTML = '<div class="empty">No actionable suggestion right now. Use <strong>Run live engine</strong> above during market hours — ignored and expired signals are hidden; blocked cards appear below when the engine generated a setup that failed execution checks.</div>';
+      _updateTickFeedPageBanners();
       return;
     }
     c.className = '';
@@ -3715,8 +3797,10 @@ async function loadSuggestion() {
     _refreshZerodhaExecButtons();
     _startSuggestionLivePrices();
     _hydrateSuggestionZerodhaMargins(c);
+    _updateTickFeedPageBanners();
   } catch (e) {
     c.className = ''; c.innerHTML = `<div class="empty">Error: ${escapeHtml(e.message)}</div>`;
+    _updateTickFeedPageBanners();
   }
 }
 
@@ -9221,7 +9305,7 @@ function bindSuggestionActions() {
 
   $$('.btn-mark-exec').forEach(b => b.addEventListener('click', async (e) => {
     const btn  = e.currentTarget;
-    if (btn.disabled) return;
+    if (btn.disabled || btn.dataset.busy === '1') return;
     const card = btn.closest('.card');
     const sid  = card.dataset.sugId;
     if (_suggestionAlreadyExecuted(card)) return;
@@ -9250,27 +9334,30 @@ function bindSuggestionActions() {
 
     const sugSpot = parseFloat(card.dataset.spotAtGen) || null;
     const atSugLots = _collectExecLots(card);
-    try {
-      const r = await API(`/api/suggestion/${sid}/mark-executed`, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          execute_at_suggested: true,
-          fills: [],
-          spot_at_execution: sugSpot,
-          lots_override: atSugLots,
-        }),
-      });
-      toast(r.trade_id ? `Trade created at suggested prices: ${r.trade_id}` : 'Suggestion ignored', 'info');
-      loadZerodhaStatus(true);
-      loadSuggestion(); loadTrades();
-    } catch (err) { toast(err.message, 'err'); }
+    await withButtonBusy(btn, 'Recording…', async () => {
+      try {
+        const r = await API(`/api/suggestion/${sid}/mark-executed`, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            execute_at_suggested: true,
+            fills: [],
+            spot_at_execution: sugSpot,
+            lots_override: atSugLots,
+          }),
+        });
+        toast(r.trade_id ? `Trade created at suggested prices: ${r.trade_id}` : 'Suggestion ignored', 'info');
+        loadZerodhaStatus(true);
+        loadSuggestion(); loadTrades();
+      } catch (err) { toast(err.message, 'err'); }
+    });
   }));
 
   $$('.btn-zerodha-exec').forEach(b => b.addEventListener('click', async (e) => {
     e.preventDefault();
     e.stopPropagation();
     const btn = e.currentTarget;
+    if (btn.disabled || btn.dataset.busy === '1') return;
     const card = btn.closest('.card[data-sug-id]');
     if (!card) {
       toast('Could not find suggestion card — refresh the page and try again.', 'err');
@@ -9285,6 +9372,12 @@ function bindSuggestionActions() {
     if (_rejectInvalidExecLots(card)) return;
     const sid = card.dataset.sugId;
     if (_suggestionAlreadyExecuted(card)) return;
+    if (_inMarketHours() && _tickFeedAlive === false) {
+      const proceed = confirm(
+        `${_tickFeedMessage || _TICK_FEED_OFF_BANNER}\n\nPlace Zerodha orders anyway?`
+      );
+      if (!proceed) return;
+    }
     const spotInput = card.querySelector('.exec-spot-input');
     const spotRaw = spotInput?.value.trim();
     // Blank is deliberately not filled in here: omitting it lets the server
@@ -9297,111 +9390,107 @@ function bindSuggestionActions() {
     }
     if (spotInput) spotInput.classList.remove('input-error');
     const legLimits = _collectZerodhaLegLimits(card, '.leg-price-input');
-    const prevLabel = btn.textContent;
-    btn.classList.add('is-loading');
-    btn.textContent = 'Loading preview…';
-    try {
-      const body = {};
-      if (spotVal != null) body.spot_at_execution = spotVal;
-      if (legLimits.length) body.leg_limits = legLimits;
-      const execLots = _collectExecLots(card);
-      if (execLots != null) body.lots = execLots;
-      const prev = await API(`/api/suggestion/${sid}/zerodha-preview`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const preview = prev?.preview;
-      if (!preview || !(preview.legs || []).length) {
-        throw new Error('Preview returned no legs — check Zerodha session and suggestion legs');
-      }
-      card.dataset.marginHydrated = '1';
-      // Fresh Execute preview also refreshes the session cache for this lots size.
-      {
-        const lots = body.lots != null ? body.lots : _collectCardLotsForMargin(card);
-        _zerodhaMarginQuoteCache.set(_marginQuoteCacheKey(sid, lots), preview);
-      }
-      _applyZerodhaMarginToCard(card, preview);
-      showZerodhaConfirmModal(preview, {
-        title: preview.all_limits_in_band
-          ? 'Confirm Zerodha entry orders'
-          : 'Warning: limits outside suggestion band',
-        submitLabel: preview.all_limits_in_band ? 'Place entry orders' : 'Proceed anyway',
-        onConfirm: async () => {
-          const execLabel = card.querySelector('.card-head-title h3')?.textContent?.trim() || sid;
-          _setZerodhaModalBody('Executing in Zerodha…', _renderZerodhaExecutionProgress(preview));
-          const submit = document.getElementById('zerodha-confirm-submit');
-          if (submit) submit.hidden = true;
-          const execBody = { ...body, ack_out_of_band: !preview.all_limits_in_band };
-          const pollMeta = {
-            suggestionId: sid,
-            label: execLabel,
-            claimStrip: true,
-            onTradeCreated: (tid) => toast(`Trade ${tid} created — visible on My Trades`, 'info'),
-          };
-          _setZerodhaModalOwner(pollMeta);
-          const stopPoll = _startZerodhaOrderPolling(
-            `/api/suggestion/${sid}/zerodha-orders`,
-            preview,
-            pollMeta,
-          );
-          let r;
-          try {
-            r = await API(`/api/suggestion/${sid}/zerodha-execute`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(execBody),
-            });
-            if (r.async && r.job_id) {
-              r = await _awaitZerodhaExecutionJob(r.job_id, pollMeta);
+    await withButtonBusy(btn, 'Loading preview…', async () => {
+      try {
+        const body = {};
+        if (spotVal != null) body.spot_at_execution = spotVal;
+        if (legLimits.length) body.leg_limits = legLimits;
+        const execLots = _collectExecLots(card);
+        if (execLots != null) body.lots = execLots;
+        const prev = await API(`/api/suggestion/${sid}/zerodha-preview`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const preview = prev?.preview;
+        if (!preview || !(preview.legs || []).length) {
+          throw new Error('Preview returned no legs — check Zerodha session and suggestion legs');
+        }
+        card.dataset.marginHydrated = '1';
+        // Fresh Execute preview also refreshes the session cache for this lots size.
+        {
+          const lots = body.lots != null ? body.lots : _collectCardLotsForMargin(card);
+          _zerodhaMarginQuoteCache.set(_marginQuoteCacheKey(sid, lots), preview);
+        }
+        _applyZerodhaMarginToCard(card, preview);
+        showZerodhaConfirmModal(preview, {
+          title: preview.all_limits_in_band
+            ? 'Confirm Zerodha entry orders'
+            : 'Warning: limits outside suggestion band',
+          submitLabel: preview.all_limits_in_band ? 'Place entry orders' : 'Proceed anyway',
+          onConfirm: async () => {
+            const execLabel = card.querySelector('.card-head-title h3')?.textContent?.trim() || sid;
+            _setZerodhaModalBody('Executing in Zerodha…', _renderZerodhaExecutionProgress(preview));
+            const submit = document.getElementById('zerodha-confirm-submit');
+            if (submit) submit.hidden = true;
+            const execBody = { ...body, ack_out_of_band: !preview.all_limits_in_band };
+            const pollMeta = {
+              suggestionId: sid,
+              label: execLabel,
+              claimStrip: true,
+              onTradeCreated: (tid) => toast(`Trade ${tid} created — visible on My Trades`, 'info'),
+            };
+            _setZerodhaModalOwner(pollMeta);
+            const stopPoll = _startZerodhaOrderPolling(
+              `/api/suggestion/${sid}/zerodha-orders`,
+              preview,
+              pollMeta,
+            );
+            let r;
+            try {
+              r = await API(`/api/suggestion/${sid}/zerodha-execute`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(execBody),
+              });
+              if (r.async && r.job_id) {
+                r = await _awaitZerodhaExecutionJob(r.job_id, pollMeta);
+              }
+            } catch (err) {
+              _zerodhaModalExecutionError(err);
+              throw err;
+            } finally {
+              stopPoll();
             }
-          } catch (err) {
-            _zerodhaModalExecutionError(err);
-            throw err;
-          } finally {
-            stopPoll();
-          }
-          _updateZerodhaInflightSurfaces(pollMeta, preview, {
-            filled_count: (r.leg_fills || []).length,
-            total_orders: (preview.legs || []).length,
-            overall_status: 'COMPLETE',
-            trade_id: r.trade_id,
-            orders: (r.leg_fills || []).map(f => ({
-              leg_order: f.leg_order,
-              status: 'COMPLETE',
-              fill_price: f.fill_price,
-              kite_order_id: f.kite_order_id,
-            })),
-          });
-          _setZerodhaModalBody(
-            r.trade_id ? 'Execution complete' : 'Execution result',
-            _renderZerodhaExecutionResult(preview, r),
-          );
-          if (submit) {
-            submit.hidden = false;
-            submit.textContent = 'Done';
-            submit.disabled = false;
-            submit.onclick = () => _closeZerodhaConfirmModal();
-          }
-          toast(r.message || `Trade ${r.trade_id} created in Zerodha`, 'ok');
-          if (r.account) _applyZerodhaAccountUi(r.account, { valid: true, user_id: r.account.user_id });
-          loadZerodhaStatus(true);
-          loadSuggestion();
-          loadTrades();
-          return true;
-        },
-      });
-    } catch (err) {
-      toast(err.message, 'err');
-    } finally {
-      btn.classList.remove('is-loading');
-      btn.textContent = prevLabel;
-    }
+            _updateZerodhaInflightSurfaces(pollMeta, preview, {
+              filled_count: (r.leg_fills || []).length,
+              total_orders: (preview.legs || []).length,
+              overall_status: 'COMPLETE',
+              trade_id: r.trade_id,
+              orders: (r.leg_fills || []).map(f => ({
+                leg_order: f.leg_order,
+                status: 'COMPLETE',
+                fill_price: f.fill_price,
+                kite_order_id: f.kite_order_id,
+              })),
+            });
+            _setZerodhaModalBody(
+              r.trade_id ? 'Execution complete' : 'Execution result',
+              _renderZerodhaExecutionResult(preview, r),
+            );
+            if (submit) {
+              submit.hidden = false;
+              submit.textContent = 'Done';
+              submit.disabled = false;
+              submit.onclick = () => _closeZerodhaConfirmModal();
+            }
+            toast(r.message || `Trade ${r.trade_id} created in Zerodha`, 'ok');
+            if (r.account) _applyZerodhaAccountUi(r.account, { valid: true, user_id: r.account.user_id });
+            loadZerodhaStatus(true);
+            loadSuggestion();
+            loadTrades();
+            return true;
+          },
+        });
+      } catch (err) {
+        toast(err.message, 'err');
+      }
+    });
   }));
 
   $$('.btn-exec-manual').forEach(b => b.addEventListener('click', async (e) => {
     const btn  = e.currentTarget;
-    if (btn.disabled) return;
+    if (btn.disabled || btn.dataset.busy === '1') return;
     const card = btn.closest('.card');
     const sid  = card.dataset.sugId;
     const skipGate = btn.dataset.skipGate === '1';
@@ -9467,34 +9556,40 @@ function bindSuggestionActions() {
       fill_price: priceFor(inp),
       lots_override: numLots,
     }));
-    try {
-      const r = await API(`/api/suggestion/${sid}/mark-executed`, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          fills,
-          // Spot omitted when blank, and the stop band is derived server-side
-          // from whatever spot ends up recorded, so both paths agree.
-          spot_at_execution: spotVal,
-          skip_execution_gate: skipGate,
-        }),
-      });
-      toast(r.trade_id ? `Trade created: ${r.trade_id}` : 'Suggestion ignored', 'info');
-      loadZerodhaStatus(true);
-      loadSuggestion(); loadTrades();
-    } catch (err) { toast(err.message, 'err'); }
+    await withButtonBusy(btn, 'Recording…', async () => {
+      try {
+        const r = await API(`/api/suggestion/${sid}/mark-executed`, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            fills,
+            // Spot omitted when blank, and the stop band is derived server-side
+            // from whatever spot ends up recorded, so both paths agree.
+            spot_at_execution: spotVal,
+            skip_execution_gate: skipGate,
+          }),
+        });
+        toast(r.trade_id ? `Trade created: ${r.trade_id}` : 'Suggestion ignored', 'info');
+        loadZerodhaStatus(true);
+        loadSuggestion(); loadTrades();
+      } catch (err) { toast(err.message, 'err'); }
+    });
   }));
   $$('.btn-ignore').forEach(b => b.addEventListener('click', async e => {
-    const sid = e.target.closest('.card').dataset.sugId;
-    try {
-      await API(`/api/suggestion/${sid}/mark-executed`, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({fills: []}),
-      });
-      toast('Suggestion ignored', 'warn');
-      loadSuggestion();
-    } catch (err) { toast(err.message, 'err'); }
+    const btn = e.currentTarget;
+    if (btn.disabled || btn.dataset.busy === '1') return;
+    const sid = btn.closest('.card').dataset.sugId;
+    await withButtonBusy(btn, 'Ignoring…', async () => {
+      try {
+        await API(`/api/suggestion/${sid}/mark-executed`, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({fills: []}),
+        });
+        toast('Suggestion ignored', 'warn');
+        loadSuggestion();
+      } catch (err) { toast(err.message, 'err'); }
+    });
   }));
 
   // Gates panel is a <details> — summary always shows HARD/SOFT/ADVISORY counts.
@@ -9620,21 +9715,26 @@ async function loadTrades() {
       setTimeout(() => section?.classList.remove('close-trade-highlight'), 1600);
     }));
     $$('.btn-void-trade').forEach(b => b.addEventListener('click', async e => {
-      const id = e.currentTarget.dataset.tradeId;
-      const card = e.currentTarget.closest('.card');
+      const btn = e.currentTarget;
+      if (btn.disabled || btn.dataset.busy === '1') return;
+      const id = btn.dataset.tradeId;
+      const card = btn.closest('.card');
       const name = card?.querySelector('h3')?.textContent?.trim() || id;
       if (!confirm(`Void trade "${name}"?\n\nThis marks the trade as VOID and removes it from your active trades. The record is kept for audit purposes.`)) return;
-      try {
-        await API(`/api/trades/${id}`, {method: 'DELETE'});
-        toast(`Trade "${name}" voided`, 'warn');
-        loadTrades();
-      } catch (err) { toast(err.message, 'err'); }
+      await withButtonBusy(btn, 'Voiding…', async () => {
+        try {
+          await API(`/api/trades/${id}`, {method: 'DELETE'});
+          toast(`Trade "${name}" voided`, 'warn');
+          loadTrades();
+        } catch (err) { toast(err.message, 'err'); }
+      });
     }));
     bindGapReplayPanels();
     bindCollapsibleCardInteractions(c);
     bindCloseFormOnExpand(c);
     wireTermHelpToggle(c);
     _hydrateSuggestionZerodhaMargins(c);
+    _refreshAllFeedTags();
     _focusPendingTradeCard();
     c.querySelectorAll('.collapsible-card').forEach(card => {
       card.classList.add('mobile-compact');
@@ -9766,6 +9866,7 @@ async function openSupplementForm(tradeId) {
 
 async function submitSupplement(tradeId, panel) {
   const btn = panel.querySelector('.btn-supp-submit');
+  if (!btn || btn.disabled || btn.dataset.busy === '1') return;
 
   // ── Lot-count parity validation ──────────────────────────────────────────
   const execLots = $$('.leg-row[data-leg-order]', panel)
@@ -9813,15 +9914,17 @@ async function submitSupplement(tradeId, panel) {
             fill_time: new Date().toISOString(),
             lots_override: lotsOverride};
   });
-  try {
-    await API(`/api/trades/${tradeId}/supplement`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({fills}),
-    });
-    toast('Trade supplemented successfully', 'info');
-    loadTrades();
-  } catch (err) { toast(err.message, 'err'); }
+  await withButtonBusy(btn, 'Saving fills…', async () => {
+    try {
+      await API(`/api/trades/${tradeId}/supplement`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({fills}),
+      });
+      toast('Trade supplemented successfully', 'info');
+      loadTrades();
+    } catch (err) { toast(err.message, 'err'); }
+  });
 }
 function _showLegsInCloseGap(panel) {
   const slot = panel && panel.querySelector('.trade-legs-slot');
@@ -10102,100 +10205,103 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
   }
 }
 async function submitZerodhaClose(tradeId, btn, panel) {
+  if (!btn || btn.disabled || btn.dataset.busy === '1') return;
   const blocked = _zerodhaExecuteDisabledReason(false);
   if (blocked) {
     toast(blocked, 'warn');
     return;
   }
-  const legLimits = panel ? _collectZerodhaLegLimits(panel, '.close-price') : [];
-  const prevLabel = btn.textContent;
-  btn.classList.add('is-loading');
-  btn.textContent = 'Loading preview…';
-  try {
-    const body = {};
-    if (legLimits.length) body.leg_limits = legLimits;
-    const prev = await API(`/api/trades/${tradeId}/zerodha-close-preview`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const preview = prev?.preview;
-    if (!preview || !(preview.legs || []).length) {
-      throw new Error('Close preview returned no legs');
-    }
-    preview.close_pnl = _snapshotClosePnl(panel, tradeId);
-    const syncFromKite = !!preview.sync_from_kite;
-    showZerodhaConfirmModal(preview, {
-      title: syncFromKite
-        ? 'Kite already flat — sync exit prices'
-        : 'Confirm Zerodha close orders',
-      submitLabel: syncFromKite
-        ? 'Record Kite exit fills'
-        : 'Place close orders',
-      onConfirm: async () => {
-        _setZerodhaModalBody(
-          syncFromKite ? 'Syncing exit fills from Kite…' : 'Closing in Zerodha…',
-          _renderZerodhaExecutionProgress(preview),
-        );
-        const submit = document.getElementById('zerodha-confirm-submit');
-        if (submit) submit.hidden = true;
-        const closeMeta = { tradeId, label: `Close ${tradeId}`, claimStrip: true };
-        _setZerodhaModalOwner(closeMeta);
-        const execBody = { ...body };
-        // Flat sync is a DB update — no need for async EXIT job / order polling.
-        if (syncFromKite) execBody.async = false;
-        const stopPoll = syncFromKite
-          ? () => {}
-          : _startZerodhaOrderPolling(
-              `/api/trades/${tradeId}/zerodha-orders`,
-              preview,
-              closeMeta,
-            );
-        let r;
-        try {
-          r = await API(`/api/trades/${tradeId}/zerodha-close`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(execBody),
-          });
-          if (r.async && r.job_id) {
-            r = await _awaitZerodhaExecutionJob(r.job_id, closeMeta);
-          }
-        } catch (err) {
-          _zerodhaModalExecutionError(err);
-          throw err;
-        } finally {
-          stopPoll();
-        }
-        _setZerodhaModalBody(
-          syncFromKite ? 'Exit fills recorded' : 'Close complete',
-          _renderZerodhaExecutionResult(preview, r),
-        );
-        if (submit) {
-          submit.hidden = false;
-          submit.textContent = 'Done';
-          submit.disabled = false;
-          submit.onclick = () => _closeZerodhaConfirmModal();
-        }
-        toast(
-          r.message
-            || (syncFromKite
-              ? `Trade ${tradeId} closed from Kite fills`
-              : `Trade ${tradeId} closed in Zerodha`),
-          'ok',
-        );
-        if (r.account) _applyZerodhaAccountUi(r.account, { valid: true, user_id: r.account.user_id });
-        loadZerodhaStatus(true);
-        loadTrades();
-        return true;
-      },
-    });
-  } catch (err) {
-    toast(err.message, 'err');
-  } finally {
-    btn.classList.remove('is-loading');
-    btn.textContent = prevLabel;
+  if (_inMarketHours() && _tickFeedAlive === false) {
+    const proceed = confirm(
+      `${_tickFeedMessage || _TICK_FEED_OFF_BANNER}\n\nClose in Zerodha anyway?`
+    );
+    if (!proceed) return;
   }
+  const legLimits = panel ? _collectZerodhaLegLimits(panel, '.close-price') : [];
+  await withButtonBusy(btn, 'Loading preview…', async () => {
+    try {
+      const body = {};
+      if (legLimits.length) body.leg_limits = legLimits;
+      const prev = await API(`/api/trades/${tradeId}/zerodha-close-preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const preview = prev?.preview;
+      if (!preview || !(preview.legs || []).length) {
+        throw new Error('Close preview returned no legs');
+      }
+      preview.close_pnl = _snapshotClosePnl(panel, tradeId);
+      const syncFromKite = !!preview.sync_from_kite;
+      showZerodhaConfirmModal(preview, {
+        title: syncFromKite
+          ? 'Kite already flat — sync exit prices'
+          : 'Confirm Zerodha close orders',
+        submitLabel: syncFromKite
+          ? 'Record Kite exit fills'
+          : 'Place close orders',
+        onConfirm: async () => {
+          _setZerodhaModalBody(
+            syncFromKite ? 'Syncing exit fills from Kite…' : 'Closing in Zerodha…',
+            _renderZerodhaExecutionProgress(preview),
+          );
+          const submit = document.getElementById('zerodha-confirm-submit');
+          if (submit) submit.hidden = true;
+          const closeMeta = { tradeId, label: `Close ${tradeId}`, claimStrip: true };
+          _setZerodhaModalOwner(closeMeta);
+          const execBody = { ...body };
+          // Flat sync is a DB update — no need for async EXIT job / order polling.
+          if (syncFromKite) execBody.async = false;
+          const stopPoll = syncFromKite
+            ? () => {}
+            : _startZerodhaOrderPolling(
+                `/api/trades/${tradeId}/zerodha-orders`,
+                preview,
+                closeMeta,
+              );
+          let r;
+          try {
+            r = await API(`/api/trades/${tradeId}/zerodha-close`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(execBody),
+            });
+            if (r.async && r.job_id) {
+              r = await _awaitZerodhaExecutionJob(r.job_id, closeMeta);
+            }
+          } catch (err) {
+            _zerodhaModalExecutionError(err);
+            throw err;
+          } finally {
+            stopPoll();
+          }
+          _setZerodhaModalBody(
+            syncFromKite ? 'Exit fills recorded' : 'Close complete',
+            _renderZerodhaExecutionResult(preview, r),
+          );
+          if (submit) {
+            submit.hidden = false;
+            submit.textContent = 'Done';
+            submit.disabled = false;
+            submit.onclick = () => _closeZerodhaConfirmModal();
+          }
+          toast(
+            r.message
+              || (syncFromKite
+                ? `Trade ${tradeId} closed from Kite fills`
+                : `Trade ${tradeId} closed in Zerodha`),
+            'ok',
+          );
+          if (r.account) _applyZerodhaAccountUi(r.account, { valid: true, user_id: r.account.user_id });
+          loadZerodhaStatus(true);
+          loadTrades();
+          return true;
+        },
+      });
+    } catch (err) {
+      toast(err.message, 'err');
+    }
+  });
 }
 
 /** Exit price for a close row: typed value wins; blank uses live LTP. */
@@ -10214,6 +10320,8 @@ function _resolveCloseExitPrice(panel, row) {
 }
 
 async function submitClose(tradeId, panel) {
+  const btn = panel?.querySelector('.btn-close-submit');
+  if (btn && (btn.disabled || btn.dataset.busy === '1')) return;
   // Belt-and-suspenders: Zerodha-channel trades must use Close in Zerodha.
   try {
     const meta = await API(`/api/trades/${tradeId}`).catch(() => null);
@@ -10247,20 +10355,27 @@ async function submitClose(tradeId, panel) {
   const pnlText = pnlEl && pnlEl.textContent !== '\u2014'
     ? ` Net P&L ${pnlEl.textContent}${pctEl ? pctEl.textContent : ''}.`
     : '';
+  const feedOffNote = (_inMarketHours() && _tickFeedAlive === false)
+    ? `\n\nWARNING: ${_tickFeedMessage || _TICK_FEED_OFF_BANNER}`
+    : '';
   if (!confirm(
-    `Close this trade and record exit fills?${pnlText}\n\nThis finalizes the trade and removes it from My Trades.`
+    `Close this trade and record exit fills?${pnlText}\n\nThis finalizes the trade and removes it from My Trades.${feedOffNote}`
   )) return;
 
-  try {
-    await API(`/api/trades/${tradeId}/close`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({exits}),
-    });
-    toast('Trade closed \u2014 P&L recorded', 'info');
-    loadZerodhaStatus(true);
-    loadTrades();
-  } catch (err) { toast(err.message, 'err'); }
+  const runClose = async () => {
+    try {
+      await API(`/api/trades/${tradeId}/close`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({exits}),
+      });
+      toast('Trade closed \u2014 P&L recorded', 'info');
+      loadZerodhaStatus(true);
+      loadTrades();
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  if (btn) await withButtonBusy(btn, 'Closing…', runClose);
+  else await runClose();
 }
 // Derive a contextual next-action note for an unexecuted leg
 // based on the leg's role and the overall execution state.
@@ -10632,6 +10747,7 @@ function renderTrade(t, expanded = false) {
       </div>
     </div>`;
   const bodyHtml = `
+    <div id="live-feed-banner-${escapeHtml(t.trade_id)}" class="live-feed-banner" data-trade-id="${escapeHtml(t.trade_id)}" hidden role="alert"></div>
     ${renderTradeActionPanel(t)}
     ${renderLiveOutlook(t)}
     ${(() => {
@@ -13428,11 +13544,12 @@ function _wireUserAvatarMenu() {
     zLogout.addEventListener('click', async () => {
       _setUserAvatarMenuOpen(false);
       try {
-        // Personal Zerodha token only — never parks the shared tick feed.
+        // Admin: clears Zerodha + parks ticks. Trader: personal token only.
+        // App Sign out does not call this — ticks stay when admin leaves the app.
         const r = await fetch('/api/zerodha/logout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ disconnect_feed: false }),
+          body: JSON.stringify({}),
         });
         const d = await r.json().catch(() => ({}));
         if (typeof toast === 'function') {
@@ -13792,6 +13909,12 @@ async function loadZerodhaStatus(refreshAccount = false) {
     const d = await r.json();
     _zerodhaHasSession = !!d.has_session;
     _zerodhaValid = !!d.valid;
+    {
+      const tf = d.tick_feed || {};
+      // Default alive when payload omitted (older servers) so we do not false-alarm.
+      _tickFeedAlive = tf.alive !== false;
+      _tickFeedMessage = (tf.message || '').trim();
+    }
     _zerodhaExecutionConfigEnabled = !!d.execution_config_enabled;
     _zerodhaExecutionRuntimeEnabled = !!d.execution_runtime_enabled;
     _zerodhaExecutionEnabled = !!d.execution_enabled;

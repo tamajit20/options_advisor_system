@@ -125,6 +125,15 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 | 7    | Report: `https://<VmHost>/` is the Tailscale address (accept cert warning once). Sign in at `/dashboard-login` with the bootstrap admin. Open **Users** (admin) to create traders. Each user clicks Zerodha Login for their own Kite token. Feed/ticks use the **admin** Zerodha session. Set the Zerodha redirect to `https://<tailscale-name>.ts.net/zerodha/callback` |
 
 
+**First boot (empty database).** Container start (and `main.py --init-db` / `deploy/db-setup.sh`) runs `database/schema.py` `create_all_tables()` — the only DDL. Tables, column migrations, and indexes live in that file. Indexes use `CREATE INDEX IF NOT EXISTS` (translated to a `sys.indexes` guard): **created once on first install or when a new index is added in code; later boots do not rebuild them.** Then seeds only:
+
+- `options_runtime_flags` defaults (missing keys only; `trade_execution_enabled` starts off; later edits are kept)
+- one `app_users` admin when that table is empty, from `OPT_BOOTSTRAP_ADMIN_*` (changing the env later does not reset the password)
+- the admin `zerodha_sessions` row from `data/zerodha_session.json` only when that admin row is empty
+- `options_events_calendar` from `EVENTS_CONFIG` (plus Trading Economics when `OPT_TE_API_KEY` is set)
+
+No suggestions, trades, or demo cards are inserted. Lot size uses `config.py` `default_lot_sizes` until `options_lot_sizes` is filled by chain ingest or `scripts/migrate_nse_lot_sizes.py`. `seed_today_suggestions.py`, `seed_test_data.py`, and `scripts/seed_*.py` are optional practice scripts. Do not run them as part of install.
+
 **VM-only alternative:** `.\deploy\azure\remote-vm-install.ps1`, or SSH + clone + `.env.docker` + `./deploy/vm-install-deploy.sh`.
 
 ---
@@ -154,6 +163,7 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 | `scripts/validate_setup_sync.py`                                                  | Repo setup sync check               |
 | `scripts/merge_archive_into_local.py`                                             | Merge archive `.bak` into laptop DB |
 | `scripts/migrate_nse_lot_sizes.py`                                                | NSE lot revision → DB + closed P&L  |
+| `seed_today_suggestions.py`, `seed_test_data.py`, `scripts/seed_*.py`             | Optional practice suggestions. Not part of first install |
 
 
 ---
@@ -229,7 +239,7 @@ Enable flags / handlers live in `SCHEDULER_CONFIG["jobs"]` and `JOB_FUNCS` in `s
 | `data/zerodha_session.json`      | Admin feed Kite token (mirrored from admin `zerodha_sessions`) | **No**  |
 | `*.example` templates            | Starters                                 | Yes     |
 
-**Multi-user:** First boot creates the `app_users` admin from `OPT_BOOTSTRAP_ADMIN_*` (empty DB only). New trades/orders/alerts get `owner_user_id` from the signed-in user at execute time — no legacy trade backfill. History tabs (Trades, Charts, Performance, Capital, reversals) and capital snapshots are scoped to the signed-in user; Suggestions History overlays that user's execute/ignore state and only links their trades. Admin: Config, Users, Logs/Jobs/WS. Each trader logs into Zerodha separately. Place, close, supplement, margin quotes, and the avatar “Your Zerodha” line use **only that user’s** `zerodha_sessions` row — never the admin feed token. Ticks still use the admin session. A trade with no `owner_user_id`, or a different signed-in user, cannot send Kite orders. Avatar **Sign out** clears only the app cookie (Back stays on `/dashboard-login`); it does **not** stop ticks. Park the shared feed only via WS Monitor → **Disconnect tick feed**.
+**Multi-user:** First boot creates the `app_users` admin from `OPT_BOOTSTRAP_ADMIN_*` (empty DB only). New trades/orders/alerts get `owner_user_id` from the signed-in user at execute time — no legacy trade backfill. History tabs (Trades, Charts, Performance, Capital, reversals) and capital snapshots are scoped to the signed-in user; Suggestions History overlays that user's execute/ignore state and only links their trades. Admin: Config, Users, Logs/Jobs/WS. Each trader logs into Zerodha separately. Place, close, supplement, margin quotes, and the avatar “Your Zerodha” line use **only that user’s** `zerodha_sessions` row — never the admin feed token. Ticks still use the admin session. A trade with no `owner_user_id`, or a different signed-in user, cannot send Kite orders. Avatar **Zerodha logout:** admin clears SQL + session file and parks ticks for everyone; a trader clears only their own `zerodha_sessions` row. Avatar **Sign out** clears only the app cookie — admin Zerodha / ticks stay on for other users. WS Monitor → **Disconnect tick feed** is the same full stop as admin Zerodha logout. When the shared tick feed is unhealthy in session, `/api/zerodha/status` includes `tick_feed` for every user; Suggestions, My Trades, and the close form show a clear **LIVE TICKS ARE OFF** banner (Place/Close confirms warn) so nobody opens or flattens on stale marks.
 
 
 Trading knobs: `config.py` + DB `options_config` (Part B4).
@@ -290,7 +300,7 @@ Do not run `open-port-https.ps1` afterward. A later install sees `data/tailscale
  SSH ACK -> VM truncates exported archive + deletes PENDING (when safe)
 ```
 
-**Never archive:** `options_config`, `options_runtime_flags`, `options_lot_sizes`, `options_expiry_calendar`, `options_events_calendar`, `options_trade_mtm_snapshot`.  
+**Never archive:** `options_config`, `options_runtime_flags`, `options_lot_sizes`, `options_expiry_calendar`, `options_events_calendar`, `options_trade_mtm_snapshot`, `app_users`, `zerodha_sessions`, `options_suggestion_user_state`.  
 **Delete-only logs:** `options_system_logs`, `options_job_log`, `options_zerodha_execution_jobs`, `options_notifications`.
 
 Archive jobs run **inside** the app (pyodbc); export uses temp DB `OptionsAdvisorDB_ArchiveExport`, then `.bak` under `./backups` (SQL bind-mount). Friday clock times: [A5](#a5-clock-and-jobs).
@@ -473,6 +483,10 @@ flowchart TB
 
 Other important tables: `options_config`, `options_runtime_flags`, `options_job_log`, `options_system_logs`, `options_notifications`, `options_chain_5min`, `options_atm_iv_5min`, MTM / level-event tables, `options_simulations`, calendars, lot sizes, `options_zerodha_capital_snapshots` (Zerodha idle/utilised on change for History → Capital), plus multi-user `app_users`, `zerodha_sessions`, `options_suggestion_user_state` and `owner_user_id` on trades/orders/notifications. Full list: `list_tables()`.
 
+**First install** uses this same file. There is no second migration folder. Startup / `--init-db` calls `create_all_tables()`: create missing tables, apply missing column migrations (`spot_at_close`, `owner_user_id`, …), and create missing indexes (per-user list/history lookups included). Existing indexes are left alone. Seed rows after DDL: runtime-flag defaults, bootstrap admin, optional admin Zerodha file import, events calendar. Suggestions and trades stay empty until the engine runs or someone executes a card.
+
+**Dashboard list speed (multi-user):** Suggestions / My Trades / History batch-load legs and `options_suggestion_user_state`. Supporting indexes live in `schema.py` next to those tables (created once via IF NOT EXISTS).
+
 ---
 
 
@@ -647,6 +661,16 @@ Job `simulation_update`: shadow ignored suggestions -> `options_simulations` / l
 `scripts/`: inspect, validate, analyze — not on the hot scheduler path.  
 `scripts/reconcile_zerodha_close_pnl.py --date YYYY-MM-DD` overwrites closed Zerodha-trade P&L from each trade’s Kite order ids (paper skipped; `--dry-run` lists ids only).
 
+**Not first-install seed.** These insert practice suggestions only when you run them by hand. A new environment must not call them:
+
+| Script | What it adds |
+| --- | --- |
+| `scripts/seed_gates_review_suggestion.py` | One card `SUG-GATES-REVIEW` for the Before-you-place panel |
+| `scripts/seed_zerodha_demo_suggestion.py` | One live-priced bull put `SUG-ZERODHA-DEMO` (uses the admin feed token to read LTP) |
+| `scripts/seed_zerodha_cheap_debit.py` | Cheap debit structures for a broker smoke test |
+| `seed_today_suggestions.py` | Six `SUG-TODAY-*` cards, one per strategy |
+| `seed_test_data.py` | Local lifecycle fixtures |
+
 ---
 
 
@@ -666,7 +690,7 @@ Quick answers, then the call chains. Preview Mermaid with `Ctrl+Shift+V`.
 | Who runs the suggestion job? | `lifecycle/suggestion_engine.py` (`run_live_suggestion_engine` / `run_suggestion_engine`) |
 | Who wires the job clock? | `scheduler/scheduler.py` + `SCHEDULER_CONFIG` |
 | Manual “mark executed”? | `lifecycle/trade_executor.py` → `mark_executed()` |
-| Real Zerodha orders? | `lifecycle/zerodha_executor.py` → `execute_suggestion_in_zerodha()` |
+| Real Zerodha orders? | `lifecycle/zerodha_executor.py` → `execute_suggestion_in_zerodha()` using **only** the acting user's `zerodha_sessions` row |
 | Zerodha close P&L? | `lifecycle/zerodha_close_pnl.py` — that trade’s Kite order ids + virtual contract note |
 | Dashboard API entry? | `dashboard/server.py` (`/api/suggestion/.../zerodha-execute`, `mark-executed`, …) |
 | WS ticks? | `providers/zerodha/ws_runner.py` (container `stock_ws_runner`) |
@@ -761,13 +785,15 @@ Live vs EOD difference: **same** `_evaluate_underlying` path; live pulls chain/s
        |                    suggestion status --> EXECUTED
        |
        +-- POST /api/suggestion/<id>/zerodha-execute
-                 dashboard/server.py
+                 dashboard/server.py  (owner = signed-in user)
                       --> lifecycle/zerodha_executor.execute_suggestion_in_zerodha()
                             |  (or *_async job + poll)
-                            +-- providers/zerodha session / InstrumentMaster
-                            +-- place + monitor each leg (Kite)
+                            +-- load_session_for_user(owner) only — never the admin feed token
+                            +-- InstrumentMaster + place + monitor each leg (that user's Kite)
                             +-- on success: trade_executor.mark_executed(...) with broker fills
-                            +-- on partial fail: rollback helpers in same file
+                            +-- on partial fail: rollback on the same Kite client
+                            Close / supplement require actor == trade owner.
+                            Auto-flatten uses the trade owner's token only.
 ```
 
 ```mermaid
@@ -864,6 +890,8 @@ pytest tests/test_database/test_schema.py tests/test_scheduler/test_scheduler.py
 | New module / boundary   | README B1 / B6 / B12                                                                           |
 | Code-only ship          | [A7](#a7-code-deploy)                                                                          |
 | Multi-user login | `app_users` / `zerodha_sessions` / `owner_user_id` / `options_suggestion_user_state`; bootstrap env; Users tab; `tests/test_dashboard/test_multi_user_future.py`; FUTURE scopes |
+| First install | `schema.py` `create_all_tables()` + `list_tables()` (tables + indexes IF NOT EXISTS); flag defaults; one admin; events calendar. No suggestion/trade seed. Optional `scripts/seed_*.py` stay manual |
+| New index | Add `CREATE INDEX IF NOT EXISTS` in `schema.py` beside the table; next boot / `--init-db` creates it once — no separate migration |
 
 
 **Agent shorthand:** saying **deploy** means document (if needed) → commit → push → VM deploy (A7).

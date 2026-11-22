@@ -50,11 +50,18 @@ def instrument_label(symbol: Any, expiry: Any, strike: Any, option_type: Any) ->
     return " ".join(p for p in parts if p)
 
 
-def load_open_contracts(db) -> list[dict]:
-    """Filled, not-yet-exited legs on ACTIVE trades."""
+def load_open_contracts(
+    db,
+    *,
+    owner_user_id: Optional[int] = None,
+) -> list[dict]:
+    """Filled, not-yet-exited legs on ACTIVE trades.
+
+    When *owner_user_id* is set, only that user's books are scanned so the
+    overlap warning (and the join) stay per-user after multi-user login.
+    """
     try:
-        rows = db.fetch_all(
-            """
+        sql = """
             SELECT t.trade_id, t.trade_name, t.suggestion_id,
                    sl.symbol, sl.expiry_date, sl.strike, sl.option_type, sl.action
             FROM options_trades t
@@ -64,7 +71,11 @@ def load_open_contracts(db) -> list[dict]:
               AND tl.executed = 1
               AND tl.exit_time IS NULL
             """
-        )
+        params: list = []
+        if owner_user_id is not None:
+            sql += " AND t.owner_user_id = ?"
+            params.append(int(owner_user_id))
+        rows = db.fetch_all(sql, params) if params else db.fetch_all(sql)
     except Exception:
         logger.exception("open instrument lookup failed")
         return []

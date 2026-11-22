@@ -2,12 +2,29 @@
 database/schema.py
 ==================
 
-DDL for all 18 tables of `OptionsAdvisorDB`.
+Canonical DDL for `OptionsAdvisorDB`. This file is the only schema.
+
+`create_all_tables()` runs on every app start (`main.py` `_ensure_schema_on_startup`)
+and on first install (`main.py --init-db` / `deploy/db-setup.sh`). Same list for a
+brand-new database and an existing one:
+
+* ``CREATE TABLE`` only when the table is missing
+* ``ALTER TABLE`` only when a column is missing
+* ``CREATE INDEX`` only when that index name is missing
+  (``CREATE INDEX IF NOT EXISTS`` → ``IF NOT EXISTS (sys.indexes) CREATE INDEX``)
+
+Indexes are **not** rebuilt every boot. After the first create, later starts only
+run a cheap catalog check and skip. Put every new index in this file next to its
+table (or in the multi-user block below) so first install and the next deploy
+both pick it up — there is no second migration folder.
+
+Inventory for tests / archive: ``list_tables()``.
 
 Design rules:
-    * Every table prefixed `options_`.
+    * Market and trade tables are prefixed `options_`. `app_users` and
+      `zerodha_sessions` are required schema without that prefix.
     * Idempotent: each `CREATE TABLE` is wrapped in an `IF OBJECT_ID(...) IS NULL`
-      guard so `--init-db` is safe to re-run.
+      guard so startup is safe to re-run.
     * No foreign key cascades — deletions handled by the retention/cleanup job.
     * All timestamps stored as `DATETIME2(0)` in IST (we store naive datetimes
       consistently — see `utils.now_ist`).
@@ -265,6 +282,9 @@ _TABLE_DDL: List[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_date ON options_suggestions (generated_on DESC)",
     "CREATE INDEX IF NOT EXISTS IX_options_suggestions_status ON options_suggestions (status, generated_on DESC)",
+    # Suggestions tab filter (created once; later boots skip via sys.indexes)
+    "CREATE INDEX IF NOT EXISTS IX_options_suggestions_status_entry "
+    "ON options_suggestions (status, entry_date, generated_on DESC)",
 
     """
     IF OBJECT_ID('options_suggestion_legs', 'U') IS NULL
@@ -1169,6 +1189,15 @@ _TABLE_DDL: List[str] = [
     ALTER TABLE options_trades ADD owner_user_id BIGINT NULL
     """,
     "CREATE INDEX IF NOT EXISTS IX_options_trades_owner ON options_trades (owner_user_id, status)",
+    # Per-user list / history / overlap (first create only — see module docstring)
+    "CREATE INDEX IF NOT EXISTS IX_options_trades_owner_exec "
+    "ON options_trades (owner_user_id, status, executed_on DESC)",
+    "CREATE INDEX IF NOT EXISTS IX_options_trades_owner_closed "
+    "ON options_trades (owner_user_id, status, closed_on DESC)",
+    "CREATE INDEX IF NOT EXISTS IX_options_trades_sugg_owner "
+    "ON options_trades (suggestion_id, owner_user_id)",
+    "CREATE INDEX IF NOT EXISTS IX_options_trade_legs_open "
+    "ON options_trade_legs (trade_id, executed, exit_time)",
 
     """
     IF OBJECT_ID('options_broker_orders', 'U') IS NOT NULL
@@ -1201,8 +1230,8 @@ _TABLE_DDL: List[str] = [
 
 
 # ---------------------------------------------------------------------------
-# SQL Server doesn't support `CREATE INDEX IF NOT EXISTS`. We translate it
-# at execution time into a guarded `CREATE INDEX` block.
+# SQL Server has no native CREATE INDEX IF NOT EXISTS. Translate to a
+# sys.indexes guard so startup never rebuilds an existing index.
 # ---------------------------------------------------------------------------
 
 def _normalize_ddl(stmt: str) -> str:
@@ -1254,14 +1283,21 @@ def create_database_if_missing() -> None:
 
 
 def create_all_tables(db: SQLServerConnection) -> None:
-    """Run every DDL statement in order. Caller commits."""
+    """Ensure tables, column migrations, and indexes exist. Caller commits.
+
+    Safe on every boot: missing objects are created once; existing indexes are
+    not rebuilt (only a ``sys.indexes`` existence check runs).
+    """
     for raw in _TABLE_DDL:
         sql = _normalize_ddl(raw)
         cur = db.execute(sql)
         cur.close()
     drop_removed_monitor_tables(db)
     drop_scout_tables(db)
-    logger.info("All tables ensured (%d options DDL; arb/basis/scout dropped if present).", len(_TABLE_DDL))
+    logger.info(
+        "Schema ensure finished (%d DDL stmts; indexes created only if missing).",
+        len(_TABLE_DDL),
+    )
 
 
 # Strict whitelist — never drop options_* tables from this helper.

@@ -13,6 +13,7 @@ This file is auto-loaded by GitHub Copilot at the start of every session in this
 - **Timezone**: All scheduling and trading windows are `Asia/Kolkata`
 - **Single source of truth for config**: `config.py` (no hardcoded thresholds, URLs, or rates anywhere else)
 - **Single source of truth for inter-module data shapes**: `contracts.py` (dataclasses only)
+- **Single source of truth for DDL**: `database/schema.py` (`create_all_tables()` on every start and `--init-db`; inventory is `list_tables()`). Indexes use `CREATE INDEX IF NOT EXISTS` — created once, not rebuilt every boot. First boot seeds only runtime-flag defaults, one admin from `OPT_BOOTSTRAP_ADMIN_*`, an optional admin Zerodha file import, and the events calendar. Do not insert suggestions or trades on install. `scripts/seed_*.py` and `seed_today_suggestions.py` are manual practice only.
 
 ## Module boundaries (strict)
 

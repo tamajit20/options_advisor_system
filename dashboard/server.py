@@ -126,6 +126,40 @@ def _zerodha_account_for_api(
     )
 
 
+def _tick_feed_status_payload() -> dict:
+    """Shared WS tick-feed health for every signed-in user (not admin-only).
+
+    Personal Zerodha login is separate — this answers “are live marks flowing?”
+    so traders do not close on stale prices when admin parked the feed.
+    """
+    from providers.ws_health import in_nse_session, is_ws_unhealthy, load_ws_status
+    from utils import now_ist
+
+    now = now_ist()
+    in_session = bool(in_nse_session(now))
+    unhealthy, reason = is_ws_unhealthy(now)
+    snap = load_ws_status() or {}
+    state = str(snap.get("connection_state") or ("unavailable" if in_session else "outside_session"))
+    if snap.get("stale_reason"):
+        state = str(snap.get("connection_state") or state)
+    alive = not unhealthy
+    message = None
+    if unhealthy:
+        message = (
+            "LIVE TICKS ARE OFF — Current P&L and close prices may be outdated. "
+            "Do not close a trade from these marks until the shared feed is back "
+            f"({reason})."
+        )
+    return {
+        "in_session": in_session,
+        "alive": alive,
+        "state": state,
+        "reason": reason if unhealthy else None,
+        "message": message,
+        "token_expired": bool(snap.get("token_expired")),
+    }
+
+
 def _zerodha_status_payload(
     db: Optional["SQLServerConnection"] = None,
     *,
@@ -155,6 +189,7 @@ def _zerodha_status_payload(
             ready = zerodha_execution_ready(db, app_user_id=uid)
         except Exception:
             logger.debug("zerodha status: execution flag read failed", exc_info=True)
+    tick_feed = _tick_feed_status_payload()
     base = {
         "public_base_url": public_base_url(),
         "redirect_url": callback,
@@ -166,6 +201,7 @@ def _zerodha_status_payload(
         "execution_runtime_enabled": runtime_flag_on,
         "execution_enabled": exec_on,
         "execution_ready": ready,
+        "tick_feed": tick_feed,
     }
     s = load_session_for_user(int(uid)) if uid is not None else None
     if s is None:
@@ -567,9 +603,10 @@ def _row(d: Dict[str, Any]) -> Dict[str, Any]:
 
 def _attach_instrument_overlaps(db: SQLServerConnection, suggestions: list) -> None:
     """Mark pending cards that reuse a contract an open trade still holds."""
+    from dashboard.auth import current_user_id
     from lifecycle.open_instrument_overlap import load_open_contracts, overlaps_for_legs
 
-    open_rows = load_open_contracts(db)
+    open_rows = load_open_contracts(db, owner_user_id=current_user_id())
     for row in suggestions:
         row["instrument_overlaps"] = overlaps_for_legs(
             open_rows,
@@ -579,6 +616,7 @@ def _attach_instrument_overlaps(db: SQLServerConnection, suggestions: list) -> N
 
 
 def _instrument_overlaps_for_suggestion(db: SQLServerConnection, suggestion_id: str) -> list:
+    from dashboard.auth import current_user_id
     from lifecycle.open_instrument_overlap import load_open_contracts, overlaps_for_legs
 
     try:
@@ -587,7 +625,7 @@ def _instrument_overlaps_for_suggestion(db: SQLServerConnection, suggestion_id: 
         logger.exception("suggestion legs unavailable for overlap check %s", suggestion_id)
         return []
     return overlaps_for_legs(
-        load_open_contracts(db),
+        load_open_contracts(db, owner_user_id=current_user_id()),
         legs,
         exclude_suggestion_id=suggestion_id,
     )
@@ -2654,11 +2692,13 @@ def create_app() -> Flask:
 
     @app.route("/api/zerodha/logout", methods=["POST"])
     def api_zerodha_logout():
-        """Clear this app-user's Zerodha token (orders / personal session).
+        """Clear Zerodha login for the signed-in app user.
 
-        Does **not** stop the shared tick feed by default — other users still
-        need admin's feed session. Pass ``disconnect_feed: true`` (admin only)
-        to also clear the shared session file and park ``ws_runner``.
+        - **Admin:** clears SQL + ``data/zerodha_session.json`` and parks the
+          shared tick feed (same as WS Monitor → Disconnect tick feed).
+        - **Trader:** clears only that user's ``zerodha_sessions`` row; ticks stay.
+        - App **Sign out** (``/dashboard-logout``) never calls this — Zerodha
+          and ticks keep running when admin only leaves the dashboard.
         """
         from dashboard.auth import current_user, current_user_id
         from database.connection import SQLServerConnection
@@ -2666,6 +2706,7 @@ def create_app() -> Flask:
         from providers.zerodha.session import clear_session
         from providers.zerodha.account_snapshot import invalidate_account_cache
         body = request.get_json(silent=True) or {}
+        # Legacy flag from WS Monitor; admin always parks the feed either way.
         want_disconnect = bool(body.get("disconnect_feed"))
         uid = current_user_id()
         u = current_user()
@@ -2680,8 +2721,7 @@ def create_app() -> Flask:
         removed_file = False
         feed_disconnected = False
 
-        if want_disconnect and is_admin:
-            # Park shared ticks: clear admin DB row + legacy session file.
+        if is_admin:
             if uid is not None:
                 db = SQLServerConnection()
                 db.connect()
@@ -2692,8 +2732,7 @@ def create_app() -> Flask:
                     db.close()
             removed_file = clear_session()
             feed_disconnected = True
-        elif uid is not None and not is_admin:
-            # Trader: clear personal order session only; feed stays on admin.
+        elif uid is not None:
             db = SQLServerConnection()
             db.connect()
             try:
@@ -2701,25 +2740,12 @@ def create_app() -> Flask:
                 db.commit()
             finally:
                 db.close()
-        elif is_admin and not want_disconnect:
-            # Admin avatar "Zerodha logout" must not kill ticks for other users.
-            invalidate_account_cache()
-            return jsonify({
-                "ok": True,
-                "removed": False,
-                "feed_disconnected": False,
-                "message": (
-                    "Admin Zerodha powers the shared tick feed — left running. "
-                    "Sign out leaves the dashboard without stopping ticks. "
-                    "Use WS Monitor → Disconnect tick feed to park the feed."
-                ),
-            })
 
         invalidate_account_cache()
         removed = removed_db or removed_file
         if feed_disconnected:
             msg = (
-                "Zerodha session cleared; shared tick feed will disconnect within ~5s."
+                "Admin Zerodha cleared; shared tick feed will disconnect within ~5s."
                 if removed else "No persisted session found."
             )
         else:
@@ -2748,6 +2774,8 @@ def create_app() -> Flask:
         # Phase 3 — #2: surface staleness so the UI can grey out / badge rows
         # whose `generated_on` is older than `suggestion_freshness_minutes`.
         from utils import now_ist as _now
+        from dashboard.auth import current_user_id
+        from database.suggestion_user_state_repo import SuggestionUserStateRepo
         fresh_min = float(
             STRATEGY_CONFIG.get("suggestion_freshness_minutes", 30)
         )
@@ -2765,21 +2793,24 @@ def create_app() -> Flask:
             pass
         from engine.market_regime import regime_from_sit_out_row, summarize_market_sit_out
 
+        # One round-trip each for legs + per-user state (not N+1 per card).
+        sids = [r["suggestion_id"] for r in rows if r.get("suggestion_id")]
+        legs_by_sid = sug.legs_many(sids)
+        uid = current_user_id()
+        user_state_by_sid = (
+            SuggestionUserStateRepo(db).map_for_user(sids, uid) if uid is not None else {}
+        )
+
         out = []
         for r in rows:
             r_out = _row(r)
             if "net_credit_suggested" in r_out:
                 r_out["net_credit"] = r_out.pop("net_credit_suggested")
-            legs_out = [_row(l) for l in sug.legs(r["suggestion_id"])]
+            sid = r.get("suggestion_id")
+            legs_out = [_row(l) for l in legs_by_sid.get(str(sid), [])]
             r_out["legs"] = legs_out
-            # Add data_as_of from provenance if available
-            prov = db.fetch_one(
-                "SELECT data_as_of FROM options_suggestions WHERE suggestion_id = ?",
-                [r["suggestion_id"]],
-            )
-            r_out["data_as_of"] = (
-                prov["data_as_of"] if prov and prov.get("data_as_of") else None
-            )
+            # data_as_of is already on the SELECT * row from active_pending.
+            r_out["data_as_of"] = r_out.get("data_as_of")
             gen_on = r.get("generated_on")
             if isinstance(gen_on, datetime) and fresh_min > 0:
                 age_min = (now - gen_on).total_seconds() / 60.0
@@ -2795,13 +2826,10 @@ def create_app() -> Flask:
             if (r.get("status") or "").upper() != "PENDING":
                 continue
             # Per-user state: hide cards this user already executed/ignored.
-            from dashboard.auth import current_user_id
-            from database.suggestion_user_state_repo import SuggestionUserStateRepo
-            uid = current_user_id()
             user_status = "PENDING"
             user_trade_id = None
-            if uid is not None:
-                ust = SuggestionUserStateRepo(db).get(r["suggestion_id"], uid)
+            if uid is not None and sid:
+                ust = user_state_by_sid.get(str(sid))
                 if ust:
                     user_status = str(ust.get("status") or "PENDING").upper()
                     user_trade_id = ust.get("trade_id")
@@ -3262,16 +3290,14 @@ def create_app() -> Flask:
         legs_by_tid = trd.legs_with_suggestion_info_many(trade_ids)
         risk_by_tid = notif.latest_risk_alerts_for_trades(trade_ids)
         # Prefetch unique suggestions once (avoid N× get + legs).
-        sug_cache: dict = {}
-        sug_legs_cache: dict = {}
-        for r in rows:
-            sid = r.get("suggestion_id")
-            if not sid or sid in sug_cache:
-                continue
-            sug_row = sug.get(sid)
-            sug_cache[sid] = sug_row
-            if sug_row:
-                sug_legs_cache[sid] = [_row(l) for l in sug.legs(sid)]
+        unique_sids = list({
+            str(r["suggestion_id"]) for r in rows if r.get("suggestion_id")
+        })
+        sug_cache = sug.get_many(unique_sids)
+        sug_legs_raw = sug.legs_many(unique_sids)
+        sug_legs_cache = {
+            sid: [_row(l) for l in legs] for sid, legs in sug_legs_raw.items()
+        }
         out = []
         for r in rows:
             r_out = _row(r)
@@ -3294,7 +3320,7 @@ def create_app() -> Flask:
             ra = risk_by_tid.get(tid)
             r_out["risk_alert"] = _row(ra) if ra else None
             # Attach the original suggestion so the UI can show its rationale
-            sid = r.get("suggestion_id")
+            sid = str(r["suggestion_id"]) if r.get("suggestion_id") else None
             sug_row = sug_cache.get(sid) if sid else None
             if sug_row:
                 sug_out = _row(sug_row)
@@ -4723,17 +4749,21 @@ def create_app() -> Flask:
         legs_by_tid = trd_repo.legs_with_suggestion_info_many(
             [r["trade_id"] for r in rows if r.get("trade_id")],
         )
+        unique_sids = list({
+            str(r["suggestion_id"]) for r in rows if r.get("suggestion_id")
+        })
+        sug_legs_raw = sug_repo.legs_many(unique_sids)
+        seen_sug = {
+            sid: [_row(lg) for lg in legs] for sid, legs in sug_legs_raw.items()
+        }
         out = []
-        seen_sug = {}
         seen_full = {}
         for r in rows:
             r = _row(r)
             tid = str(r["trade_id"])
             trade_legs = [_row(lg) for lg in legs_by_tid.get(tid, [])]
             sid = r.get("suggestion_id")
-            if sid and sid not in seen_sug:
-                seen_sug[sid] = [_row(lg) for lg in sug_repo.legs(sid)]
-            sug_legs = seen_sug.get(sid, [])
+            sug_legs = seen_sug.get(str(sid), []) if sid else []
             suggestion = _history_suggestion_payload(sug_repo, r, sug_legs, seen_full)
             item = {
                 "trade_id":          r["trade_id"],

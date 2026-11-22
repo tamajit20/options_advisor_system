@@ -787,11 +787,53 @@ class SuggestionRepo:
             "SELECT * FROM options_suggestions WHERE suggestion_id = ?", [suggestion_id]
         )
 
+    def get_many(self, suggestion_ids: Sequence[str]) -> Dict[str, dict]:
+        """Batch-load suggestions keyed by suggestion_id."""
+        ids = [str(s) for s in suggestion_ids if s]
+        if not ids:
+            return {}
+        out: Dict[str, dict] = {}
+        chunk = 200
+        for i in range(0, len(ids), chunk):
+            part = ids[i:i + chunk]
+            ph = ",".join("?" * len(part))
+            rows = self.db.fetch_all(
+                f"SELECT * FROM options_suggestions WHERE suggestion_id IN ({ph})",
+                part,
+            ) or []
+            for r in rows:
+                sid = r.get("suggestion_id")
+                if sid:
+                    out[str(sid)] = r
+        return out
+
     def legs(self, suggestion_id: str) -> List[dict]:
         return self.db.fetch_all(
             "SELECT * FROM options_suggestion_legs WHERE suggestion_id = ? ORDER BY leg_order",
             [suggestion_id],
         )
+
+    def legs_many(self, suggestion_ids: Sequence[str]) -> Dict[str, List[dict]]:
+        """Batch-load legs keyed by suggestion_id (ordered by leg_order)."""
+        ids = [str(s) for s in suggestion_ids if s]
+        out: Dict[str, List[dict]] = {sid: [] for sid in ids}
+        if not ids:
+            return out
+        chunk = 200
+        for i in range(0, len(ids), chunk):
+            part = ids[i:i + chunk]
+            ph = ",".join("?" * len(part))
+            rows = self.db.fetch_all(
+                "SELECT * FROM options_suggestion_legs "
+                f"WHERE suggestion_id IN ({ph}) "
+                "ORDER BY suggestion_id, leg_order",
+                part,
+            ) or []
+            for r in rows:
+                sid = str(r.get("suggestion_id") or "")
+                if sid in out:
+                    out[sid].append(r)
+        return out
 
     def save_mark_band_calendar(self, suggestion_id: str, payload: str) -> None:
         self.db.execute(
