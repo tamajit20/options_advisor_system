@@ -1263,12 +1263,14 @@ function _liveFeedInfo(tradeId, opts = {}) {
   if (inMarket) {
     // Shared tick feed (everyone) — checked before personal Zerodha login.
     if (_tickFeedAlive === false) {
+      // Full message lives once at the panel top (#suggestion/#trades-tick-feed-banner).
+      // Per-trade banners stay empty so the same text is not repeated on every card.
       return {
         mode: 'feed_off',
         label: 'Ticks OFF',
         tip: _tickFeedMessage || _TICK_FEED_OFF_BANNER,
         cls: 'tag-err',
-        banner: _tickFeedMessage || _TICK_FEED_OFF_BANNER,
+        banner: null,
       };
     }
     if (!_zerodhaHasSession || !_zerodhaValid) {
