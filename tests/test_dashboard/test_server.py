@@ -309,7 +309,14 @@ class TestApiSuggestionToday:
                      return_value=[sug_row])
         mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today",
                      return_value=[])
-        mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[leg_row])
+        mocker.patch(
+            "dashboard.server.SuggestionRepo.legs_many",
+            return_value={"SUG-1": [leg_row]},
+        )
+        mocker.patch(
+            "database.suggestion_user_state_repo.SuggestionUserStateRepo.map_for_user",
+            return_value={},
+        )
         resp = client.get("/api/suggestion/today")
         assert resp.status_code == 200
         data = resp.get_json()
@@ -323,6 +330,8 @@ class TestApiSuggestionToday:
         assert "execution_gate" in s
         assert s["execution_gate"]["ok"] is True
         assert s["instrument_overlaps"] == []
+        # Shared suggestion Final must not leak onto suggestion cards.
+        assert "zerodha_margin_final" not in s
 
     def test_flags_instrument_already_held_by_an_open_trade(self, client, mocker):
         sug_row = {
@@ -340,7 +349,14 @@ class TestApiSuggestionToday:
         }
         mocker.patch("dashboard.server.SuggestionRepo.active_pending", return_value=[sug_row])
         mocker.patch("dashboard.server.SuggestionRepo.active_sit_out_today", return_value=[])
-        mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[leg_row])
+        mocker.patch(
+            "dashboard.server.SuggestionRepo.legs_many",
+            return_value={"SUG-NEW": [leg_row]},
+        )
+        mocker.patch(
+            "database.suggestion_user_state_repo.SuggestionUserStateRepo.map_for_user",
+            return_value={},
+        )
         mocker.patch(
             "lifecycle.open_instrument_overlap.load_open_contracts",
             return_value=[{
@@ -605,11 +621,18 @@ class TestApiTradesOpen:
             "confidence_score": 10,
             "probability_of_profit": 68,
         }
+        mocker.patch("dashboard.auth.current_user_id", return_value=None)
         mocker.patch("dashboard.server.TradeRepo.open_trades", return_value=[trade_row])
         mocker.patch("dashboard.server.TradeRepo.legs_with_suggestion_info_many", return_value={})
         mocker.patch("dashboard.server.NotificationRepo.latest_risk_alerts_for_trades", return_value={})
-        mocker.patch("dashboard.server.SuggestionRepo.get", return_value=sug_row)
-        mocker.patch("dashboard.server.SuggestionRepo.legs", return_value=[])
+        mocker.patch(
+            "dashboard.server.SuggestionRepo.get_many",
+            return_value={"SUG-1": sug_row},
+        )
+        mocker.patch(
+            "dashboard.server.SuggestionRepo.legs_many",
+            return_value={"SUG-1": []},
+        )
         mocker.patch(
             "dashboard.server._stamp_execution_channels",
             side_effect=lambda _db, trades: [
@@ -619,6 +642,10 @@ class TestApiTradesOpen:
         mocker.patch("dashboard.server._stored_mtm_payloads", return_value={
             "TRD-1": {"mtm": -176.25, "as_of": "2026-08-21 15:29:00"},
         })
+        mocker.patch(
+            "dashboard.server._trade_live_outlook",
+            return_value={},
+        )
         resp = client.get("/api/trades/open")
         assert resp.status_code == 200
         trade = resp.get_json()["trades"][0]
@@ -826,6 +853,7 @@ class TestApiHistorySuggestions:
 
 class TestApiLogs:
     def test_logs_endpoint_returns_200(self, client, mocker):
+        mocker.patch("dashboard.auth.require_admin", return_value=None)
         mocker.patch("dashboard.server.LogRepo.fetch", return_value=[])
         resp = client.get("/api/logs")
         assert resp.status_code == 200
@@ -863,7 +891,8 @@ class TestZerodhaCallback:
             assert server.zerodha_callback_url() == "http://azure-vm.example:5001/zerodha/callback"
 
     def test_zerodha_status_includes_redirect_url(self, client, mocker):
-        mocker.patch("providers.zerodha.session.load_session", return_value=None)
+        mocker.patch("providers.zerodha.session.load_session_for_user", return_value=None)
+        mocker.patch("dashboard.auth.current_user_id", return_value=None)
         resp = client.get(
             "/api/zerodha/status",
             base_url="http://52.230.104.81:5001/",
@@ -874,7 +903,8 @@ class TestZerodhaCallback:
         assert body["public_base_url"] == "http://52.230.104.81:5001"
 
     def test_zerodha_status_manual_paste_on_http_ip(self, client, mocker):
-        mocker.patch("providers.zerodha.session.load_session", return_value=None)
+        mocker.patch("providers.zerodha.session.load_session_for_user", return_value=None)
+        mocker.patch("dashboard.auth.current_user_id", return_value=None)
         resp = client.get(
             "/api/zerodha/status",
             base_url="http://52.230.104.81:5001/",
@@ -884,7 +914,8 @@ class TestZerodhaCallback:
         assert body["kite_console_redirect_url"] == "http://127.0.0.1:5001/zerodha/callback"
 
     def test_zerodha_status_flags_http_ip_as_https_required(self, client, mocker):
-        mocker.patch("providers.zerodha.session.load_session", return_value=None)
+        mocker.patch("providers.zerodha.session.load_session_for_user", return_value=None)
+        mocker.patch("dashboard.auth.current_user_id", return_value=None)
         resp = client.get(
             "/api/zerodha/status",
             base_url="http://52.230.104.81:5001/",
@@ -897,7 +928,8 @@ class TestZerodhaCallback:
             {"public_base_url": "https://options.example.com"},
             clear=False,
         )
-        mocker.patch("providers.zerodha.session.load_session", return_value=None)
+        mocker.patch("providers.zerodha.session.load_session_for_user", return_value=None)
+        mocker.patch("dashboard.auth.current_user_id", return_value=None)
         resp = client.get("/api/zerodha/status")
         body = resp.get_json()
         assert body["kite_https_required"] is False
@@ -908,12 +940,18 @@ class TestZerodhaCallback:
             "providers.zerodha.session.exchange_request_token",
             return_value=mocker.Mock(user_id="AB12", generated_at=None),
         )
+        mocker.patch(
+            "dashboard.auth.current_user",
+            return_value={"id": 1, "is_admin": True},
+        )
+        mocker.patch("dashboard.auth.current_user_id", return_value=1)
+        mocker.patch("dashboard.server._publish_tick_feed_login", return_value=None)
         resp = client.get(
             "/zerodha/callback?status=success&request_token=abc123",
             follow_redirects=False,
         )
         assert resp.status_code == 302
-        assert "tab=wsmon" in resp.headers["Location"]
+        assert "#wsmon" in resp.headers["Location"]
         assert "zerodha=ok" in resp.headers["Location"]
 
     def test_callback_missing_token_redirects_with_error(self, client):
@@ -1262,7 +1300,11 @@ class TestWsMonitorEndpoint:
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
+    def _as_admin(self, mocker):
+        mocker.patch("dashboard.auth.require_admin", return_value=None)
+
     def test_returns_unavailable_when_file_missing(self, client, mocker, tmp_path):
+        self._as_admin(mocker)
         mocker.patch(
             "providers.ws_monitor.default_snapshot_path",
             return_value=tmp_path / "absent.json",
@@ -1274,6 +1316,7 @@ class TestWsMonitorEndpoint:
         assert "reason" in body
 
     def test_returns_snapshot_when_file_exists(self, client, mocker, tmp_path):
+        self._as_admin(mocker)
         path = self._write_snapshot(tmp_path, {
             "provider": "zerodha",
             "connection_state": "connected",
@@ -1298,6 +1341,7 @@ class TestWsMonitorEndpoint:
         assert body["recent_events"][0]["topic"] == "connection_state"
 
     def test_filters_by_topic(self, client, mocker, tmp_path):
+        self._as_admin(mocker)
         path = self._write_snapshot(tmp_path, {
             "provider": "zerodha",
             "recent_events": [
@@ -1312,6 +1356,7 @@ class TestWsMonitorEndpoint:
         assert body["recent_events"][0]["topic"] == "tick"
 
     def test_filters_by_symbol(self, client, mocker, tmp_path):
+        self._as_admin(mocker)
         path = self._write_snapshot(tmp_path, {
             "provider": "zerodha",
             "recent_events": [
@@ -1326,6 +1371,7 @@ class TestWsMonitorEndpoint:
         assert body["recent_events"][0]["symbol"] == "BANKNIFTY"
 
     def test_limit_caps_results(self, client, mocker, tmp_path):
+        self._as_admin(mocker)
         events = [
             {"ts": f"2025-04-01T09:30:{i:02d}", "topic": "tick", "symbol": "NIFTY"}
             for i in range(50)
@@ -1338,6 +1384,7 @@ class TestWsMonitorEndpoint:
         assert len(body["recent_events"]) == 5
 
     def test_corrupt_json_returns_unavailable(self, client, mocker, tmp_path):
+        self._as_admin(mocker)
         path = tmp_path / "ws_status.json"
         path.write_text("not json", encoding="utf-8")
         mocker.patch("providers.ws_monitor.default_snapshot_path", return_value=path)

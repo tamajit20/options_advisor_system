@@ -144,3 +144,44 @@ def test_fetch_account_snapshot_force_refresh_bypasses_cache(mocker):
     acct.fetch_account_snapshot(force_refresh=True)
     assert facade.profile.call_count == 2
 
+
+def test_fetch_account_snapshot_for_user_uses_load_session_for_user(mocker):
+    session = MagicMock(access_token="tok", api_key="user-key", user_id="U7")
+    load_user = mocker.patch(
+        "providers.zerodha.session.load_session_for_user",
+        return_value=session,
+    )
+    load_admin = mocker.patch(
+        "providers.zerodha.account_snapshot.load_session",
+        return_value=MagicMock(access_token="admin"),
+    )
+    mocker.patch("providers.zerodha.account_snapshot.is_token_valid", return_value=True)
+    mocker.patch(
+        "providers.zerodha.account_snapshot.persist_capital_snapshot_if_changed",
+        return_value=False,
+    )
+    captured = {}
+
+    def _facade(sess, **kw):
+        captured["api_key"] = sess.api_key
+        captured["allow_env"] = kw.get("allow_env_api_key_fallback")
+        facade = MagicMock()
+        facade.profile.return_value = {"user_id": "U7", "user_name": "Trader"}
+        facade.margins.return_value = {
+            "equity": {
+                "net": 42000,
+                "available": {"cash": 42000, "live_balance": 42000},
+                "utilised": {},
+            }
+        }
+        return facade
+
+    mocker.patch("providers.zerodha.account_snapshot._build_facade", side_effect=_facade)
+    out = acct.fetch_account_snapshot(app_user_id=7, force_refresh=True)
+    assert out["available"] is True
+    assert out["usable_balance"] == 42000.0
+    load_user.assert_called_once_with(7)
+    load_admin.assert_not_called()
+    assert captured["api_key"] == "user-key"
+    assert captured["allow_env"] is False
+

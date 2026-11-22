@@ -71,10 +71,19 @@ def normalize_account_snapshot(profile: dict, margins: dict) -> dict:
     }
 
 
-def _build_facade(session: ZerodhaSession) -> KiteExecutionFacade:
-    """Use this session's Kite app key — never the admin env key for traders."""
+def _build_facade(
+    session: ZerodhaSession,
+    *,
+    allow_env_api_key_fallback: bool = False,
+) -> KiteExecutionFacade:
+    """Use this session's Kite app key.
+
+    Env ``OPT_ZERODHA_API_KEY`` is only a fallback for the admin/feed path
+    (``allow_env_api_key_fallback=True``). Traders must have api_key on their
+    ``zerodha_sessions`` row.
+    """
     api_key = (getattr(session, "api_key", None) or "").strip()
-    if not api_key:
+    if not api_key and allow_env_api_key_fallback:
         api_key = str(ZERODHA_API_CONFIG.get("api_key") or "").strip()
     if not api_key:
         raise ValueError("Kite API key missing on session")
@@ -158,7 +167,11 @@ def fetch_account_snapshot(
                 return {**cached, "cached": True}
 
     try:
-        facade = _build_facade(session)
+        facade = _build_facade(
+            session,
+            # Only the anonymous/admin feed path may use env api_key.
+            allow_env_api_key_fallback=(app_user_id is None),
+        )
         profile = facade.profile()
         margins = facade.margins()
         body = normalize_account_snapshot(profile, margins)

@@ -852,7 +852,11 @@ def _fill_missing_spot_at_close(db: SQLServerConnection, trades: list) -> None:
 
 
 def _zerodha_margin_preview_from_row(row: Optional[dict]) -> Optional[dict]:
-    """Build a preview-shaped dict from stored Final/Peak columns."""
+    """Build a preview-shaped dict from stored Final/Peak columns.
+
+    Does **not** assert funds OK — call ``_apply_user_funds_gate`` with the
+    acting user's id so available margin is always that trader's account.
+    """
     if not row:
         return None
     fin = row.get("zerodha_margin_final")
@@ -871,13 +875,106 @@ def _zerodha_margin_preview_from_row(row: Optional[dict]) -> Optional[dict]:
         "margin_final_required": fin_f,
         "margin_peak_required": peak_f,
         "margin_required": peak_f if peak_f is not None else fin_f,
-        "margin_ok": True,
+        "margin_ok": None,
+        "margin_available": None,
+        "margin_shortfall": None,
         "margin_message": "Stored Zerodha Final (quoted once)",
         "zerodha_margin_lots": row.get("zerodha_margin_lots"),
         "zerodha_margin_quoted_at": row.get("zerodha_margin_quoted_at"),
         "from_db": True,
         "legs": [],
     }
+
+
+def _apply_user_funds_gate(
+    preview: Optional[dict],
+    app_user_id: Optional[int],
+) -> Optional[dict]:
+    """Compare stored/live peak vs THIS user's Zerodha available margin.
+
+    Uses the same peak + buffer rule as ``check_margin_for_orders``. Never
+    reads the admin feed session.
+    """
+    if not preview:
+        return preview
+    if app_user_id is None:
+        preview["margin_ok"] = None
+        preview.setdefault(
+            "margin_message",
+            "Sign in to check your Zerodha available margin",
+        )
+        return preview
+    peak = preview.get("margin_peak_required")
+    if peak is None:
+        peak = preview.get("margin_required")
+    try:
+        peak_f = float(peak) if peak is not None else None
+    except (TypeError, ValueError):
+        peak_f = None
+    if peak_f is None or peak_f <= 0:
+        return preview
+    try:
+        from config import ZERODHA_EXECUTION_CONFIG
+        from providers.zerodha.account_snapshot import fetch_account_snapshot
+
+        acct = fetch_account_snapshot(
+            app_user_id=int(app_user_id),
+            force_refresh=False,
+            persist_capital=False,
+            trigger_reason="funds_gate",
+        )
+    except Exception as exc:
+        logger.debug("user funds gate failed: %s", exc, exc_info=True)
+        preview["margin_ok"] = None
+        preview["margin_message"] = (
+            "Could not read your Zerodha available margin"
+        )
+        return preview
+    if not acct.get("available"):
+        preview["margin_ok"] = None
+        preview["margin_available"] = None
+        preview["margin_message"] = (
+            "Your Zerodha session is not ready for a funds check"
+            if acct.get("reason") in (None, "no_valid_session", "session_expired")
+            else f"Could not read your Zerodha funds ({acct.get('reason')})"
+        )
+        return preview
+    # Match check_margin_for_orders: equity net ≈ Kite "Margin available".
+    available = acct.get("net")
+    if available is None:
+        available = acct.get("usable_balance")
+    try:
+        avail_f = float(available) if available is not None else None
+    except (TypeError, ValueError):
+        avail_f = None
+    if avail_f is None:
+        preview["margin_ok"] = None
+        preview["margin_message"] = "Zerodha did not report your available margin"
+        return preview
+    buffer_pct = float(ZERODHA_EXECUTION_CONFIG.get("margin_buffer_pct", 5)) / 100.0
+    need = peak_f * (1.0 + buffer_pct)
+    preview["margin_available"] = round(avail_f, 2)
+    preview["margin_buffer_pct"] = buffer_pct * 100.0
+    if avail_f < need:
+        shortfall = round(need - avail_f, 2)
+        preview["margin_ok"] = False
+        preview["margin_shortfall"] = shortfall
+        preview["margin_message"] = (
+            f"Insufficient funds. Margin required: ₹{need:,.2f} "
+            f"(peak ₹{peak_f:,.2f} + {buffer_pct * 100:.0f}% buffer). "
+            f"Your margin available: ₹{avail_f:,.2f}. "
+            f"Add ₹{shortfall:,.2f} to place this order."
+        )
+    else:
+        preview["margin_ok"] = True
+        preview["margin_shortfall"] = 0.0
+        fin = preview.get("margin_final_required")
+        fin_bit = f"; final ₹{float(fin):,.0f}" if fin is not None else ""
+        preview["margin_message"] = (
+            f"Your funds cover peak ₹{peak_f:,.0f}{fin_bit} "
+            f"(+{buffer_pct * 100:.0f}% buffer)"
+        )
+    return preview
 
 
 def _stored_zerodha_margin_preview(
@@ -3116,6 +3213,15 @@ def create_app() -> Flask:
                     continue
             r_out["user_status"] = user_status
             r_out["user_trade_id"] = user_trade_id
+            # Shared suggestion Final/Peak is not user-scoped — never stamp
+            # another trader's quote (or a stale shared quote) on this card.
+            for _mk in (
+                "zerodha_margin_final",
+                "zerodha_margin_peak",
+                "zerodha_margin_lots",
+                "zerodha_margin_quoted_at",
+            ):
+                r_out.pop(_mk, None)
             r_out["execution_gate"] = {
                 "ok": gate.ok,
                 "vetoes": list(gate.vetoes),
@@ -3421,6 +3527,8 @@ def create_app() -> Flask:
                 owner_user_id=quote_uid,
             )
             if stored is not None:
+                # Re-check THIS user's available margin (never trust stored margin_ok).
+                _apply_user_funds_gate(stored, quote_uid)
                 stored["instrument_overlaps"] = _instrument_overlaps_for_suggestion(db, sid)
                 return jsonify({"preview": stored, "from_db": True})
 
@@ -3440,9 +3548,10 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 400
         preview_dict = preview.to_dict()
         preview_dict["instrument_overlaps"] = _instrument_overlaps_for_suggestion(db, sid)
+        # Live preview already ran check_margin_for_orders on this user's session.
         _persist_zerodha_margin_quote(
             db,
-            suggestion_id=sid,
+            suggestion_id=None,  # never share Final across traders via suggestion row
             trade_id=trade_id,
             margin_final=preview_dict.get("margin_final_required")
             or preview_dict.get("margin_required"),
@@ -5068,12 +5177,9 @@ def create_app() -> Flask:
                 "actual_lower_be":   r["actual_lower_breakeven"],
                 "actual_stop_loss":  r["actual_stop_loss_level"],
                 "entry_quality_score": r.get("sug_entry_quality"),
-                "zerodha_margin_final": r.get("zerodha_margin_final")
-                if r.get("zerodha_margin_final") is not None
-                else r.get("sug_zerodha_margin_final"),
-                "zerodha_margin_peak": r.get("zerodha_margin_peak")
-                if r.get("zerodha_margin_peak") is not None
-                else r.get("sug_zerodha_margin_peak"),
+                # Trade-row Final/Peak only — never fall back to shared suggestion quote.
+                "zerodha_margin_final": r.get("zerodha_margin_final"),
+                "zerodha_margin_peak": r.get("zerodha_margin_peak"),
                 "zerodha_margin_lots": r.get("zerodha_margin_lots"),
                 "zerodha_margin_quoted_at": r.get("zerodha_margin_quoted_at"),
                 "legs":              trade_legs,

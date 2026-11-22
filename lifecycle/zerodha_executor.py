@@ -78,7 +78,7 @@ from providers.zerodha.order_updates import (
     persist_order_update,
     wait_for_order_terminal,
 )
-from providers.zerodha.session import is_token_valid, load_session
+from providers.zerodha.session import is_token_valid
 from utils import now_ist
 
 
@@ -2135,6 +2135,26 @@ def execute_suggestion_in_zerodha(
                 execution_job_id=execution_job_id,
             )
             raise ZerodhaExecutionError("Trade was not created after fills")
+
+        # Persist THIS user's Final/Peak on their trade (not the shared suggestion).
+        if _margin is not None and (
+            getattr(_margin, "final_required", None) is not None
+            or getattr(_margin, "peak_required", None) is not None
+        ):
+            try:
+                from database.models import TradeRepo
+                TradeRepo(db).save_zerodha_margin_once(
+                    str(trade_id),
+                    margin_final=getattr(_margin, "final_required", None)
+                    or getattr(_margin, "required", None),
+                    margin_peak=getattr(_margin, "peak_required", None),
+                    lots=lots_override,
+                )
+            except Exception:
+                logger.debug(
+                    "persist trade zerodha margin skipped for %s",
+                    trade_id, exc_info=True,
+                )
 
         broker_rows = BrokerOrderRepo(db).by_job(execution_job_id) if execution_job_id is not None else []
         if not broker_rows:

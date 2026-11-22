@@ -7561,7 +7561,7 @@ function collectPrePlaceZerodhaItems(s, card) {
         detail: (bits.length ? bits.join(' \u00b7 ') + ' \u2014 ' : '')
           + (marginMsg || 'Available margin does not cover peak + buffer'),
       });
-    } else if (hydrated === '1' && (peak || fin || avail)) {
+    } else if (marginOk === '1' && (peak || fin || avail)) {
       const bits = [];
       if (fin) bits.push(`Final \u20b9${fmt(parseFloat(fin))}`);
       if (peak) bits.push(`Peak \u20b9${fmt(parseFloat(peak))}`);
@@ -7571,6 +7571,18 @@ function collectPrePlaceZerodhaItems(s, card) {
         severity: 'ok',
         label: 'Zerodha funds',
         detail: bits.join(' \u00b7 ') + (marginMsg ? ` \u2014 ${marginMsg}` : ' \u2014 covers peak'),
+      });
+    } else if (hydrated === '1' && (peak || fin)) {
+      // Final/Peak known but live funds not confirmed for THIS user yet.
+      const bits = [];
+      if (fin) bits.push(`Final \u20b9${fmt(parseFloat(fin))}`);
+      if (peak) bits.push(`Peak \u20b9${fmt(parseFloat(peak))}`);
+      items.push({
+        section: 'zerodha',
+        severity: 'warn',
+        label: 'Zerodha margin',
+        detail: bits.join(' \u00b7 ')
+          + ' \u2014 refresh quote to check your available funds',
       });
     } else if (hydrated === '0' || marginMsg) {
       items.push({
@@ -9563,7 +9575,7 @@ function bindSuggestionActions() {
     const legLimits = _collectZerodhaLegLimits(card, '.leg-price-input');
     await withButtonBusy(btn, 'Loading preview…', async () => {
       try {
-        const body = {};
+        const body = { force_refresh: true };
         if (spotVal != null) body.spot_at_execution = spotVal;
         if (legLimits.length) body.leg_limits = legLimits;
         const execLots = _collectExecLots(card);
