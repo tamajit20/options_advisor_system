@@ -13461,7 +13461,7 @@ async function loadUsersPane() {
           <td><span class="users-active ${u.is_active ? 'is-yes' : 'is-no'}">${u.is_active ? 'Yes' : 'No'}</span></td>
           <td class="users-col-actions">
             <div class="users-actions">
-              <button type="button" class="btn btn-sm" data-set-password="${u.id}" data-login="${escapeHtml(u.login || '')}">Set password</button>
+              <button type="button" class="btn btn-sm" data-set-password="${u.id}" data-login="${escapeHtml(u.login || '')}">Password</button>
               ${u.is_admin ? '' : `<button type="button" class="btn btn-sm" data-transfer-admin="${u.id}">Make admin</button>`}
               ${u.is_admin ? '' : (u.is_active
                 ? `<button type="button" class="btn btn-sm btn-ghost" data-disable-user="${u.id}">Disable</button>`

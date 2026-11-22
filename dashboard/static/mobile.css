@@ -22,6 +22,12 @@
     touch-action: manipulation;
   }
   .btn-sm { min-height: 40px; }
+  .users-actions .btn,
+  .users-actions .btn-sm {
+    min-height: 0;
+    height: auto;
+    padding: 4px 8px;
+  }
   .card-head-btn { min-height: 40px; padding: 8px 12px; }
 }
 
