@@ -50,16 +50,6 @@
     <button type="button" class="options-subtab" data-tab="learn">Learning</button>
   </nav>
   <div class="header-actions">
-    <div id="app-user-chip" class="idx-chip" hidden title="Signed-in app user">
-      <span class="idx-chip-label" id="app-user-label">User</span>
-      <span class="idx-chip-src" id="app-user-role"></span>
-      <a href="/dashboard-logout" class="zerodha-margin-refresh-btn" style="text-decoration:none;margin-left:6px"
-         title="Sign out of the dashboard">Logout</a>
-    </div>
-    <div id="feed-status-chip" class="idx-chip" hidden title="Admin Zerodha feed (ticks / MTM)">
-      <span class="idx-chip-label">Feed</span>
-      <span class="idx-chip-src" id="feed-status-label">—</span>
-    </div>
     <div id="zerodha-profile-chip" class="idx-chip idx-chip-live zerodha-funds-chip" hidden
          title="Available margin — updates every 30 minutes."
          aria-label="Zerodha available margin">
@@ -70,12 +60,33 @@
               aria-label="Refresh Zerodha margin">Refresh</button>
       <span class="idx-chip-src">Margin</span>
     </div>
-    <a id="zerodha-login-btn" class="icon-btn" href="/zerodha/login"
-       title="Zerodha login (daily token refresh)"
-       aria-label="Zerodha login">
-      <span id="zerodha-login-icon">🔑</span>
-      <span id="zerodha-login-label" class="muted" style="font-size:.75rem;margin-left:.25rem;">Login</span>
-    </a>
+    <div class="user-avatar-wrap" id="user-avatar-wrap">
+      <button type="button" class="user-avatar-btn" id="user-avatar-btn"
+              aria-haspopup="menu" aria-expanded="false" aria-controls="user-avatar-menu"
+              title="Account menu">
+        <span class="user-avatar-circle" id="user-avatar-initials">?</span>
+        <span class="user-avatar-dot" id="user-avatar-dot" data-state="unknown" aria-hidden="true"></span>
+      </button>
+      <div class="user-avatar-menu" id="user-avatar-menu" role="menu" hidden>
+        <div class="user-avatar-head">
+          <strong id="app-user-label">Signed in</strong>
+          <span class="user-avatar-role" id="app-user-role"></span>
+          <span class="user-avatar-id muted" id="app-user-id"></span>
+        </div>
+        <div class="user-avatar-meta muted">
+          <div>Feed (admin): <span id="feed-status-label">—</span></div>
+          <div>Your Zerodha: <span id="zerodha-login-label">—</span>
+            <span id="zerodha-login-icon" class="user-avatar-z-icon" aria-hidden="true"></span>
+          </div>
+        </div>
+        <a id="zerodha-login-btn" class="user-avatar-item" role="menuitem" href="/zerodha/login">Zerodha login</a>
+        <button type="button" class="user-avatar-item" role="menuitem" id="user-menu-zerodha-logout">Zerodha logout</button>
+        <button type="button" class="user-avatar-item" role="menuitem" id="user-menu-change-password">Change my password…</button>
+        <button type="button" class="user-avatar-item admin-only" role="menuitem" id="user-menu-users" hidden>Users…</button>
+        <a class="user-avatar-item user-avatar-danger" role="menuitem" id="user-menu-sign-out"
+           href="/dashboard-logout">Sign out</a>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -261,12 +272,16 @@
 
     <article class="panel" id="panel-users" aria-hidden="true">
       <h2 class="panel-title">Users</h2>
-      <p class="muted" style="font-size:.85rem;margin:0 0 12px">Admin only — create traders, disable accounts, transfer admin (exactly one admin at a time).</p>
-      <div class="filter-row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
-        <input id="user-new-login" type="text" placeholder="Login" autocomplete="off" />
-        <input id="user-new-name" type="text" placeholder="Display name" autocomplete="off" />
-        <input id="user-new-password" type="password" placeholder="Temp password" autocomplete="new-password" />
-        <button type="button" class="btn" id="user-create-btn">Create user</button>
+      <p class="muted" style="font-size:.85rem;margin:0 0 12px">Admin only — create traders, set passwords, disable accounts, transfer admin (exactly one admin at a time).</p>
+      <div class="card users-create-card" style="margin-bottom:16px;padding:14px 16px">
+        <h3 style="margin:0 0 10px;font-size:.95rem">Add new user</h3>
+        <p class="muted" style="font-size:.8rem;margin:0 0 10px">Give them a login + temporary password. They sign in at <code>/dashboard-login</code>, then connect their own Zerodha.</p>
+        <div class="filter-row" style="gap:8px;flex-wrap:wrap;margin:0">
+          <input id="user-new-login" type="text" placeholder="Login (username)" autocomplete="off" />
+          <input id="user-new-name" type="text" placeholder="Display name" autocomplete="off" />
+          <input id="user-new-password" type="password" placeholder="Temporary password" autocomplete="new-password" />
+          <button type="button" class="btn" id="user-create-btn">Create user</button>
+        </div>
       </div>
       <div id="users-container" class="loading">Loading…</div>
     </article>
@@ -364,7 +379,10 @@
           <input id="zerodha-token-input" type="text" placeholder="Paste redirect URL or request_token…"
                  class="wsmon-token-input">
           <button id="zerodha-submit-btn" class="btn">Submit Token</button>
-          <button id="zerodha-logout-btn" class="btn btn-ghost">Logout (disconnect WS)</button>
+          <button id="zerodha-logout-btn" class="btn btn-ghost"
+                  title="Clears admin Zerodha session and parks the shared tick feed">
+            Disconnect tick feed
+          </button>
         </div>
         <div id="zerodha-submit-msg" class="muted wsmon-config-hint">
           Tokens expire daily ~06:00 IST. Run this each morning before market.

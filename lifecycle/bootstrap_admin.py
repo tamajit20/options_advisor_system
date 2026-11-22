@@ -1,4 +1,4 @@
-"""Seed first admin + backfill owner_user_id / import file Zerodha session."""
+"""Create the first admin on empty installs; optional file→DB Zerodha import."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def bootstrap_admin_if_needed(db: SQLServerConnection) -> Optional[int]:
     if not login or not password:
         logger.info(
             "app_users empty — set OPT_BOOTSTRAP_ADMIN_LOGIN / "
-            "OPT_BOOTSTRAP_ADMIN_PASSWORD then re-run to seed admin"
+            "OPT_BOOTSTRAP_ADMIN_PASSWORD then re-run to create admin"
         )
         return None
     uid = repo.create_user(
@@ -53,35 +53,8 @@ def bootstrap_admin_if_needed(db: SQLServerConnection) -> Optional[int]:
         is_active=True,
     )
     db.commit()
-    logger.info("Seeded bootstrap admin user_id=%s login=%s", uid, login.lower())
+    logger.info("Created bootstrap admin user_id=%s login=%s", uid, login.lower())
     return uid
-
-
-def migrate_owner_user_ids(db: SQLServerConnection, admin_user_id: int) -> dict:
-    """Assign NULL owner rows to the admin (one-shot safe to re-run)."""
-    stats = {"trades": 0, "orders": 0, "notifications": 0}
-    cur = db.execute(
-        "UPDATE options_trades SET owner_user_id = ? WHERE owner_user_id IS NULL",
-        [int(admin_user_id)],
-    )
-    stats["trades"] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-    cur.close()
-    cur = db.execute(
-        "UPDATE options_broker_orders SET owner_user_id = ? WHERE owner_user_id IS NULL",
-        [int(admin_user_id)],
-    )
-    stats["orders"] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-    cur.close()
-    # Trade-scoped notifications → admin; leave unrelated NULL (admin-only system)
-    cur = db.execute(
-        "UPDATE options_notifications SET owner_user_id = ? "
-        "WHERE owner_user_id IS NULL AND related_trade_id IS NOT NULL",
-        [int(admin_user_id)],
-    )
-    stats["notifications"] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
-    cur.close()
-    db.commit()
-    return stats
 
 
 def import_file_session_for_admin(db: SQLServerConnection, admin_user_id: int) -> bool:
@@ -110,12 +83,13 @@ def import_file_session_for_admin(db: SQLServerConnection, admin_user_id: int) -
 
 
 def ensure_multi_user_bootstrap(db: SQLServerConnection) -> Optional[int]:
-    """Schema post-step: seed admin, backfill owners, import file session."""
+    """Ensure an admin exists; optionally import legacy file Zerodha session.
+
+    Fresh installs have zero trades — new trades get ``owner_user_id`` at
+    execute time from the signed-in user. No trade ownership backfill.
+    """
     admin_id = bootstrap_admin_if_needed(db)
     if admin_id is None:
         return None
-    stats = migrate_owner_user_ids(db, admin_id)
-    if any(stats.values()):
-        logger.info("owner_user_id backfill: %s", stats)
     import_file_session_for_admin(db, admin_id)
     return admin_id

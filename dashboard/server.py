@@ -2620,19 +2620,46 @@ def create_app() -> Flask:
 
     @app.route("/api/zerodha/logout", methods=["POST"])
     def api_zerodha_logout():
-        """Clear the persisted Zerodha session.
+        """Clear this app-user's Zerodha token (orders / personal session).
 
-        The ws_runner container polls the session file and returns to a
-        waiting state within ~5 seconds. No manual docker restart is needed.
+        Does **not** stop the shared tick feed by default — other users still
+        need admin's feed session. Pass ``disconnect_feed: true`` (admin only)
+        to also clear the shared session file and park ``ws_runner``.
         """
         from dashboard.auth import current_user, current_user_id
         from database.connection import SQLServerConnection
         from database.zerodha_session_repo import ZerodhaSessionRepo
         from providers.zerodha.session import clear_session
         from providers.zerodha.account_snapshot import invalidate_account_cache
+        body = request.get_json(silent=True) or {}
+        want_disconnect = bool(body.get("disconnect_feed"))
         uid = current_user_id()
+        u = current_user()
+        is_admin = bool(u and u.get("is_admin"))
+        if want_disconnect and not is_admin:
+            return jsonify({
+                "ok": False,
+                "error": "Only admin can disconnect the shared tick feed.",
+            }), 403
+
         removed_db = False
-        if uid is not None:
+        removed_file = False
+        feed_disconnected = False
+
+        if want_disconnect and is_admin:
+            # Park shared ticks: clear admin DB row + legacy session file.
+            if uid is not None:
+                db = SQLServerConnection()
+                db.connect()
+                try:
+                    removed_db = ZerodhaSessionRepo(db).clear(uid)
+                    db.commit()
+                finally:
+                    db.close()
+            removed_file = clear_session()
+            feed_disconnected = True
+        elif uid is not None and not is_admin:
+            # Trader: clear personal order session only; feed stays on admin.
             db = SQLServerConnection()
             db.connect()
             try:
@@ -2640,20 +2667,37 @@ def create_app() -> Flask:
                 db.commit()
             finally:
                 db.close()
-        # Admin logout also clears shared file so feed stops.
-        u = current_user()
-        removed_file = False
-        if u and u.get("is_admin"):
-            removed_file = clear_session()
+        elif is_admin and not want_disconnect:
+            # Admin avatar "Zerodha logout" must not kill ticks for other users.
+            invalidate_account_cache()
+            return jsonify({
+                "ok": True,
+                "removed": False,
+                "feed_disconnected": False,
+                "message": (
+                    "Admin Zerodha powers the shared tick feed — left running. "
+                    "Sign out leaves the dashboard without stopping ticks. "
+                    "Use WS Monitor → Disconnect tick feed to park the feed."
+                ),
+            })
+
         invalidate_account_cache()
         removed = removed_db or removed_file
+        if feed_disconnected:
+            msg = (
+                "Zerodha session cleared; shared tick feed will disconnect within ~5s."
+                if removed else "No persisted session found."
+            )
+        else:
+            msg = (
+                "Your Zerodha session cleared. Shared tick feed is unchanged."
+                if removed_db else "No persisted session found."
+            )
         return jsonify({
             "ok": True,
             "removed": bool(removed),
-            "message": (
-                "Session cleared. WS runner will disconnect within ~5s." if removed
-                else "No persisted session found."
-            ),
+            "feed_disconnected": feed_disconnected,
+            "message": msg,
         })
 
     # ---------- Tab 1: Suggestion ----------

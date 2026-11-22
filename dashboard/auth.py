@@ -29,7 +29,10 @@ _PUBLIC_EXACT = {
     "/health",
     "/zerodha/callback",
     LOGIN_PATH,
+    LOGOUT_PATH,
 }
+
+_NO_STORE = "no-store, no-cache, must-revalidate, max-age=0, private"
 
 
 def configured_api_key() -> str:
@@ -89,23 +92,47 @@ def _set_user_cookie(response, user_id: int):
         httponly=True,
         samesite="Lax",
         max_age=60 * 60 * 24 * 30,
+        path="/",
     )
     return response
 
 
 def _clear_auth_cookies(response):
-    response.delete_cookie(AUTH_COOKIE)
-    response.delete_cookie(LEGACY_API_COOKIE)
+    """Expire app auth cookies for every common path/host quirk."""
+    for name in (AUTH_COOKIE, LEGACY_API_COOKIE):
+        response.set_cookie(
+            name,
+            "",
+            expires=0,
+            max_age=0,
+            httponly=True,
+            samesite="Lax",
+            path="/",
+        )
+        response.delete_cookie(name, path="/")
     return response
 
 
-def _login_page_html(*, error: str = "", next_path: str = "/") -> str:
+def _apply_no_store(response):
+    response.headers["Cache-Control"] = _NO_STORE
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+def _login_page_html(*, error: str = "", next_path: str = "/", signed_out: bool = False) -> str:
     err = f'<p class="err">{error}</p>' if error else ""
     nxt = quote(next_path or "/", safe="/")
+    signed = (
+        '<p class="ok">Signed out. Live market feed is unchanged for other users.</p>'
+        if signed_out else ""
+    )
     return f"""<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
 <title>Dashboard login</title>
 <style>
   body {{ font-family: system-ui, sans-serif; background: #0f1419; color: #e6edf3;
@@ -115,16 +142,35 @@ def _login_page_html(*, error: str = "", next_path: str = "/") -> str:
   h1 {{ margin: 0 0 8px; font-size: 1.15rem; }}
   p {{ margin: 0 0 16px; color: #8b9cb3; font-size: .9rem; line-height: 1.45; }}
   .err {{ color: #f87171; }}
+  .ok {{ color: #6ee7b7; }}
   label {{ display: block; font-size: .85rem; margin: 12px 0 6px; color: #8b9cb3; }}
   input {{ width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px;
     border: 1px solid #2a3744; background: #0f1419; color: #e6edf3; font-size: 1rem; }}
   button {{ margin-top: 16px; width: 100%; padding: 10px; border: none; border-radius: 8px;
     background: #14b8a6; color: #042f2e; font-weight: 600; font-size: 1rem; cursor: pointer; }}
   button:hover {{ filter: brightness(1.08); }}
-</style></head><body>
+</style>
+<script>
+(function () {{
+  // Drop any dashboard history entry so Back stays on login.
+  try {{
+    if (window.history && history.replaceState) {{
+      history.replaceState(null, "", "{LOGIN_PATH}");
+    }}
+  }} catch (_) {{}}
+  window.addEventListener("pageshow", function (ev) {{
+    // BFCache restore of a prior dashboard must bounce back to login.
+    if (ev.persisted) {{
+      try {{ location.replace("{LOGIN_PATH}"); }} catch (_) {{ location.href = "{LOGIN_PATH}"; }}
+    }}
+  }});
+}})();
+</script>
+</head><body>
 <div class="card">
   <h1>Trading Dashboard</h1>
   <p>Sign in with your app username and password.</p>
+  {signed}
   {err}
   <form method="post" action="{LOGIN_PATH}?next={nxt}">
     <label for="login">Username</label>
@@ -242,12 +288,15 @@ def register_dashboard_auth(app) -> None:
         next_path = (request.args.get("next") or "/").strip() or "/"
         if not next_path.startswith("/"):
             next_path = "/"
-        if current_user() or _load_user_from_cookie() or _admin_break_glass_user():
-            # already authenticated
+        # Never bounce a just-signed-out browser back into the dashboard.
+        signed_out = (request.args.get("signed_out") or "") in ("1", "true", "yes")
+        if not signed_out and (
+            current_user() or _load_user_from_cookie() or _admin_break_glass_user()
+        ):
             user = current_user() or _load_user_from_cookie() or _admin_break_glass_user()
             if user:
                 resp = make_response(redirect(next_path))
-                return _set_user_cookie(resp, int(user["id"]))
+                return _apply_no_store(_set_user_cookie(resp, int(user["id"])))
         if request.method == "POST":
             login = (request.form.get("login") or "").strip()
             password = request.form.get("password") or ""
@@ -258,7 +307,7 @@ def register_dashboard_auth(app) -> None:
                 admin = _admin_break_glass_user()
                 if admin:
                     resp = make_response(redirect(next_path))
-                    return _set_user_cookie(resp, int(admin["id"]))
+                    return _apply_no_store(_set_user_cookie(resp, int(admin["id"])))
             try:
                 from database.connection import SQLServerConnection
                 from database.app_user_repo import AppUserRepo
@@ -270,20 +319,38 @@ def register_dashboard_auth(app) -> None:
                     user = AppUserRepo(db).authenticate(login, password)
                     if user:
                         resp = make_response(redirect(next_path))
-                        return _set_user_cookie(resp, int(user["id"]))
+                        return _apply_no_store(_set_user_cookie(resp, int(user["id"])))
                 finally:
                     db.close()
             except Exception:
                 logger.exception("login failed")
-            return _login_page_html(
+            html = _login_page_html(
                 error="Incorrect username or password.", next_path=next_path,
-            ), 401
-        return _login_page_html(next_path=next_path)
+            )
+            return _apply_no_store(make_response(html, 401))
+        html = _login_page_html(next_path=next_path, signed_out=signed_out)
+        return _apply_no_store(make_response(html))
 
     @app.route(LOGOUT_PATH, methods=["GET", "POST"])
     def dashboard_logout():  # noqa: ANN001
-        resp = make_response(redirect(LOGIN_PATH))
-        return _clear_auth_cookies(resp)
+        """Clear app login only — never touches Zerodha / tick feed."""
+        resp = make_response(redirect(f"{LOGIN_PATH}?signed_out=1", code=303))
+        _clear_auth_cookies(resp)
+        _apply_no_store(resp)
+        # Ask supporting browsers to drop origin cookies/storage for this site.
+        resp.headers["Clear-Site-Data"] = '"cookies", "storage"'
+        return resp
+
+    @app.after_request
+    def _no_store_authenticated_html(response):  # noqa: ANN001
+        # Prevent BFCache / back-button from resurrecting a signed-in dashboard.
+        try:
+            ct = (response.headers.get("Content-Type") or "").lower()
+            if "text/html" in ct and not _is_public_path(request.path or "/"):
+                _apply_no_store(response)
+        except Exception:
+            pass
+        return response
 
     @app.before_request
     def _bind_app_user():  # noqa: ANN001

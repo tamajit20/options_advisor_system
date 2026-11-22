@@ -2733,7 +2733,7 @@ const toast = (msg, kind='info') => {
 window.toast = toast;
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
+const TABS = ['suggestion', 'trades', 'learn', 'history', 'users', 'logs', 'jobs', 'wsmon', 'notifications', 'config'];
 window.TABS = TABS;
 const OPTIONS_TABS = ['suggestion', 'trades', 'learn', 'history', 'logs', 'jobs', 'wsmon', 'config'];
 const SYSTEM_TABS = ['logs', 'jobs', 'wsmon'];
@@ -13241,24 +13241,162 @@ function _debounce(fn, ms) {
 // ---------------- App user / multi-user ----------------
 window.__OA_ME = null;
 
+function _userAvatarInitials(u) {
+  const raw = String((u && (u.display_name || u.login)) || '?').trim();
+  const parts = raw.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return raw.slice(0, 2).toUpperCase() || '?';
+}
+
+function _setUserAvatarMenuOpen(open) {
+  const btn = document.getElementById('user-avatar-btn');
+  const menu = document.getElementById('user-avatar-menu');
+  if (!btn || !menu) return;
+  menu.hidden = !open;
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function _wireUserAvatarMenu() {
+  const btn = document.getElementById('user-avatar-btn');
+  const menu = document.getElementById('user-avatar-menu');
+  const wrap = document.getElementById('user-avatar-wrap');
+  if (!btn || !menu || !wrap || btn.dataset.wired === '1') return;
+  btn.dataset.wired = '1';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    _setUserAvatarMenuOpen(menu.hidden);
+  });
+  document.addEventListener('click', (e) => {
+    if (!wrap.contains(e.target)) _setUserAvatarMenuOpen(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') _setUserAvatarMenuOpen(false);
+  });
+  const usersBtn = document.getElementById('user-menu-users');
+  if (usersBtn) {
+    usersBtn.addEventListener('click', () => {
+      _setUserAvatarMenuOpen(false);
+      if (typeof switchTab === 'function') switchTab('users');
+      else {
+        const nav = document.querySelector('.nav-item[data-tab="users"]');
+        if (nav) nav.click();
+      }
+    });
+  }
+  const zLogout = document.getElementById('user-menu-zerodha-logout');
+  if (zLogout) {
+    zLogout.addEventListener('click', async () => {
+      _setUserAvatarMenuOpen(false);
+      try {
+        // Personal Zerodha token only — never parks the shared tick feed.
+        const r = await fetch('/api/zerodha/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ disconnect_feed: false }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (typeof toast === 'function') {
+          toast((d && d.message) || 'Zerodha session cleared', r.ok ? 'ok' : 'err');
+        }
+        if (typeof loadZerodhaStatus === 'function') loadZerodhaStatus(true);
+        loadAppMe();
+      } catch (err) {
+        if (typeof toast === 'function') toast('Zerodha logout failed', 'err');
+      }
+    });
+  }
+  const changePw = document.getElementById('user-menu-change-password');
+  if (changePw) {
+    changePw.addEventListener('click', async () => {
+      _setUserAvatarMenuOpen(false);
+      const me = window.__OA_ME && window.__OA_ME.user;
+      if (!me || me.id == null) {
+        toast('Not signed in', 'err');
+        return;
+      }
+      const password = window.prompt('New password for your account:');
+      if (password == null) return;
+      if (!String(password).trim()) {
+        toast('Password required', 'err');
+        return;
+      }
+      try {
+        await API(`/api/users/${me.id}/password`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: String(password) }),
+        });
+        toast('Password updated', 'ok');
+      } catch (err) {
+        toast((err && err.message) || 'Password update failed', 'err');
+      }
+    });
+  }
+  const signOut = document.getElementById('user-menu-sign-out');
+  if (signOut) {
+    signOut.addEventListener('click', (e) => {
+      e.preventDefault();
+      _setUserAvatarMenuOpen(false);
+      // replace() drops the dashboard history entry so Back cannot reopen it.
+      try {
+        location.replace('/dashboard-logout');
+      } catch (_) {
+        location.href = '/dashboard-logout';
+      }
+    });
+  }
+}
+
+// If BFCache restores a dashboard after Sign out, bounce to login.
+window.addEventListener('pageshow', (ev) => {
+  if (!ev.persisted) return;
+  fetch('/api/me', { credentials: 'same-origin', cache: 'no-store' })
+    .then((r) => {
+      if (r.status === 401) {
+        try { location.replace('/dashboard-login?signed_out=1'); }
+        catch (_) { location.href = '/dashboard-login?signed_out=1'; }
+      }
+    })
+    .catch(() => {});
+});
+
 async function loadAppMe() {
+  _wireUserAvatarMenu();
   try {
     const data = await API('/api/me');
     window.__OA_ME = data;
     const u = data && data.user;
-    const chip = document.getElementById('app-user-chip');
     const label = document.getElementById('app-user-label');
     const role = document.getElementById('app-user-role');
-    if (chip && u) {
-      chip.hidden = false;
+    const idEl = document.getElementById('app-user-id');
+    const initials = document.getElementById('user-avatar-initials');
+    const wrap = document.getElementById('user-avatar-wrap');
+    if (wrap) wrap.hidden = !u;
+    if (u) {
       if (label) label.textContent = u.display_name || u.login || 'User';
       if (role) role.textContent = u.is_admin ? 'Admin' : 'User';
+      if (idEl) idEl.textContent = `id ${u.id}`;
+      if (initials) initials.textContent = _userAvatarInitials(u);
     }
-    const feedChip = document.getElementById('feed-status-chip');
     const feedLabel = document.getElementById('feed-status-label');
-    if (feedChip && data.feed) {
-      feedChip.hidden = false;
-      if (feedLabel) feedLabel.textContent = data.feed.ready ? 'OK' : 'Offline';
+    if (feedLabel && data.feed) {
+      feedLabel.textContent = data.feed.ready ? 'OK' : 'Offline';
+    }
+    const zLabel = document.getElementById('zerodha-login-label');
+    if (zLabel && data.zerodha) {
+      zLabel.textContent = data.zerodha.ready
+        ? (`OK${data.zerodha.kite_user_id ? ' · ' + data.zerodha.kite_user_id : ''}`)
+        : 'Not logged in';
+    }
+    const dot = document.getElementById('user-avatar-dot');
+    if (dot) {
+      const zOk = !!(data.zerodha && data.zerodha.ready);
+      const feedOk = !!(data.feed && data.feed.ready);
+      if (zOk && feedOk) dot.dataset.state = 'ok';
+      else if (zOk || feedOk) dot.dataset.state = 'warn';
+      else dot.dataset.state = 'bad';
     }
     document.querySelectorAll('.admin-only').forEach(el => {
       el.hidden = !(u && u.is_admin);
@@ -13287,20 +13425,43 @@ async function loadUsersPane() {
     }
     box.className = '';
     box.innerHTML = `<table class="data-table"><thead><tr>
-      <th>Login</th><th>Name</th><th>Role</th><th>Active</th><th>Actions</th>
+      <th>Id</th><th>Login</th><th>Name</th><th>Role</th><th>Active</th><th>Actions</th>
     </tr></thead><tbody>${users.map(u => `
       <tr>
+        <td>${escapeHtml(String(u.id))}</td>
         <td>${escapeHtml(u.login || '')}</td>
         <td>${escapeHtml(u.display_name || '')}</td>
         <td>${u.is_admin ? 'Admin' : 'User'}</td>
         <td>${u.is_active ? 'Yes' : 'No'}</td>
         <td style="white-space:nowrap">
+          <button type="button" class="btn btn-sm" data-set-password="${u.id}" data-login="${escapeHtml(u.login || '')}">Set password</button>
           ${u.is_admin ? '' : `<button type="button" class="btn btn-sm" data-transfer-admin="${u.id}">Make admin</button>`}
           ${u.is_admin ? '' : (u.is_active
             ? `<button type="button" class="btn btn-sm" data-disable-user="${u.id}">Disable</button>`
             : `<button type="button" class="btn btn-sm" data-enable-user="${u.id}">Enable</button>`)}
         </td>
       </tr>`).join('')}</tbody></table>`;
+    box.querySelectorAll('[data-set-password]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const login = btn.dataset.login || btn.dataset.setPassword;
+        const password = window.prompt(`New password for ${login}:`);
+        if (password == null) return;
+        if (!String(password).trim()) {
+          toast('Password required', 'err');
+          return;
+        }
+        try {
+          await API(`/api/users/${btn.dataset.setPassword}/password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: String(password) }),
+          });
+          toast(`Password updated for ${login}`, 'ok');
+        } catch (err) {
+          toast((err && err.message) || 'Password update failed', 'err');
+        }
+      });
+    });
     box.querySelectorAll('[data-transfer-admin]').forEach(btn => {
       btn.addEventListener('click', async () => {
         if (!confirm('Transfer admin to this user? You will become a normal user.')) return;
@@ -13545,25 +13706,33 @@ async function loadZerodhaStatus(refreshAccount = false) {
       if (sugHost) _hydrateSuggestionZerodhaMargins(sugHost);
       if (trdHost) _hydrateSuggestionZerodhaMargins(trdHost);
     }
-    // Update header pill (always present)
+    // Update avatar-menu Zerodha row (and status dot)
+    const avatarDot = document.getElementById('user-avatar-dot');
     if (headerBtn && headerIcon && headerLabel) {
       if (!d.has_session) {
-        headerIcon.textContent = '🔑';
-        headerLabel.textContent = 'Login';
-        headerBtn.style.color = '#b91c1c';
+        headerIcon.textContent = '';
+        headerLabel.textContent = 'Not logged in';
+        headerBtn.style.color = '#fca5a5';
         headerBtn.title = 'Zerodha — no session. Click to log in.';
       } else if (d.valid) {
         headerIcon.textContent = '✓';
-        headerLabel.textContent = 'Zerodha';
-        headerBtn.style.color = '#047857';
+        headerLabel.textContent = d.user_id ? `OK · ${d.user_id}` : 'OK';
+        headerBtn.style.color = '#6ee7b7';
         const untilTip = d.valid_until ? ` until ${d.valid_until.slice(0, 16)}` : '';
         headerBtn.title = `Zerodha session valid (user_id ${d.user_id || ''}${untilTip}).`;
       } else {
         headerIcon.textContent = '⚠';
-        headerLabel.textContent = 'Re-login';
-        headerBtn.style.color = '#b45309';
+        headerLabel.textContent = 'Expired — re-login';
+        headerBtn.style.color = '#fbbf24';
         headerBtn.title = 'Zerodha session expired. Click to re-login.';
       }
+    }
+    if (avatarDot) {
+      const zOk = !!(d.valid);
+      const feedOk = !!(window.__OA_ME && window.__OA_ME.feed && window.__OA_ME.feed.ready);
+      if (zOk && feedOk) avatarDot.dataset.state = 'ok';
+      else if (zOk || feedOk) avatarDot.dataset.state = 'warn';
+      else avatarDot.dataset.state = 'bad';
     }
     // Update Config-tab card if present
     if (el) {
@@ -13985,23 +14154,32 @@ document.addEventListener('click', async (ev) => {
   await _submitZerodhaRequestToken(inp ? inp.value : '');
 });
 
-// Logout handler — wires up the button on the WS Monitor session card.
+// Explicit feed disconnect (WS Monitor) — admin only; parks shared tick feed.
 document.addEventListener('click', async (ev) => {
   const btn = ev.target.closest('#zerodha-logout-btn');
   if (!btn) return;
-  if (!confirm('Clear Zerodha session and disconnect the WS runner?\n\nYou will need to re-login before the next market open.')) return;
+  if (!confirm(
+    'Disconnect the shared tick feed for everyone?\n\n'
+    + 'This clears the admin Zerodha session used by ws_runner. '
+    + 'Other users keep their app login; live ticks pause until admin re-logins Zerodha.'
+  )) return;
   btn.disabled = true;
   try {
-    const r = await fetch('/api/zerodha/logout', { method: 'POST' });
+    const r = await fetch('/api/zerodha/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ disconnect_feed: true }),
+    });
     const d = await r.json();
     if (d.ok) {
-      toast(d.message || 'Session cleared.');
+      toast(d.message || 'Tick feed disconnect requested.');
       loadZerodhaStatus();
+      if (typeof loadAppMe === 'function') loadAppMe();
     } else {
-      toast('Logout failed: ' + (d.error || 'unknown'));
+      toast('Disconnect failed: ' + (d.error || 'unknown'));
     }
   } catch (e) {
-    toast('Logout failed: ' + e);
+    toast('Disconnect failed: ' + e);
   } finally {
     btn.disabled = false;
   }

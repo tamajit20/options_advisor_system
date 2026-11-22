@@ -56,6 +56,106 @@ a { color: var(--accent); text-decoration: none; }
   margin-left: auto;
 }
 
+.user-avatar-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+.user-avatar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 2px solid rgba(255,255,255,.28);
+  border-radius: 999px;
+  background: linear-gradient(145deg, #0f766e, #134e4a);
+  color: #ecfdf5;
+  cursor: pointer;
+  position: relative;
+}
+.user-avatar-btn:hover,
+.user-avatar-btn[aria-expanded="true"] {
+  border-color: rgba(20, 184, 166, .85);
+  filter: brightness(1.06);
+}
+.user-avatar-circle {
+  font-size: .85rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  line-height: 1;
+  text-transform: uppercase;
+  user-select: none;
+}
+.user-avatar-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 2px solid #0f1419;
+  background: #94a3b8;
+}
+.user-avatar-dot[data-state="ok"] { background: #22c55e; }
+.user-avatar-dot[data-state="warn"] { background: #f59e0b; }
+.user-avatar-dot[data-state="bad"] { background: #ef4444; }
+.user-avatar-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 240px;
+  padding: 10px 0 8px;
+  border-radius: 12px;
+  border: 1px solid #2a3744;
+  background: #1a2332;
+  box-shadow: 0 12px 32px rgba(0,0,0,.45);
+  z-index: 80;
+}
+.user-avatar-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 14px 10px;
+  border-bottom: 1px solid #2a3744;
+}
+.user-avatar-head strong {
+  font-size: .92rem;
+  color: #e6edf3;
+}
+.user-avatar-role {
+  font-size: .75rem;
+  color: #14b8a6;
+  font-weight: 600;
+}
+.user-avatar-id { font-size: .72rem; }
+.user-avatar-meta {
+  padding: 8px 14px;
+  font-size: .75rem;
+  line-height: 1.45;
+  border-bottom: 1px solid #2a3744;
+}
+.user-avatar-z-icon { margin-left: 4px; }
+.user-avatar-item {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 14px;
+  border: none;
+  background: transparent;
+  color: #e6edf3;
+  text-align: left;
+  font: inherit;
+  font-size: .86rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+.user-avatar-item:hover {
+  background: rgba(20, 184, 166, .12);
+}
+.user-avatar-danger { color: #fca5a5; }
+.user-avatar-danger:hover { background: rgba(248, 113, 113, .12); }
+
 .signal-rail {
   display: flex;
   align-items: center;
@@ -1556,11 +1656,12 @@ input:focus, select:focus, textarea:focus {
     height: 36px;
     font-size: 18px;
   }
-  #zerodha-login-label { display: none; }
-  #zerodha-login-btn {
-    width: auto;
-    min-width: 36px;
-    padding: 0 6px;
+  .user-avatar-btn {
+    width: 34px;
+    height: 34px;
+  }
+  .user-avatar-menu {
+    min-width: 220px;
   }
   .app-main { min-height: calc(100vh - 48px); }
   .tab-panels { padding: 10px 12px; }
