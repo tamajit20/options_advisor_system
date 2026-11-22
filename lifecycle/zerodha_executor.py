@@ -603,8 +603,13 @@ def parse_leg_limits(raw: Any) -> Dict[int, float]:
     return out
 
 
-def parse_lots_override(raw: Any) -> Optional[int]:
-    """Parse API payload ``lots`` — the shared order size for every leg."""
+def parse_lots_override(raw: Any, *, enforce_cap: bool = True) -> Optional[int]:
+    """Parse API payload ``lots`` — the shared order size for every leg.
+
+    ``enforce_cap=False`` is for margin preview / Amount needed so the UI can
+    quote sizes the trader typed even when Place still blocks above
+    ``max_lots_cap``.
+    """
     if raw is None or raw == "":
         return None
     try:
@@ -613,11 +618,12 @@ def parse_lots_override(raw: Any) -> Optional[int]:
         raise ZerodhaExecutionError(f"Invalid lots value: {raw!r}") from None
     if lots < 1:
         raise ZerodhaExecutionError("Lots must be at least 1")
-    cap = int(STRATEGY_CONFIG.get("max_lots_cap") or 0)
-    if cap > 0 and lots > cap:
-        raise ZerodhaExecutionError(
-            f"Lots {lots} exceeds the configured max_lots_cap of {cap}"
-        )
+    if enforce_cap:
+        cap = int(STRATEGY_CONFIG.get("max_lots_cap") or 0)
+        if cap > 0 and lots > cap:
+            raise ZerodhaExecutionError(
+                f"Lots {lots} exceeds the configured max_lots_cap of {cap}"
+            )
     return lots
 
 

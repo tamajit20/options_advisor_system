@@ -892,9 +892,16 @@ function _collectCardLotsForMargin(card) {
   // suggestion order-size box (which is absent on held trades).
   const stamped = parseInt(card?.dataset?.lots, 10);
   if (Number.isFinite(stamped) && stamped > 0) return stamped;
-  if (typeof _collectExecLots !== 'function') return null;
-  const lots = _collectExecLots(card);
-  if (lots == null || lots === 'invalid') return null;
+  // Quote the typed size even above max_lots_cap (Place still blocks via
+  // _collectExecLots). Returning null for >cap used to re-show the stored
+  // 1-lot Amount needed while the box said 4+.
+  const input = card?.querySelector('.exec-lots-input');
+  if (!input) return null;
+  if (input.validity?.badInput) return null;
+  const raw = (input.value || '').trim();
+  if (!raw) return null;
+  const lots = parseInt(raw, 10);
+  if (!Number.isFinite(lots) || lots < 1 || String(lots) !== raw) return null;
   return lots;
 }
 
@@ -1012,6 +1019,22 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
     return;
   }
   const lots = _collectCardLotsForMargin(card);
+  const lotsInput = card.querySelector('.exec-lots-input');
+  const lotsRaw = (lotsInput?.value || '').trim();
+  // Non-empty garbage in the box must not fall back to the stored 1-lot quote.
+  if (lotsInput && !card.dataset.tradeId && (
+    lotsInput.validity?.badInput || (lotsRaw && lots == null)
+  )) {
+    card.dataset.marginHydrated = '0';
+    delete card.dataset.marginFinal;
+    const cap = parseInt(lotsInput.max, 10);
+    card.dataset.marginMessage = Number.isFinite(cap) && cap > 0
+      ? `Order size must be a whole number between 1 and ${cap} lots.`
+      : 'Order size must be a whole number of at least 1 lot.';
+    _setSuggestionMarginStatus(card, card.dataset.marginMessage, { warn: true });
+    refreshPrePlaceReview(card);
+    return;
+  }
   const cacheKey = _marginQuoteCacheKey(sid, lots);
   const cached = _zerodhaMarginQuoteCache.get(cacheKey);
   if (cached) {

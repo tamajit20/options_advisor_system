@@ -3547,7 +3547,8 @@ def create_app() -> Flask:
             zerodha_margin_quote_ready,
         )
         payload = request.get_json(silent=True) or {}
-        lots_override = parse_lots_override(payload.get("lots"))
+        # Preview quotes the typed size even above max_lots_cap; Place still caps.
+        lots_override = parse_lots_override(payload.get("lots"), enforce_cap=False)
         trade_id = (payload.get("trade_id") or "").strip() or None
         force_refresh = bool(payload.get("force_refresh"))
 

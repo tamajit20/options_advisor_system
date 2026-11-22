@@ -75,6 +75,16 @@ def test_parse_lots_override_enforces_cap():
         parse_lots_override(cap + 1)
 
 
+def test_parse_lots_override_preview_skips_cap():
+    """Amount needed preview may quote above max_lots_cap; Place still enforces."""
+    from config import STRATEGY_CONFIG
+
+    cap = int(STRATEGY_CONFIG.get("max_lots_cap") or 0)
+    if cap <= 0:
+        pytest.skip("max_lots_cap not configured")
+    assert parse_lots_override(cap + 2, enforce_cap=False) == cap + 2
+
+
 def test_with_lots_override_pins_lots_actual_without_mutating_source():
     legs = [_leg(lots=1)]
     out = _with_lots_override(legs, 3)
