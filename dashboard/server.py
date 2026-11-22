@@ -605,6 +605,8 @@ def _filter_trades_by_execution_channel(
 def _attach_history_zerodha_executions(
     db: SQLServerConnection,
     trades: list,
+    *,
+    owner_user_id: Optional[int] = None,
 ) -> None:
     """Embed sequenced Zerodha execution groups on each history trade card."""
     from database.broker_order_repo import BrokerOrderRepo
@@ -620,7 +622,7 @@ def _attach_history_zerodha_executions(
     sids = [t.get("suggestion_id") for t in trades if t.get("suggestion_id")]
     broker = BrokerOrderRepo(db)
     rows = broker.list_for_trades_or_suggestions(
-        trade_ids=tids, suggestion_ids=sids,
+        trade_ids=tids, suggestion_ids=sids, owner_user_id=owner_user_id,
     )
     if not rows:
         for t in trades:
@@ -636,7 +638,7 @@ def _attach_history_zerodha_executions(
     row_tids = [r.get("trade_id") for r in rows if r.get("trade_id")]
     job_repo = ZerodhaExecutionJobRepo(db)
     jobs_by_key: dict = {}
-    for j in job_repo.list_for_suggestions(row_sids):
+    for j in job_repo.list_for_suggestions(row_sids, owner_user_id=owner_user_id):
         jobs_by_key[j["id"]] = _row(j)
     for j in job_repo.list_for_trades(row_tids):
         jobs_by_key[j["id"]] = _row(j)
@@ -1087,6 +1089,16 @@ def _persist_zerodha_margin_quote(
         peak = float(margin_peak) if margin_peak is not None else None
     except (TypeError, ValueError):
         peak = None
+    # Blank box means suggested size — persist that so lots matching works later.
+    if lots is None and suggestion_id:
+        try:
+            for lg in SuggestionRepo(db).legs(suggestion_id) or []:
+                lv = lg.get("lots")
+                if lv is not None and int(lv) > 0:
+                    lots = int(lv)
+                    break
+        except Exception:
+            pass
     wrote = False
     if suggestion_id and owner_user_id is not None:
         try:
@@ -1101,6 +1113,17 @@ def _persist_zerodha_margin_quote(
         except Exception:
             logger.debug("persist user-state zerodha margin skipped", exc_info=True)
     tid = trade_id
+    if tid and owner_user_id is not None:
+        # Never stamp another trader's trade with this user's quote.
+        try:
+            trow = TradeRepo(db).get(str(tid))
+            row_owner = trow.get("owner_user_id") if trow else None
+            if trow is None or (
+                row_owner is not None and int(row_owner) != int(owner_user_id)
+            ):
+                tid = None
+        except (TypeError, ValueError):
+            tid = None
     if not tid and suggestion_id and owner_user_id is not None:
         try:
             own = db.fetch_one(
@@ -3249,7 +3272,27 @@ def create_app() -> Flask:
                 r_out.pop(_mk, None)
             if uid is not None and sid:
                 ust = user_state_by_sid.get(str(sid)) or {}
-                if ust.get("zerodha_margin_final") is not None:
+                # Only stamp Amount needed when the stored quote matches the
+                # suggestion's lot size (UI starts at suggested lots). A quote
+                # for a different size must not paint next to a 1-lot box.
+                sug_lots = None
+                try:
+                    legs = r_out.get("legs") or []
+                    for lg in legs:
+                        lv = lg.get("lots") if isinstance(lg, dict) else None
+                        if lv is not None and int(lv) > 0:
+                            sug_lots = int(lv)
+                            break
+                except (TypeError, ValueError):
+                    sug_lots = None
+                stored_lots = ust.get("zerodha_margin_lots")
+                lots_ok = True
+                if stored_lots is not None and sug_lots is not None:
+                    try:
+                        lots_ok = int(stored_lots) == int(sug_lots)
+                    except (TypeError, ValueError):
+                        lots_ok = True
+                if ust.get("zerodha_margin_final") is not None and lots_ok:
                     r_out["zerodha_margin_final"] = ust.get("zerodha_margin_final")
                     r_out["zerodha_margin_peak"] = ust.get("zerodha_margin_peak")
                     r_out["zerodha_margin_lots"] = ust.get("zerodha_margin_lots")
@@ -3583,17 +3626,20 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 400
         preview_dict = preview.to_dict()
         preview_dict["instrument_overlaps"] = _instrument_overlaps_for_suggestion(db, sid)
-        # Live preview already ran check_margin_for_orders on this user's session.
-        _persist_zerodha_margin_quote(
-            db,
-            suggestion_id=sid,
-            trade_id=trade_id,
-            margin_final=preview_dict.get("margin_final_required")
-            or preview_dict.get("margin_required"),
-            margin_peak=preview_dict.get("margin_peak_required"),
-            lots=lots_override,
-            owner_user_id=quote_uid,
-        )
+        # Persist only real Kite basket quotes (path_steps non-empty). A
+        # max-loss fallback must not freeze as the one-time Final.
+        steps = preview_dict.get("margin_path_steps") or []
+        if steps:
+            _persist_zerodha_margin_quote(
+                db,
+                suggestion_id=sid,
+                trade_id=trade_id,
+                margin_final=preview_dict.get("margin_final_required")
+                or preview_dict.get("margin_required"),
+                margin_peak=preview_dict.get("margin_peak_required"),
+                lots=lots_override,
+                owner_user_id=quote_uid,
+            )
         return jsonify({"preview": preview_dict, "from_db": False})
 
     @app.route("/api/suggestion/<sid>/zerodha-execute", methods=["POST"])
@@ -3684,10 +3730,16 @@ def create_app() -> Flask:
         """Live broker-order status for in-flight Zerodha entry execution."""
         from database.broker_order_repo import BrokerOrderRepo
         from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
+        from dashboard.auth import current_user_id
         from lifecycle.zerodha_execution_log import live_suggestion_order_status
 
-        rows = [_row(r) for r in BrokerOrderRepo(db).by_suggestion(sid)]
-        latest_job = ZerodhaExecutionJobRepo(db).latest_for_suggestion(sid)
+        uid = current_user_id()
+        rows = [_row(r) for r in BrokerOrderRepo(db).by_suggestion(
+            sid, owner_user_id=uid,
+        )]
+        latest_job = ZerodhaExecutionJobRepo(db).latest_for_suggestion(
+            sid, owner_user_id=uid,
+        )
         progress = live_suggestion_order_status(rows, latest_job)
         return jsonify({
             "suggestion_id": sid,
@@ -4008,8 +4060,13 @@ def create_app() -> Flask:
         """Live broker-order status for in-flight Zerodha close execution."""
         from database.broker_order_repo import BrokerOrderRepo
         from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
+        from dashboard.user_scope import trade_owned_or_404
         from lifecycle.zerodha_execution_log import live_suggestion_order_status
 
+        trade = TradeRepo(db).get(trade_id)
+        denied = trade_owned_or_404(trade)
+        if denied is not None:
+            return denied
         rows = [_row(r) for r in BrokerOrderRepo(db).by_trade(trade_id)]
         latest_job = ZerodhaExecutionJobRepo(db).latest_for_trade(
             trade_id, operation="EXIT",
@@ -4028,8 +4085,14 @@ def create_app() -> Flask:
     @app.route("/api/zerodha-execution-jobs/<int:job_id>")
     @_with_db
     def api_zerodha_execution_job(db: SQLServerConnection, job_id: int):
+        from dashboard.auth import current_user, current_user_id
         from lifecycle.zerodha_execution_job import job_status_dict
-        row = job_status_dict(db, job_id)
+        u = current_user()
+        row = job_status_dict(
+            db, job_id,
+            owner_user_id=current_user_id(),
+            allow_admin=bool(u and u.get("is_admin")),
+        )
         if row is None:
             return jsonify({"error": "Job not found"}), 404
         return jsonify(row)
@@ -5240,7 +5303,7 @@ def create_app() -> Flask:
         out.extend(rev_cards)
 
         try:
-            _attach_history_zerodha_executions(db, out)
+            _attach_history_zerodha_executions(db, out, owner_user_id=uid)
         except Exception:
             logger.debug("history zerodha executions attach skipped", exc_info=True)
             for item in out:
@@ -5338,20 +5401,18 @@ def create_app() -> Flask:
         suggestion_id = (request.args.get("suggestion_id") or "").strip() or None
         since = now_ist() - timedelta(days=max(days, 1))
 
+        u = current_user()
+        uid = current_user_id()
+        owner_filter = None
+        if u and not u.get("is_admin") and uid is not None:
+            owner_filter = int(uid)
         rows = BrokerOrderRepo(db).list_since(
             since,
             limit=limit * 20,
             trade_id=trade_id,
             suggestion_id=suggestion_id,
+            owner_user_id=owner_filter,
         )
-        u = current_user()
-        uid = current_user_id()
-        if u and not u.get("is_admin") and uid is not None:
-            rows = [
-                r for r in rows
-                if r.get("owner_user_id") is not None
-                and int(r["owner_user_id"]) == int(uid)
-            ]
         trade_ids = {r["trade_id"] for r in rows if r.get("trade_id")}
         trade_names: dict = {}
         trd = TradeRepo(db)
@@ -5364,7 +5425,7 @@ def create_app() -> Flask:
         tids = [r["trade_id"] for r in rows if r.get("trade_id")]
         job_repo = ZerodhaExecutionJobRepo(db)
         jobs_by_key: dict = {}
-        for j in job_repo.list_for_suggestions(sids):
+        for j in job_repo.list_for_suggestions(sids, owner_user_id=owner_filter):
             jobs_by_key[j["id"]] = _row(j)
         for j in job_repo.list_for_trades(tids):
             jobs_by_key[j["id"]] = _row(j)

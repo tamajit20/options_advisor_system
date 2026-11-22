@@ -179,6 +179,7 @@ def test_preview_persists_per_user_state_not_shared_suggestion(client, mocker):
                 "margin_peak_required": 95000,
                 "margin_required": 95000,
                 "margin_ok": True,
+                "margin_path_steps": [{"leg_order": 1, "final": 88000}],
                 "legs": [],
             }
 

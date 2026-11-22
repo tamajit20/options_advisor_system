@@ -62,6 +62,7 @@ def submit_execution_job(
     total_legs: int,
     runner: Callable[[SQLServerConnection, int], Any],
     message: Optional[str] = None,
+    owner_user_id: Optional[int] = None,
 ) -> int:
     """Insert job row and start background thread. Returns job id."""
     if not _can_start_job():
@@ -69,7 +70,9 @@ def submit_execution_job(
             "Too many Zerodha executions in progress — wait for one to finish"
         )
     if suggestion_id:
-        lock_key = f"sugg:{suggestion_id}"
+        # Per-user lock so two traders can Place the same suggestion in parallel.
+        uid_part = f":u:{int(owner_user_id)}" if owner_user_id is not None else ""
+        lock_key = f"sugg:{suggestion_id}{uid_part}"
     elif trade_id:
         lock_key = f"trade:{trade_id}"
     else:
@@ -81,7 +84,9 @@ def submit_execution_job(
 
     try:
         repo = ZerodhaExecutionJobRepo(db)
-        if suggestion_id and repo.running_for_suggestion(suggestion_id) is not None:
+        if suggestion_id and repo.running_for_suggestion(
+            suggestion_id, owner_user_id=owner_user_id,
+        ) is not None:
             raise RuntimeError(
                 "Zerodha execution already running for this suggestion"
             )
@@ -100,6 +105,7 @@ def submit_execution_job(
             "message": (message or "").strip() or "Starting…",
             "created_at": now,
             "updated_at": now,
+            "owner_user_id": int(owner_user_id) if owner_user_id is not None else None,
         })
         db.commit()
     except Exception:
@@ -178,11 +184,22 @@ def update_job_progress(
     db.commit()
 
 
-def job_status_dict(db: SQLServerConnection, job_id: int) -> Optional[dict]:
+def job_status_dict(
+    db: SQLServerConnection,
+    job_id: int,
+    *,
+    owner_user_id: Optional[int] = None,
+    allow_admin: bool = False,
+) -> Optional[dict]:
+    """Return job payload, or None when missing / not owned by the caller."""
     repo = ZerodhaExecutionJobRepo(db)
     row = repo.get(job_id)
     if row is None:
         return None
+    if owner_user_id is not None and not allow_admin:
+        job_owner = row.get("owner_user_id")
+        if job_owner is not None and int(job_owner) != int(owner_user_id):
+            return None
     out = dict(row)
     parsed = repo.result_dict(row)
     if parsed:

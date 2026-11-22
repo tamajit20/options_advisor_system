@@ -68,8 +68,6 @@ class SuggestionUserStateRepo:
         if fin <= 0:
             return False
         existing = self.get(suggestion_id, user_id)
-        if existing and existing.get("zerodha_margin_final") is not None:
-            return False
         now = now_ist().replace(tzinfo=None)
         peak = None
         if margin_peak is not None:
@@ -83,6 +81,27 @@ class SuggestionUserStateRepo:
                 lots_i = int(lots)
             except (TypeError, ValueError):
                 lots_i = None
+        # One-time per size: keep an existing Final unless this quote is for a
+        # different lot count (trader resized the order).
+        if existing and existing.get("zerodha_margin_final") is not None:
+            prev_lots = existing.get("zerodha_margin_lots")
+            same_lots = True
+            if lots_i is not None and prev_lots is not None:
+                try:
+                    same_lots = int(prev_lots) == int(lots_i)
+                except (TypeError, ValueError):
+                    same_lots = True
+            if same_lots:
+                return False
+            self.db.execute(
+                "UPDATE options_suggestion_user_state "
+                "SET zerodha_margin_final = ?, zerodha_margin_peak = ?, "
+                "    zerodha_margin_lots = ?, zerodha_margin_quoted_at = ?, "
+                "    updated_at = ? "
+                "WHERE suggestion_id = ? AND user_id = ?",
+                [fin, peak, lots_i, now, now, suggestion_id, int(user_id)],
+            ).close()
+            return True
         if existing:
             self.db.execute(
                 "UPDATE options_suggestion_user_state "

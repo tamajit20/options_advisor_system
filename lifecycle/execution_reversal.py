@@ -24,6 +24,7 @@ def record_reversal_from_orders(
     trade_id: Optional[str] = None,
     execution_job_id: Optional[int] = None,
     reason: str = "ENTRY_ROLLBACK",
+    owner_user_id: Optional[int] = None,
 ) -> Optional[dict]:
     """Insert a reversal ledger row if these fills are a flatten round-trip."""
     open_op = "EXIT" if reason.startswith("EXIT") else "ENTRY"
@@ -38,6 +39,15 @@ def record_reversal_from_orders(
         by_job = repo.get_by_job(execution_job_id)
         if by_job:
             return by_job
+    if owner_user_id is None:
+        for o in orders:
+            raw = o.get("owner_user_id") if isinstance(o, dict) else None
+            if raw is not None:
+                try:
+                    owner_user_id = int(raw)
+                    break
+                except (TypeError, ValueError):
+                    pass
     row = {
         **snap,
         "suggestion_id": suggestion_id,
@@ -49,7 +59,7 @@ def record_reversal_from_orders(
     row_id = repo.insert(row)
     row["id"] = row_id
     db.commit()
-    _notify(db, row)
+    _notify(db, row, owner_user_id=owner_user_id)
     logger.info(
         "execution reversal recorded id=%s job=%s net=%.2f charges=%.2f",
         row_id, execution_job_id, row["net_pnl"], row["total_charges"],
@@ -64,6 +74,7 @@ def record_reversal_after_flatten(
     trade_id: Optional[str],
     execution_job_id: Optional[int],
     reason: str,
+    owner_user_id: Optional[int] = None,
 ) -> Optional[dict]:
     broker = BrokerOrderRepo(db)
     orders: List[dict] = []
@@ -72,7 +83,9 @@ def record_reversal_after_flatten(
     if not isinstance(orders, (list, tuple)):
         orders = []
     if not orders and suggestion_id:
-        orders = broker.by_suggestion(suggestion_id)
+        orders = broker.by_suggestion(
+            suggestion_id, owner_user_id=owner_user_id,
+        )
     if not isinstance(orders, (list, tuple)):
         orders = []
     if not orders and trade_id:
@@ -88,6 +101,7 @@ def record_reversal_after_flatten(
             trade_id=trade_id,
             execution_job_id=execution_job_id,
             reason=reason,
+            owner_user_id=owner_user_id,
         )
     except Exception:
         logger.exception("failed to record execution reversal P&L")
@@ -146,7 +160,12 @@ def attach_reversals_to_groups(db: SQLServerConnection, groups: List[dict]) -> N
             group["detail"] = (detail + extra).strip()
 
 
-def _notify(db: SQLServerConnection, row: dict) -> None:
+def _notify(
+    db: SQLServerConnection,
+    row: dict,
+    *,
+    owner_user_id: Optional[int] = None,
+) -> None:
     try:
         net = float(row["net_pnl"])
         sign = "+" if net >= 0 else ""
@@ -162,6 +181,7 @@ def _notify(db: SQLServerConnection, row: dict) -> None:
             ),
             related_suggestion_id=row.get("suggestion_id"),
             related_trade_id=row.get("trade_id"),
+            owner_user_id=int(owner_user_id) if owner_user_id is not None else None,
         ))
         db.commit()
     except Exception:

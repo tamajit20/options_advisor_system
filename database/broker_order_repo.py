@@ -14,6 +14,25 @@ from typing import Any, Dict, Iterable, List, Optional
 from database.connection import SQLServerConnection
 
 
+def _owner_sql(
+    owner_user_id: Optional[int],
+    *,
+    include_null: bool = False,
+    column: str = "owner_user_id",
+) -> tuple[str, list]:
+    """SQL fragment + params to scope rows to one app user.
+
+    Safety checks (pending / orphan / rollback) use ``include_null=True`` so
+    legacy rows without an owner still block. Display queries match exactly.
+    """
+    if owner_user_id is None:
+        return "", []
+    uid = int(owner_user_id)
+    if include_null:
+        return f" AND ({column} = ? OR {column} IS NULL)", [uid]
+    return f" AND {column} = ?", [uid]
+
+
 def net_unbooked_entry_fills(
     rows: Iterable[dict],
     *,
@@ -193,11 +212,20 @@ class BrokerOrderRepo:
             params,
         ).close()
 
-    def by_suggestion(self, suggestion_id: str) -> List[dict]:
+    def by_suggestion(
+        self,
+        suggestion_id: str,
+        *,
+        owner_user_id: Optional[int] = None,
+        include_null_owner: bool = False,
+    ) -> List[dict]:
+        owner_sql, owner_params = _owner_sql(
+            owner_user_id, include_null=include_null_owner,
+        )
         return self.db.fetch_all(
             "SELECT * FROM options_broker_orders WHERE suggestion_id = ? "
-            "ORDER BY leg_order, id",
-            [suggestion_id],
+            f"{owner_sql} ORDER BY leg_order, id",
+            [suggestion_id, *owner_params],
         ) or []
 
     def attach_trade_id(
@@ -243,11 +271,21 @@ class BrokerOrderRepo:
             [trade_id],
         )
 
-    def pending_for_suggestion(self, suggestion_id: str) -> List[dict]:
+    def pending_for_suggestion(
+        self,
+        suggestion_id: str,
+        *,
+        owner_user_id: Optional[int] = None,
+    ) -> List[dict]:
+        # Include NULL-owner rows so legacy in-flight orders still block.
+        owner_sql, owner_params = _owner_sql(
+            owner_user_id, include_null=True,
+        )
         return self.db.fetch_all(
             "SELECT * FROM options_broker_orders WHERE suggestion_id = ? "
-            "AND status IN ('PENDING', 'OPEN', 'TRIGGER PENDING')",
-            [suggestion_id],
+            "AND status IN ('PENDING', 'OPEN', 'TRIGGER PENDING')"
+            f"{owner_sql}",
+            [suggestion_id, *owner_params],
         )
 
     def orphan_entry_fills(
@@ -255,6 +293,7 @@ class BrokerOrderRepo:
         suggestion_id: str,
         *,
         except_job_id: Optional[int] = None,
+        owner_user_id: Optional[int] = None,
     ) -> List[dict]:
         """Unbooked COMPLETE ENTRY fills that still mean an open Kite position.
 
@@ -262,9 +301,16 @@ class BrokerOrderRepo:
         - a prior attempt that never reached Kite (FAILED, no order id)
         - a prior attempt that filled and was fully rolled back
         - the current job's own fills, which are about to be booked
+
+        Scoped to *owner_user_id* (plus legacy NULL-owner rows) so one
+        trader's leftover fill cannot block or net against another's.
         """
         return net_unbooked_entry_fills(
-            self.by_suggestion(suggestion_id),
+            self.by_suggestion(
+                suggestion_id,
+                owner_user_id=owner_user_id,
+                include_null_owner=True,
+            ),
             except_job_id=except_job_id,
         )
 
@@ -325,11 +371,14 @@ class BrokerOrderRepo:
         trade_ids: Optional[Iterable[str]] = None,
         suggestion_ids: Optional[Iterable[str]] = None,
         limit: int = 5000,
+        owner_user_id: Optional[int] = None,
     ) -> List[dict]:
         """Broker rows for history cards — by trade id and/or suggestion id.
 
         Suggestion-only rows (failed entry before a trade was stamped) are
-        included so history can show the full attempt sequence.
+        included so history can show the full attempt sequence. When
+        *owner_user_id* is set, suggestion-side rows are limited to that user
+        (trades already belong to one owner).
         """
         tids = [str(t).strip() for t in (trade_ids or []) if t and str(t).strip()]
         sids = [str(s).strip() for s in (suggestion_ids or []) if s and str(s).strip()]
@@ -346,8 +395,15 @@ class BrokerOrderRepo:
             params.extend(tids)
         if sids:
             ph = ",".join("?" * len(sids))
-            clauses.append(f"suggestion_id IN ({ph})")
-            params.extend(sids)
+            if owner_user_id is not None:
+                clauses.append(
+                    f"(suggestion_id IN ({ph}) AND (owner_user_id = ? OR owner_user_id IS NULL))"
+                )
+                params.extend(sids)
+                params.append(int(owner_user_id))
+            else:
+                clauses.append(f"suggestion_id IN ({ph})")
+                params.extend(sids)
         where = " OR ".join(clauses)
         return self.db.fetch_all(
             f"SELECT TOP (?) * FROM options_broker_orders WHERE ({where}) "
@@ -362,6 +418,7 @@ class BrokerOrderRepo:
         limit: int = 500,
         trade_id: Optional[str] = None,
         suggestion_id: Optional[str] = None,
+        owner_user_id: Optional[int] = None,
     ) -> List[dict]:
         clauses = ["created_at >= ?"]
         params: list = [int(limit), since]
@@ -371,6 +428,9 @@ class BrokerOrderRepo:
         if suggestion_id:
             clauses.append("suggestion_id = ?")
             params.append(suggestion_id)
+        if owner_user_id is not None:
+            clauses.append("(owner_user_id = ? OR owner_user_id IS NULL)")
+            params.append(int(owner_user_id))
         where = " AND ".join(clauses)
         return self.db.fetch_all(
             f"SELECT TOP (?) * FROM options_broker_orders WHERE {where} "
@@ -391,7 +451,14 @@ class BrokerOrderRepo:
         suggestion_id: Optional[str],
         trade_id: Optional[str],
         leg_order: int,
+        owner_user_id: Optional[int] = None,
+        execution_job_id: Optional[int] = None,
     ) -> bool:
+        """True when THIS user's leg already has a COMPLETE ROLLBACK.
+
+        Must not treat another trader's rollback of the same suggestion leg as
+        done — that would skip flattening a live Kite position.
+        """
         clauses = ["operation = 'ROLLBACK'", "leg_order = ?", "status = 'COMPLETE'"]
         params: list = [leg_order]
         if trade_id:
@@ -400,6 +467,12 @@ class BrokerOrderRepo:
         elif suggestion_id:
             clauses.append("suggestion_id = ?")
             params.append(suggestion_id)
+        if execution_job_id is not None:
+            clauses.append("execution_job_id = ?")
+            params.append(int(execution_job_id))
+        elif owner_user_id is not None:
+            clauses.append("(owner_user_id = ? OR owner_user_id IS NULL)")
+            params.append(int(owner_user_id))
         row = self.db.fetch_one(
             f"SELECT TOP 1 1 AS x FROM options_broker_orders WHERE {' AND '.join(clauses)}",
             params,

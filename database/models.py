@@ -1118,15 +1118,36 @@ class TradeRepo:
         return n > 0
 
     def copy_zerodha_margin_from_suggestion(
-        self, trade_id: str, suggestion_id: str,
+        self,
+        trade_id: str,
+        suggestion_id: str,
+        *,
+        owner_user_id: Optional[int] = None,
     ) -> bool:
-        """One-time copy of stored suggestion margin onto a new trade."""
-        row = self.db.fetch_one(
-            "SELECT zerodha_margin_final, zerodha_margin_peak, "
-            "       zerodha_margin_lots, zerodha_margin_quoted_at "
-            "FROM options_suggestions WHERE suggestion_id = ?",
-            [suggestion_id],
-        )
+        """One-time copy of THIS user's Amount needed onto a new trade.
+
+        Prefers ``options_suggestion_user_state`` when *owner_user_id* is set.
+        Falls back to the legacy shared suggestion columns only when no owner
+        is known (single-user / pre-multi-user rows).
+        """
+        row = None
+        if owner_user_id is not None:
+            try:
+                from database.suggestion_user_state_repo import SuggestionUserStateRepo
+                row = SuggestionUserStateRepo(self.db).get(
+                    suggestion_id, int(owner_user_id),
+                )
+            except Exception:
+                row = None
+        if not row or row.get("zerodha_margin_final") is None:
+            if owner_user_id is not None:
+                return False
+            row = self.db.fetch_one(
+                "SELECT zerodha_margin_final, zerodha_margin_peak, "
+                "       zerodha_margin_lots, zerodha_margin_quoted_at "
+                "FROM options_suggestions WHERE suggestion_id = ?",
+                [suggestion_id],
+            )
         if not row or row.get("zerodha_margin_final") is None:
             return False
         return self.save_zerodha_margin_once(

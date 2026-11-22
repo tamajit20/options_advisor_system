@@ -1042,6 +1042,7 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
     _applyZerodhaMarginToCard(card, cached);
     return;
   }
+  const seq = card.dataset.marginQuoteSeq || '0';
   card.dataset.marginHydrated = 'pending';
   _setSuggestionMarginStatus(card, 'Fetching Zerodha Final / Peak\u2026');
   refreshPrePlaceReview(card);
@@ -1055,6 +1056,8 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    // Ignore stale responses after the trader changed lots again.
+    if ((card.dataset.marginQuoteSeq || '0') !== seq) return;
     if (prev?.preview && (
       prev.preview.margin_peak_required != null
       || prev.preview.margin_final_required != null
@@ -1067,6 +1070,7 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
     }
     card.dataset.marginHydrated = '0';
     delete card.dataset.marginFinal;
+    delete card.dataset.marginOk;
     card.dataset.marginMessage = (prev?.preview?.margin_message) || 'Zerodha Final / Peak unavailable';
     _setSuggestionMarginStatus(
       card,
@@ -1075,8 +1079,10 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
     );
     refreshPrePlaceReview(card);
   } catch (err) {
+    if ((card.dataset.marginQuoteSeq || '0') !== seq) return;
     card.dataset.marginHydrated = '0';
     delete card.dataset.marginFinal;
+    delete card.dataset.marginOk;
     card.dataset.marginMessage = (err && err.message) ? String(err.message) : 'Zerodha Final / Peak unavailable';
     _setSuggestionMarginStatus(
       card,
@@ -1088,15 +1094,16 @@ async function _hydrateOneSuggestionZerodhaMargin(card) {
 }
 
 async function _hydrateSuggestionZerodhaMargins(root) {
-  // Only cards still missing Final. Stored values come with the list/trade
-  // payload — no separate zerodha-preview when data-margin-hydrated=1.
+  // Hydrate cards that still need a preview — including those with a stored
+  // Final so the funds gate (_apply_user_funds_gate) can run for this user.
   const scope = root
     || document.getElementById('suggestion-container')
     || document;
   const cards = [...scope.querySelectorAll('[data-sug-id]')].filter(
     el => el.querySelector('.econ-cap-req')
       && el.dataset.marginHydrated !== '1'
-      && !(Number(el.dataset.marginFinal) > 0),
+      && el.dataset.marginHydrated !== 'pending'
+      && el.dataset.marginHydrated !== '0',
   );
   if (!cards.length) return;
   const blockedReason = typeof _zerodhaMarginQuoteDisabledReason === 'function'
@@ -9511,8 +9518,16 @@ function bindSuggestionActions() {
           // Lots change — drop cached quote and re-fetch once for the new size.
           delete card.dataset.marginHydrated;
           delete card.dataset.marginFinal;
+          delete card.dataset.marginOk;
+          delete card.dataset.marginMessage;
           _invalidateZerodhaMarginQuote(card.dataset.sugId);
-          _hydrateOneSuggestionZerodhaMargin(card);
+          const seq = String((Number(card.dataset.marginQuoteSeq) || 0) + 1);
+          card.dataset.marginQuoteSeq = seq;
+          clearTimeout(card._marginLotsTimer);
+          card._marginLotsTimer = setTimeout(() => {
+            if (card.dataset.marginQuoteSeq !== seq) return;
+            _hydrateOneSuggestionZerodhaMargin(card);
+          }, 300);
         }
         recalc();
       }
@@ -9606,14 +9621,8 @@ function bindSuggestionActions() {
       toast(blocked, 'warn');
       return;
     }
-    if (card.dataset.marginOk === '0' || btn.dataset.fundsBlocked === '1') {
-      toast(
-        card.dataset.marginMessage
-          || 'Insufficient Zerodha funds for your account (peak margin + buffer).',
-        'err',
-      );
-      return;
-    }
+    // Do not hard-stop on a stale card marginOk — Place force-refreshes
+    // preview and the confirm modal re-checks live funds for this user.
     if (_rejectInvalidExecLots(card)) return;
     const sid = card.dataset.sugId;
     if (_suggestionAlreadyExecuted(card)) return;

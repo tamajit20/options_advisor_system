@@ -204,6 +204,7 @@ def test_order_placement_refuses_admin_feed_fallback():
 
 def test_suggestion_execute_does_not_hide_card_for_other_users():
     """User A EXECUTED state must not block User B via duplicate_execution_reason."""
+
     db = MagicMock()
     db.fetch_one.return_value = None
 
@@ -232,3 +233,41 @@ def test_admin_and_user_can_both_read_system_logs():
         assert require_admin() is not None  # logs blocked for normal user
         g.app_user = {"id": 1, "is_admin": True}
         assert require_admin() is None
+
+
+def test_job_status_hides_other_users_jobs(mocker):
+    from lifecycle.zerodha_execution_job import job_status_dict
+
+    db = MagicMock()
+    repo = MagicMock()
+    repo.get.return_value = {
+        "id": 9,
+        "owner_user_id": 1,
+        "status": "RUNNING",
+        "result_json": None,
+    }
+    repo.result_dict.return_value = None
+    mocker.patch(
+        "lifecycle.zerodha_execution_job.ZerodhaExecutionJobRepo",
+        return_value=repo,
+    )
+    assert job_status_dict(db, 9, owner_user_id=1) is not None
+    assert job_status_dict(db, 9, owner_user_id=2) is None
+    assert job_status_dict(db, 9, owner_user_id=2, allow_admin=True) is not None
+
+
+def test_rollback_complete_for_leg_is_owner_scoped():
+    from database.broker_order_repo import BrokerOrderRepo
+
+    db = MagicMock()
+    db.fetch_one.return_value = {"x": 1}
+    BrokerOrderRepo(db).rollback_complete_for_leg(
+        suggestion_id="SUG-1",
+        trade_id=None,
+        leg_order=1,
+        owner_user_id=7,
+        execution_job_id=42,
+    )
+    sql, params = db.fetch_one.call_args[0]
+    assert "execution_job_id = ?" in sql
+    assert params[-1] == 42

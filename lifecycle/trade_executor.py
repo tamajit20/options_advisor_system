@@ -59,7 +59,7 @@ def duplicate_execution_reason(
     if owner_user_id is not None:
         from database.suggestion_user_state_repo import SuggestionUserStateRepo
         ust = SuggestionUserStateRepo(db).get(suggestion_id, owner_user_id)
-        if ust:
+        if isinstance(ust, dict):
             st_u = str(ust.get("status") or "").upper()
             if st_u == "EXECUTED":
                 tid = ust.get("trade_id") or "your book"
@@ -76,8 +76,8 @@ def duplicate_execution_reason(
             "ORDER BY executed_on DESC",
             [suggestion_id, int(owner_user_id)],
         )
-        if mine and mine.get("trade_id"):
-            tid = mine["trade_id"]
+        tid = mine.get("trade_id") if isinstance(mine, dict) else None
+        if isinstance(tid, str) and tid.strip():
             st = str(mine.get("status") or "").upper()
             if st in ("CLOSED", "EXPIRED"):
                 return (
@@ -397,13 +397,17 @@ def mark_executed(
     # them as leftovers aborted the trade and rolled both legs back.
     from_zerodha = str(execution_provider or "").lower() == "zerodha"
     if not from_zerodha:
-        pending_orders = broker.pending_for_suggestion(suggestion_id)
+        pending_orders = broker.pending_for_suggestion(
+            suggestion_id, owner_user_id=owner_user_id,
+        )
         if pending_orders:
             raise ValueError(
                 "Zerodha orders are already in flight for this suggestion — "
                 "wait or cancel on Kite before recording a manual fill"
             )
-        orphans = broker.orphan_entry_fills(suggestion_id)
+        orphans = broker.orphan_entry_fills(
+            suggestion_id, owner_user_id=owner_user_id,
+        )
         if orphans:
             raise ValueError(
                 "Prior Zerodha entry fills exist without a recorded trade — "
@@ -571,7 +575,9 @@ def mark_executed(
         })
     trd.insert_legs(trade_id, trade_legs)
     try:
-        trd.copy_zerodha_margin_from_suggestion(trade_id, suggestion_id)
+        trd.copy_zerodha_margin_from_suggestion(
+            trade_id, suggestion_id, owner_user_id=owner_user_id,
+        )
     except Exception:
         logger.debug(
             "trade_executor: zerodha margin copy skipped for %s", trade_id, exc_info=True,
