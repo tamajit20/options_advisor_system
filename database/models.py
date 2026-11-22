@@ -2745,7 +2745,10 @@ class ZerodhaCapitalSnapshotRepo:
         # Need at least one capital figure to store.
         if all(row.get(k) is None for k in self._WATCH):
             return False
-        prev = self.latest(owner_user_id=owner_user_id)
+        from database.owner_scope import resolve_owner_user_id
+        # Fail closed: every capital row belongs to one app user.
+        uid = resolve_owner_user_id(owner_user_id, what="capital.insert_if_changed")
+        prev = self.latest(owner_user_id=uid)
         if not self._changed(prev, row):
             return False
         at = recorded_at or now_ist()
@@ -2770,7 +2773,7 @@ class ZerodhaCapitalSnapshotRepo:
                 row["utilised_exposure"],
                 row["utilised_option_premium"],
                 (trigger_reason or "fetch")[:40],
-                int(owner_user_id) if owner_user_id is not None else None,
+                uid,
             ],
         ).close()
         return True

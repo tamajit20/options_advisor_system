@@ -69,12 +69,21 @@ def flatten_open_trade(db: SQLServerConnection, ctx: AutoExecContext) -> str:
                 f"Trade {ctx.trade_id} has no owner — refusing auto-flatten "
                 "so it cannot use another user's Zerodha session"
             )
-        if not zerodha_execution_ready(db, app_user_id=int(owner_raw)):
+        owner = int(owner_raw)
+        if not zerodha_execution_ready(db, app_user_id=owner):
             raise ZerodhaExecutionError(
                 "Trade owner's Zerodha session is not ready — cannot auto-flatten. "
                 "That user must log in to Zerodha."
             )
-        close_trade_in_zerodha_async(db, ctx.trade_id, close_trigger=ctx.notif_type)
+        # Bind acting owner so in-flight / job submit stay fail-closed even if
+        # a future call site forgets actor_user_id.
+        from database.owner_scope import acting_owner
+        with acting_owner(owner):
+            close_trade_in_zerodha_async(
+                db, ctx.trade_id,
+                close_trigger=ctx.notif_type,
+                actor_user_id=owner,
+            )
         return "zerodha"
 
     if not ctx.exits:
