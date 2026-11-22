@@ -39,6 +39,39 @@ def test_margin_preview_from_row_requires_positive_final():
     assert out["from_db"] is True
 
 
+def test_stored_margin_preview_scoped_to_owner(mocker):
+    db = MagicMock()
+    db.fetch_one.return_value = None
+    mocker.patch(
+        "dashboard.server.TradeRepo.get",
+        return_value={
+            "trade_id": "T1",
+            "owner_user_id": 99,
+            "zerodha_margin_final": 50000,
+            "zerodha_margin_peak": 55000,
+        },
+    )
+    # Other user's trade id must not leak margin to owner 7.
+    assert server._stored_zerodha_margin_preview(
+        db, "SUG-1", trade_id="T1", owner_user_id=7,
+    ) is None
+    # Same owner: trade margin is returned.
+    mocker.patch(
+        "dashboard.server.TradeRepo.get",
+        return_value={
+            "trade_id": "T1",
+            "owner_user_id": 7,
+            "zerodha_margin_final": 50000,
+            "zerodha_margin_peak": 55000,
+        },
+    )
+    out = server._stored_zerodha_margin_preview(
+        db, "SUG-1", trade_id="T1", owner_user_id=7,
+    )
+    assert out is not None
+    assert out["margin_final_required"] == 50000
+
+
 def test_preview_returns_stored_without_kite(client, mocker):
     mocker.patch("dashboard.server._zerodha_execution_auth_required", return_value=None)
     mocker.patch(

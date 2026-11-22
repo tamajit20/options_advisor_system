@@ -19,6 +19,20 @@ class ZerodhaSessionRepo:
             [int(user_id)],
         )
 
+    def list_user_ids_with_token(self) -> list:
+        """App user ids that currently have a Zerodha access token."""
+        rows = self.db.fetch_all(
+            "SELECT user_id FROM zerodha_sessions "
+            "WHERE access_token IS NOT NULL AND LTRIM(RTRIM(access_token)) <> ''"
+        ) or []
+        out = []
+        for r in rows:
+            try:
+                out.append(int(r["user_id"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+        return out
+
     def set_app_credentials(
         self,
         user_id: int,

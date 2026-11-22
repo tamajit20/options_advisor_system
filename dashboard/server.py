@@ -117,13 +117,15 @@ def _zerodha_account_for_api(
     from dashboard.auth import current_user_id
     from providers.zerodha.account_snapshot import fetch_account_snapshot, invalidate_account_cache
 
+    uid = current_user_id()
     if force_refresh:
-        invalidate_account_cache()
+        # Only drop this user's cache — other traders keep theirs.
+        invalidate_account_cache(uid)
     return fetch_account_snapshot(
         force_refresh=force_refresh,
         persist_capital=True,
         trigger_reason=trigger_reason if force_refresh else "poll",
-        app_user_id=current_user_id(),
+        app_user_id=uid,
     )
 
 
@@ -884,14 +886,42 @@ def _stored_zerodha_margin_preview(
     *,
     trade_id: Optional[str] = None,
     lots: Optional[int] = None,
+    owner_user_id: Optional[int] = None,
 ) -> Optional[dict]:
-    """Return stored Final/Peak when present (trade preferred over suggestion)."""
+    """Return stored Final/Peak when present (this user's trade preferred).
+
+    Never reuse another trader's trade margin. Shared suggestion-level quotes
+    are only used when no owner filter is set (legacy / single-user paths).
+    """
     if trade_id:
         row = TradeRepo(db).get(trade_id)
+        if row and owner_user_id is not None:
+            try:
+                row_owner = row.get("owner_user_id")
+                if row_owner is None or int(row_owner) != int(owner_user_id):
+                    row = None
+            except (TypeError, ValueError):
+                row = None
         preview = _zerodha_margin_preview_from_row(row)
         if preview is not None:
             return preview
-    # Fallback: any open/closed trade for this suggestion that already has Final.
+    # Fallback: this owner's trade for the suggestion that already has Final.
+    if owner_user_id is not None:
+        trade_row = db.fetch_one(
+            "SELECT TOP 1 zerodha_margin_final, zerodha_margin_peak, "
+            "       zerodha_margin_lots, zerodha_margin_quoted_at "
+            "FROM options_trades "
+            "WHERE suggestion_id = ? AND owner_user_id = ? "
+            "  AND zerodha_margin_final IS NOT NULL "
+            "  AND UPPER(ISNULL(status,'')) <> 'VOID' "
+            "ORDER BY executed_on DESC",
+            [suggestion_id, int(owner_user_id)],
+        )
+        preview = _zerodha_margin_preview_from_row(trade_row)
+        if preview is not None:
+            return preview
+        # Multi-user: do not serve another user's suggestion-level quote.
+        return None
     trade_row = db.fetch_one(
         "SELECT TOP 1 zerodha_margin_final, zerodha_margin_peak, "
         "       zerodha_margin_lots, zerodha_margin_quoted_at "
@@ -2987,7 +3017,7 @@ def create_app() -> Flask:
             finally:
                 db.close()
 
-        invalidate_account_cache()
+        invalidate_account_cache(uid)
         removed = removed_db or removed_file
         if feed_disconnected:
             # Push immediately — do not wait for ws_runner's ~5s poll loop.
@@ -3381,17 +3411,19 @@ def create_app() -> Flask:
         trade_id = (payload.get("trade_id") or "").strip() or None
         force_refresh = bool(payload.get("force_refresh"))
 
-        # Prefer DB: Amount used / Amount needed is a one-time Kite quote.
+        from dashboard.auth import current_user_id
+        quote_uid = current_user_id()
+        # Prefer DB: Amount used / Amount needed is a one-time Kite quote
+        # for this user's own trade — never another trader's stored margin.
         if not force_refresh:
             stored = _stored_zerodha_margin_preview(
                 db, sid, trade_id=trade_id, lots=lots_override,
+                owner_user_id=quote_uid,
             )
             if stored is not None:
                 stored["instrument_overlaps"] = _instrument_overlaps_for_suggestion(db, sid)
                 return jsonify({"preview": stored, "from_db": True})
 
-        from dashboard.auth import current_user_id
-        quote_uid = current_user_id()
         if not zerodha_margin_quote_ready(app_user_id=quote_uid):
             return jsonify({"error": "Your Zerodha session is not ready for a margin quote"}), 403
         spot_raw = payload.get("spot_at_execution")

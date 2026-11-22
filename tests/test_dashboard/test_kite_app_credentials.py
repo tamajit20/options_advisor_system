@@ -198,6 +198,30 @@ def test_session_repo_clear_token_keeps_credentials():
     assert store[2]["access_token"] is None
 
 
+def test_account_snapshot_facade_uses_session_api_key(monkeypatch):
+    from providers.zerodha import account_snapshot as acct
+    from providers.zerodha.session import ZerodhaSession
+    from datetime import datetime, timezone, timedelta
+
+    IST = timezone(timedelta(hours=5, minutes=30))
+    captured = {}
+
+    def fake_facade(**kw):
+        captured.update(kw)
+        return MagicMock(profile=lambda: {}, margins=lambda: {})
+
+    monkeypatch.setattr(acct, "KiteExecutionFacade", fake_facade)
+    sess = ZerodhaSession(
+        api_key="trader-app-key",
+        access_token="tok",
+        user_id="K1",
+        generated_at=datetime.now(tz=IST),
+    )
+    acct._build_facade(sess)
+    assert captured.get("api_key") == "trader-app-key"
+    assert captured.get("access_token") == "tok"
+
+
 def test_public_kite_app_never_returns_secrets():
     from database.zerodha_session_repo import ZerodhaSessionRepo
 

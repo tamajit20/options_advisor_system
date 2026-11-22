@@ -72,14 +72,24 @@ def normalize_account_snapshot(profile: dict, margins: dict) -> dict:
 
 
 def _build_facade(session: ZerodhaSession) -> KiteExecutionFacade:
+    """Use this session's Kite app key — never the admin env key for traders."""
+    api_key = (getattr(session, "api_key", None) or "").strip()
+    if not api_key:
+        api_key = str(ZERODHA_API_CONFIG.get("api_key") or "").strip()
+    if not api_key:
+        raise ValueError("Kite API key missing on session")
     return KiteExecutionFacade(
-        api_key=ZERODHA_API_CONFIG["api_key"],
+        api_key=api_key,
         access_token=session.access_token,
     )
 
 
-def invalidate_account_cache() -> None:
+def invalidate_account_cache(app_user_id: Optional[int] = None) -> None:
+    """Clear one user's margin cache, or all caches when app_user_id is None."""
     with _CACHE_LOCK:
+        if app_user_id is not None:
+            _CACHE.pop(f"u:{int(app_user_id)}", None)
+            return
         _CACHE.clear()
         _CACHE["payload"] = None
         _CACHE["at"] = 0.0
@@ -133,7 +143,9 @@ def fetch_account_snapshot(
     if session is None or not is_token_valid(session):
         return {"available": False, "reason": "no_valid_session"}
 
-    if not ZERODHA_API_CONFIG.get("api_key"):
+    session_key = (getattr(session, "api_key", None) or "").strip()
+    env_key = str(ZERODHA_API_CONFIG.get("api_key") or "").strip()
+    if not session_key and not env_key:
         return {"available": False, "reason": "api_key_not_configured"}
 
     cache_key = f"u:{int(app_user_id)}" if app_user_id is not None else "default"

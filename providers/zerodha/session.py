@@ -127,7 +127,11 @@ def is_token_valid(session: Optional[ZerodhaSession], now: Optional[datetime] = 
 # ---------------------------------------------------------------------------
 # Read / write
 # ---------------------------------------------------------------------------
-def _session_from_db_row(row: dict) -> Optional[ZerodhaSession]:
+def _session_from_db_row(
+    row: dict,
+    *,
+    allow_env_api_key_fallback: bool = False,
+) -> Optional[ZerodhaSession]:
     if not row or not row.get("access_token"):
         return None
     gen = row.get("generated_at")
@@ -137,8 +141,10 @@ def _session_from_db_row(row: dict) -> Optional[ZerodhaSession]:
         return None
     if getattr(gen, "tzinfo", None) is None:
         gen = gen.replace(tzinfo=_IST)
-    from config import ZERODHA_API_CONFIG
-    api_key = str(row.get("api_key") or ZERODHA_API_CONFIG.get("api_key") or "")
+    api_key = str(row.get("api_key") or "").strip()
+    if not api_key and allow_env_api_key_fallback:
+        from config import ZERODHA_API_CONFIG
+        api_key = str(ZERODHA_API_CONFIG.get("api_key") or "").strip()
     if not api_key:
         return None
     return ZerodhaSession(
@@ -229,12 +235,18 @@ def load_session_for_user(app_user_id: int) -> Optional[ZerodhaSession]:
     """Load Zerodha token for a specific app user from SQL."""
     try:
         from database.connection import SQLServerConnection
+        from database.app_user_repo import AppUserRepo
         from database.zerodha_session_repo import ZerodhaSessionRepo
         db = SQLServerConnection()
         db.connect()
         try:
             row = ZerodhaSessionRepo(db).get(int(app_user_id))
-            return _session_from_db_row(row or {})
+            admin = AppUserRepo(db).get_admin()
+            allow_env = bool(admin and int(admin["id"]) == int(app_user_id))
+            return _session_from_db_row(
+                row or {},
+                allow_env_api_key_fallback=allow_env,
+            )
         finally:
             db.close()
     except Exception:

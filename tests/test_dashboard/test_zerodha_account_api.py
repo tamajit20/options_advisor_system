@@ -37,9 +37,16 @@ def _valid_session():
 
 
 def test_zerodha_status_includes_account_when_valid(dash_client, mocker):
-    mocker.patch("providers.zerodha.session.load_session", return_value=_valid_session())
+    mocker.patch("dashboard.auth.current_user_id", return_value=7)
+    mocker.patch(
+        "providers.zerodha.session.load_session_for_user",
+        return_value=_valid_session(),
+    )
     mocker.patch("providers.zerodha.session.is_token_valid", return_value=True)
-    mocker.patch("providers.zerodha.session.token_valid_until", return_value=datetime(2026, 9, 6, 6, 0, 0))
+    mocker.patch(
+        "providers.zerodha.session.token_valid_until",
+        return_value=datetime(2026, 9, 6, 6, 0, 0),
+    )
     mocker.patch(
         "dashboard.server._zerodha_account_for_api",
         return_value={
@@ -59,9 +66,16 @@ def test_zerodha_status_includes_account_when_valid(dash_client, mocker):
 
 
 def test_zerodha_status_refresh_account_query(dash_client, mocker):
-    mocker.patch("providers.zerodha.session.load_session", return_value=_valid_session())
+    mocker.patch("dashboard.auth.current_user_id", return_value=7)
+    mocker.patch(
+        "providers.zerodha.session.load_session_for_user",
+        return_value=_valid_session(),
+    )
     mocker.patch("providers.zerodha.session.is_token_valid", return_value=True)
-    mocker.patch("providers.zerodha.session.token_valid_until", return_value=datetime(2026, 9, 6, 6, 0, 0))
+    mocker.patch(
+        "providers.zerodha.session.token_valid_until",
+        return_value=datetime(2026, 9, 6, 6, 0, 0),
+    )
     account_fn = mocker.patch(
         "dashboard.server._zerodha_account_for_api",
         return_value={"available": True, "usable_balance": 100.0},
