@@ -132,17 +132,12 @@ class ZerodhaSessionRepo:
         return self.clear_token(user_id)
 
     def public_kite_app(self, user_id: int) -> dict:
-        """Safe summary for admin Users UI (never returns api_secret)."""
+        """Safe summary only — never returns api_key or api_secret values."""
         row = self.get(user_id) or {}
         key = (row.get("api_key") or "").strip()
         secret = (row.get("api_secret") or "").strip()
-        masked = ""
-        if key:
-            masked = key[:4] + "…" + key[-4:] if len(key) > 8 else "••••"
         return {
             "configured": bool(key and secret),
-            "api_key_masked": masked or None,
-            "has_secret": bool(secret),
             "has_token": bool(row.get("access_token")),
-            "kite_user_id": row.get("kite_user_id"),
+            "kite_user_id": row.get("kite_user_id") or None,
         }

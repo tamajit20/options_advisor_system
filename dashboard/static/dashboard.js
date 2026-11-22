@@ -2951,7 +2951,7 @@ const toast = (msg, kind='info') => {
 window.toast = toast;
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'history', 'notifications', 'config', 'learn', 'password', 'users', 'jobs', 'logs', 'wsmon'];
+const TABS = ['suggestion', 'trades', 'history', 'notifications', 'config', 'learn', 'account', 'users', 'jobs', 'logs', 'wsmon'];
 window.TABS = TABS;
 // Advisor chrome (header subtabs / mobile Advisor mode) — daily workflow tabs.
 const OPTIONS_TABS = ['suggestion', 'trades', 'history', 'config', 'learn'];
@@ -3025,7 +3025,7 @@ function switchTab(name) {
     if (typeof window.renderLearningPage === 'function') window.renderLearningPage();
   }
   if (name === 'history')       loadHistory();
-  if (name === 'password')      _resetPasswordForm();
+  if (name === 'account')       _resetAccountForm();
   if (name === 'users')         loadUsersPane();
   if (name === 'logs')          loadLogsPane();
   if (name === 'jobs')          loadJobs();
@@ -3062,12 +3062,14 @@ function _restoreActiveTab() {
   const hash = (window.location.hash || '').replace(/^#/, '');
   if (hash === 'learn' || hash.startsWith('learn/')) initial = 'learn';
   else if (hash === 'zerodha-logs') { initial = 'logs'; logsSubtab = 'zerodha'; }
+  else if (hash === 'password') initial = 'account';
   else if (hash && TABS.includes(hash)) initial = hash;
   if (!initial) {
     try {
       const saved = localStorage.getItem('activeTab');
       if (saved === 'learn' || (saved && saved.startsWith('learn/'))) initial = 'learn';
       else if (saved === 'zerodha-logs') { initial = 'logs'; logsSubtab = 'zerodha'; }
+      else if (saved === 'password') initial = 'account';
       else if (saved && TABS.includes(saved)) initial = saved;
     } catch (_) {}
   }
@@ -13597,96 +13599,172 @@ function _syncZerodhaMenuAction(sessionOk) {
   }
 }
 
-/** null = change own password; else { userId, login } for admin reset via Users tab. */
-let _passwordTarget = null;
+/** null = edit own account; else { userId, login } for admin password reset via Users tab. */
+let _accountTarget = null;
 
-function _openPasswordPage(target) {
-  _passwordTarget = target || null;
-  if (typeof switchTab === 'function') switchTab('password');
+function _openAccountPage(target) {
+  _accountTarget = target || null;
+  if (typeof switchTab === 'function') switchTab('account');
 }
 
-function _passwordReturnTab() {
-  return (_passwordTarget && _isAdminUser()) ? 'users' : 'suggestion';
+function _accountReturnTab() {
+  return (_accountTarget && _isAdminUser()) ? 'users' : 'suggestion';
 }
 
-function _syncPasswordPageChrome() {
-  const title = document.getElementById('pw-page-title');
-  const blurb = document.getElementById('pw-page-blurb');
-  if (_passwordTarget && _passwordTarget.userId != null) {
-    const who = _passwordTarget.login || ('user #' + _passwordTarget.userId);
+function _isAdminPasswordResetMode() {
+  return !!( _accountTarget && _accountTarget.userId != null);
+}
+
+function _syncAccountPageChrome() {
+  const title = document.getElementById('account-page-title');
+  const blurb = document.getElementById('account-page-blurb');
+  const selfFields = document.getElementById('account-self-fields');
+  const pwHint = document.getElementById('account-pw-hint');
+  const pwLabel = document.getElementById('account-pw-label');
+  if (_isAdminPasswordResetMode()) {
+    const who = _accountTarget.login || ('user #' + _accountTarget.userId);
     if (title) title.textContent = 'Set password';
     if (blurb) blurb.textContent = `Choose a new dashboard password for ${who}.`;
+    if (selfFields) selfFields.hidden = true;
+    if (pwHint) pwHint.textContent = 'Required for admin password reset.';
+    if (pwLabel) pwLabel.textContent = 'New password';
   } else {
-    if (title) title.textContent = 'Change password';
-    if (blurb) blurb.textContent = 'Choose a new password for your dashboard login.';
+    if (title) title.textContent = 'Account settings';
+    if (blurb) {
+      blurb.textContent =
+        'Update your display name, password, and Kite Connect app. Secrets are write-only — never shown after save.';
+    }
+    if (selfFields) selfFields.hidden = false;
+    if (pwHint) pwHint.textContent = 'Leave blank to keep your current password.';
+    if (pwLabel) pwLabel.textContent = 'New password';
   }
 }
 
-function _resetPasswordForm() {
-  const err = document.getElementById('pw-form-error');
+async function _resetAccountForm() {
+  const err = document.getElementById('account-form-error');
   if (err) { err.hidden = true; err.textContent = ''; }
-  ['pw-new', 'pw-confirm'].forEach(id => {
+  ['account-pw-new', 'account-pw-confirm', 'account-api-key', 'account-api-secret'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
-  _syncPasswordPageChrome();
+  _syncAccountPageChrome();
+  if (_isAdminPasswordResetMode()) return;
+  try {
+    const data = await API('/api/me/account');
+    const u = (data && data.user) || (window.__OA_ME && window.__OA_ME.user) || {};
+    const loginEl = document.getElementById('account-login');
+    const nameEl = document.getElementById('account-display-name');
+    if (loginEl) loginEl.value = u.login || '';
+    if (nameEl) nameEl.value = u.display_name || '';
+    const ka = (data && data.kite_app) || {};
+    const st = document.getElementById('account-kite-status');
+    if (st) {
+      const parts = [ka.configured ? 'App configured' : 'App not set'];
+      if (ka.has_token) parts.push('Zerodha logged in');
+      if (ka.kite_user_id) parts.push(String(ka.kite_user_id));
+      st.textContent = 'Status: ' + parts.join(' · ');
+    }
+  } catch (_) {
+    const me = window.__OA_ME && window.__OA_ME.user;
+    const loginEl = document.getElementById('account-login');
+    const nameEl = document.getElementById('account-display-name');
+    if (loginEl && me) loginEl.value = me.login || '';
+    if (nameEl && me) nameEl.value = me.display_name || '';
+  }
 }
 
-function _wirePasswordPage() {
-  const save = document.getElementById('pw-save-btn');
-  const cancel = document.getElementById('pw-cancel-btn');
+function _wireAccountPage() {
+  const save = document.getElementById('account-save-btn');
+  const cancel = document.getElementById('account-cancel-btn');
   if (save && save.dataset.wired !== '1') {
     save.dataset.wired = '1';
     save.addEventListener('click', async () => {
-      const err = document.getElementById('pw-form-error');
+      const err = document.getElementById('account-form-error');
       const showErr = (msg) => {
         if (err) { err.hidden = false; err.textContent = msg; }
         else if (typeof toast === 'function') toast(msg, 'err');
       };
       if (err) { err.hidden = true; err.textContent = ''; }
-      const me = window.__OA_ME && window.__OA_ME.user;
-      const targetId = (_passwordTarget && _passwordTarget.userId != null)
-        ? _passwordTarget.userId
-        : (me && me.id);
-      const targetLogin = (_passwordTarget && _passwordTarget.login) || null;
-      if (targetId == null) {
-        showErr('Not signed in');
-        return;
-      }
-      const password = String((document.getElementById('pw-new') || {}).value || '');
-      const confirm = String((document.getElementById('pw-confirm') || {}).value || '');
-      if (!password.trim()) {
-        showErr('Enter a new password.');
-        return;
-      }
-      if (password !== confirm) {
-        showErr('Password and confirm password do not match.');
-        return;
+      const password = String((document.getElementById('account-pw-new') || {}).value || '');
+      const confirm = String((document.getElementById('account-pw-confirm') || {}).value || '');
+      if (password || confirm) {
+        if (!password.trim()) {
+          showErr('Enter a new password, or leave both password fields blank.');
+          return;
+        }
+        if (password !== confirm) {
+          showErr('Password and confirm password do not match.');
+          return;
+        }
       }
       try {
-        await API(`/api/users/${targetId}/password`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password }),
-        });
-        if (typeof toast === 'function') {
-          toast(targetLogin ? `Password updated for ${targetLogin}` : 'Password updated', 'ok');
+        if (_isAdminPasswordResetMode()) {
+          if (!password.trim()) {
+            showErr('Enter a new password.');
+            return;
+          }
+          const targetId = _accountTarget.userId;
+          const targetLogin = _accountTarget.login || null;
+          await API(`/api/users/${targetId}/password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password }),
+          });
+          if (typeof toast === 'function') {
+            toast(targetLogin ? `Password updated for ${targetLogin}` : 'Password updated', 'ok');
+          }
+        } else {
+          const api_key = String((document.getElementById('account-api-key') || {}).value || '');
+          const api_secret = String((document.getElementById('account-api-secret') || {}).value || '');
+          if ((api_key && !api_secret) || (!api_key && api_secret)) {
+            showErr('To change the Kite app, paste both API key and API secret.');
+            return;
+          }
+          const display_name = String(
+            (document.getElementById('account-display-name') || {}).value || ''
+          ).trim();
+          if (!display_name) {
+            showErr('Display name is required.');
+            return;
+          }
+          const body = {
+            display_name,
+            password: password || '',
+            password_confirm: confirm || '',
+          };
+          if (api_key && api_secret) {
+            body.api_key = api_key;
+            body.api_secret = api_secret;
+          }
+          const data = await API('/api/me/account', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (data && data.user && window.__OA_ME) {
+            window.__OA_ME.user = Object.assign({}, window.__OA_ME.user, data.user);
+            const label = document.getElementById('app-user-label');
+            const initials = document.getElementById('user-avatar-initials');
+            if (label) label.textContent = data.user.display_name || data.user.login || 'User';
+            if (initials) initials.textContent = _userAvatarInitials(data.user);
+          }
+          if (typeof toast === 'function') toast('Account updated', 'ok');
         }
-        const back = _passwordReturnTab();
-        _passwordTarget = null;
-        _resetPasswordForm();
+        const back = _accountReturnTab();
+        _accountTarget = null;
+        await _resetAccountForm();
         if (typeof switchTab === 'function') switchTab(back);
       } catch (e) {
-        showErr((e && e.message) || 'Password update failed');
+        showErr((e && e.message) || 'Save failed');
       }
     });
   }
   if (cancel && cancel.dataset.wired !== '1') {
     cancel.dataset.wired = '1';
     cancel.addEventListener('click', () => {
-      const back = _passwordReturnTab();
-      _passwordTarget = null;
-      _resetPasswordForm();
+      const back = _accountReturnTab();
+      _accountTarget = null;
+      _resetAccountForm();
       if (typeof switchTab === 'function') switchTab(back);
     });
   }
@@ -13735,11 +13813,11 @@ function _wireUserAvatarMenu() {
       }
     });
   }
-  const changePw = document.getElementById('user-menu-change-password');
-  if (changePw) {
-    changePw.addEventListener('click', () => {
+  const accountBtn = document.getElementById('user-menu-account');
+  if (accountBtn) {
+    accountBtn.addEventListener('click', () => {
       _setUserAvatarMenuOpen(false);
-      _openPasswordPage(null);
+      _openAccountPage(null);
     });
   }
   const signOut = document.getElementById('user-menu-sign-out');
@@ -13772,7 +13850,7 @@ window.addEventListener('pageshow', (ev) => {
 
 async function loadAppMe() {
   _wireUserAvatarMenu();
-  _wirePasswordPage();
+  _wireAccountPage();
   try {
     const data = await API('/api/me');
     window.__OA_ME = data;
@@ -13857,16 +13935,14 @@ async function loadUsersPane() {
       </thead>
       <tbody>${users.map(u => {
         const ka = u.kite_app || {};
-        const kiteLabel = ka.configured
-          ? `OK · ${escapeHtml(ka.api_key_masked || '••••')}`
-          : 'Not set';
+        const kiteLabel = ka.configured ? 'Configured' : 'Not set';
         return `
         <tr>
           <td class="users-col-id">${escapeHtml(String(u.id))}</td>
           <td><code>${escapeHtml(u.login || '')}</code></td>
           <td>${escapeHtml(u.display_name || '—')}</td>
           <td><span class="users-role ${u.is_admin ? 'users-role-admin' : 'users-role-user'}">${u.is_admin ? 'Admin' : 'User'}</span></td>
-          <td><span class="users-kite ${ka.configured ? 'is-yes' : 'is-no'}" title="Kite Connect app for this trader">${kiteLabel}</span></td>
+          <td><span class="users-kite ${ka.configured ? 'is-yes' : 'is-no'}" title="Kite Connect app for this trader (status only — secrets never shown)">${kiteLabel}</span></td>
           <td><span class="users-active ${u.is_active ? 'is-yes' : 'is-no'}">${u.is_active ? 'Yes' : 'No'}</span></td>
           <td class="users-col-actions">
             <div class="users-actions">
@@ -13887,13 +13963,18 @@ async function loadUsersPane() {
       btn.addEventListener('click', async () => {
         const uid = Number(btn.dataset.setKiteApp);
         const who = btn.dataset.login || String(uid);
+        // Write-only: empty prompts — never prefill or display stored secrets.
         const api_key = prompt(
-          `Kite API key for ${who}\n(Use the app whose Zerodha Client ID matches this trader)`,
+          `Paste Kite API key for ${who}\n(App whose Zerodha Client ID matches this trader)\nSecrets are never shown again after save.`,
           ''
         );
         if (api_key == null) return;
-        const api_secret = prompt(`Kite API secret for ${who}`, '');
+        const api_secret = prompt(`Paste Kite API secret for ${who}`, '');
         if (api_secret == null) return;
+        if (!String(api_key).trim() || !String(api_secret).trim()) {
+          toast('Both API key and secret are required', 'err');
+          return;
+        }
         try {
           await API(`/api/users/${uid}/kite-app`, {
             method: 'PUT',
@@ -13909,7 +13990,7 @@ async function loadUsersPane() {
     });
     box.querySelectorAll('[data-set-password]').forEach(btn => {
       btn.addEventListener('click', () => {
-        _openPasswordPage({
+        _openAccountPage({
           userId: Number(btn.dataset.setPassword),
           login: btn.dataset.login || btn.dataset.setPassword,
         });

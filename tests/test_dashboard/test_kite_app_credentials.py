@@ -196,3 +196,28 @@ def test_session_repo_clear_token_keeps_credentials():
     assert store[2]["api_key"] == "k"
     assert store[2]["api_secret"] == "s"
     assert store[2]["access_token"] is None
+
+
+def test_public_kite_app_never_returns_secrets():
+    from database.zerodha_session_repo import ZerodhaSessionRepo
+
+    class FakeDB:
+        def fetch_one(self, sql, params):
+            return {
+                "user_id": 3,
+                "api_key": "abcd1234secretkey",
+                "api_secret": "super-secret-value",
+                "access_token": "tok",
+                "kite_user_id": "XY",
+            }
+
+    pub = ZerodhaSessionRepo(FakeDB()).public_kite_app(3)
+    assert pub["configured"] is True
+    assert pub["has_token"] is True
+    assert pub["kite_user_id"] == "XY"
+    blob = str(pub)
+    assert "abcd1234secretkey" not in blob
+    assert "super-secret-value" not in blob
+    assert "api_key" not in pub
+    assert "api_secret" not in pub
+    assert "api_key_masked" not in pub

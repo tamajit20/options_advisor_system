@@ -246,20 +246,19 @@ a { color: var(--accent); text-decoration: none; }
 .user-avatar-danger { color: #fca5a5; }
 .user-avatar-danger:hover { background: rgba(248, 113, 113, .12); }
 
+.account-page,
 .password-page {
-  max-width: 420px;
+  max-width: 520px;
 }
-.password-page .filter-row {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
-}
+.account-page label,
 .password-page label {
   display: block;
   font-size: .82rem;
   color: var(--text-dim);
   margin-bottom: 4px;
 }
+.account-page input[type="text"],
+.account-page input[type="password"],
 .password-page input[type="password"] {
   width: 100%;
   box-sizing: border-box;

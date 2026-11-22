@@ -2788,6 +2788,54 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"ok": True})
 
+    @app.route("/api/me/account", methods=["GET", "PUT"])
+    @_with_db
+    def api_me_account(db: SQLServerConnection):
+        """Self-service account: name / optional password / optional Kite credentials.
+
+        GET never returns api_key, api_secret, or password — only status flags.
+        PUT accepts write-only secret fields; omit or blank keeps current values.
+        """
+        from dashboard.auth import current_user
+        from database.app_user_repo import AppUserRepo
+        from database.zerodha_session_repo import ZerodhaSessionRepo
+        u = current_user()
+        if not u:
+            return jsonify({"error": "Unauthorized"}), 401
+        uid = int(u["id"])
+        users = AppUserRepo(db)
+        zrepo = ZerodhaSessionRepo(db)
+        if request.method == "GET":
+            row = users.get(uid)
+            return jsonify({
+                "user": AppUserRepo.public_row(row),
+                "kite_app": zrepo.public_kite_app(uid),
+            })
+        body = request.get_json(silent=True) or {}
+        display_name = body.get("display_name")
+        password = str(body.get("password") or "")
+        password_confirm = str(body.get("password_confirm") or "")
+        api_key = str(body.get("api_key") or "").strip()
+        api_secret = str(body.get("api_secret") or "").strip()
+        try:
+            if display_name is not None:
+                users.set_display_name(uid, str(display_name))
+            if password or password_confirm:
+                if password != password_confirm:
+                    return jsonify({"error": "password and confirm do not match"}), 400
+                users.set_password(uid, password)
+            if api_key or api_secret:
+                zrepo.set_app_credentials(uid, api_key=api_key, api_secret=api_secret)
+            db.commit()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        row = users.get(uid)
+        return jsonify({
+            "ok": True,
+            "user": AppUserRepo.public_row(row),
+            "kite_app": zrepo.public_kite_app(uid),
+        })
+
     # ---------- HTML ----------
     @app.route("/")
     def index():

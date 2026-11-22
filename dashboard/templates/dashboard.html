@@ -77,7 +77,7 @@
         </div>
         <a id="zerodha-login-btn" class="user-avatar-item" role="menuitem" href="/zerodha/login">Zerodha login</a>
         <button type="button" class="user-avatar-item" role="menuitem" id="user-menu-zerodha-logout" hidden>Zerodha logout</button>
-        <button type="button" class="user-avatar-item" role="menuitem" id="user-menu-change-password">Change my password…</button>
+        <button type="button" class="user-avatar-item" role="menuitem" id="user-menu-account">Account settings…</button>
         <a class="user-avatar-item user-avatar-danger" role="menuitem" id="user-menu-sign-out"
            href="/dashboard-logout">Sign out</a>
       </div>
@@ -292,25 +292,43 @@
       <div id="users-container" class="loading">Loading…</div>
     </article>
 
-    <article class="panel" id="panel-password" aria-hidden="true">
-      <h2 class="panel-title" id="pw-page-title">Change password</h2>
-      <p class="muted" id="pw-page-blurb" style="font-size:.85rem;margin:0 0 12px">Choose a new password for your dashboard login.</p>
-      <div class="card password-page" style="padding:16px 18px">
-        <div class="filter-row" style="margin:0">
-          <div>
-            <label for="pw-new">New password</label>
-            <input id="pw-new" type="password" autocomplete="new-password" />
+    <article class="panel" id="panel-account" aria-hidden="true">
+      <h2 class="panel-title" id="account-page-title">Account settings</h2>
+      <p class="muted" id="account-page-blurb" style="font-size:.85rem;margin:0 0 12px">
+        Update your display name, password, and Kite Connect app. Secrets are write-only — never shown after save.
+      </p>
+      <div class="card account-page" style="padding:16px 18px;max-width:520px">
+        <div id="account-self-fields">
+          <div style="margin-bottom:14px">
+            <label for="account-login">Login</label>
+            <input id="account-login" type="text" readonly disabled autocomplete="username" />
           </div>
-          <div>
-            <label for="pw-confirm">Confirm password</label>
-            <input id="pw-confirm" type="password" autocomplete="new-password" />
+          <div style="margin-bottom:14px">
+            <label for="account-display-name">Display name</label>
+            <input id="account-display-name" type="text" autocomplete="nickname" />
           </div>
-          <div class="password-page-actions">
-            <button type="button" class="btn" id="pw-save-btn">Save password</button>
-            <button type="button" class="btn btn-ghost" id="pw-cancel-btn">Cancel</button>
+          <div style="margin-bottom:14px">
+            <label>Kite Connect app</label>
+            <p class="muted" id="account-kite-status" style="font-size:.78rem;margin:4px 0 8px">Status: —</p>
+            <p class="muted" style="font-size:.75rem;margin:0 0 8px">Leave blank to keep the current app. To change, paste both key and secret (never displayed again).</p>
+            <input id="account-api-key" type="password" placeholder="API key (leave blank to keep)"
+                   autocomplete="off" spellcheck="false" style="margin-bottom:8px;width:100%" />
+            <input id="account-api-secret" type="password" placeholder="API secret (leave blank to keep)"
+                   autocomplete="new-password" spellcheck="false" style="width:100%" />
           </div>
-          <p id="pw-form-error" class="err" hidden style="margin:0;color:#f87171;font-size:.85rem"></p>
         </div>
+        <div style="margin-bottom:14px">
+          <label for="account-pw-new" id="account-pw-label">New password</label>
+          <p class="muted" style="font-size:.75rem;margin:4px 0 8px" id="account-pw-hint">Leave blank to keep your current password.</p>
+          <input id="account-pw-new" type="password" autocomplete="new-password" style="margin-bottom:8px;width:100%" />
+          <input id="account-pw-confirm" type="password" placeholder="Confirm new password"
+                 autocomplete="new-password" style="width:100%" />
+        </div>
+        <div class="password-page-actions" style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" class="btn" id="account-save-btn">Save</button>
+          <button type="button" class="btn btn-ghost" id="account-cancel-btn">Cancel</button>
+        </div>
+        <p id="account-form-error" class="err" hidden style="margin:10px 0 0;color:#f87171;font-size:.85rem"></p>
       </div>
     </article>
 

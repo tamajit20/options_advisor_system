@@ -111,6 +111,17 @@ class AppUserRepo:
             ],
         ).close()
 
+    def set_display_name(self, user_id: int, display_name: str) -> None:
+        name = str(display_name or "").strip()
+        if not name:
+            raise ValueError("display name required")
+        if self.get(user_id) is None:
+            raise ValueError("unknown user")
+        self.db.execute(
+            "UPDATE app_users SET display_name = ?, updated_at = ? WHERE id = ?",
+            [name[:120], now_ist().replace(tzinfo=None), int(user_id)],
+        ).close()
+
     def transfer_admin(self, to_user_id: int) -> None:
         """Make *to_user_id* the sole admin; demote any previous admin."""
         target = self.get(to_user_id)
