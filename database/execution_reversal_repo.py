@@ -60,23 +60,47 @@ class ExecutionReversalRepo:
         cur.close()
         return int(out[0])
 
+    @staticmethod
+    def _owner_scope_sql(alias: str = "r") -> str:
+        """Resolve reversal owner via linked trade / broker orders."""
+        return (
+            f"COALESCE("
+            f"(SELECT TOP 1 t.owner_user_id FROM options_trades t "
+            f" WHERE {alias}.trade_id IS NOT NULL AND t.trade_id = {alias}.trade_id), "
+            f"(SELECT TOP 1 o.owner_user_id FROM options_broker_orders o "
+            f" WHERE {alias}.execution_job_id IS NOT NULL "
+            f"   AND o.execution_job_id = {alias}.execution_job_id "
+            f"   AND o.owner_user_id IS NOT NULL "
+            f" ORDER BY o.created_at DESC), "
+            f"(SELECT TOP 1 o.owner_user_id FROM options_broker_orders o "
+            f" WHERE {alias}.suggestion_id IS NOT NULL "
+            f"   AND o.suggestion_id = {alias}.suggestion_id "
+            f"   AND o.owner_user_id IS NOT NULL "
+            f" ORDER BY o.created_at DESC)"
+            f")"
+        )
+
     def list_between(
         self,
         *,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
+        owner_user_id: Optional[int] = None,
     ) -> List[dict]:
         filters = ["1 = 1"]
         params: list = []
         if from_date:
-            filters.append("CONVERT(date, created_at) >= ?")
+            filters.append("CONVERT(date, r.created_at) >= ?")
             params.append(from_date)
         if to_date:
-            filters.append("CONVERT(date, created_at) <= ?")
+            filters.append("CONVERT(date, r.created_at) <= ?")
             params.append(to_date)
+        if owner_user_id is not None:
+            filters.append(f"{self._owner_scope_sql('r')} = ?")
+            params.append(int(owner_user_id))
         where = " AND ".join(filters)
         return self.db.fetch_all(
-            f"SELECT * FROM options_execution_reversals WHERE {where} "
-            "ORDER BY created_at ASC",
+            f"SELECT r.* FROM options_execution_reversals r WHERE {where} "
+            "ORDER BY r.created_at ASC",
             params,
         ) or []

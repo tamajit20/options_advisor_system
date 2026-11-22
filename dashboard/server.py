@@ -288,16 +288,20 @@ def _history_reversal_cards(
     quality_band: str,
     channel_f: Optional[str],
     skip_trade_ids: set,
+    owner_user_id: Optional[int] = None,
 ) -> tuple[list, set, set]:
     """Zerodha flatten round-trips that never became a closed trade.
 
     These already sit in the history P&L strip. Return matching cards plus
     the underlyings and strategies seen in the date window (for filters).
+    Scoped to *owner_user_id* when set (private books).
     """
     if channel_f == "manual" or quality_band:
         return [], set(), set()
     try:
-        rows = db.fetch_all(
+        from database.execution_reversal_repo import ExecutionReversalRepo
+        owner_sql = ExecutionReversalRepo._owner_scope_sql("r")
+        sql = (
             "SELECT r.id, r.suggestion_id, r.trade_id, r.reason, r.created_at, "
             "       r.gross_pnl, r.total_charges, r.net_pnl, r.matched_qty, "
             "       r.notes, r.legs_json, "
@@ -306,9 +310,13 @@ def _history_reversal_cards(
             "LEFT JOIN options_suggestions s ON s.suggestion_id = r.suggestion_id "
             "WHERE CONVERT(date, r.created_at) >= ? "
             "  AND CONVERT(date, r.created_at) <= ? "
-            "ORDER BY r.created_at DESC",
-            [from_date, to_date],
-        ) or []
+        )
+        params: list = [from_date, to_date]
+        if owner_user_id is not None:
+            sql += f" AND {owner_sql} = ? "
+            params.append(int(owner_user_id))
+        sql += "ORDER BY r.created_at DESC"
+        rows = db.fetch_all(sql, params) or []
     except Exception:
         logger.debug("history execution reversals unavailable", exc_info=True)
         return [], set(), set()
@@ -3921,7 +3929,7 @@ def create_app() -> Flask:
         rev_to = next((p for f, p in zip(date_filters, params) if "<=" in f), None)
         try:
             rev_rows = ExecutionReversalRepo(db).list_between(
-                from_date=rev_from, to_date=rev_to,
+                from_date=rev_from, to_date=rev_to, owner_user_id=uid,
             )
         except Exception:
             logger.debug("execution reversals unavailable", exc_info=True)
@@ -4231,9 +4239,14 @@ def create_app() -> Flask:
         channel_f = _normalize_execution_channel_filter(
             request.args.get("channel") or request.args.get("execution_channel"),
         )
+        from dashboard.auth import current_user_id
+        uid = current_user_id()
         where = "t.status IN ('CLOSED', 'EXPIRED') AND t.net_pnl IS NOT NULL"
         if date_filters:
             where += " AND " + " AND ".join(date_filters)
+        if uid is not None:
+            where += " AND t.owner_user_id = ? "
+            params = list(params) + [int(uid)]
 
         from database.execution_reversal_repo import ExecutionReversalRepo
 
@@ -4241,7 +4254,7 @@ def create_app() -> Flask:
         rev_to = next((p for f, p in zip(date_filters, params) if "<=" in f), None)
         try:
             rev_rows = ExecutionReversalRepo(db).list_between(
-                from_date=rev_from, to_date=rev_to,
+                from_date=rev_from, to_date=rev_to, owner_user_id=uid,
             )
         except Exception:
             logger.debug("execution reversals unavailable", exc_info=True)
@@ -4655,6 +4668,7 @@ def create_app() -> Flask:
             quality_band=quality_band,
             channel_f=channel_f,
             skip_trade_ids={t.get("trade_id") for t in out if t.get("trade_id")},
+            owner_user_id=uid,
         )
         out.extend(rev_cards)
 
