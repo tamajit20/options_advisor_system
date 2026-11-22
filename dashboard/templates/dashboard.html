@@ -50,6 +50,16 @@
     <button type="button" class="options-subtab" data-tab="learn">Learning</button>
   </nav>
   <div class="header-actions">
+    <div id="app-user-chip" class="idx-chip" hidden title="Signed-in app user">
+      <span class="idx-chip-label" id="app-user-label">User</span>
+      <span class="idx-chip-src" id="app-user-role"></span>
+      <a href="/dashboard-logout" class="zerodha-margin-refresh-btn" style="text-decoration:none;margin-left:6px"
+         title="Sign out of the dashboard">Logout</a>
+    </div>
+    <div id="feed-status-chip" class="idx-chip" hidden title="Admin Zerodha feed (ticks / MTM)">
+      <span class="idx-chip-label">Feed</span>
+      <span class="idx-chip-src" id="feed-status-label">—</span>
+    </div>
     <div id="zerodha-profile-chip" class="idx-chip idx-chip-live zerodha-funds-chip" hidden
          title="Available margin — updates every 30 minutes."
          aria-label="Zerodha available margin">
@@ -91,19 +101,22 @@
         <button class="nav-item" data-tab="history">
           <span class="nav-icon">📜</span><span class="nav-label">History</span>
         </button>
-        <button class="nav-item" data-tab="logs">
+        <button class="nav-item admin-only" data-tab="logs" hidden>
           <span class="nav-icon">🪵</span><span class="nav-label">Logs</span>
         </button>
-        <button class="nav-item" data-tab="jobs">
+        <button class="nav-item admin-only" data-tab="jobs" hidden>
           <span class="nav-icon">🔧</span><span class="nav-label">Jobs</span>
         </button>
-        <button class="nav-item" data-tab="wsmon">
+        <button class="nav-item admin-only" data-tab="wsmon" hidden>
           <span class="nav-icon">📡</span><span class="nav-label">WS Monitor</span>
         </button>
         <button class="nav-item" data-tab="notifications">
           <span class="nav-icon">🔔</span>
           <span class="nav-label">Alerts</span>
           <span id="notif-tab-badge" class="notif-tab-badge" hidden>0</span>
+        </button>
+        <button class="nav-item admin-only" data-tab="users" hidden>
+          <span class="nav-icon">👤</span><span class="nav-label">Users</span>
         </button>
         <button class="nav-item" data-tab="config">
           <span class="nav-icon">⚙️</span><span class="nav-label">Config</span>
@@ -244,6 +257,18 @@
       <div id="hist-pane-performance" hidden>
         <div id="perf-container" class="loading">Loading…</div>
       </div>
+    </article>
+
+    <article class="panel" id="panel-users" aria-hidden="true">
+      <h2 class="panel-title">Users</h2>
+      <p class="muted" style="font-size:.85rem;margin:0 0 12px">Admin only — create traders, disable accounts, transfer admin (exactly one admin at a time).</p>
+      <div class="filter-row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <input id="user-new-login" type="text" placeholder="Login" autocomplete="off" />
+        <input id="user-new-name" type="text" placeholder="Display name" autocomplete="off" />
+        <input id="user-new-password" type="password" placeholder="Temp password" autocomplete="new-password" />
+        <button type="button" class="btn" id="user-create-btn">Create user</button>
+      </div>
+      <div id="users-container" class="loading">Loading…</div>
     </article>
 
     <article class="panel" id="panel-logs" aria-hidden="true">

@@ -13,12 +13,17 @@ checks before any order leaves the app.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
+
+_ACTING_APP_USER_ID: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "zerodha_acting_app_user_id", default=None,
+)
 
 from config import STRATEGY_CONFIG, ZERODHA_API_CONFIG, ZERODHA_EXECUTION_CONFIG
 from contracts import TradeLegFill
@@ -142,8 +147,12 @@ def zerodha_execution_enabled(db: SQLServerConnection) -> bool:
     return zerodha_execution_config_enabled() and zerodha_execution_runtime_enabled(db)
 
 
-def zerodha_session_ready() -> bool:
-    session = load_session()
+def zerodha_session_ready(*, app_user_id: Optional[int] = None) -> bool:
+    if app_user_id is not None:
+        from providers.zerodha.session import load_session_for_user
+        session = load_session_for_user(int(app_user_id))
+    else:
+        session = load_session()
     return session is not None and is_token_valid(session)
 
 
@@ -160,12 +169,16 @@ def zerodha_margin_quote_ready() -> bool:
     return zerodha_session_ready()
 
 
-def zerodha_execution_ready(db: SQLServerConnection) -> bool:
+def zerodha_execution_ready(
+    db: SQLServerConnection,
+    *,
+    app_user_id: Optional[int] = None,
+) -> bool:
     if not zerodha_execution_enabled(db):
         return False
     if not ZERODHA_API_CONFIG.get("api_key"):
         return False
-    return zerodha_session_ready()
+    return zerodha_session_ready(app_user_id=app_user_id)
 
 
 def trade_execution_channel(db: SQLServerConnection, trade_row: dict) -> str:
@@ -348,10 +361,18 @@ def _lock_for(key: str) -> threading.Lock:
         return _LOCKS[key]
 
 
-def _build_client() -> Tuple[KiteExecutionFacade, InstrumentMaster]:
+def _build_client(
+    *,
+    app_user_id: Optional[int] = None,
+) -> Tuple[KiteExecutionFacade, InstrumentMaster]:
     if not ZERODHA_API_CONFIG.get("api_key"):
         raise ZerodhaExecutionError("OPT_ZERODHA_API_KEY is not configured")
-    session = load_session()
+    uid = app_user_id if app_user_id is not None else _ACTING_APP_USER_ID.get()
+    if uid is not None:
+        from providers.zerodha.session import load_session_for_user
+        session = load_session_for_user(int(uid))
+    else:
+        session = load_session()
     if session is None or not is_token_valid(session):
         raise ZerodhaExecutionError(
             "Zerodha session missing or expired — log in on the dashboard first"
@@ -775,6 +796,7 @@ def _place_and_monitor_leg(
         "execution_job_id": execution_job_id,
         "created_at": now,
         "updated_at": now,
+        "owner_user_id": _ACTING_APP_USER_ID.get(),
     })
     db.commit()
 
@@ -1887,6 +1909,7 @@ def execute_suggestion_in_zerodha(
     ack_out_of_band: bool = False,
     execution_job_id: Optional[int] = None,
     lots_override: Optional[int] = None,
+    owner_user_id: Optional[int] = None,
 ) -> ExecutionOutcome:
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError(
@@ -1894,10 +1917,11 @@ def execute_suggestion_in_zerodha(
             "and the trade_execution_enabled runtime flag"
         )
 
-    lock = _lock_for(f"sugg:{suggestion_id}")
+    lock = _lock_for(f"sugg:{suggestion_id}:u:{owner_user_id or 0}")
     if not lock.acquire(blocking=False):
         raise ZerodhaExecutionError("Execution already in progress for this suggestion")
 
+    token = _ACTING_APP_USER_ID.set(int(owner_user_id) if owner_user_id else None)
     try:
         suggestion, legs, facade, master, live_map, inst_map, ordered, strategy, _margin = (
             _entry_context(
@@ -2037,6 +2061,7 @@ def execute_suggestion_in_zerodha(
                 # spot drift the manual path applies.
                 skip_execution_gate=True,
                 execution_provider=EXECUTION_PROVIDER_ZERODHA,
+                owner_user_id=owner_user_id,
             )
         except Exception as exc:
             _handle_leg_failure(
@@ -2097,6 +2122,7 @@ def execute_suggestion_in_zerodha(
             job_id=execution_job_id,
         )
     finally:
+        _ACTING_APP_USER_ID.reset(token)
         lock.release()
 
 
@@ -2108,13 +2134,18 @@ def execute_suggestion_in_zerodha_async(
     leg_limits: Optional[Dict[int, float]] = None,
     ack_out_of_band: bool = False,
     lots_override: Optional[int] = None,
+    owner_user_id: Optional[int] = None,
 ) -> ExecutionOutcome:
     """Start background entry execution; returns immediately with job_id."""
     if not zerodha_execution_enabled(db):
         raise ZerodhaExecutionError("Zerodha execution is disabled")
     _assert_execution_not_in_flight(db, suggestion_id=suggestion_id)
-    # Fail before the job is queued if funds / live prices / gates fail.
-    _entry_context(db, suggestion_id, leg_limits, lots_override)
+    token = _ACTING_APP_USER_ID.set(int(owner_user_id) if owner_user_id else None)
+    try:
+        # Fail before the job is queued if funds / live prices / gates fail.
+        _entry_context(db, suggestion_id, leg_limits, lots_override)
+    finally:
+        _ACTING_APP_USER_ID.reset(token)
 
     suggestion = SuggestionRepo(db).get(suggestion_id)
     if suggestion is None:
@@ -2130,6 +2161,7 @@ def execute_suggestion_in_zerodha_async(
             ack_out_of_band=ack_out_of_band,
             execution_job_id=job_id,
             lots_override=lots_override,
+            owner_user_id=owner_user_id,
         )
 
     job_id = submit_execution_job(
@@ -2242,6 +2274,7 @@ def close_trade_in_zerodha(
     if not lock.acquire(blocking=False):
         raise ZerodhaExecutionError("Close already in progress for this trade")
 
+    owner_token = None
     try:
         trd = TradeRepo(db)
         trade = trd.get(trade_id)
@@ -2251,6 +2284,10 @@ def close_trade_in_zerodha(
             raise ZerodhaExecutionError(
                 f"Trade status is {trade.get('status')!r} — cannot close"
             )
+        # Auto-close / dashboard close must use the trade owner's Kite token.
+        owner_raw = trade.get("owner_user_id")
+        if owner_raw is not None:
+            owner_token = _ACTING_APP_USER_ID.set(int(owner_raw))
 
         all_legs = trd.legs_with_suggestion_info(trade_id)
         executed_legs = [l for l in all_legs if l.get("executed")]
@@ -2394,6 +2431,8 @@ def close_trade_in_zerodha(
             job_id=execution_job_id,
         )
     finally:
+        if owner_token is not None:
+            _ACTING_APP_USER_ID.reset(owner_token)
         lock.release()
 
 

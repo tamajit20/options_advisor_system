@@ -129,11 +129,11 @@ Closed-trade join on 2026-09-10 (16 CLOSED rows, 4 wins / 12 losses) found **no 
 
 ---
 
-## 🟢 Platform — Multi-user login (parked Nov 2026)
+## 🟢 Platform — Multi-user login (in progress — Nov 2026)
 
-**Status:** Plan finalized; **implementation parked** until explicitly started.  
-**Today:** One shared `OPT_DASHBOARD_API_KEY`, one `data/zerodha_session.json`, one Kite app key/secret, global `options_suggestions` / `options_trades` / notifications (no `owner_user_id`).  
-**Test stubs:** `tests/test_dashboard/test_multi_user_future.py`
+**Status:** Implementing on branch `feature/multi-user-login`.  
+**Decisions locked:** Admin own-book only (1A); parallel suggestion execute (2A); logs/jobs/WS **admin-only**; alerts scoped by `owner_user_id` (admin sees all).  
+**Tests:** `tests/test_dashboard/test_multi_user_future.py`
 
 ### Locked decisions
 | Rule | Detail |
@@ -144,7 +144,7 @@ Closed-trade join on 2026-09-10 (16 CLOSED rows, 4 wins / 12 losses) found **no 
 | Shared suggestions | Everyone sees the same engine suggestions / sit-outs / market context |
 | Private book | Trades, legs, broker orders, History P&L, trade-scoped notifications scoped by `owner_user_id` |
 | Admin UI | User list: create / disable / transfer admin |
-| Logs | System, Jobs, and WS/feed logs visible to **both** admin and non-admin |
+| Logs | System / Jobs / WS Monitor APIs+UI = **admin only**. Alerts: non-admin = own `owner_user_id`; admin = all |
 
 ### Target shape
 - **Auth:** Real app users (replace single dashboard API-key gate). Cookie identifies the app user.
@@ -178,7 +178,7 @@ Closed-trade join on 2026-09-10 (16 CLOSED rows, 4 wins / 12 losses) found **no 
 
 | Item | Status |
 |---|---|
-| **Multi-user login** (admin feed / per-user orders) | **Parked Nov 2026** — full plan → [Platform — Multi-user login](#-platform--multi-user-login-parked-nov-2026) |
+| **Multi-user login** (admin feed / per-user orders) | **In progress** — [Platform — Multi-user login](#-platform--multi-user-login-in-progress--nov-2026) |
 | Broker-agnostic adapter layer (ZerodhaAdapter / NoOpAdapter) | Discussed only — not implementing yet |
 | Telegram / email notification dispatcher | Discussed only — not implementing yet |
 | Trade Action Panel — full rule fusion + broker execution | Advisory panel shipped May 2026; remaining UI items → Risk & Monitoring |

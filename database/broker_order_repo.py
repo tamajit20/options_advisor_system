@@ -103,9 +103,9 @@ class BrokerOrderRepo:
                tradingsymbol, exchange, transaction_type, quantity, limit_price,
                fill_price, status, tag, error_message, retry_count,
                filled_quantity, pending_quantity, status_message, order_type,
-               validity, execution_job_id, created_at, updated_at)
+               validity, execution_job_id, created_at, updated_at, owner_user_id)
             OUTPUT INSERTED.id
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 row["operation"],
@@ -131,6 +131,7 @@ class BrokerOrderRepo:
                 row.get("execution_job_id"),
                 row.get("created_at"),
                 row.get("updated_at"),
+                row.get("owner_user_id"),
             ],
         )
         out = cur.fetchone()

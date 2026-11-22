@@ -127,8 +127,28 @@ def is_token_valid(session: Optional[ZerodhaSession], now: Optional[datetime] = 
 # ---------------------------------------------------------------------------
 # Read / write
 # ---------------------------------------------------------------------------
-def load_session(path: Optional[Path] = None) -> Optional[ZerodhaSession]:
-    """Read the persisted session. Returns None if missing or unreadable."""
+def _session_from_db_row(row: dict) -> Optional[ZerodhaSession]:
+    if not row or not row.get("access_token"):
+        return None
+    gen = row.get("generated_at")
+    if isinstance(gen, str):
+        gen = datetime.fromisoformat(gen)
+    if gen is None:
+        return None
+    if getattr(gen, "tzinfo", None) is None:
+        gen = gen.replace(tzinfo=_IST)
+    from config import ZERODHA_API_CONFIG
+    api_key = str(row.get("api_key") or ZERODHA_API_CONFIG.get("api_key") or "")
+    return ZerodhaSession(
+        api_key=api_key,
+        access_token=str(row["access_token"]),
+        user_id=str(row.get("kite_user_id") or ""),
+        generated_at=gen,
+    )
+
+
+def load_session_from_file(path: Optional[Path] = None) -> Optional[ZerodhaSession]:
+    """Read the legacy shared file session."""
     p = path or _session_path()
     if not p.exists():
         return None
@@ -139,6 +159,55 @@ def load_session(path: Optional[Path] = None) -> Optional[ZerodhaSession]:
     except (OSError, ValueError, KeyError) as exc:
         logger.warning("zerodha session unreadable at %s: %s", p, exc)
         return None
+
+
+def load_session_for_user(app_user_id: int) -> Optional[ZerodhaSession]:
+    """Load Zerodha token for a specific app user from SQL."""
+    try:
+        from database.connection import SQLServerConnection
+        from database.zerodha_session_repo import ZerodhaSessionRepo
+        db = SQLServerConnection()
+        db.connect()
+        try:
+            row = ZerodhaSessionRepo(db).get(int(app_user_id))
+            return _session_from_db_row(row or {})
+        finally:
+            db.close()
+    except Exception:
+        logger.debug("load_session_for_user(%s) failed", app_user_id, exc_info=True)
+        return None
+
+
+def load_admin_session() -> Optional[ZerodhaSession]:
+    """Zerodha session for the sole admin (feed / ws_runner)."""
+    try:
+        from database.connection import SQLServerConnection
+        from database.app_user_repo import AppUserRepo
+        db = SQLServerConnection()
+        db.connect()
+        try:
+            admin = AppUserRepo(db).get_admin()
+            if admin:
+                sess = load_session_for_user(int(admin["id"]))
+                if sess is not None:
+                    return sess
+        finally:
+            db.close()
+    except Exception:
+        logger.debug("load_admin_session failed", exc_info=True)
+    # Transition: fall back to shared file until admin row is imported.
+    return load_session_from_file()
+
+
+def load_session(path: Optional[Path] = None) -> Optional[ZerodhaSession]:
+    """Default session load — admin/feed preferred, then legacy file.
+
+    Trading paths that need a specific user should call
+    ``load_session_for_user`` instead.
+    """
+    if path is not None:
+        return load_session_from_file(path)
+    return load_admin_session()
 
 
 def _restrict_session_file_permissions(path: Path) -> None:
@@ -225,13 +294,42 @@ def build_login_url() -> str:
     return KiteConnect(api_key=api_key).login_url()
 
 
-def exchange_request_token(request_token: str) -> ZerodhaSession:
+def save_session_for_user(app_user_id: int, session: ZerodhaSession) -> None:
+    """Persist token to SQL for *app_user_id*; also write file if user is admin."""
+    from database.connection import SQLServerConnection
+    from database.app_user_repo import AppUserRepo
+    from database.zerodha_session_repo import ZerodhaSessionRepo
+
+    gen = session.generated_at
+    gen_naive = gen.replace(tzinfo=None) if getattr(gen, "tzinfo", None) else gen
+    db = SQLServerConnection()
+    db.connect()
+    try:
+        ZerodhaSessionRepo(db).upsert(
+            int(app_user_id),
+            access_token=session.access_token,
+            kite_user_id=session.user_id or "",
+            api_key=session.api_key,
+            generated_at=gen_naive,
+        )
+        admin = AppUserRepo(db).get_admin()
+        is_admin = bool(admin and int(admin["id"]) == int(app_user_id))
+        db.commit()
+    finally:
+        db.close()
+    if is_admin:
+        save_session(session)
+
+
+def exchange_request_token(
+    request_token: str,
+    *,
+    app_user_id: Optional[int] = None,
+) -> ZerodhaSession:
     """Exchange a Kite ``request_token`` for an access_token and persist it.
 
-    Raises:
-        RuntimeError: api credentials missing.
-        ValueError:   request_token empty.
-        Exception:    kiteconnect.generate_session() failure (token reused / invalid).
+    When *app_user_id* is set, store under ``zerodha_sessions`` for that user
+    (and mirror to file if they are admin). Otherwise write the legacy file only.
     """
     from config import ZERODHA_API_CONFIG
     from kiteconnect import KiteConnect  # type: ignore[import-not-found]
@@ -254,10 +352,13 @@ def exchange_request_token(request_token: str) -> ZerodhaSession:
         user_id=data.get("user_id", ""),
         generated_at=datetime.now(tz=_IST),
     )
-    save_session(session)
+    if app_user_id is not None:
+        save_session_for_user(int(app_user_id), session)
+    else:
+        save_session(session)
     logger.info(
-        "zerodha session minted: user_id=%s generated_at=%s",
-        session.user_id, session.generated_at.isoformat(),
+        "zerodha session minted: kite_user=%s app_user_id=%s generated_at=%s",
+        session.user_id, app_user_id, session.generated_at.isoformat(),
     )
     try:
         from providers.zerodha.ws_runner_control import notify_session_updated

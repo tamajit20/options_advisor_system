@@ -2790,6 +2790,7 @@ function switchTab(name) {
     if (typeof window.renderLearningPage === 'function') window.renderLearningPage();
   }
   if (name === 'history')       loadHistory();
+  if (name === 'users')         loadUsersPane();
   if (name === 'logs')          loadLogsPane();
   if (name === 'jobs')          loadJobs();
   if (name === 'wsmon')         loadWsMonitor();
@@ -13237,7 +13238,122 @@ function _debounce(fn, ms) {
   };
 }
 
+// ---------------- App user / multi-user ----------------
+window.__OA_ME = null;
+
+async function loadAppMe() {
+  try {
+    const data = await API('/api/me');
+    window.__OA_ME = data;
+    const u = data && data.user;
+    const chip = document.getElementById('app-user-chip');
+    const label = document.getElementById('app-user-label');
+    const role = document.getElementById('app-user-role');
+    if (chip && u) {
+      chip.hidden = false;
+      if (label) label.textContent = u.display_name || u.login || 'User';
+      if (role) role.textContent = u.is_admin ? 'Admin' : 'User';
+    }
+    const feedChip = document.getElementById('feed-status-chip');
+    const feedLabel = document.getElementById('feed-status-label');
+    if (feedChip && data.feed) {
+      feedChip.hidden = false;
+      if (feedLabel) feedLabel.textContent = data.feed.ready ? 'OK' : 'Offline';
+    }
+    document.querySelectorAll('.admin-only').forEach(el => {
+      el.hidden = !(u && u.is_admin);
+    });
+    // Hide admin tabs in mobile more-drawer too
+    document.querySelectorAll('.more-drawer-item[data-tab="logs"], .more-drawer-item[data-tab="jobs"], .more-drawer-item[data-tab="wsmon"]').forEach(el => {
+      el.hidden = !(u && u.is_admin);
+    });
+  } catch (e) {
+    console.warn('loadAppMe failed', e);
+  }
+}
+
+async function loadUsersPane() {
+  const box = document.getElementById('users-container');
+  if (!box) return;
+  box.className = 'loading';
+  box.textContent = 'Loading…';
+  try {
+    const data = await API('/api/users');
+    const users = (data && data.users) || [];
+    if (!users.length) {
+      box.className = '';
+      box.textContent = 'No users yet.';
+      return;
+    }
+    box.className = '';
+    box.innerHTML = `<table class="data-table"><thead><tr>
+      <th>Login</th><th>Name</th><th>Role</th><th>Active</th><th>Actions</th>
+    </tr></thead><tbody>${users.map(u => `
+      <tr>
+        <td>${escapeHtml(u.login || '')}</td>
+        <td>${escapeHtml(u.display_name || '')}</td>
+        <td>${u.is_admin ? 'Admin' : 'User'}</td>
+        <td>${u.is_active ? 'Yes' : 'No'}</td>
+        <td style="white-space:nowrap">
+          ${u.is_admin ? '' : `<button type="button" class="btn btn-sm" data-transfer-admin="${u.id}">Make admin</button>`}
+          ${u.is_admin ? '' : (u.is_active
+            ? `<button type="button" class="btn btn-sm" data-disable-user="${u.id}">Disable</button>`
+            : `<button type="button" class="btn btn-sm" data-enable-user="${u.id}">Enable</button>`)}
+        </td>
+      </tr>`).join('')}</tbody></table>`;
+    box.querySelectorAll('[data-transfer-admin]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Transfer admin to this user? You will become a normal user.')) return;
+        await API(`/api/users/${btn.dataset.transferAdmin}/transfer-admin`, { method: 'POST' });
+        toast('Admin transferred', 'ok');
+        await loadAppMe();
+        loadUsersPane();
+      });
+    });
+    box.querySelectorAll('[data-disable-user]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await API(`/api/users/${btn.dataset.disableUser}/disable`, { method: 'POST' });
+        loadUsersPane();
+      });
+    });
+    box.querySelectorAll('[data-enable-user]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await API(`/api/users/${btn.dataset.enableUser}/enable`, { method: 'POST' });
+        loadUsersPane();
+      });
+    });
+  } catch (e) {
+    box.className = 'err';
+    box.textContent = (e && e.message) || 'Failed to load users';
+  }
+}
+
+const _userCreateBtn = document.getElementById('user-create-btn');
+if (_userCreateBtn) {
+  _userCreateBtn.addEventListener('click', async () => {
+    const login = (document.getElementById('user-new-login') || {}).value || '';
+    const display_name = (document.getElementById('user-new-name') || {}).value || '';
+    const password = (document.getElementById('user-new-password') || {}).value || '';
+    try {
+      await API('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login, display_name, password }),
+      });
+      toast('User created', 'ok');
+      ['user-new-login', 'user-new-name', 'user-new-password'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+      loadUsersPane();
+    } catch (e) {
+      toast((e && e.message) || 'Create failed', 'err');
+    }
+  });
+}
+
 // ---------------- Boot ----------------
+loadAppMe();
 loadSuggestion();
 const _sugRunLiveBtn = $('#suggestion-run-live');
 if (_sugRunLiveBtn) _sugRunLiveBtn.addEventListener('click', runLiveSuggestionFromTab);

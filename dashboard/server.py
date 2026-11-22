@@ -203,16 +203,16 @@ def _zerodha_execution_ready(db: SQLServerConnection) -> bool:
 
 
 def _zerodha_execution_auth_required():
-    """Block broker execution APIs when dashboard auth is not configured."""
-    from dashboard.auth import configured_api_key
+    """Block broker execution APIs when no app user is logged in."""
+    from dashboard.auth import current_user
     from lifecycle.zerodha_executor import zerodha_execution_config_enabled
-    if zerodha_execution_config_enabled() and not configured_api_key():
+    if zerodha_execution_config_enabled() and current_user() is None:
         return jsonify({
             "error": (
-                "Zerodha execution requires OPT_DASHBOARD_API_KEY — "
-                "set it in .env.docker and restart the app"
+                "Zerodha execution requires an app login — "
+                "sign in at /dashboard-login first"
             ),
-        }), 503
+        }), 401
     return None
 
 
@@ -2406,6 +2406,129 @@ def create_app() -> Flask:
     from dashboard.auth import register_dashboard_auth
     register_dashboard_auth(app)
 
+    # ---------- App user / multi-user ----------
+    @app.route("/api/me")
+    def api_me():
+        from dashboard.auth import current_user
+        from providers.zerodha.session import (
+            is_token_valid, load_admin_session, load_session_for_user,
+        )
+        u = current_user()
+        if not u:
+            return jsonify({"user": None}), 401
+        my_sess = load_session_for_user(int(u["id"]))
+        admin_sess = load_admin_session()
+        return jsonify({
+            "user": u,
+            "zerodha": {
+                "ready": bool(my_sess and is_token_valid(my_sess)),
+                "kite_user_id": (my_sess.user_id if my_sess else None),
+            },
+            "feed": {
+                "ready": bool(admin_sess and is_token_valid(admin_sess)),
+                "kite_user_id": (admin_sess.user_id if admin_sess else None),
+                "is_admin_feed": bool(u.get("is_admin")),
+            },
+        })
+
+    @app.route("/api/users")
+    @_with_db
+    def api_users_list(db: SQLServerConnection):
+        from dashboard.auth import require_admin
+        from database.app_user_repo import AppUserRepo
+        gate = require_admin()
+        if gate is not None:
+            return gate
+        rows = AppUserRepo(db).list_users()
+        return jsonify({
+            "users": [AppUserRepo.public_row(r) for r in rows],
+        })
+
+    @app.route("/api/users", methods=["POST"])
+    @_with_db
+    def api_users_create(db: SQLServerConnection):
+        from dashboard.auth import require_admin
+        from database.app_user_repo import AppUserRepo
+        gate = require_admin()
+        if gate is not None:
+            return gate
+        body = request.get_json(silent=True) or {}
+        try:
+            uid = AppUserRepo(db).create_user(
+                login=str(body.get("login") or ""),
+                password=str(body.get("password") or ""),
+                display_name=body.get("display_name"),
+                is_admin=False,
+                is_active=True,
+            )
+            db.commit()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "user": AppUserRepo(db).get(uid)})
+
+    @app.route("/api/users/<int:user_id>/disable", methods=["POST"])
+    @_with_db
+    def api_users_disable(db: SQLServerConnection, user_id: int):
+        from dashboard.auth import require_admin
+        from database.app_user_repo import AppUserRepo
+        gate = require_admin()
+        if gate is not None:
+            return gate
+        try:
+            AppUserRepo(db).set_active(user_id, False)
+            db.commit()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True})
+
+    @app.route("/api/users/<int:user_id>/enable", methods=["POST"])
+    @_with_db
+    def api_users_enable(db: SQLServerConnection, user_id: int):
+        from dashboard.auth import require_admin
+        from database.app_user_repo import AppUserRepo
+        gate = require_admin()
+        if gate is not None:
+            return gate
+        AppUserRepo(db).set_active(user_id, True)
+        db.commit()
+        return jsonify({"ok": True})
+
+    @app.route("/api/users/<int:user_id>/transfer-admin", methods=["POST"])
+    @_with_db
+    def api_users_transfer_admin(db: SQLServerConnection, user_id: int):
+        from dashboard.auth import require_admin
+        from database.app_user_repo import AppUserRepo
+        gate = require_admin()
+        if gate is not None:
+            return gate
+        try:
+            AppUserRepo(db).transfer_admin(user_id)
+            db.commit()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "admin": AppUserRepo(db).get_admin()})
+
+    @app.route("/api/users/<int:user_id>/password", methods=["POST"])
+    @_with_db
+    def api_users_set_password(db: SQLServerConnection, user_id: int):
+        from dashboard.auth import current_user, require_admin
+        from database.app_user_repo import AppUserRepo
+        u = current_user()
+        if not u:
+            return jsonify({"error": "Unauthorized"}), 401
+        # Admin may reset anyone; user may reset own password.
+        if int(u["id"]) != int(user_id):
+            gate = require_admin()
+            if gate is not None:
+                return gate
+        body = request.get_json(silent=True) or {}
+        try:
+            AppUserRepo(db).set_password(user_id, str(body.get("password") or ""))
+            db.commit()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True})
+
     # ---------- HTML ----------
     @app.route("/")
     def index():
@@ -2453,8 +2576,9 @@ def create_app() -> Flask:
         if not rt:
             return redirect("/?tab=wsmon&zerodha_error=missing_request_token")
         try:
+            from dashboard.auth import current_user_id
             from providers.zerodha.session import exchange_request_token
-            exchange_request_token(rt)
+            exchange_request_token(rt, app_user_id=current_user_id())
         except Exception as exc:  # noqa: BLE001
             logger.exception("zerodha callback exchange failed")
             return redirect(f"/?tab=wsmon&zerodha_error={quote(str(exc)[:200])}")
@@ -2467,8 +2591,9 @@ def create_app() -> Flask:
         if not rt:
             return jsonify({"ok": False, "error": "request_token is required"}), 400
         try:
+            from dashboard.auth import current_user_id
             from providers.zerodha.session import exchange_request_token
-            session = exchange_request_token(rt)
+            session = exchange_request_token(rt, app_user_id=current_user_id())
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception as exc:  # noqa: BLE001
@@ -2500,10 +2625,28 @@ def create_app() -> Flask:
         The ws_runner container polls the session file and returns to a
         waiting state within ~5 seconds. No manual docker restart is needed.
         """
+        from dashboard.auth import current_user, current_user_id
+        from database.connection import SQLServerConnection
+        from database.zerodha_session_repo import ZerodhaSessionRepo
         from providers.zerodha.session import clear_session
         from providers.zerodha.account_snapshot import invalidate_account_cache
-        removed = clear_session()
+        uid = current_user_id()
+        removed_db = False
+        if uid is not None:
+            db = SQLServerConnection()
+            db.connect()
+            try:
+                removed_db = ZerodhaSessionRepo(db).clear(uid)
+                db.commit()
+            finally:
+                db.close()
+        # Admin logout also clears shared file so feed stops.
+        u = current_user()
+        removed_file = False
+        if u and u.get("is_admin"):
+            removed_file = clear_session()
         invalidate_account_cache()
+        removed = removed_db or removed_file
         return jsonify({
             "ok": True,
             "removed": bool(removed),
@@ -2573,6 +2716,21 @@ def create_app() -> Flask:
             )
             if (r.get("status") or "").upper() != "PENDING":
                 continue
+            # Per-user state: hide cards this user already executed/ignored.
+            from dashboard.auth import current_user_id
+            from database.suggestion_user_state_repo import SuggestionUserStateRepo
+            uid = current_user_id()
+            user_status = "PENDING"
+            user_trade_id = None
+            if uid is not None:
+                ust = SuggestionUserStateRepo(db).get(r["suggestion_id"], uid)
+                if ust:
+                    user_status = str(ust.get("status") or "PENDING").upper()
+                    user_trade_id = ust.get("trade_id")
+                if user_status in ("EXECUTED", "IGNORED"):
+                    continue
+            r_out["user_status"] = user_status
+            r_out["user_trade_id"] = user_trade_id
             r_out["execution_gate"] = {
                 "ok": gate.ok,
                 "vetoes": list(gate.vetoes),
@@ -2836,6 +2994,7 @@ def create_app() -> Flask:
             if sug_row:
                 spot_val = fetch_underlying_spot(str(sug_row.get("underlying") or "NIFTY"))
         try:
+            from dashboard.auth import current_user_id
             trade_id = mark_executed(
                 db, sid, fills,
                 spot_at_execution=spot_val,
@@ -2843,6 +3002,7 @@ def create_app() -> Flask:
                 execute_at_suggested=execute_at_suggested,
                 skip_execution_gate=skip_execution_gate,
                 lots_override=int(lots_raw) if lots_raw else None,
+                owner_user_id=current_user_id(),
             )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -2914,11 +3074,13 @@ def create_app() -> Flask:
             zerodha_execution_ready,
         )
         from config import ZERODHA_EXECUTION_CONFIG
-        if not zerodha_execution_ready(db):
+        from dashboard.auth import current_user_id
+        owner_uid = current_user_id()
+        if not zerodha_execution_ready(db, app_user_id=owner_uid):
             return jsonify({
                 "error": (
                     "Zerodha execution is not ready — enable the feature, "
-                    "log in to Zerodha, and turn on trade_execution_enabled"
+                    "log in to Zerodha (your account), and turn on trade_execution_enabled"
                 ),
             }), 403
         payload = request.get_json(silent=True) or {}
@@ -2940,6 +3102,7 @@ def create_app() -> Flask:
                     leg_limits=leg_limits or None,
                     ack_out_of_band=ack_oob,
                     lots_override=lots_override,
+                    owner_user_id=owner_uid,
                 )
                 return jsonify({
                     "ok": True,
@@ -2953,6 +3116,7 @@ def create_app() -> Flask:
                 leg_limits=leg_limits or None,
                 ack_out_of_band=ack_oob,
                 lots_override=lots_override,
+                owner_user_id=owner_uid,
             )
         except ZerodhaExecutionError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -3009,7 +3173,8 @@ def create_app() -> Flask:
         channel_f = _normalize_execution_channel_filter(
             request.args.get("channel") or request.args.get("execution_channel"),
         )
-        rows = trd.open_trades()
+        from dashboard.auth import current_user_id
+        rows = trd.open_trades(owner_user_id=current_user_id())
         stored_mtm = _stored_mtm_payloads(db)
         live_snap = _read_live_mtm_state().get("trades") or {}
         trade_ids = [r["trade_id"] for r in rows if r.get("trade_id")]
@@ -3114,10 +3279,12 @@ def create_app() -> Flask:
     @app.route("/api/trades/<trade_id>")
     @_with_db
     def api_trade_detail(db: SQLServerConnection, trade_id: str):
+        from dashboard.user_scope import trade_owned_or_404
         trd = TradeRepo(db)
         r = trd.get(trade_id)
-        if r is None:
-            return jsonify({"error": "Not found"}), 404
+        denied = trade_owned_or_404(r)
+        if denied is not None:
+            return denied
         r_out = _row(r)
         r_out["legs"] = [_row(l) for l in trd.legs(trade_id)]
         _enrich_trade_execution_channel(db, r_out)
@@ -3656,14 +3823,25 @@ def create_app() -> Flask:
     @app.route("/api/history/trades")
     @_with_db
     def api_history_trades(db: SQLServerConnection):
+        from dashboard.auth import current_user_id
         days = int(request.args.get("days", 30))
         since = (today_ist() - timedelta(days=days))
-        rows = db.fetch_all(
-            "SELECT TOP 200 * FROM options_trades "
-            "WHERE executed_on >= ? AND status IN ('CLOSED', 'EXPIRED') "
-            "ORDER BY executed_on DESC",
-            [since],
-        )
+        uid = current_user_id()
+        if uid is not None:
+            rows = db.fetch_all(
+                "SELECT TOP 200 * FROM options_trades "
+                "WHERE executed_on >= ? AND status IN ('CLOSED', 'EXPIRED') "
+                "AND owner_user_id = ? "
+                "ORDER BY executed_on DESC",
+                [since, int(uid)],
+            )
+        else:
+            rows = db.fetch_all(
+                "SELECT TOP 200 * FROM options_trades "
+                "WHERE executed_on >= ? AND status IN ('CLOSED', 'EXPIRED') "
+                "ORDER BY executed_on DESC",
+                [since],
+            )
         return jsonify({"trades": [_row(r) for r in rows]})
 
     @app.route("/api/stats/pnl-timeline")
@@ -3687,6 +3865,11 @@ def create_app() -> Flask:
             from_date, to_date, date_expr="t.closed_on",
         )
         filters.extend(date_filters)
+        from dashboard.auth import current_user_id
+        uid = current_user_id()
+        if uid is not None:
+            filters.append("t.owner_user_id = ?")
+            params.append(int(uid))
 
         from database.execution_reversal_repo import ExecutionReversalRepo
 
@@ -4349,6 +4532,11 @@ def create_app() -> Flask:
             f"  AND CONVERT(date, {_CLOSED_TRADE_DATE_EXPR}) <= ? "
         )
         params = [from_date_str, to_date_str]
+        from dashboard.auth import current_user_id
+        uid = current_user_id()
+        if uid is not None:
+            sql += " AND t.owner_user_id = ? "
+            params.append(int(uid))
         if underlying:
             sql += " AND s.underlying = ? "
             params.append(underlying)
@@ -4476,6 +4664,10 @@ def create_app() -> Flask:
     @app.route("/api/logs")
     @_with_db
     def api_logs(db: SQLServerConnection):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
         from config import RETENTION_CONFIG
         repo = LogRepo(db)
         level = request.args.get("level") or None
@@ -4496,6 +4688,10 @@ def create_app() -> Flask:
     @app.route("/api/logs/level-counts")
     @_with_db
     def api_log_counts(db: SQLServerConnection):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
         repo = LogRepo(db)
         hours = int(request.args.get("hours", 24))
         return jsonify(repo.counts_by_level(since_hours=hours))
@@ -4503,10 +4699,12 @@ def create_app() -> Flask:
     @app.route("/api/zerodha/execution-logs")
     @_with_db
     def api_zerodha_execution_logs(db: SQLServerConnection):
+        # Own-orders only for non-admin (filter below); admin sees all.
         from config import RETENTION_CONFIG
         from database.broker_order_repo import BrokerOrderRepo
         from database.models import TradeRepo
         from database.zerodha_execution_job_repo import ZerodhaExecutionJobRepo
+        from dashboard.auth import current_user, current_user_id
         from lifecycle.zerodha_execution_log import group_broker_orders
 
         days = int(request.args.get("days", RETENTION_CONFIG["hot_archive_keep_days"]))
@@ -4521,6 +4719,14 @@ def create_app() -> Flask:
             trade_id=trade_id,
             suggestion_id=suggestion_id,
         )
+        u = current_user()
+        uid = current_user_id()
+        if u and not u.get("is_admin") and uid is not None:
+            rows = [
+                r for r in rows
+                if r.get("owner_user_id") is not None
+                and int(r["owner_user_id"]) == int(uid)
+            ]
         trade_ids = {r["trade_id"] for r in rows if r.get("trade_id")}
         trade_names: dict = {}
         trd = TradeRepo(db)
@@ -4571,6 +4777,10 @@ def create_app() -> Flask:
     @app.route("/api/jobs/latest")
     @_with_db
     def api_jobs_latest(db: SQLServerConnection):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
         repo = JobLogRepo(db)
         rows = []
         for r in repo.latest_status_per_job():
@@ -4783,9 +4993,16 @@ def create_app() -> Flask:
 
         repo = NotificationRepo(db)
 
+        from dashboard.auth import current_user, current_user_id
+        u = current_user()
+        admin_all = bool(u and u.get("is_admin"))
+        owner_uid = None if admin_all else current_user_id()
+
         # Legacy ?unread=1 path (used by global banner refresh)
         if unread_only and not any([severity, category, notif_type, trade_id, from_dt, to_dt]):
-            rows = repo.unread(limit=limit)
+            rows = repo.unread(
+                limit=limit, owner_user_id=owner_uid, admin_all=admin_all,
+            )
             return jsonify({"notifications": [_notif_row_simple(r) for r in rows], "total": len(rows)})
 
         rows = repo.filtered(
@@ -4798,6 +5015,8 @@ def create_app() -> Flask:
             to_dt=to_dt,
             limit=limit,
             offset=offset,
+            owner_user_id=owner_uid,
+            admin_all=admin_all,
         )
         total = repo.count_filtered(
             severity=severity,
@@ -4806,6 +5025,8 @@ def create_app() -> Flask:
             trade_id=trade_id,
             from_dt=from_dt,
             to_dt=to_dt,
+            owner_user_id=owner_uid,
+            admin_all=admin_all,
         )
 
         return jsonify({
@@ -4819,7 +5040,13 @@ def create_app() -> Flask:
     @_with_db
     def api_notifications_stats(db: SQLServerConnection):
         """Return unread counts by severity and category for badge chips."""
-        return jsonify(NotificationRepo(db).stats())
+        from dashboard.auth import current_user, current_user_id
+        u = current_user()
+        admin_all = bool(u and u.get("is_admin"))
+        return jsonify(NotificationRepo(db).stats(
+            owner_user_id=None if admin_all else current_user_id(),
+            admin_all=admin_all,
+        ))
 
     @app.route("/api/alerts/stream")
     def api_alerts_stream():
@@ -4865,6 +5092,11 @@ def create_app() -> Flask:
     @app.route("/api/jobs/list")
     @_with_db
     def api_jobs_list(db: SQLServerConnection):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
+
         return jsonify(_build_jobs_list_payload(db))
 
     @app.route("/api/jobs/stream")
@@ -4896,6 +5128,11 @@ def create_app() -> Flask:
     @app.route("/api/jobs/<job_name>/trigger", methods=["POST"])
     @_with_db
     def api_jobs_trigger(db: SQLServerConnection, job_name: str):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
+
         from scheduler.scheduler import (
             BLOCKED_MANUAL_JOBS as _BLOCKED_MANUAL,
             JOB_FUNCS as _JOB_FUNCS,
@@ -4973,6 +5210,10 @@ def create_app() -> Flask:
     @app.route("/api/runtime-flags/<flag_key>", methods=["POST"])
     @_with_db
     def api_runtime_flags_set(db: SQLServerConnection, flag_key: str):
+        from dashboard.auth import require_admin
+        gate = require_admin()
+        if gate is not None:
+            return gate
         from database.runtime_flags import RuntimeFlagsRepo
         payload = request.get_json(silent=True) or {}
         if "value" not in payload:

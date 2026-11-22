@@ -66,6 +66,8 @@ def _cmd_init_db() -> int:
         # overwritten — operator toggles survive a re-init.
         from database.runtime_flags import RuntimeFlagsRepo
         RuntimeFlagsRepo(db).seed_defaults()
+        from lifecycle.bootstrap_admin import ensure_multi_user_bootstrap
+        ensure_multi_user_bootstrap(db)
         db.commit()
         logger.info("Database initialised successfully.")
         return 0
@@ -587,6 +589,10 @@ def _ensure_schema_on_startup() -> None:
         db.connect()
         try:
             create_all_tables(db)
+            from database.runtime_flags import RuntimeFlagsRepo
+            RuntimeFlagsRepo(db).seed_defaults()
+            from lifecycle.bootstrap_admin import ensure_multi_user_bootstrap
+            ensure_multi_user_bootstrap(db)
             db.commit()
             logger.info("Startup schema ensure completed (options tables + migrations).")
         finally:

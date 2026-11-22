@@ -414,3 +414,4 @@ class Notification:
     provider:                 Optional[str] = None      # e.g. 'zerodha', 'nse_eod'
     tick_age_ms:              Optional[int] = None      # age of the tick at dispatch
     flag_state_at_dispatch:   Optional[str] = None      # JSON snapshot of runtime flags
+    owner_user_id:            Optional[int] = None      # multi-user: trade/user scoped alerts

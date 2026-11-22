@@ -24,14 +24,20 @@ class TestNormalizeDdl:
 class TestListTables:
     def test_returns_expected_tables(self):
         tables = sc.list_tables()
-        assert len(tables) == 31
-        assert all(t.startswith("options_") for t in tables)
+        assert len(tables) == 34
         assert "options_runtime_flags" in tables
         assert "options_intraday_close_snapshot" in tables
         assert "options_trade_level_events" in tables
         assert "options_broker_orders" in tables
         assert "options_execution_reversals" in tables
         assert "options_zerodha_execution_jobs" in tables
+        assert "options_suggestion_user_state" in tables
+        assert "app_users" in tables
+        assert "zerodha_sessions" in tables
+        assert all(
+            t.startswith("options_") or t in ("app_users", "zerodha_sessions")
+            for t in tables
+        )
 
 
 class TestCreateAllTables:

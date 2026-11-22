@@ -1,6 +1,6 @@
 # Options Advisor - Complete Guide
 
-**Last updated:** 2026-11-18
+**Last updated:** 2026-11-22
 
 **Single document** for install, day-to-day ops, and architecture.  
 Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.
@@ -102,7 +102,7 @@ Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markd
   - Preferred: size **Standard_B2s**, OS disk **Standard SSD** (~32 GB), not Premium SSD
   - `setup-new-environment.ps1` converts Premium → Standard SSD automatically if needed
 - [ ] Repo cloned
-- [ ] Secrets: DB password, Zerodha API key/secret, `OPT_DASHBOARD_API_KEY`
+- [ ] Secrets: DB password, Zerodha API key/secret, `OPT_BOOTSTRAP_ADMIN_LOGIN` / `OPT_BOOTSTRAP_ADMIN_PASSWORD` (first admin), optional `OPT_DASHBOARD_SESSION_SECRET`
 - [ ] Optional: `OptionsAdvisorDB-*.bak` to restore
 
 ---
@@ -117,12 +117,12 @@ Ask Cursor: *"Follow README.md and bootstrap"*. Agents execute in order:
 | Step | Action                                                                                                                                                   |
 | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1    | Copy `deploy/azure/laptop.config.ps1.example` -> `laptop.config.ps1`; fill `VmHost`, `SshKeyPath`, Azure RG/VM, `LocalSqlServer`, and `TailscaleAuthKey` (reusable auth key from the Tailscale admin console; never commit) |
-| 2    | Copy `.env.docker.example` -> `.env.docker`; fill `MSSQL_SA_PASSWORD`, `OPT_DB_PASSWORD` (same), Zerodha keys, `OPT_DASHBOARD_API_KEY`. **Never commit** |
+| 2    | Copy `.env.docker.example` -> `.env.docker`; fill `MSSQL_SA_PASSWORD`, `OPT_DB_PASSWORD` (same), Zerodha keys, `OPT_BOOTSTRAP_ADMIN_LOGIN` / `OPT_BOOTSTRAP_ADMIN_PASSWORD` (seeds first admin). Optional `OPT_DASHBOARD_SESSION_SECRET`. **Never commit** |
 | 3    | `az login` if needed                                                                                                                                     |
 | 4    | `.\deploy\azure\setup-new-environment.ps1` (or `-RestoreFromBackup "PATH\to.bak"`; or `setup-laptop.ps1` only) — self-signed HTTPS, joins laptop + VM to Tailscale, then closes public inbound 22/80/443/5001 |
 | 5    | `python scripts/validate_setup_sync.py` then `.\deploy\azure\Test-EnvironmentSetup.ps1` until exit 0                                                     |
 | 6    | On VM: `git pull` + `chmod +x deploy/*.sh ...` + `./deploy/vm-restart.sh`                                                                                |
-| 7    | Report: `https://<VmHost>/` is the Tailscale address (accept cert warning once). Install the Tailscale app on the phone and sign in to the same tailnet. Set the Zerodha redirect to `https://<tailscale-name>.ts.net/zerodha/callback` (the MagicDNS name, not the `100.x` address). Zerodha login is still manual |
+| 7    | Report: `https://<VmHost>/` is the Tailscale address (accept cert warning once). Sign in at `/dashboard-login` with the bootstrap admin. Open **Users** (admin) to create traders. Each user clicks Zerodha Login for their own Kite token. Feed/ticks use the **admin** Zerodha session. Set the Zerodha redirect to `https://<tailscale-name>.ts.net/zerodha/callback` |
 
 
 **VM-only alternative:** `.\deploy\azure\remote-vm-install.ps1`, or SSH + clone + `.env.docker` + `./deploy/vm-install-deploy.sh`.
@@ -225,9 +225,11 @@ Enable flags / handlers live in `SCHEDULER_CONFIG["jobs"]` and `JOB_FUNCS` in `s
 | File                             | Purpose                                  | Commit? |
 | -------------------------------- | ---------------------------------------- | ------- |
 | `deploy/azure/laptop.config.ps1` | VM IP, SSH key, Azure RG, local SQL      | **No**  |
-| `.env.docker`                    | DB passwords, Zerodha, dashboard API key | **No**  |
-| `data/zerodha_session.json`      | Live Kite token                          | **No**  |
+| `.env.docker`                    | DB passwords, Zerodha, bootstrap admin login/password, session secret | **No**  |
+| `data/zerodha_session.json`      | Admin feed Kite token (mirrored from admin `zerodha_sessions`) | **No**  |
 | `*.example` templates            | Starters                                 | Yes     |
+
+**Multi-user:** First boot seeds `app_users` admin from `OPT_BOOTSTRAP_ADMIN_*`. Trades/orders/alerts carry `owner_user_id`. Admin: Users tab, Logs/Jobs/WS. Each trader logs into Zerodha separately; place/close use that trader's token; ticks use admin.
 
 
 Trading knobs: `config.py` + DB `options_config` (Part B4).
@@ -320,7 +322,7 @@ ACK refuses if `LAST_HOT_BACKUP.json` is missing or older than this export, `PEN
 | Stuck after VM reboot | `sudo systemctl enable --now docker tailscaled options-advisor`; then `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5001/health` |
 | HTTPS / cert fail     | `docker logs options_caddy`; cert includes the Tailscale IP; see A7   |
 | Archive stuck         | Laptop task; VM `git pull` + `vm-restart`; ACK conditions above. If merge fails with `\var\opt\mssql\...` paths, update `scripts/merge_archive_into_local.py` (RESTORE must WITH MOVE to local SQL data dir) |
-| Zerodha execute fails | `OPT_DASHBOARD_API_KEY` in VM `.env.docker`                           |
+| Zerodha execute fails | App login + that user's Zerodha session; `trade_execution_enabled` flag |
 | Live P&L looks frozen | UI always prefers a **priced live/snap** MTM (leg LTPs present); only then falls back to DB `last_mtm`. Net on the card chip, Live Profit Levels, and the close preview share one fill-based charge (`estChargesFromLegs`) |
 
 
@@ -383,7 +385,7 @@ flowchart LR
 ```
 
 Compose service names: `sqlserver`, `options_advisor`, `ws_runner` (profile `bundled` starts SQL).  
-Env: `.env.docker` -> `OPT_DB_*`, `OPT_PROVIDERS`, Zerodha keys, `OPT_DASHBOARD_PORT`, `OPT_DASHBOARD_API_KEY`.  
+Env: `.env.docker` -> `OPT_DB_*`, `OPT_PROVIDERS`, Zerodha keys, `OPT_DASHBOARD_PORT`, `OPT_BOOTSTRAP_ADMIN_*`, optional `OPT_DASHBOARD_SESSION_SECRET`.  
 Volumes: `sqlserver_data`, `./backups`, `./data`, `./logs`, `./archive`.  
 Code deploy: [A7](#a7-code-deploy).
 
@@ -469,7 +471,7 @@ flowchart TB
 
 
 
-Other important tables: `options_config`, `options_runtime_flags`, `options_job_log`, `options_system_logs`, `options_notifications`, `options_chain_5min`, `options_atm_iv_5min`, MTM / level-event tables, `options_simulations`, calendars, lot sizes, `options_zerodha_capital_snapshots` (Zerodha idle/utilised on change for History → Capital). Full list: `list_tables()`.
+Other important tables: `options_config`, `options_runtime_flags`, `options_job_log`, `options_system_logs`, `options_notifications`, `options_chain_5min`, `options_atm_iv_5min`, MTM / level-event tables, `options_simulations`, calendars, lot sizes, `options_zerodha_capital_snapshots` (Zerodha idle/utilised on change for History → Capital), plus multi-user `app_users`, `zerodha_sessions`, `options_suggestion_user_state` and `owner_user_id` on trades/orders/notifications. Full list: `list_tables()`.
 
 ---
 
@@ -861,7 +863,7 @@ pytest tests/test_database/test_schema.py tests/test_scheduler/test_scheduler.py
 | Index lot-size revision | `options_lot_sizes`, `config.py` `default_lot_sizes`, `scripts/migrate_nse_lot_sizes.py`, README B4 |
 | New module / boundary   | README B1 / B6 / B12                                                                           |
 | Code-only ship          | [A7](#a7-code-deploy)                                                                          |
-| Parked multi-user login | `FUTURE_ENHANCEMENT_SCOPES.md` → Platform — Multi-user login; stubs in `tests/test_dashboard/test_multi_user_future.py` |
+| Multi-user login | `app_users` / `zerodha_sessions` / `owner_user_id` / `options_suggestion_user_state`; bootstrap env; Users tab; `tests/test_dashboard/test_multi_user_future.py`; FUTURE scopes |
 
 
 **Agent shorthand:** saying **deploy** means document (if needed) → commit → push → VM deploy (A7).

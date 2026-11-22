@@ -58,6 +58,8 @@ _SECRET_KEYS = frozenset({
 })
 _DASHBOARD_SKIP = frozenset({
     "host", "port", "debug", "api_key", "public_base_url",
+    "session_secret", "bootstrap_admin_login", "bootstrap_admin_password",
+    "bootstrap_admin_name", "require_app_login",
 })
 
 # Old per-table retention keys in options_config → the two live knobs.

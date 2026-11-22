@@ -1107,6 +1107,76 @@ _TABLE_DDL: List[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS IX_options_zerodha_jobs_sugg ON options_zerodha_execution_jobs (suggestion_id, created_at)",
     "CREATE INDEX IF NOT EXISTS IX_options_zerodha_jobs_trade ON options_zerodha_execution_jobs (trade_id, created_at)",
+
+    # ---------------- Multi-user (app login + per-user Zerodha / books) ----------------
+    """
+    IF OBJECT_ID('app_users', 'U') IS NULL
+    CREATE TABLE app_users (
+        id              BIGINT IDENTITY(1,1) PRIMARY KEY,
+        login           NVARCHAR(80)  NOT NULL,
+        password_hash   NVARCHAR(255) NOT NULL,
+        display_name    NVARCHAR(120) NULL,
+        is_admin        BIT           NOT NULL DEFAULT 0,
+        is_active       BIT           NOT NULL DEFAULT 1,
+        created_at      DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        updated_at      DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        CONSTRAINT UX_app_users_login UNIQUE (login)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_app_users_admin ON app_users (is_admin, is_active)",
+
+    """
+    IF OBJECT_ID('zerodha_sessions', 'U') IS NULL
+    CREATE TABLE zerodha_sessions (
+        user_id         BIGINT        NOT NULL PRIMARY KEY,
+        kite_user_id    NVARCHAR(40)  NULL,
+        access_token    NVARCHAR(512) NOT NULL,
+        api_key         NVARCHAR(80)  NULL,
+        generated_at    DATETIME2(0)  NOT NULL,
+        updated_at      DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME()
+    )
+    """,
+
+    """
+    IF OBJECT_ID('options_suggestion_user_state', 'U') IS NULL
+    CREATE TABLE options_suggestion_user_state (
+        suggestion_id   NVARCHAR(40)  NOT NULL,
+        user_id         BIGINT        NOT NULL,
+        status          NVARCHAR(20)  NOT NULL DEFAULT 'PENDING',
+        trade_id        NVARCHAR(40)  NULL,
+        updated_at      DATETIME2(0)  NOT NULL DEFAULT SYSDATETIME(),
+        CONSTRAINT PK_options_suggestion_user_state PRIMARY KEY (suggestion_id, user_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_sug_user_state_user "
+    "ON options_suggestion_user_state (user_id, status)",
+
+    # owner_user_id columns (migration-safe ALTERs)
+    """
+    IF OBJECT_ID('options_trades', 'U') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_trades') AND name = 'owner_user_id')
+    ALTER TABLE options_trades ADD owner_user_id BIGINT NULL
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_trades_owner ON options_trades (owner_user_id, status)",
+
+    """
+    IF OBJECT_ID('options_broker_orders', 'U') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_broker_orders') AND name = 'owner_user_id')
+    ALTER TABLE options_broker_orders ADD owner_user_id BIGINT NULL
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_broker_orders_owner "
+    "ON options_broker_orders (owner_user_id, created_at)",
+
+    """
+    IF OBJECT_ID('options_notifications', 'U') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM sys.columns
+        WHERE object_id = OBJECT_ID('options_notifications') AND name = 'owner_user_id')
+    ALTER TABLE options_notifications ADD owner_user_id BIGINT NULL
+    """,
+    "CREATE INDEX IF NOT EXISTS IX_options_notifications_owner "
+    "ON options_notifications (owner_user_id, created_at DESC)",
 ]
 
 
@@ -1280,6 +1350,7 @@ def list_tables() -> List[str]:
         "options_events_calendar",
         "options_suggestions",
         "options_suggestion_legs",
+        "options_suggestion_user_state",
         "options_trades",
         "options_trade_legs",
         "options_resuggestions",
@@ -1301,4 +1372,7 @@ def list_tables() -> List[str]:
         "options_atm_iv_5min",
         "options_em_calibration",
         "options_zerodha_capital_snapshots",
+        # App auth / per-user Zerodha (not options_* prefix but required schema)
+        "app_users",
+        "zerodha_sessions",
     ]

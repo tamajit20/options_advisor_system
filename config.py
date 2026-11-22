@@ -1066,7 +1066,15 @@ DASHBOARD_CONFIG = {
     "host":         _env("OPT_DASHBOARD_HOST", "0.0.0.0"),
     "port":         _env_int("OPT_DASHBOARD_PORT", 5001),
     "debug":        _env_bool("OPT_DASHBOARD_DEBUG", False),
+    # Legacy shared key — optional break-glass; app user login is primary auth.
     "api_key":      _env("OPT_DASHBOARD_API_KEY", ""),
+    "session_secret": _env("OPT_DASHBOARD_SESSION_SECRET", ""),
+    "bootstrap_admin_login": _env("OPT_BOOTSTRAP_ADMIN_LOGIN", ""),
+    "bootstrap_admin_password": _env("OPT_BOOTSTRAP_ADMIN_PASSWORD", ""),
+    "bootstrap_admin_name": _env("OPT_BOOTSTRAP_ADMIN_NAME", ""),
+    # When true (default), dashboard requires an app_users login once any user exists
+    # (or bootstrap env is set). Set false only for emergency local debugging.
+    "require_app_login": _env_bool("OPT_DASHBOARD_REQUIRE_APP_LOGIN", True),
     # Optional fixed public URL (e.g. http://52.230.104.81:5001). When unset, derived
     # from each HTTP request Host / X-Forwarded-* headers (works on Azure without this).
     "public_base_url": _env("OPT_PUBLIC_BASE_URL", "").strip().rstrip("/"),

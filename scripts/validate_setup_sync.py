@@ -39,6 +39,10 @@ NEVER_ARCHIVE = frozenset({
     "options_expiry_calendar",
     "options_events_calendar",
     "options_trade_mtm_snapshot",
+    # Multi-user auth / per-user state (not historical market data)
+    "app_users",
+    "zerodha_sessions",
+    "options_suggestion_user_state",
 })
 
 

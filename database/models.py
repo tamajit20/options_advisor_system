@@ -1006,8 +1006,8 @@ class TradeRepo:
                actual_upper_breakeven, actual_lower_breakeven, actual_stop_loss_level,
                spot_at_execution,
                status, daily_status, exit_instruction, broken_state_json,
-               gross_pnl, total_charges, net_pnl, closed_on)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               gross_pnl, total_charges, net_pnl, closed_on, owner_user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 trade["trade_id"], trade["suggestion_id"], trade.get("trade_name"),
@@ -1019,7 +1019,7 @@ class TradeRepo:
                 trade.get("status", "ACTIVE"), trade.get("daily_status"),
                 trade.get("exit_instruction"), trade.get("broken_state_json"),
                 trade.get("gross_pnl"), trade.get("total_charges"), trade.get("net_pnl"),
-                trade.get("closed_on"),
+                trade.get("closed_on"), trade.get("owner_user_id"),
             ],
         ).close()
 
@@ -1110,7 +1110,15 @@ class TradeRepo:
             [trade_id],
         )
 
-    def open_trades(self) -> List[dict]:
+    def open_trades(self, *, owner_user_id: Optional[int] = None) -> List[dict]:
+        if owner_user_id is not None:
+            return self.db.fetch_all(
+                "SELECT * FROM options_trades "
+                "WHERE status NOT IN ('CLOSED', 'EXPIRED', 'VOID') "
+                "AND owner_user_id = ? "
+                "ORDER BY executed_on DESC",
+                [int(owner_user_id)],
+            )
         return self.db.fetch_all(
             "SELECT * FROM options_trades "
             "WHERE status NOT IN ('CLOSED', 'EXPIRED', 'VOID') "
@@ -1564,12 +1572,22 @@ class NotificationRepo:
         self.db = db
 
     def insert(self, n: Notification) -> None:
+        owner_id = getattr(n, "owner_user_id", None)
+        # Inherit owner from trade when caller omitted it.
+        if owner_id is None and n.related_trade_id:
+            tr = self.db.fetch_one(
+                "SELECT owner_user_id FROM options_trades WHERE trade_id = ?",
+                [n.related_trade_id],
+            )
+            if tr and tr.get("owner_user_id") is not None:
+                owner_id = int(tr["owner_user_id"])
         self.db.execute(
             "INSERT INTO options_notifications "
             "(created_at, notif_type, severity, title, body, "
             " related_suggestion_id, related_trade_id, "
-            " source_event_id, provider, tick_age_ms, flag_state_at_dispatch) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " source_event_id, provider, tick_age_ms, flag_state_at_dispatch, "
+            " owner_user_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 n.created_at, n.notif_type, n.severity, n.title[:200], n.body,
                 n.related_suggestion_id, n.related_trade_id,
@@ -1577,20 +1595,36 @@ class NotificationRepo:
                 getattr(n, "provider", None),
                 getattr(n, "tick_age_ms", None),
                 getattr(n, "flag_state_at_dispatch", None),
+                owner_id,
             ],
         ).close()
 
-    def unread(self, limit: int = 50) -> List[dict]:
+    def unread(self, limit: int = 50, *, owner_user_id: Optional[int] = None,
+               admin_all: bool = False) -> List[dict]:
+        if admin_all or owner_user_id is None:
+            return self.db.fetch_all(
+                "SELECT TOP (?) * FROM options_notifications "
+                "WHERE read_at IS NULL ORDER BY created_at DESC",
+                [limit],
+            )
         return self.db.fetch_all(
             "SELECT TOP (?) * FROM options_notifications "
-            "WHERE read_at IS NULL ORDER BY created_at DESC",
-            [limit],
+            "WHERE read_at IS NULL AND owner_user_id = ? "
+            "ORDER BY created_at DESC",
+            [limit, int(owner_user_id)],
         )
 
-    def recent(self, limit: int = 50) -> List[dict]:
+    def recent(self, limit: int = 50, *, owner_user_id: Optional[int] = None,
+               admin_all: bool = False) -> List[dict]:
+        if admin_all or owner_user_id is None:
+            return self.db.fetch_all(
+                "SELECT TOP (?) * FROM options_notifications ORDER BY created_at DESC",
+                [limit],
+            )
         return self.db.fetch_all(
-            "SELECT TOP (?) * FROM options_notifications ORDER BY created_at DESC",
-            [limit],
+            "SELECT TOP (?) * FROM options_notifications "
+            "WHERE owner_user_id = ? ORDER BY created_at DESC",
+            [limit, int(owner_user_id)],
         )
 
     def recent_for_trade(self, trade_id: str, *, minutes: int = 15) -> List[dict]:
@@ -1649,6 +1683,8 @@ class NotificationRepo:
         to_dt: Optional[datetime] = None,
         limit: int = 100,
         offset: int = 0,
+        owner_user_id: Optional[int] = None,
+        admin_all: bool = False,
     ) -> List[dict]:
         """Flexible filtered query for the Notifications tab.
 
@@ -1677,6 +1713,9 @@ class NotificationRepo:
         wheres: list[str] = []
         params: list = []
 
+        if not admin_all and owner_user_id is not None:
+            wheres.append("owner_user_id = ?")
+            params.append(int(owner_user_id))
         if unread_only:
             wheres.append("read_at IS NULL")
         if severity:
@@ -1717,6 +1756,8 @@ class NotificationRepo:
         trade_id: Optional[str] = None,
         from_dt: Optional[datetime] = None,
         to_dt: Optional[datetime] = None,
+        owner_user_id: Optional[int] = None,
+        admin_all: bool = False,
     ) -> int:
         _CATEGORY_TYPES: dict[str, list[str]] = {
             "sl":         ["SL_TRIGGER", "SL_HIT", "PRE_BREACH_WARNING",
@@ -1733,6 +1774,9 @@ class NotificationRepo:
         }
         wheres: list[str] = []
         params: list = []
+        if not admin_all and owner_user_id is not None:
+            wheres.append("owner_user_id = ?")
+            params.append(int(owner_user_id))
         if unread_only:
             wheres.append("read_at IS NULL")
         if severity:
@@ -1756,13 +1800,27 @@ class NotificationRepo:
             f"SELECT COUNT(*) FROM options_notifications {where_clause}", params
         ) or 0
 
-    def stats(self) -> dict:
+    def stats(
+        self,
+        *,
+        owner_user_id: Optional[int] = None,
+        admin_all: bool = False,
+    ) -> dict:
         """Return unread counts grouped by severity and category for badge display."""
-        rows = self.db.fetch_all(
-            "SELECT severity, notif_type, COUNT(*) AS cnt "
-            "FROM options_notifications WHERE read_at IS NULL "
-            "GROUP BY severity, notif_type"
-        )
+        if not admin_all and owner_user_id is not None:
+            rows = self.db.fetch_all(
+                "SELECT severity, notif_type, COUNT(*) AS cnt "
+                "FROM options_notifications WHERE read_at IS NULL "
+                "AND owner_user_id = ? "
+                "GROUP BY severity, notif_type",
+                [int(owner_user_id)],
+            )
+        else:
+            rows = self.db.fetch_all(
+                "SELECT severity, notif_type, COUNT(*) AS cnt "
+                "FROM options_notifications WHERE read_at IS NULL "
+                "GROUP BY severity, notif_type"
+            )
         by_sev: dict[str, int] = {}
         by_cat: dict[str, int] = {}
         _CAT_MAP = {
