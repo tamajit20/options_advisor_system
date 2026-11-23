@@ -23,16 +23,22 @@
 
   function syncMenuButtonActive() {
     const moreBtn = document.getElementById('bnav-more-btn');
-    const drawer = document.getElementById('more-drawer');
     if (!moreBtn) return;
-    const drawerOpen = drawer && !drawer.hidden;
-    const onSystem = SYSTEM_TABS.includes(getActiveTab());
-    moreBtn.classList.toggle('active', drawerOpen || onSystem);
+    // Bottom bar is menu-only on mobile — always highlight the hamburger.
+    moreBtn.classList.toggle('active', true);
+  }
+
+  function syncDrawerActiveItem() {
+    const tab = getActiveTab();
+    document.querySelectorAll('.more-drawer-item[data-tab]').forEach(btn => {
+      btn.classList.toggle('active', !!tab && btn.dataset.tab === tab);
+    });
   }
 
   function openMoreDrawer() {
     const drawer = document.getElementById('more-drawer');
     if (!drawer) return;
+    syncDrawerActiveItem();
     drawer.hidden = false;
     document.body.classList.add('more-drawer-open');
     syncMenuButtonActive();
@@ -106,6 +112,7 @@
       closeMoreDrawer();
       const out = orig(name);
       syncMenuButtonActive();
+      syncDrawerActiveItem();
       return out;
     };
     window.switchTab.__mobilePatched = true;

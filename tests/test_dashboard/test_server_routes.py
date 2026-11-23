@@ -62,6 +62,11 @@ class TestIndexRoute:
         assert 'id="hist-range-apply"' not in html
         assert 'id="perf-from"' not in html
         assert 'id="chart-from"' not in html
+        # Mobile: all sections live in the hamburger drawer (not top/bottom split).
+        assert 'id="bnav-more-btn"' in html
+        assert 'id="more-drawer-main-section"' in html
+        assert 'data-bnav-app="options"' not in html
+        assert html.count('class="bnav-item') == 1
 
 
 class TestHealth:

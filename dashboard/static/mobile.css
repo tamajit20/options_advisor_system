@@ -31,7 +31,9 @@
   .card-head-btn { min-height: 40px; padding: 8px 12px; }
 }
 
-/* ---------- Options Advisor subtabs (mobile) ---------- */
+/* ---------- Options Advisor subtabs ----------
+   Desktop keeps them available if shown; phone/tablet put every section
+   in the hamburger drawer instead of a second row under the header. */
 .options-subtabs {
   display: none;
 }
@@ -46,49 +48,10 @@
   }
   .signal-tile.is-on .signal-shape,
   .signal-tile--status .signal-shape { animation: none; }
+  /* Never show the header subtab strip on mobile — use Menu drawer. */
+  .app-header .options-subtabs,
   .app-header .options-subtabs:not([hidden]) {
-    display: flex;
-    flex: 1 0 100%;
-    order: 6;
-    position: relative;
-    z-index: 2;
-    width: auto;
-    max-width: 100%;
-    min-width: 0;
-    flex-wrap: wrap;
-    overflow: visible;
-    gap: 6px;
-    margin: 4px 0 0;
-    padding: 6px 0 2px;
-    background: transparent;
-    border-top: 1px solid rgba(255, 255, 255, 0.18);
-    touch-action: manipulation;
-  }
-  .app-header .options-subtab {
-    background: rgba(255, 255, 255, 0.12);
-    color: rgba(255, 255, 255, 0.9);
-    border-color: rgba(255, 255, 255, 0.28);
-  }
-  .app-header .options-subtab.active {
-    color: #fff;
-    border-color: #fff;
-    background: rgba(255, 255, 255, 0.24);
-  }
-  .options-subtab {
-    flex: 0 0 auto;
-    white-space: nowrap;
-    padding: 8px 14px;
-    font-size: 0.82rem;
-    border: 1px solid #2a3744;
-    border-radius: 8px;
-    background: var(--surface-alt);
-    color: var(--text-dim);
-    cursor: pointer;
-  }
-  .options-subtab.active {
-    color: var(--accent);
-    border-color: var(--accent);
-    background: rgba(56, 189, 248, 0.08);
+    display: none !important;
   }
 }
 
@@ -104,12 +67,12 @@
   color: var(--text-dim);
 }
 
-/* ---------- Bottom nav (4 items — two apps) ---------- */
+/* ---------- Bottom nav (menu / hamburger only) ---------- */
 @media (max-width: 1024px) {
   .bottom-nav {
     padding-bottom: env(safe-area-inset-bottom, 0);
     min-height: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0));
-    justify-content: space-around;
+    justify-content: stretch;
     overflow-x: hidden;
   }
   .bnav-item {
@@ -121,7 +84,7 @@
     padding: 4px 2px;
   }
   .bnav-item span:first-child { font-size: 20px; }
-  .bnav-item.bnav-more { color: var(--text-dim); }
+  .bnav-item.bnav-more { color: var(--accent); }
   .bnav-item.bnav-more.active { color: var(--accent); }
 
   .app-main {
@@ -191,6 +154,11 @@
   text-align: left;
 }
 .more-drawer-item:active { background: rgba(255, 255, 255, 0.06); }
+.more-drawer-item.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(56, 189, 248, 0.08);
+}
 .more-drawer-icon { font-size: 1.25rem; flex-shrink: 0; }
 .more-drawer-note {
   margin: 12px 4px 0;

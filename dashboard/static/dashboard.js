@@ -3062,7 +3062,8 @@ function switchTab(name) {
   });
   $$('.nav-item, .bnav-item').forEach(b => {
     if (b.classList.contains('bnav-more')) {
-      b.classList.toggle('active', SYSTEM_TABS.includes(name));
+      // Mobile: only the hamburger sits in the bottom bar; keep it accented.
+      b.classList.toggle('active', true);
       return;
     }
     const tab = b.dataset.tab;
@@ -3075,9 +3076,14 @@ function switchTab(name) {
   $$('.options-subtab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === name);
   });
+  $$('.more-drawer-item[data-tab]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === name);
+  });
   document.body.classList.remove('mobile-app-options', 'mobile-app-alerts');
   if (name === 'notifications') document.body.classList.add('mobile-app-alerts');
   else if (isOptionsTab(name)) document.body.classList.add('mobile-app-options');
+  // Header subtabs stay in the DOM for desktop/tests, but mobile.css hides
+  // them; keep hidden=false so desktop can still show when used.
   const optBar = document.getElementById('options-subtabs-bar');
   if (optBar) optBar.hidden = !isOptionsTab(name);
   if (name === 'suggestion')    loadSuggestion();
