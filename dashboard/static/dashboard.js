@@ -68,10 +68,34 @@ function _normLegKey(sym, expiry, strike, ot) {
 function _legacyLegKey(sym, strike, ot) {
   return `${String(sym || '').toUpperCase()}|${parseFloat(strike)}|${String(ot || '').toUpperCase()}`;
 }
+function formatStrikeDisplay(strike) {
+  if (strike == null || strike === '') return '';
+  const n = Number(strike);
+  if (!Number.isFinite(n)) return String(strike);
+  return Math.abs(n - Math.round(n)) < 1e-9
+    ? String(Math.round(n))
+    : String(parseFloat(n.toFixed(2)));
+}
+
+/** Readable contract label, e.g. BANKNIFTY 23 Nov 2026 63100 PE */
 function formatLegInstrument(l) {
   const exp = _normExpiry(l && (l.expiry_date || l.expiry));
-  const bits = [l && l.symbol, exp, l && l.strike != null ? l.strike : '', l && l.option_type]
-    .filter(b => b !== '' && b != null);
+  let expDisp = '';
+  if (exp) {
+    try {
+      expDisp = new Date(exp).toLocaleDateString('en-IN', {
+        day: '2-digit', month: 'short', year: 'numeric',
+      });
+    } catch {
+      expDisp = exp;
+    }
+  }
+  const bits = [
+    l && l.symbol,
+    expDisp,
+    formatStrikeDisplay(l && l.strike),
+    l && l.option_type,
+  ].filter(b => b !== '' && b != null);
   return escapeHtml(bits.join(' '));
 }
 
@@ -8329,7 +8353,7 @@ function creditBreakdownHtml(legs, mode, live = false) {
     // the user edits leg price inputs — no separate LTP widget needed.
     return `<span class="cb-leg">
       <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'} tag-sm">${escapeHtml(l.action)}</span>
-      <span class="cb-leg-name">${escapeHtml(l.option_type||'')} ${l.strike||''}</span>
+      <span class="cb-leg-name">${formatLegInstrument(l)}</span>
       <span data-cb-leg="${l.leg_order}" data-cb-action="${escapeHtml(l.action)}" style="color:${color};font-weight:600">${l.action === 'SELL' ? '+' : '\u2212'}\u20b9${fmt(price)}</span>
     </span>`;
   }).join('<span class="cb-sep"> + </span>');
@@ -9113,7 +9137,7 @@ function renderSuggestion(s, readOnly = false, allSuggestions = [], inlineHeader
         ${spreadBadge(s.legs, l)}
       </div>
       <div>
-        <div><strong>${escapeHtml(l.symbol)} ${escapeHtml(l.expiry_date || '')} ${l.strike} ${l.option_type}</strong>${_legOverlapTag(l, s.instrument_overlaps)}</div>
+        <div><strong>${formatLegInstrument(l)}</strong>${_legOverlapTag(l, s.instrument_overlaps)}</div>
         <div class="leg-meta">${legMetaHtml}</div>
         ${liveHtml}
         <div class="leg-hints">${thresholdHint} · ${closeHint}</div>
@@ -10192,22 +10216,11 @@ async function submitSupplement(tradeId, panel) {
     } catch (err) { toast(err.message, 'err'); }
   });
 }
-function _showLegsInCloseGap(panel) {
-  const slot = panel && panel.querySelector('.trade-legs-slot');
-  if (!slot) return;
-  slot.hidden = false;
-  const gap = panel.querySelector('.cf-legs-gap');
-  if (gap) gap.appendChild(slot);
-  else panel.appendChild(slot);
-}
-
 async function openCloseForm(tradeId, netCreditActual = 0) {
   const panel = document.getElementById(`close-${tradeId}`);
   if (!panel) return;
   const content = panel.querySelector('.close-trade-content');
   if (!content) return;
-  const legsSlot = panel.querySelector('.trade-legs-slot');
-  if (legsSlot) panel.appendChild(legsSlot);
   content.innerHTML = '<div class="muted">Loading legs…</div>';
   try {
     const [data, sugg, snap, tradeMeta] = await Promise.all([
@@ -10218,7 +10231,6 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     ]);
     if (!data.legs.length) {
       content.innerHTML = '<div class="muted">No executed legs found.</div>';
-      _showLegsInCloseGap(panel);
       return;
     }
     const brokerChannel = tradeExecutionChannel(tradeMeta);
@@ -10248,10 +10260,8 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       (data.legs[0] && (data.legs[0].expiry_date || data.legs[0].expiry)) || null
     );
     // Single close panel: live LTP + leg P&L + compact target on each fill card.
+    // Premium total stays on the card header + Entry premium (not repeated here).
     const closePremium = tradePremiumFromLegs(data.legs);
-    const tradeOpenHtml = closePremium
-      ? `<div class="cf-trade-open">Trade open <strong>\u20b9${fmt(closePremium.rs)}</strong> ${closePremium.kind === 'received' ? 'credit' : 'debit'}</div>`
-      : '';
     const fillLegsHtml = data.legs.map(l => {
       const closeAction = l.action === 'SELL' ? 'Buy back' : 'Sell back';
       const lotsUsed = l.lots_actual || l.lots || 1;
@@ -10327,7 +10337,6 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     content.innerHTML = `
         <div class="close-trade-single">
           <div id="live-feed-banner-${escapeHtml(tradeId)}" class="live-feed-banner" hidden></div>
-          ${tradeOpenHtml}
           ${execOrderFillsSection(data.legs, closeStrategy, showZerodhaClose ? '\u270f\ufe0f Optional LIMIT overrides' : '\u270f\ufe0f Enter your actual fills')}
           <div class="leg-exit-grid">${fillLegsHtml}</div>
           <div class="fill-pnl-preview" id="fill-pnl-${escapeHtml(tradeId)}"${closePremium ? ` data-premium-rs="${closePremium.rs}" data-premium-kind="${closePremium.kind}"` : ''}>
@@ -10342,7 +10351,6 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
             ${manualCloseBtnHtml}
           </div>
           ${zCloseHintHtml}
-          <div class="cf-legs-gap"></div>
         </div>`;
 
     // ── Recalc helper (shared by both panels) ──
@@ -10394,7 +10402,6 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
 
     content.querySelectorAll('.close-price').forEach(inp => inp.addEventListener('input', recalcFillPnl));
     recalcFillPnl();
-    _showLegsInCloseGap(panel);
     const hasLivePrices = data.legs.some(l =>
       (mktPriceMap[l.leg_order] > 0) && priceSrcMap[l.leg_order] === 'live');
     const usingEod = !marketOpen && data.legs.some(l => mktPriceMap[l.leg_order] > 0);
@@ -10410,7 +10417,6 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     }
   } catch (err) {
     content.innerHTML = `<div class="muted">Error: ${escapeHtml(err.message)}</div>`;
-    _showLegsInCloseGap(panel);
   }
 }
 async function submitZerodhaClose(tradeId, btn, panel) {
@@ -10775,21 +10781,20 @@ function renderTrade(t, expanded = false) {
   const hasExecutedLegs = executedLegs.length > 0;
   const hasPendingClose = hasExecutedLegs && executedLegs.every(l => !l.exit_price);
 
+  // Legs grid only while entry fills are still pending. Fully filled open
+  // trades already show contracts on Entry premium + Close Trade tiles.
+  const hasPendingEntryLegs = legs.some(l => !l.executed);
   let legsHtml = '';
-  if (hasLegDetails && legs.length) {
+  if (hasLegDetails && hasPendingEntryLegs) {
     legsHtml = `<div class="trade-legs-section">
       <div class="close-trade-header sl-monitor-label">Legs</div>
       ${(() => {
-        // Entry-order banner when there are still pending (un-executed) legs to fill.
         const pending = legs.filter(l => !l.executed);
         const tradeStrategy3 = (t.suggestion && t.suggestion.strategy) || '';
         return pending.length > 1 ? execOrderBanner(pending, tradeStrategy3, 'entry') : '';
       })()}
       <div class="trade-legs-grid">${(() => {
         const tradeStrategy = (t.suggestion && t.suggestion.strategy) || '';
-        const tradeDte = (t.suggestion && t.suggestion.dte != null)
-          ? parseInt(t.suggestion.dte, 10) : null;
-        const openExec = legs.filter(l => l.executed && !l.exit_price);
         const pending  = legs.filter(l => !l.executed);
         return legs.map(l => {
         const done = !!l.executed;
@@ -10797,7 +10802,6 @@ function renderTrade(t, expanded = false) {
         const tag = `<span class="tag ${(l.action||'') === 'SELL' ? 'tag-err' : 'tag-ok'}">${escapeHtml(l.action||'')}</span>`;
         const instrument = formatLegInstrument(l);
         if (done && l.exit_price != null) {
-          const pnlClass = l.leg_pnl != null ? (l.leg_pnl >= 0 ? 'pnl-profit' : 'pnl-loss') : '';
           return `<div class="trade-leg-row leg-done leg-exited action-${l.action}">
             <div class="leg-action-col">${tag}${spreadBadge(legs, l)}</div>
             <div class="tl-info">
@@ -10808,21 +10812,13 @@ function renderTrade(t, expanded = false) {
             </div>
           </div>`;
         } else if (done) {
-          const targetClose = legTargetClosePrice(l.action, l.fill_price, tradeStrategy, tradeDte);
-          const capLabel = legTargetCloseCaption(l.action, tradeStrategy, tradeDte);
-          const closeHint = targetClose != null
-            ? (l.action === 'SELL'
-              ? `<span class="leg-target-close">Target buy back \u2264 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(${capLabel})</span></span>`
-              : `<span class="leg-target-close">Target sell back \u2265 \u20b9${fmt(targetClose)} <span class="muted" style="font-size:.72rem">(${capLabel})</span></span>`)
-            : `<span class="leg-target-close muted">Target close: ${capLabel}</span>`;
           return `<div class="trade-leg-row leg-done action-${l.action}">
-            <div class="leg-action-col">${execStepBadge(openExec, l, tradeStrategy, 'close')}${tag}${spreadBadge(legs, l)}</div>
+            <div class="leg-action-col">${tag}${spreadBadge(legs, l)}</div>
             <div class="tl-info">
               <span class="tl-instrument">${instrument}</span>
               <div class="muted" style="font-size:.8rem">${escapeHtml(legRoleNote(l.strategy, l))}</div>
               <span class="leg-status-done">\u2713 Filled</span>
               <span class="tl-fill">@ \u20b9${fmt(l.fill_price)} \u00b7 ${lotsUsed} lot${lotsUsed !== 1 ? 's' : ''}</span>
-              ${closeHint}
             </div>
           </div>`;
         } else {
@@ -11042,7 +11038,6 @@ function renderTrade(t, expanded = false) {
         ${hasPendingClose ? `<div class="pending-close-alert pending-close-inline">\u26a0 Exit fills not recorded \u2014 use Close Trade below to compute P&amp;L</div>` : ''}
       </div>
       <div class="close-trade-content"><div class="muted">Loading…</div></div>
-      <div class="trade-legs-slot" hidden>${legsHtml}</div>
     </section>` : ''}
     ${hasExecutedLegs ? `
     <section class="gap-replay-section" id="gap-replay-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}"${_premAttrs} hidden>
@@ -11054,7 +11049,7 @@ function renderTrade(t, expanded = false) {
         <div class="muted" style="font-size:.8rem">Loading replay\u2026</div>
       </div>
     </section>` : ''}
-    ${hasExecutedLegs ? '' : legsHtml}
+    ${legsHtml}
     ${t.exit_instruction ? `<p class="muted" style="margin:8px 0 0">Exit: ${escapeHtml(t.exit_instruction)}</p>` : ''}
     ${brokenHtml}
     ${isPartial ? `<div class="btn-row" style="margin-top:10px">
@@ -12337,7 +12332,7 @@ function renderHistoryTrade(t) {
     // formatLegInstrument includes per-leg expiry (calendars: same strike, different month).
     const exp = l.expiry_date || l.expiry;
     const contract = exp
-      ? `${escapeHtml(l.symbol || '')} <span class="muted">${escapeHtml(fmtDate(exp))}</span> <strong>${l.strike ?? ''}</strong> ${escapeHtml(l.option_type || '')}`
+      ? `${escapeHtml(l.symbol || '')} <span class="muted">${escapeHtml(fmtDate(exp))}</span> <strong>${escapeHtml(formatStrikeDisplay(l.strike))}</strong> ${escapeHtml(l.option_type || '')}`
       : formatLegInstrument(l);
     return `<tr>
       <td class="num">${l.leg_order}</td>

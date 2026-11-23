@@ -3868,9 +3868,6 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 .cf-live-leg{display:flex;flex-direction:column;align-items:stretch;gap:2px;font-size:.85rem;padding:4px 0 6px;border-bottom:1px solid rgba(255,255,255,.05);}
 .cf-live-leg-main{display:flex;align-items:center;gap:8px;}
 .cf-live-leg-meta{display:flex;flex-wrap:wrap;gap:12px;font-size:.75rem;color:var(--text-dim);}
-.cf-trade-open{font-size:.78rem;color:var(--text-dim);}
-.cf-legs-gap{margin-top:4px;}
-.cf-legs-gap .trade-legs-section{margin:8px 0 0;padding-top:8px;border-top:1px solid rgba(6,182,212,.25);}
 .cf-live-price{margin-left:auto;font-weight:700;font-size:.9rem;color:var(--text);}
 .live-pnl-preview,.fill-pnl-preview{padding:8px 10px;background:#0d1f2d;border-radius:6px;font-size:.85rem;color:#8898aa;border:1px solid #2a3744;}
 .live-pnl-label{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:4px;opacity:.7;}
