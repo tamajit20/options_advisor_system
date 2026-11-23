@@ -369,6 +369,17 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict) -> str:
     except Exception:
         logger.exception("config overlay at scheduler start failed")
 
+    def _persist_trade_status(
+        trade_id: str,
+        status: str,
+        daily_status: str | None,
+        exit_instruction: str | None,
+    ) -> None:
+        TradeRepo(db).update_status(
+            trade_id, status, daily_status, exit_instruction,
+        )
+        db.commit()
+
     live_risk_monitor = LiveRiskMonitor(
         notifier=build_notifier(db, provider="zerodha"),
         snapshot_loader=make_db_risk_snapshot_loader(db),
@@ -380,6 +391,7 @@ def _run_ws_runner_once(session, stop_event, bus, index_spots: dict) -> str:
         plan_persister=_persist_profit_ms_plan,
         mtm_snapshot_persister=_persist_mtm_snapshot,
         level_event_persister=_persist_level_event,
+        status_persister=_persist_trade_status,
         events_repo=EventCalendarRepo(db),
         config_reloader=lambda: apply_strategy_overrides(db),
         auto_exec=dispatch_auto_execution,

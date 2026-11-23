@@ -1138,6 +1138,22 @@ class TestTradeSignalKind:
             target_rs=5000.0,
         ) == "in_profit"
 
+    def test_sticky_take_profit_daily_clears_when_net_drops_below_target(self):
+        # EOD TAKE_PROFIT daily_status must not keep the profit rail once net
+        # is below the Exit Plan target (same recovery rule as TARGET_HIT).
+        assert server._signal_kind_for_open_trade(
+            {
+                "daily_status": "TAKE_PROFIT",
+                "exit_instruction": (
+                    "Captured ≥50% of max profit (net ₹945 of ₹1678) | "
+                    "Suggested close: … | Record actual fills via 'Close Trade'."
+                ),
+            },
+            mtm=-1275.0,
+            net_mtm=-1378.0,
+            target_rs=839.0,
+        ) == "in_loss"
+
     def test_sticky_target_hit_stays_when_net_still_above_target(self):
         assert server._signal_kind_for_open_trade(
             {"daily_status": "OPEN", "exit_instruction": None},

@@ -2082,6 +2082,49 @@ function _headerAmountUsed(tradeId) {
   };
 }
 
+/** Paint close-form fill P&L (gross/net/charges/amount used + loss warn). */
+function _paintFillPnlPreview(container, result, premiumInfo) {
+  if (!container) return;
+  const prem = premiumInfo || _premiumFromDataset(container);
+  const grossEl = container.querySelector('.fill-pnl-gross');
+  const grossPctEl = container.querySelector('.fill-pnl-gross-pct');
+  const chargesEl = container.querySelector('.fill-pnl-charges');
+  const netEl = container.querySelector('.fill-pnl-value');
+  const netPctEl = container.querySelector('.fill-pnl-pct');
+  if (!netEl) return;
+  if (!result) {
+    _setPnlLine(grossEl, grossPctEl, null, prem);
+    if (chargesEl) chargesEl.textContent = '\u2014';
+    _setPnlLine(netEl, netPctEl, null, prem);
+    delete container.dataset.fillNet;
+    delete container.dataset.fillGross;
+    _paintFillAmountUsed(container, null);
+    container.querySelectorAll('.close-loss-warn').forEach(el => el.remove());
+    return;
+  }
+  const { gross, charges, net } = result;
+  _setPnlLine(grossEl, grossPctEl, gross, prem);
+  if (chargesEl) {
+    chargesEl.textContent = (charges != null && !isNaN(charges))
+      ? `\u20b9${fmt(charges)}` : '\u2014';
+  }
+  _setPnlLine(netEl, netPctEl, net, prem);
+  container.dataset.fillNet = String(net);
+  container.dataset.fillGross = String(gross);
+  _paintFillAmountUsed(container, net);
+  let warnEl = container.querySelector('.close-loss-warn');
+  if (net < 0) {
+    if (!warnEl) {
+      warnEl = document.createElement('div');
+      warnEl.className = 'close-loss-warn';
+      container.appendChild(warnEl);
+    }
+    warnEl.innerHTML = `\u26a0 Loss of <strong>\u20b9${fmt(Math.abs(net))}</strong>${formatPnlPctText(net, prem)} — verify before confirming.`;
+  } else if (warnEl) {
+    warnEl.remove();
+  }
+}
+
 function _paintFillAmountUsed(container, net) {
   const el = container && container.querySelector('.fill-pnl-used');
   const pctEl = container && container.querySelector('.fill-pnl-used-pct');
@@ -2521,15 +2564,7 @@ function _applyLegLtpsToClosePanel(tradeId, legLtps) {
         }
       }
       if (charges == null) charges = estChargesOneSide([...fEntry, ...fExit]);
-      const net = gross - charges;
-      const prem = _premiumFromDataset(fillPreview);
-      _setPnlLine(fillPreview.querySelector('.fill-pnl-gross'), fillPreview.querySelector('.fill-pnl-gross-pct'), gross, prem);
-      const c = fillPreview.querySelector('.fill-pnl-charges');
-      if (c) c.textContent = `\u20b9${fmt(charges)}`;
-      _setPnlLine(fillPreview.querySelector('.fill-pnl-value'), fillPreview.querySelector('.fill-pnl-pct'), net, prem);
-      fillPreview.dataset.fillNet = String(net);
-      fillPreview.dataset.fillGross = String(gross);
-      _paintFillAmountUsed(fillPreview, net);
+      _paintFillPnlPreview(fillPreview, { gross, charges, net: gross - charges });
     }
   }
   return anyUpdated;
@@ -3383,9 +3418,40 @@ const _SIGNAL_LABELS = {
   in_profit: 'In profit — not at target',
 };
 const _SIGNAL_STATUS_KINDS = new Set(['in_loss', 'in_profit']);
+const _PROFIT_DAILY_STATUSES = new Set(['TAKE_PROFIT', 'TARGET_HIT', 'TARGET_LOCKED']);
 const _MTM_FLAT_RS = 0.5;
 let _lastStatusForRail = {};
 let _lastRailSignature = '';
+
+/** TAKE_PROFIT / TARGET_* daily chips clear once live net is below target. */
+function _effectiveDailyStatus(dailyStatus, live) {
+  const ds = String(dailyStatus || '').toUpperCase();
+  if (!_PROFIT_DAILY_STATUSES.has(ds)) return dailyStatus || '';
+  const liveMtmKnown = live && live.liveMtm != null && !isNaN(Number(live.liveMtm));
+  if (liveMtmKnown && live && live.targetHit === false) return 'OPEN';
+  return dailyStatus || '';
+}
+
+function _isStaleTakeProfitExit(exitInstruction, live) {
+  if (!exitInstruction) return false;
+  const txt = String(exitInstruction);
+  if (!/take[_\s-]?profit|captured\b.*\bmax profit|target reached/i.test(txt)) {
+    return false;
+  }
+  const liveMtmKnown = live && live.liveMtm != null && !isNaN(Number(live.liveMtm));
+  return !!(liveMtmKnown && live && live.targetHit === false);
+}
+
+function _syncDailyStatusTag(card, live) {
+  if (!card) return;
+  const tag = card.querySelector('.trade-daily-status');
+  if (!tag) return;
+  const raw = card.dataset.dailyStatus || '';
+  const fallback = card.dataset.tradeStatus || 'ACTIVE';
+  const effective = _effectiveDailyStatus(raw, live) || fallback;
+  tag.textContent = effective;
+  tag.className = `tag trade-daily-status tag-${effective === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}`;
+}
 
 function _signalKindFromFields({ dailyStatus, exitInstruction, riskNotif, live } = {}) {
   const daily = String(dailyStatus || '').toUpperCase();
@@ -3397,7 +3463,7 @@ function _signalKindFromFields({ dailyStatus, exitInstruction, riskNotif, live }
     && !(liveMtmKnown && live && live.lossHit === false);
   // Sticky TARGET_HIT / TAKE_PROFIT clear once live *net* is below target.
   const stickyTargetActive = (
-    ['TAKE_PROFIT', 'TARGET_HIT', 'TARGET_LOCKED'].includes(daily)
+    _PROFIT_DAILY_STATUSES.has(daily)
     || exitTxt.includes('take_profit')
     || exitTxt.includes('take profit')
     || exitTxt.includes('target reached')
@@ -3475,6 +3541,12 @@ function _syncCardSignal(tradeId, live) {
     // _updateLiveRiskStrip hides sticky when live TARGET HIT (etc.) is up; do not
     // re-show it here. Still hide sticky on SL / PRE_BREACH / TARGET recovery.
     if (card) {
+      _syncDailyStatusTag(card, {
+        ...(live || {}),
+        liveMtm,
+        liveNet,
+        targetHit,
+      });
       const sticky = card.querySelector('.risk-alert-static');
       if (sticky) {
         const rn = String(card.dataset.riskNotif || '').toUpperCase();
@@ -6341,9 +6413,13 @@ function _computeTradeActionInstruction(opts) {
     dailyStatus, exitInstruction, riskNotif,
     premiumInfo, outlookSummary, outlook,
   } = opts;
-  const ds = (dailyStatus || '').toUpperCase();
+  const dsRaw = (dailyStatus || '').toUpperCase();
+  const liveForDaily = { liveMtm, liveNet, targetHit };
+  const ds = String(_effectiveDailyStatus(dailyStatus, liveForDaily) || '').toUpperCase();
   const rn = (riskNotif || '').toUpperCase();
   const ol = outlook || {};
+  const staleTakeProfitNote = _isStaleTakeProfitExit(exitInstruction, liveForDaily)
+    || (_PROFIT_DAILY_STATUSES.has(dsRaw) && liveMtm != null && targetHit === false);
 
   if (ds === 'EXIT_AT_OPEN' || ds === 'EXIT') {
     return {
@@ -6514,7 +6590,7 @@ function _computeTradeActionInstruction(opts) {
       cta: 'No mandatory action.',
     };
   }
-  if (exitInstruction && /exit|close/i.test(exitInstruction)) {
+  if (exitInstruction && /exit|close/i.test(exitInstruction) && !staleTakeProfitNote) {
     return {
       tone: 'warn',
       verb: 'REVIEW',
@@ -6825,7 +6901,9 @@ function _updateTradeActionPanel(tradeId, payload, stripState) {
     if (why) why.textContent = instr.why;
     _syncCardSignal(tradeId, {
       liveMtm,
+      liveNet,
       lossHit: stripState && stripState.lossHit,
+      targetHit: stripState && stripState.targetHit,
       preBreachNear,
     });
   });
@@ -10397,43 +10475,13 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       return { gross, charges, net: gross - charges };
     }
 
-    function _renderPnl(container, result) {
-      if (!container) return;
-      const prem = _premiumFromDataset(container) || closePremium;
-      const grossEl = container.querySelector('.fill-pnl-gross');
-      const grossPctEl = container.querySelector('.fill-pnl-gross-pct');
-      const chargesEl = container.querySelector('.fill-pnl-charges');
-      const netEl = container.querySelector('.fill-pnl-value');
-      const netPctEl = container.querySelector('.fill-pnl-pct');
-      if (!netEl) return;
-      if (!result) {
-        _setPnlLine(grossEl, grossPctEl, null, prem);
-        if (chargesEl) chargesEl.textContent = '\u2014';
-        _setPnlLine(netEl, netPctEl, null, prem);
-        delete container.dataset.fillNet;
-        delete container.dataset.fillGross;
-        _paintFillAmountUsed(container, null);
-        container.querySelectorAll('.close-loss-warn').forEach(el => el.remove());
-        return;
-      }
-      const { gross, charges, net } = result;
-      _setPnlLine(grossEl, grossPctEl, gross, prem);
-      if (chargesEl) chargesEl.textContent = `\u20b9${fmt(charges)}`;
-      _setPnlLine(netEl, netPctEl, net, prem);
-      container.dataset.fillNet = String(net);
-      container.dataset.fillGross = String(gross);
-      _paintFillAmountUsed(container, net);
-      let warnEl = container.querySelector('.close-loss-warn');
-      if (net < 0) {
-        if (!warnEl) { warnEl = document.createElement('div'); warnEl.className = 'close-loss-warn'; container.appendChild(warnEl); }
-        warnEl.innerHTML = `\u26a0 Loss of <strong>\u20b9${fmt(Math.abs(net))}</strong>${formatPnlPctText(net, prem)} — verify before confirming.`;
-      } else if (warnEl) warnEl.remove();
-    }
-
-    // Typed fills, or live LTP when a box is left blank
+    // Typed fills, or live LTP when a box is left blank.
+    // Blank boxes prefer live MTM + card charges so Net matches the header
+    // and the loss warning stays in sync (do not leave a stale LTP-sum warn).
     function recalcFillPnl() {
       const rows = [...content.querySelectorAll('.leg-exit-row')];
-      const result = _calcPnl(rows, row => {
+      const anyTyped = rows.some(row => (row.querySelector('.close-price')?.value || '').trim());
+      let result = _calcPnl(rows, row => {
         const typed = (row.querySelector('.close-price')?.value || '').trim();
         if (typed) return typed;
         const lo = row.dataset.legOrder;
@@ -10441,7 +10489,15 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
           `.cf-live-leg[data-leg-order="${lo}"] .cf-live-price`
         )?.dataset?.ltp;
       });
-      _renderPnl(content.querySelector('.fill-pnl-preview'), result);
+      if (result && !anyTyped) {
+        const liveGross = _lastMtmByTrade[tradeId] && _lastMtmByTrade[tradeId].mtm;
+        const canon = _canonicalChargesRs(tradeId);
+        if (liveGross != null && !isNaN(liveGross) && canon != null) {
+          result = { gross: liveGross, charges: canon, net: liveGross - canon };
+        }
+      }
+      const preview = content.querySelector('.fill-pnl-preview');
+      _paintFillPnlPreview(preview, result, _premiumFromDataset(preview) || closePremium);
       if (result && (_lastMtmByTrade[tradeId] == null || _lastMtmByTrade[tradeId].mtm == null)) {
         _updateCurrentPnlBadge(tradeId, result.gross, !_inMarketHours() ? 'last EOD' : null, false);
       }
@@ -10976,7 +11032,7 @@ function renderTrade(t, expanded = false) {
         <span class="tag live-risk-live" data-trade-id="${escapeHtml(t.trade_id)}" hidden></span>
         ${hasPendingClose ? `<span class="tag tag-warn" title="Record exit prices to compute P&L">CLOSE PENDING</span>` : ''}
         ${executionChannelBadge(tradeExecutionChannel(t))}
-        <span class="tag tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
+        <span class="tag trade-daily-status tag-${t.daily_status === 'EXIT_AT_OPEN' ? 'warn' : 'ok'}">
           ${escapeHtml(t.daily_status || t.status)}</span>
         <span class="tag tag-warn live-feed-tag" data-trade-id="${escapeHtml(t.trade_id)}" title="Checking feed\u2026">\u2026</span>
         ${_entryQualBadge}
@@ -11119,7 +11175,7 @@ function renderTrade(t, expanded = false) {
     ${isPartial ? `<div class="supplement-panel" id="supp-${escapeHtml(t.trade_id)}" hidden></div>` : ''}`;
   return wrapCollapsibleCard(summaryHtml, bodyHtml, {
     open: expanded,
-    attrs: `id="trade-card-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}"${t.suggestion_id ? ` data-sug-id="${escapeHtml(t.suggestion_id)}"` : ''} data-net-credit-actual="${t.net_credit_actual != null ? escapeHtml(String(t.net_credit_actual)) : ''}"${(() => { const inv = tradeInvestedRs(t); return inv != null ? ` data-invested-rs="${inv}"` : ''; })()}${(() => { const fin = _storedMarginFinal(t); return fin != null ? ` data-margin-final="${fin}" data-margin-hydrated="1"` : ''; })()}${(() => { const peak = Number(t.zerodha_margin_peak); return Number.isFinite(peak) && peak > 0 ? ` data-margin-peak="${peak}"` : ''; })()} data-daily-status="${escapeHtml(t.daily_status || '')}" data-exit-instruction="${escapeHtml(t.exit_instruction || '')}" data-risk-notif="${escapeHtml((t.risk_alert && t.risk_alert.notif_type) || '')}"`,
+    attrs: `id="trade-card-${escapeHtml(t.trade_id)}" data-trade-id="${escapeHtml(t.trade_id)}"${t.suggestion_id ? ` data-sug-id="${escapeHtml(t.suggestion_id)}"` : ''} data-net-credit-actual="${t.net_credit_actual != null ? escapeHtml(String(t.net_credit_actual)) : ''}"${(() => { const inv = tradeInvestedRs(t); return inv != null ? ` data-invested-rs="${inv}"` : ''; })()}${(() => { const fin = _storedMarginFinal(t); return fin != null ? ` data-margin-final="${fin}" data-margin-hydrated="1"` : ''; })()}${(() => { const peak = Number(t.zerodha_margin_peak); return Number.isFinite(peak) && peak > 0 ? ` data-margin-peak="${peak}"` : ''; })()} data-trade-status="${escapeHtml(t.status || 'ACTIVE')}" data-daily-status="${escapeHtml(t.daily_status || '')}" data-exit-instruction="${escapeHtml(t.exit_instruction || '')}" data-risk-notif="${escapeHtml((t.risk_alert && t.risk_alert.notif_type) || '')}"`,
   });
 }
 

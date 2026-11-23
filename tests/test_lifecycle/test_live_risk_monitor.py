@@ -159,6 +159,46 @@ class TestEvaluation:
             for c in notifier.notify.call_args_list
         )
 
+    def test_stale_take_profit_daily_status_clears_when_not_at_target(self):
+        # EOD left daily_status=TAKE_PROFIT; live net below target → OPEN + persist.
+        state = _make_state(max_profit=10000.0)
+        state.daily_status = "TAKE_PROFIT"
+        snap = _Snapshot()
+        snap.trades[state.trade_id] = state
+        for leg in state.legs:
+            snap.index.setdefault(leg.key, []).append(state.trade_id)
+        bus = EventBus()
+        notifier = MagicMock()
+        cleared = []
+        monitor = LiveRiskMonitor(
+            notifier=notifier,
+            snapshot_loader=lambda: snap,
+            event_bus=bus,
+            config={
+                "enabled": True,
+                "target_fraction_at_min_dte": 0.70,
+                "target_fraction_at_max_dte": 0.70,
+                "cooldown_minutes": 15,
+                "reload_interval_sec": 9999,
+                "session_start": "09:15",
+                "session_end": "15:30",
+                "pre_breach_fraction": 0.99,
+                "stale_leg_seconds": 600,
+                "trailing_sl_steps": [],
+            },
+            clock=lambda: datetime(2026, 5, 5, 11, 0),
+            status_persister=lambda tid, status, daily, instr: cleared.append(
+                (tid, status, daily, instr)
+            ),
+        )
+        monitor._snapshot = snap
+        monitor._unsubscribe = bus.subscribe("tick", monitor._on_tick)
+        # Premiums only slightly down → profit but below 50% target.
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "CE", 90.0))
+        bus.publish("tick", _q("NIFTY", state.expiry, 23000.0, "PE", 90.0))
+        assert state.daily_status == "OPEN"
+        assert cleared == [("T-001", "ACTIVE", "OPEN", None)]
+
     def test_sl_trigger_fires_when_loss_crosses_threshold(self):
         state = _make_state(max_loss=10000.0)
         monitor, notifier, bus = _build_monitor(state)

@@ -83,7 +83,7 @@ import os
 import threading
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as dtime, timedelta
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import STRATEGY_CONFIG
 from engine.charges import estimated_round_trip_charges_rs
@@ -185,6 +185,9 @@ class _LegRef:
     key: LegKey
 
 
+_PROFIT_DAILY_STATUSES = frozenset({"TAKE_PROFIT", "TARGET_HIT", "TARGET_LOCKED"})
+
+
 @dataclass
 class _TradeState:
     trade_id: str
@@ -196,6 +199,7 @@ class _TradeState:
     max_profit: float
     max_loss: float
     sl_level: Optional[float]
+    daily_status: Optional[str] = None
     silenced_until: Optional[datetime] = None
     legs: List[_LegRef] = field(default_factory=list)
     leg_ltps: Dict[LegKey, float] = field(default_factory=dict)
@@ -368,6 +372,8 @@ def make_db_snapshot_loader(db) -> SnapshotLoader:
                 sl_level=(float(trade["actual_stop_loss_level"])
                           if trade.get("actual_stop_loss_level") is not None
                           else None),
+                daily_status=(str(trade["daily_status"]).upper()
+                              if trade.get("daily_status") else None),
                 silenced_until=trade.get("alerts_silenced_until"),
                 legs=legs,
                 trailing_pnl_floor=(float(trade["trailing_pnl_floor"])
@@ -547,6 +553,9 @@ class LiveRiskMonitor:
         plan_persister: Optional[Callable[[str, Optional[dict]], None]] = None,
         mtm_snapshot_persister: Optional[Callable[[dict], None]] = None,
         level_event_persister: Optional[Callable[[dict], None]] = None,
+        status_persister: Optional[
+            Callable[[str, str, Optional[str], Optional[str]], None]
+        ] = None,
         events_repo: Optional[object] = None,
         config_reloader: Optional[Callable[[], None]] = None,
         auto_exec: Optional[Callable[[AutoExecContext], None]] = None,
@@ -561,6 +570,7 @@ class LiveRiskMonitor:
         self._plan_persister = plan_persister
         self._mtm_snapshot_persister = mtm_snapshot_persister
         self._level_event_persister = level_event_persister
+        self._status_persister = status_persister
         self._events_repo = events_repo
         self._config_reloader = config_reloader
         self._auto_exec = auto_exec
@@ -1590,6 +1600,10 @@ class LiveRiskMonitor:
                 threshold_rs=target_rs,
             ), mtm_payload, trailing_persist, snapshot_payload
 
+        # Stale EOD TAKE_PROFIT / TARGET_* daily_status must clear once live
+        # net is no longer at the Exit Plan target (same rule as the UI rail).
+        self._maybe_clear_stale_take_profit(state, decision)
+
         # 6. Not in breach — clear so cooldown resets on re-entry.
         if decision.decision != "SL_HIT":
             self._clear_level_breach(
@@ -1896,6 +1910,29 @@ class LiveRiskMonitor:
             logger.exception(
                 "LiveRiskMonitor: level_event_persister failed for %s/%s",
                 state.trade_id, level,
+            )
+
+    def _maybe_clear_stale_take_profit(
+        self,
+        state: _TradeState,
+        decision: Any,
+    ) -> None:
+        """Drop sticky TAKE_PROFIT daily_status once evaluate_exit is not TP."""
+        daily = (state.daily_status or "").upper()
+        if daily not in _PROFIT_DAILY_STATUSES:
+            return
+        decision_name = getattr(decision, "decision", None) or ""
+        if str(decision_name).upper() == "TAKE_PROFIT":
+            return
+        state.daily_status = "OPEN"
+        if self._status_persister is None:
+            return
+        try:
+            self._status_persister(state.trade_id, "ACTIVE", "OPEN", None)
+        except Exception:
+            logger.exception(
+                "LiveRiskMonitor: status_persister failed clearing TAKE_PROFIT for %s",
+                state.trade_id,
             )
 
     def _clear_level_breach(
