@@ -9887,6 +9887,28 @@ function _isMobileLayout() {
   return window.matchMedia('(max-width: 1024px)').matches;
 }
 
+function bindVoidTradeButton(btn) {
+  if (!btn || btn.dataset.voidBound === '1') return;
+  btn.dataset.voidBound = '1';
+  btn.addEventListener('click', async e => {
+    const el = e.currentTarget;
+    if (el.disabled || el.dataset.busy === '1') return;
+    const id = el.dataset.tradeId;
+    const card = el.closest('.card');
+    const name = card?.querySelector('h3')?.textContent?.trim() || id;
+    if (!confirm(
+      `Void trade "${name}"?\n\nThis marks the trade as VOID and removes it from your active trades. The record is kept for audit purposes.`
+    )) return;
+    await withButtonBusy(el, 'Voiding\u2026', async () => {
+      try {
+        await API(`/api/trades/${id}`, { method: 'DELETE' });
+        toast(`Trade "${name}" voided`, 'warn');
+        loadTrades();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+  });
+}
+
 function _closeFormLoaded(section) {
   return !!(section && section.querySelector(
     '.close-trade-content .close-trade-single, .close-trade-content .close-two-col',
@@ -10004,21 +10026,7 @@ async function loadTrades() {
       section?.classList.add('close-trade-highlight');
       setTimeout(() => section?.classList.remove('close-trade-highlight'), 1600);
     }));
-    $$('.btn-void-trade').forEach(b => b.addEventListener('click', async e => {
-      const btn = e.currentTarget;
-      if (btn.disabled || btn.dataset.busy === '1') return;
-      const id = btn.dataset.tradeId;
-      const card = btn.closest('.card');
-      const name = card?.querySelector('h3')?.textContent?.trim() || id;
-      if (!confirm(`Void trade "${name}"?\n\nThis marks the trade as VOID and removes it from your active trades. The record is kept for audit purposes.`)) return;
-      await withButtonBusy(btn, 'Voiding…', async () => {
-        try {
-          await API(`/api/trades/${id}`, {method: 'DELETE'});
-          toast(`Trade "${name}" voided`, 'warn');
-          loadTrades();
-        } catch (err) { toast(err.message, 'err'); }
-      });
-    }));
+    $$('.btn-void-trade').forEach(bindVoidTradeButton);
     bindGapReplayPanels();
     bindCollapsibleCardInteractions(c);
     bindCloseFormOnExpand(c);
@@ -10346,9 +10354,13 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
             <div class="muted" style="font-size:.82rem">Est. charges: <strong class="fill-pnl-charges">\u2014</strong></div>
             <div>Amount used: <strong class="fill-pnl-used">\u2014</strong><span class="fill-pnl-used-pct pnl-pct-bracket"></span></div>
           </div>
-          <div class="btn-row" style="margin-top:8px">
-            ${zCloseBtnHtml}
-            ${manualCloseBtnHtml}
+          <div class="btn-row close-trade-actions">
+            <div class="close-trade-actions-primary">
+              ${zCloseBtnHtml}
+              ${manualCloseBtnHtml}
+            </div>
+            <button type="button" class="btn btn-danger btn-void-trade" data-trade-id="${escapeHtml(tradeId)}">
+              Void Trade</button>
           </div>
           ${zCloseHintHtml}
         </div>`;
@@ -10415,6 +10427,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
     if (zClose) {
       zClose.addEventListener('click', () => submitZerodhaClose(tradeId, zClose, content));
     }
+    bindVoidTradeButton(panel.querySelector('.btn-void-trade'));
   } catch (err) {
     content.innerHTML = `<div class="muted">Error: ${escapeHtml(err.message)}</div>`;
   }
@@ -11056,10 +11069,11 @@ function renderTrade(t, expanded = false) {
       <button class="btn btn-warn btn-complete-trade" data-trade-id="${escapeHtml(t.trade_id)}">
         Complete Trade</button>
     </div>` : ''}
+    ${hasExecutedLegs ? '' : `
     <div class="btn-row trade-void-row" style="margin-top:12px">
       <button type="button" class="btn btn-danger btn-void-trade" data-trade-id="${escapeHtml(t.trade_id)}">
         Void Trade</button>
-    </div>
+    </div>`}
     ${isPartial ? `<div class="supplement-panel" id="supp-${escapeHtml(t.trade_id)}" hidden></div>` : ''}`;
   return wrapCollapsibleCard(summaryHtml, bodyHtml, {
     open: expanded,

@@ -3504,6 +3504,20 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
   padding-top: 8px;
   border-top: 1px solid #2a3744;
 }
+.close-trade-actions {
+  margin-top: 8px;
+  justify-content: space-between;
+  align-items: center;
+}
+.close-trade-actions-primary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.close-trade-actions .btn-void-trade {
+  margin-left: auto;
+}
 @media (min-width: 640px) {
   .legs-grid { grid-template-columns: 1fr 1fr; }
   .kv-grid   { grid-template-columns: repeat(3, 1fr); }

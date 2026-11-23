@@ -629,7 +629,7 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 **Pre-event exit marquee:** from the **morning of the prior day**, when a HIGH-impact event is **tomorrow** (or still **today**) and any ACTIVE short/credit trade is open, a single-line scrolling banner under the header warns to consider closing tonight (advisory). Multiple events are **one at a time** on that line — **×** dismisses the current event (localStorage through the event date) and shows the next. Driven by live `/api/system-status` (`pre_event_exit.items`), not unread state; visible on phones. Job `event_eve_review` (**09:05 IST**) inserts `PRE_EVENT_EXIT` (CRITICAL) for shorts and `EVENT_AHEAD_REVIEW` for other ACTIVE trades.
 
-**My Trades Close / Void:** **Close Trade** is in the card header (opens the close form after confirm); **Void Trade** is at the bottom of the card (confirm before void). Recording fills also confirms before finalize.
+**My Trades Close / Void:** Close form shows **Close in Zerodha** / record fills on the left and **Void Trade** on the right of that same row (confirm before void). Trades still filling entry legs keep Void at the bottom. Recording fills also confirms before finalize.
 
 **Kite instrument master:** process-shared in-memory cache (`providers/zerodha/instrument_cache.py`, ~2–3 MB, 24h TTL) for execute / margin / leg LTPs. Not stored in SQL (live lookups stay local). Logout clears it. The `ws_runner` container keeps its own master so live tick sync is unchanged.
 
