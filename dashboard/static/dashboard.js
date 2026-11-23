@@ -2082,7 +2082,7 @@ function _headerAmountUsed(tradeId) {
   };
 }
 
-/** Paint close-form fill P&L (gross/net/charges/amount used + loss warn). */
+/** Paint close-form fill P&L (gross/net/charges/amount used). */
 function _paintFillPnlPreview(container, result, premiumInfo) {
   if (!container) return;
   const prem = premiumInfo || _premiumFromDataset(container);
@@ -2092,6 +2092,8 @@ function _paintFillPnlPreview(container, result, premiumInfo) {
   const netEl = container.querySelector('.fill-pnl-value');
   const netPctEl = container.querySelector('.fill-pnl-pct');
   if (!netEl) return;
+  // Drop legacy loss banner — Net/Gross lines already show the figure.
+  container.querySelectorAll('.close-loss-warn').forEach(el => el.remove());
   if (!result) {
     _setPnlLine(grossEl, grossPctEl, null, prem);
     if (chargesEl) chargesEl.textContent = '\u2014';
@@ -2099,7 +2101,6 @@ function _paintFillPnlPreview(container, result, premiumInfo) {
     delete container.dataset.fillNet;
     delete container.dataset.fillGross;
     _paintFillAmountUsed(container, null);
-    container.querySelectorAll('.close-loss-warn').forEach(el => el.remove());
     return;
   }
   const { gross, charges, net } = result;
@@ -2112,17 +2113,6 @@ function _paintFillPnlPreview(container, result, premiumInfo) {
   container.dataset.fillNet = String(net);
   container.dataset.fillGross = String(gross);
   _paintFillAmountUsed(container, net);
-  let warnEl = container.querySelector('.close-loss-warn');
-  if (net < 0) {
-    if (!warnEl) {
-      warnEl = document.createElement('div');
-      warnEl.className = 'close-loss-warn';
-      container.appendChild(warnEl);
-    }
-    warnEl.innerHTML = `\u26a0 Loss of <strong>\u20b9${fmt(Math.abs(net))}</strong>${formatPnlPctText(net, prem)} — verify before confirming.`;
-  } else if (warnEl) {
-    warnEl.remove();
-  }
 }
 
 function _paintFillAmountUsed(container, net) {
@@ -2466,7 +2456,7 @@ function _refreshAllFeedTags() {
     const opts = {};
     if (panel) {
       const content = panel.querySelector('.close-trade-content');
-      if (content && content.querySelector('.cf-live-leg')) {
+      if (content && content.querySelector('.cf-live-price[data-leg-key]')) {
         let hasPrices = false;
         content.querySelectorAll('.cf-live-price[data-ltp]').forEach(span => {
           const ltp = parseFloat(span.dataset.ltp);
@@ -2504,7 +2494,7 @@ function _applyLegLtpsToClosePanel(tradeId, legLtps) {
     if (ltp == null || ltp <= 0) return;
     span.textContent = `\u20b9${fmt(ltp)}`;
     span.dataset.ltp = ltp;
-    const liveRow = span.closest('.cf-live-leg');
+    const liveRow = span.closest('.leg-exit-row, .cf-live-leg');
     if (liveRow) {
       _setCloseLegPnlEl(
         liveRow.querySelector('.cf-live-leg-pnl'),
@@ -2535,12 +2525,7 @@ function _applyLegLtpsToClosePanel(tradeId, legLtps) {
       const typed = (row.querySelector('.close-price')?.value || '').trim();
       let cp = typed ? parseFloat(typed) : NaN;
       if (!typed) {
-        const lo = row.dataset.legOrder;
-        cp = parseFloat(
-          closePanel.querySelector(
-            `.cf-live-leg[data-leg-order="${lo}"] .cf-live-price`
-          )?.dataset?.ltp
-        );
+        cp = parseFloat(row.querySelector('.cf-live-price')?.dataset?.ltp);
       }
       if (isNaN(cp) || cp <= 0) { fOk = false; return; }
       fGross += action === 'SELL' ? (ep - cp) * lots * ls : (cp - ep) * lots * ls;
@@ -9942,7 +9927,9 @@ function _isMobileLayout() {
 }
 
 function _closeFormLoaded(section) {
-  return !!(section && section.querySelector('.close-trade-content .close-two-col'));
+  return !!(section && section.querySelector(
+    '.close-trade-content .close-trade-single, .close-trade-content .close-two-col',
+  ));
 }
 
 function _loadTradeCloseForm(tradeId, netCreditActual) {
@@ -10331,68 +10318,49 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       data.legs, closeStrategy, closeDte, closeNetCredit,
     );
 
-    // ── LEFT: read-only live market price display ──
+    // Single close panel: live LTP + leg P&L live on each fill card (no duplicate market column).
     const closePremium = tradePremiumFromLegs(data.legs);
     const tradeOpenHtml = closePremium
       ? `<div class="cf-trade-open">Trade open <strong>\u20b9${fmt(closePremium.rs)}</strong> ${closePremium.kind === 'received' ? 'credit' : 'debit'}</div>`
       : '';
-    const liveLegsHtml = data.legs.map(l => {
+    const fillLegsHtml = data.legs.map(l => {
       const closeAction = l.action === 'SELL' ? 'Buy back' : 'Sell back';
       const lotsUsed = l.lots_actual || l.lots || 1;
       const lotSize = l.lot_size || 1;
       const entry = parseFloat(l.fill_price) || 0;
+      const prefill = l.exit_price != null ? l.exit_price : '';
       const mp = (mktPriceMap[l.leg_order] != null && mktPriceMap[l.leg_order] > 0)
                  ? mktPriceMap[l.leg_order] : null;
       const psrc = priceSrcMap[l.leg_order];
       const legKey = _normLegKey(l.symbol, l.expiry_date, l.strike, l.option_type);
-      let priceDisplay = mp != null ? `\u20b9${fmt(mp)}` : '<span class="muted">—</span>';
-      if (mp != null && psrc === 'intrinsic_fallback') priceDisplay += ' <span class="tag tag-warn" style="font-size:.65rem">intrinsic est.</span>';
+      let priceDisplay = mp != null ? `\u20b9${fmt(mp)}` : '<span class="muted">\u2014</span>';
+      if (mp != null && psrc === 'intrinsic_fallback') {
+        priceDisplay += ' <span class="tag tag-warn" style="font-size:.65rem">intrinsic est.</span>';
+      }
       const legPnl = _closeLegMtm(l.action, entry, mp, lotsUsed, lotSize);
       const pnlCls = legPnl == null ? 'muted' : (legPnl >= 0 ? 'pnl-pos' : 'pnl-neg');
       const pnlTxt = legPnl == null ? 'Leg P&L \u2014' : `Leg P&L ${_fmtSignedInr(legPnl)}`;
-      const openTxt = entry > 0
-        ? `Open \u20b9${fmt(entry)} \u00d7 ${lotsUsed} lot${lotsUsed !== 1 ? 's' : ''}`
-        : 'Open \u2014';
-      return `<div class="cf-live-leg"
-                   data-leg-order="${l.leg_order}"
-                   data-action="${escapeHtml(l.action)}"
-                   data-fill-price="${l.fill_price || 0}"
-                   data-lots="${lotsUsed}"
-                   data-lot-size="${lotSize}">
-        <div class="cf-live-leg-main">
-          <span class="muted" style="font-size:.78rem">${escapeHtml(closeAction)}</span>
-          <strong>${formatLegInstrument(l)}</strong>
-          <span class="cf-live-price" data-leg-key="${escapeHtml(legKey)}"
-                data-ltp="${mp != null ? mp : ''}">${priceDisplay}</span>
-        </div>
-        <div class="cf-live-leg-meta">
-          <span>${openTxt}</span>
-          <span class="cf-live-leg-pnl ${pnlCls}">${pnlTxt}</span>
-        </div>
-      </div>`;
-    }).join('');
-
-    // ── RIGHT: blank input fields for actual fills ──
-    const fillLegsHtml = data.legs.map(l => {
-      const closeAction = l.action === 'SELL' ? 'Buy back' : 'Sell back';
-      const lotsUsed = l.lots_actual || l.lots || 1;
-      const prefill = l.exit_price != null ? l.exit_price : '';
       return `
         <div class="leg-exit-row" data-leg-order="${l.leg_order}"
              data-action="${escapeHtml(l.action)}"
              data-fill-price="${l.fill_price || 0}"
              data-lots="${lotsUsed}"
-             data-lot-size="${l.lot_size || 1}">
+             data-lot-size="${lotSize}">
           <div class="leg-exit-head">
             ${execStepBadge(data.legs, l, closeStrategy, 'close')}
             <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'}">${escapeHtml(l.action)}</span>
             <strong>${formatLegInstrument(l)}</strong>
+            <span class="cf-live-price" data-leg-key="${escapeHtml(legKey)}"
+                  data-ltp="${mp != null ? mp : ''}">${priceDisplay}</span>
+          </div>
+          <div class="leg-exit-meta">
             <span class="muted" style="font-size:.8rem">Entry \u20b9${fmt(l.fill_price)} \u00d7 ${lotsUsed} lots</span>
+            <span class="cf-live-leg-pnl ${pnlCls}">${pnlTxt}</span>
           </div>
           <div class="leg-exit-input">
             <span class="muted" style="font-size:.8rem">${escapeHtml(closeAction)} @ \u20b9</span>
             <input type="number" step="0.05" class="close-price" data-leg="${l.leg_order}"
-                   value="${prefill}" placeholder="Blank = live market">
+                   value="${prefill}" placeholder="Blank = live">
           </div>
         </div>`;
     }).join('');
@@ -10421,36 +10389,25 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       : `<p class="muted" style="font-size:.78rem;margin-top:6px">Paper/manual trade — leave prices blank to record at live LTP, or type fills. Close in Zerodha stays hidden until Kite ENTRY/SUPPLEMENT fills exist.</p>`;
 
     content.innerHTML = `
-        <div class="close-two-col">
-
-          <!-- LEFT: live market snapshot -->
-          <div class="close-col close-col-live">
-            <div id="live-feed-banner-${escapeHtml(tradeId)}" class="live-feed-banner" hidden></div>
-            <div class="close-col-title">📡 Current market prices</div>
-            <div class="cf-live-legs">${liveLegsHtml}</div>
-            ${tradeOpenHtml}
-            ${targetExitHtml}
-            <div class="cf-legs-gap"></div>
+        <div class="close-trade-single">
+          <div id="live-feed-banner-${escapeHtml(tradeId)}" class="live-feed-banner" hidden></div>
+          ${tradeOpenHtml}
+          ${targetExitHtml}
+          ${execOrderFillsSection(data.legs, closeStrategy, showZerodhaClose ? '\u270f\ufe0f Optional LIMIT overrides' : '\u270f\ufe0f Enter your actual fills')}
+          <div class="leg-exit-grid">${fillLegsHtml}</div>
+          <div class="fill-pnl-preview" id="fill-pnl-${escapeHtml(tradeId)}"${closePremium ? ` data-premium-rs="${closePremium.rs}" data-premium-kind="${closePremium.kind}"` : ''}>
+            <div class="live-pnl-label">P&amp;L based on your fills</div>
+            <div>Net P&amp;L: <strong class="fill-pnl-value">\u2014</strong><span class="fill-pnl-pct pnl-pct-bracket muted"></span></div>
+            <div>Gross P&amp;L: <strong class="fill-pnl-gross">\u2014</strong><span class="fill-pnl-gross-pct pnl-pct-bracket muted"></span></div>
+            <div class="muted" style="font-size:.82rem">Est. charges: <strong class="fill-pnl-charges">\u2014</strong></div>
+            <div>Amount used: <strong class="fill-pnl-used">\u2014</strong><span class="fill-pnl-used-pct pnl-pct-bracket"></span></div>
           </div>
-
-          <!-- RIGHT: actual fills entry -->
-          <div class="close-col close-col-fills">
-            ${execOrderFillsSection(data.legs, closeStrategy, showZerodhaClose ? '\u270f\ufe0f Optional LIMIT overrides' : '\u270f\ufe0f Enter your actual fills')}
-            <div class="leg-exit-grid">${fillLegsHtml}</div>
-            <div class="fill-pnl-preview" id="fill-pnl-${escapeHtml(tradeId)}"${closePremium ? ` data-premium-rs="${closePremium.rs}" data-premium-kind="${closePremium.kind}"` : ''}>
-              <div class="live-pnl-label">P&amp;L based on your fills</div>
-              <div>Net P&amp;L: <strong class="fill-pnl-value">\u2014</strong><span class="fill-pnl-pct pnl-pct-bracket muted"></span></div>
-              <div>Gross P&amp;L: <strong class="fill-pnl-gross">\u2014</strong><span class="fill-pnl-gross-pct pnl-pct-bracket muted"></span></div>
-              <div class="muted" style="font-size:.82rem">Est. charges: <strong class="fill-pnl-charges">\u2014</strong></div>
-              <div>Amount used: <strong class="fill-pnl-used">\u2014</strong><span class="fill-pnl-used-pct pnl-pct-bracket"></span></div>
-            </div>
-            <div class="btn-row" style="margin-top:8px">
-              ${zCloseBtnHtml}
-              ${manualCloseBtnHtml}
-            </div>
-            ${zCloseHintHtml}
+          <div class="btn-row" style="margin-top:8px">
+            ${zCloseBtnHtml}
+            ${manualCloseBtnHtml}
           </div>
-
+          ${zCloseHintHtml}
+          <div class="cf-legs-gap"></div>
         </div>`;
 
     // ── Recalc helper (shared by both panels) ──
@@ -10484,10 +10441,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       let result = _calcPnl(rows, row => {
         const typed = (row.querySelector('.close-price')?.value || '').trim();
         if (typed) return typed;
-        const lo = row.dataset.legOrder;
-        return content.querySelector(
-          `.cf-live-leg[data-leg-order="${lo}"] .cf-live-price`
-        )?.dataset?.ltp;
+        return row.querySelector('.cf-live-price')?.dataset?.ltp;
       });
       if (result && !anyTyped) {
         const liveGross = _lastMtmByTrade[tradeId] && _lastMtmByTrade[tradeId].mtm;
@@ -10631,11 +10585,7 @@ function _resolveCloseExitPrice(panel, row) {
     const p = parseFloat(typed);
     return (p && !isNaN(p) && p > 0) ? p : null;
   }
-  const lo = row.dataset.legOrder;
-  const ltp = parseFloat(
-    panel.querySelector(`.cf-live-leg[data-leg-order="${lo}"] .cf-live-price`)
-      ?.dataset?.ltp
-  );
+  const ltp = parseFloat(row.querySelector('.cf-live-price')?.dataset?.ltp);
   return (ltp && !isNaN(ltp) && ltp > 0) ? ltp : null;
 }
 
