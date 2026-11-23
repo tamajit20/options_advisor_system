@@ -7075,73 +7075,6 @@ function legTargetCloseHint(action, entry, strategy, dte, legOrder) {
   return `<span class="leg-target-close">Target close: ${verb} ${cmp} \u20b9<span class="target-close-val"${orderAttr}>${fmt(targetClose)}</span> (${capLabel})</span>`;
 }
 
-/** Target-exit box for open legs (used in Close Trade left column). */
-function targetExitBoxHtml(legs, strategy, dte, netCreditActual) {
-  const openExecLegs = (legs || []).filter(l => l.executed && !l.exit_price);
-  if (!openExecLegs.length) return '';
-  const strat = strategy || (openExecLegs[0] && openExecLegs[0].strategy) || '';
-  let dteSafe = dte;
-  if (dteSafe == null) {
-    const exp = openExecLegs[0] && (openExecLegs[0].expiry_date || openExecLegs[0].expiry);
-    dteSafe = dteFromExpiry(exp);
-  }
-  const netCr = netCreditActual != null && netCreditActual !== ''
-    ? parseFloat(netCreditActual) : NaN;
-  const isCreditTrade = !isNaN(netCr) && netCr > 0;
-  const isDebitTrade = !isNaN(netCr) && netCr < 0;
-  const tradePct = isCreditTrade
-    ? creditCaptureFraction(strat)
-    : (isDebitSpreadStrategy(strat)
-      ? debitSpreadTargetFraction()
-      : longPremiumTargetMult(dteSafe));
-  const tradePctLabel = `${Math.round(tradePct * 100)}%`;
-  const structureQty = Math.max(...openExecLegs.map(
-    l => ((l.lots_actual || l.lots || 1) * (l.lot_size || 1))
-  )) || 1;
-  let perUnitCredit = 0;
-  openExecLegs.forEach(l => {
-    perUnitCredit += (l.action === 'SELL' ? 1 : -1) * (l.fill_price || 0);
-  });
-  const creditBase = (!isNaN(netCr) && netCr !== 0) ? netCr : (perUnitCredit * structureQty);
-  const targetPct = creditBase * tradePct;
-  const targetRows = openExecLegs.map(l => {
-    const tc = legTargetClosePrice(l.action, l.fill_price, strat, dteSafe);
-    const capLabel = legTargetCloseCaption(l.action, strat, dteSafe);
-    const lotsUsed = l.lots_actual || l.lots || 1;
-    const lotSize = l.lot_size || 1;
-    const qty = lotsUsed * lotSize;
-    const closeVerb = l.action === 'SELL' ? 'Buy back' : 'Sell back';
-    const sign = l.action === 'SELL' ? '\u2264' : '\u2265';
-    const priceBit = tc != null
-      ? `${closeVerb} ${sign} <strong>\u20b9${fmt(tc)}</strong>`
-      : closeVerb;
-    return `<div class="target-row">
-      <span class="tag ${l.action === 'SELL' ? 'tag-err' : 'tag-ok'} tag-sm">${escapeHtml(l.action||'')}</span>
-      <span><strong>${formatLegInstrument(l)}</strong></span>
-      <span>${priceBit} <span class="muted">(${capLabel} \u00b7 entry \u20b9${fmt(l.fill_price)} \u00d7 ${qty}u)</span></span>
-    </div>`;
-  }).join('');
-  let footer = '';
-  if (isCreditTrade) {
-    footer = `<div class="target-exit-keep">Close when ~\u20b9${fmt(targetPct)} of the \u20b9${fmt(netCr)} total credit is captured</div>`;
-  } else if (isDebitTrade) {
-    const debit = Math.abs(netCr);
-    const frac = isDebitSpreadStrategy(strat)
-      ? debitSpreadTargetFraction()
-      : longPremiumTargetMult(dteSafe);
-    const targetGain = Math.round(debit * frac * 10) / 10;
-    footer = `<div class="target-exit-keep">Close when position gains ~\u20b9${fmt(targetGain)} (${Math.round(frac * 100)}% of \u20b9${fmt(debit)} debit paid)</div>`;
-  }
-  const titleLabel = isDebitTrade
-    ? `${tradePctLabel} debit gain target`
-    : `${tradePctLabel} credit capture`;
-  return `<div class="target-exit-box">
-    <div class="target-exit-title">\u{1F3AF} Target exit (${titleLabel})</div>
-    ${targetRows}
-    ${footer}
-  </div>`;
-}
-
 // ── Confidence checks breakdown ──────────────────────────────────────────────
 // conditions_json is always [{label, status, detail}, ...] (array format).
 // Legacy {conditions:[...strings...]} kept as safety fallback.
@@ -10311,18 +10244,10 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       }
     });
     const closeStrategy = (data.legs[0] && data.legs[0].strategy) || '';
-    const tradeRow = (tradeMeta && tradeMeta.trade) || {};
-    const closeNetCredit = parseFloat(
-      tradeRow.net_credit_actual != null ? tradeRow.net_credit_actual : netCreditActual
-    ) || 0;
     const closeDte = dteFromExpiry(
       (data.legs[0] && (data.legs[0].expiry_date || data.legs[0].expiry)) || null
     );
-    const targetExitHtml = targetExitBoxHtml(
-      data.legs, closeStrategy, closeDte, closeNetCredit,
-    );
-
-    // Single close panel: live LTP + leg P&L live on each fill card (no duplicate market column).
+    // Single close panel: live LTP + leg P&L + compact target on each fill card.
     const closePremium = tradePremiumFromLegs(data.legs);
     const tradeOpenHtml = closePremium
       ? `<div class="cf-trade-open">Trade open <strong>\u20b9${fmt(closePremium.rs)}</strong> ${closePremium.kind === 'received' ? 'credit' : 'debit'}</div>`
@@ -10344,6 +10269,12 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
       const legPnl = _closeLegMtm(l.action, entry, mp, lotsUsed, lotSize);
       const pnlCls = legPnl == null ? 'muted' : (legPnl >= 0 ? 'pnl-pos' : 'pnl-neg');
       const pnlTxt = legPnl == null ? 'Leg P&L \u2014' : `Leg P&L ${_fmtSignedInr(legPnl)}`;
+      const targetPx = legTargetClosePrice(l.action, entry, closeStrategy, closeDte);
+      const targetCap = legTargetCloseCaption(l.action, closeStrategy, closeDte);
+      const targetSign = l.action === 'SELL' ? '\u2264' : '\u2265';
+      const targetHint = targetPx != null
+        ? `Target ${targetSign} \u20b9${fmt(targetPx)} \u00b7 ${escapeHtml(targetCap)}`
+        : `Target \u00b7 ${escapeHtml(targetCap)}`;
       return `
         <div class="leg-exit-row" data-leg-order="${l.leg_order}"
              data-action="${escapeHtml(l.action)}"
@@ -10366,6 +10297,7 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
             <input type="number" step="0.05" class="close-price" data-leg="${l.leg_order}"
                    value="${prefill}" placeholder="Blank = live">
           </div>
+          <div class="leg-exit-target">${targetHint}</div>
         </div>`;
     }).join('');
 
@@ -10396,7 +10328,6 @@ async function openCloseForm(tradeId, netCreditActual = 0) {
         <div class="close-trade-single">
           <div id="live-feed-banner-${escapeHtml(tradeId)}" class="live-feed-banner" hidden></div>
           ${tradeOpenHtml}
-          ${targetExitHtml}
           ${execOrderFillsSection(data.legs, closeStrategy, showZerodhaClose ? '\u270f\ufe0f Optional LIMIT overrides' : '\u270f\ufe0f Enter your actual fills')}
           <div class="leg-exit-grid">${fillLegsHtml}</div>
           <div class="fill-pnl-preview" id="fill-pnl-${escapeHtml(tradeId)}"${closePremium ? ` data-premium-rs="${closePremium.rs}" data-premium-kind="${closePremium.kind}"` : ''}>

@@ -1994,38 +1994,6 @@ input:focus, select:focus, textarea:focus {
 .leg-target-close .target-close-val { color: var(--text); font-weight: 600; }
 .leg-exit-info { font-size: .78rem; color: var(--text-dim); margin-top: 1px; }
 
-/* ---------- Target exit summary box ---------- */
-.target-exit-box {
-  background: rgba(16,185,129,.07);
-  border: 1px solid rgba(16,185,129,.25);
-  border-left: 3px solid var(--ok);
-  border-radius: 6px;
-  padding: 8px 12px;
-  margin: 8px 0 0;
-}
-.close-col-live .target-exit-box { margin-top: 10px; }
-.target-exit-title {
-  font-size: .78rem;
-  font-weight: 700;
-  color: var(--ok);
-  margin-bottom: 6px;
-  letter-spacing: .3px;
-}
-.target-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  font-size: .82rem;
-  margin-bottom: 4px;
-}
-.target-exit-keep {
-  font-size: .75rem;
-  color: var(--text-dim);
-  margin-top: 4px;
-  border-top: 1px solid rgba(16,185,129,.15);
-  padding-top: 4px;
-}
 
 /* ---------- Drawer ---------- */
 .drawer {
@@ -3501,6 +3469,12 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
   height: 34px;
   padding: 4px 8px;
   font-size: .88rem;
+}
+.leg-exit-target {
+  margin-top: 4px;
+  font-size: .75rem;
+  color: #86efac;
+  font-weight: 600;
 }
 .leg-exit-info {
   font-size: .78rem;
