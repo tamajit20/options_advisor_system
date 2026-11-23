@@ -2916,6 +2916,10 @@ const TERM_HELP = {
     label: 'Premium',
     html: '<strong>Premium</strong> — Total option premium paid or received to open the trade (all legs). P&amp;L % is often shown vs this amount.',
   },
+  entry_premium_fills: {
+    label: 'Entry premium from fills',
+    html: '<strong>Entry premium from fills</strong> — Leg-by-leg fill prices that make your open credit (or debit) per unit. Suggested range is what the card originally aimed for; within / above / below tells you if the fill was better or worse than that band.',
+  },
   est_charges: {
     label: 'Est. charges',
     html: '<strong>Est. charges</strong> — Approximate brokerage, STT, and exchange fees from your entry fills. Subtracted in \u201cnet at max profit\u201d.',
@@ -10903,9 +10907,11 @@ function renderTrade(t, expanded = false) {
         }
       }).join('');
       })()}</div>
-      ${creditBreakdownHtml(legs.filter(l => l.executed), 'trade')}
     </div>`;
   }
+  const entryPremiumHtml = hasExecutedLegs
+    ? creditBreakdownHtml(legs.filter(l => l.executed), 'trade')
+    : '';
 
   const _entryQualBadge = _qualityBadge(t.entry_quality_score, 'Entry quality: ');
   const _tradePremium = tradePremiumFromLegs(legs);
@@ -11089,6 +11095,12 @@ function renderTrade(t, expanded = false) {
         <strong>Spot SL</strong> = underlying crosses stored level (two-sided spreads: close breached side only).<br>
         <strong>Loss limit</strong> and <strong>profit floor</strong> are MTM-based — see Live profit levels.
       </div>
+      ${entryPremiumHtml ? `
+      <div class="sl-entry-premium">
+        <div class="sl-monitor-label sl-entry-premium-label">${labelWithHelp('Entry premium from fills', 'entry_premium_fills')}</div>
+        <p class="muted sl-entry-premium-note">Filled legs \u2192 open credit/debit per unit, vs the suggestion band.</p>
+        ${entryPremiumHtml}
+      </div>` : ''}
     </div>`;
       return `<div class="risk-levels-pair">${liveProfitHtml}${slMonitorHtml}</div>`;
     })()}

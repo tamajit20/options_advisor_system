@@ -2768,6 +2768,20 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 .sl-monitor-footer { margin-top: 8px; display: flex; align-items: center; gap: 10px; }
 .sl-save-msg { font-size: .8rem; color: var(--ok); }
 .sl-action-note { margin-top: 10px; font-size: .8rem; color: var(--text-dim); background: rgba(245,158,11,.08); border-left: 3px solid var(--warn); padding: 6px 10px; border-radius: 0 4px 4px 0; }
+.sl-entry-premium {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(14, 165, 233, .18);
+}
+.sl-entry-premium-label { margin-bottom: 4px; }
+.sl-entry-premium-note { margin: 0 0 8px; font-size: .75rem; line-height: 1.4; }
+.sl-entry-premium .credit-breakdown {
+  margin: 0;
+  background: rgba(0, 0, 0, .18);
+  border: 1px solid rgba(255, 255, 255, .06);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
 @media (max-width: 500px) {
   .sl-monitor-grid { grid-template-columns: 1fr 1fr; }
 }
