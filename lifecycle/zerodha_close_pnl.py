@@ -95,7 +95,8 @@ def reconcile_closed_trade_from_kite(
                 exit_px = float(leg.get("exit_price") or 0)
             except (TypeError, ValueError):
                 exit_px = 0.0
-        if entry_px <= 0 or exit_px <= 0 or lots <= 0 or lot_size <= 0:
+        # exit_px may be 0 on cash-settled OTM legs — only reject negatives / missing entry.
+        if entry_px <= 0 or exit_px < 0 or lots <= 0 or lot_size <= 0:
             logger.warning(
                 "Kite close P&L: trade %s leg %s missing fill/exit — keeping estimate",
                 tid, lo,

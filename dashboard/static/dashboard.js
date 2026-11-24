@@ -13996,12 +13996,10 @@ async function loadUsersPane() {
           <td><code>${escapeHtml(u.login || '')}</code></td>
           <td>${escapeHtml(u.display_name || '—')}</td>
           <td><span class="users-role ${u.is_admin ? 'users-role-admin' : 'users-role-user'}">${u.is_admin ? 'Admin' : 'User'}</span></td>
-          <td><span class="users-kite ${ka.configured ? 'is-yes' : 'is-no'}" title="Kite Connect app for this trader (status only — secrets never shown)">${kiteLabel}</span></td>
+          <td><span class="users-kite ${ka.configured ? 'is-yes' : 'is-no'}" title="Status only — each user sets their Kite app under Account settings">${kiteLabel}</span></td>
           <td><span class="users-active ${u.is_active ? 'is-yes' : 'is-no'}">${u.is_active ? 'Yes' : 'No'}</span></td>
           <td class="users-col-actions">
             <div class="users-actions">
-              <button type="button" class="btn btn-sm" data-set-kite-app="${u.id}"
-                      data-login="${escapeHtml(u.login || '')}">Kite app</button>
               <button type="button" class="btn btn-sm" data-set-password="${u.id}" data-login="${escapeHtml(u.login || '')}">Password</button>
               ${u.is_admin ? '' : `<button type="button" class="btn btn-sm" data-transfer-admin="${u.id}">Make admin</button>`}
               ${u.is_admin ? '' : (u.is_active
@@ -14013,35 +14011,6 @@ async function loadUsersPane() {
       }).join('')}
       </tbody>
     </table>`;
-    box.querySelectorAll('[data-set-kite-app]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const uid = Number(btn.dataset.setKiteApp);
-        const who = btn.dataset.login || String(uid);
-        // Write-only: empty prompts — never prefill or display stored secrets.
-        const api_key = prompt(
-          `Paste Kite API key for ${who}\n(App whose Zerodha Client ID matches this trader)\nSecrets are never shown again after save.`,
-          ''
-        );
-        if (api_key == null) return;
-        const api_secret = prompt(`Paste Kite API secret for ${who}`, '');
-        if (api_secret == null) return;
-        if (!String(api_key).trim() || !String(api_secret).trim()) {
-          toast('Both API key and secret are required', 'err');
-          return;
-        }
-        try {
-          await API(`/api/users/${uid}/kite-app`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ api_key, api_secret }),
-          });
-          toast(`Kite app saved for ${who}`, 'ok');
-          loadUsersPane();
-        } catch (e) {
-          toast((e && e.message) || 'Save failed', 'err');
-        }
-      });
-    });
     box.querySelectorAll('[data-set-password]').forEach(btn => {
       btn.addEventListener('click', () => {
         _openAccountPage({

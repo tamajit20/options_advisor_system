@@ -38,21 +38,135 @@ from lifecycle.eod_session import effective_bhav_end_date
 logger = logging.getLogger(__name__)
 
 
-def _close_trade_with_charges(db: SQLServerConnection, trade_id: str,
-                              gross_pnl: float) -> None:
-    """Close the trade — for now we use the existing P&L and assume charges
-    were captured at suggestion time (re-using suggestion estimate)."""
-    from lifecycle.trade_executor import resolve_spot_at_close
-    trd = TradeRepo(db)
-    trade = trd.get(trade_id)
-    if trade is None:
-        return
-    charges = float(trade.get("total_charges") or 0.0)
-    net = gross_pnl - charges
-    close_spot = resolve_spot_at_close(db, trade)
-    trd.close_trade(
-        trade_id, gross=gross_pnl, charges=charges, net=net, spot_at_close=close_spot,
-    )
+def _estimate_settlement_charges(
+    *,
+    legs: list[dict],
+    close_by_order: dict[int, float],
+) -> float:
+    """Zerodha-style charge estimate for entry + cash-settlement exits.
+
+    Same model as ``close_trade_with_fills`` / ``estimate_charges_per_txn``.
+    Expiry usually has no Kite EXIT orders, so a full contract-note pull is
+    incomplete — estimate both sides, then callers may refine from Kite.
+    """
+    from engine.charges import estimate_charges_per_txn
+
+    txn_legs: list[dict] = []
+    for leg in legs:
+        if not leg.get("executed"):
+            continue
+        try:
+            order = int(leg["leg_order"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if order not in close_by_order:
+            continue
+        lots = int(leg.get("lots_actual") or leg.get("lots") or 0)
+        lot_size = int(leg.get("lot_size") or 0)
+        fill = float(leg.get("fill_price") or 0.0)
+        close_px = float(close_by_order[order])
+        action = str(leg.get("action") or "").upper()
+        if lots <= 0 or lot_size <= 0 or action not in ("BUY", "SELL"):
+            continue
+        txn_legs.append({
+            "action": action,
+            "price": fill,
+            "lots": lots,
+            "lot_size": lot_size,
+        })
+        txn_legs.append({
+            "action": "BUY" if action == "SELL" else "SELL",
+            "price": close_px,
+            "lots": lots,
+            "lot_size": lot_size,
+        })
+    if not txn_legs:
+        return 0.0
+    return float(estimate_charges_per_txn(txn_legs).total)
+
+
+def _zerodha_charges_for_trade_orders(
+    db: SQLServerConnection,
+    trade_id: str,
+) -> float | None:
+    """Pull Kite virtual-contract-note charges for this trade's booked orders.
+
+    Returns None when the trade is paper/manual, the owner session is down,
+    or the pull is incomplete. On expiry this is usually ENTRY/SUPPLEMENT
+    only (cash settlement creates no EXIT orders).
+    """
+    try:
+        from database.broker_order_repo import BrokerOrderRepo
+        from lifecycle.zerodha_close_pnl import (
+            _charges_for_mapped_orders,
+            _mapped_orders_for_trade,
+        )
+        from lifecycle.zerodha_executor import _build_client
+
+        broker = BrokerOrderRepo(db)
+        if not broker.has_entry_kite_fills_for_trade(trade_id):
+            return None
+        trade = TradeRepo(db).get(trade_id)
+        owner = (trade or {}).get("owner_user_id")
+        if owner is None:
+            return None
+        facade, _master = _build_client(app_user_id=int(owner))
+        mapped = _mapped_orders_for_trade(broker, facade, trade_id, ())
+        if not mapped:
+            return None
+        return _charges_for_mapped_orders(facade, trade_id, mapped)
+    except Exception:
+        logger.debug(
+            "exit_engine: Kite charges pull failed for %s", trade_id, exc_info=True,
+        )
+        return None
+
+
+def _estimate_entry_charges_only(legs: list[dict]) -> float:
+    from engine.charges import estimate_charges_per_txn
+
+    txn: list[dict] = []
+    for leg in legs:
+        if not leg.get("executed"):
+            continue
+        action = str(leg.get("action") or "").upper()
+        lots = int(leg.get("lots_actual") or leg.get("lots") or 0)
+        lot_size = int(leg.get("lot_size") or 0)
+        fill = float(leg.get("fill_price") or 0.0)
+        if lots <= 0 or lot_size <= 0 or action not in ("BUY", "SELL"):
+            continue
+        txn.append({
+            "action": action, "price": fill, "lots": lots, "lot_size": lot_size,
+        })
+    if not txn:
+        return 0.0
+    return float(estimate_charges_per_txn(txn).total)
+
+
+def _resolve_auto_settle_charges(
+    db: SQLServerConnection,
+    trade_id: str,
+    *,
+    legs: list[dict],
+    close_by_order: dict[int, float],
+) -> tuple[float, str]:
+    """Prefer Kite note charges when available; else local estimate.
+
+    Expiry usually has opening Kite fills only (cash settlement, no EXIT
+    orders). Blend Kite opening charges with an estimated settlement side so
+    Net is not understated versus the broker P&L screen.
+    """
+    estimate = _estimate_settlement_charges(legs=legs, close_by_order=close_by_order)
+    kite = _zerodha_charges_for_trade_orders(db, trade_id)
+    if kite is None:
+        return round(estimate, 2), "estimate"
+    entry_est = _estimate_entry_charges_only(legs)
+    exit_est = max(0.0, estimate - entry_est)
+    blended = round(float(kite) + exit_est, 2)
+    # Guard: if Kite pull looks broken, keep the full local estimate.
+    if blended + 1.0 < estimate * 0.5:
+        return round(estimate, 2), "estimate"
+    return blended, "kite+estimate_exit"
 
 
 def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> int:
@@ -320,7 +434,27 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
                                 exit_price=close_px, exit_time=settle_time,
                                 leg_pnl=leg_pnl,
                             )
-                        charges = float(trade.get("total_charges") or 0.0)
+                        # Legs for charges need action/lot_size (suggestion + fills).
+                        charge_legs: list[dict] = []
+                        for eng_leg in legs_for_engine:
+                            tl = by_order_lookup.get(eng_leg["leg_order"])
+                            if not tl or not tl.get("executed"):
+                                continue
+                            charge_legs.append({
+                                **eng_leg,
+                                "executed": True,
+                                "fill_price": tl.get("fill_price"),
+                                "lots_actual": tl.get("lots_actual") or eng_leg.get("lots"),
+                            })
+                        close_by_order = {
+                            int(order): float(close_px)
+                            for order, close_px, _ in leg_results
+                        }
+                        charges, charge_src = _resolve_auto_settle_charges(
+                            db, trade_id,
+                            legs=charge_legs,
+                            close_by_order=close_by_order,
+                        )
                         net_pnl = settle_gross - charges
                         from lifecycle.trade_executor import resolve_spot_at_close
                         close_spot = resolve_spot_at_close(
@@ -330,6 +464,14 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
                             trade_id=trade_id, gross=settle_gross,
                             charges=charges, net=net_pnl,
                             spot_at_close=close_spot,
+                        )
+                        settle_note = (
+                            f"DTE=0 — cash settled at intrinsic value. "
+                            f"Gross ₹{settle_gross:+,.0f}, charges ₹{charges:,.0f} "
+                            f"({charge_src}), net ₹{net_pnl:+,.0f}."
+                        )
+                        trd.update_status(
+                            trade_id, "CLOSED", "AUTO_SETTLED", settle_note,
                         )
                         auto_settled += 1
                         notif.insert(Notification(
@@ -342,16 +484,16 @@ def run_exit_engine(db: SQLServerConnection, trade_date: date | None = None) -> 
                                 f"(net P&L ₹{net_pnl:+,.0f})"
                             ),
                             body=(
-                                f"DTE=0 — cash settled at intrinsic value. "
-                                f"Gross ₹{settle_gross:+,.0f}, charges ₹{charges:,.0f}, "
-                                f"net ₹{net_pnl:+,.0f}. Review and edit fills via "
-                                f"'Close Trade' if your actual broker settlement differs."
+                                f"{settle_note} Charges use Kite note when opening "
+                                f"fills exist, else the same estimate as manual close. "
+                                f"Review History if your broker screen differs."
                             ),
                             related_trade_id=trade_id,
                         ))
                         logger.info(
-                            "exit_engine: auto-settled %s at expiry net=%.0f",
-                            trade_id, net_pnl,
+                            "exit_engine: auto-settled %s at expiry "
+                            "gross=%.0f charges=%.0f (%s) net=%.0f",
+                            trade_id, settle_gross, charges, charge_src, net_pnl,
                         )
                         # Skip the rest of this trade's loop iteration — we
                         # already wrote a status + notification.

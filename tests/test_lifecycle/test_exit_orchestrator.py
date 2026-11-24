@@ -245,27 +245,38 @@ class TestAutoSettleAtExpire:
         self._expire_setup(mocker, mock_db)
         close = mocker.patch.object(orch.TradeRepo, "close_trade")
         update_leg = mocker.patch.object(orch.TradeRepo, "update_leg_exit")
-        mocker.patch.object(orch.TradeRepo, "update_status")
+        update_status = mocker.patch.object(orch.TradeRepo, "update_status")
+        # Force estimate path (no live Kite session in unit tests).
+        mocker.patch.object(orch, "_zerodha_charges_for_trade_orders", return_value=None)
+        from engine.charges import estimate_charges_per_txn
+        expected_charges = estimate_charges_per_txn([
+            {"action": "SELL", "price": 50.0, "lots": 1, "lot_size": 75},
+            {"action": "BUY", "price": 0.0, "lots": 1, "lot_size": 75},
+            {"action": "BUY", "price": 20.0, "lots": 1, "lot_size": 75},
+            {"action": "SELL", "price": 0.0, "lots": 1, "lot_size": 75},
+        ]).total
         n = orch.run_exit_engine(mock_db, date(2026, 5, 14))
         assert n == 1
         close.assert_called_once()
         # Both legs settle worthless; short collected ₹50 fill, long paid ₹20 fill.
-        # gross = (50 - 0) * 75 - (0 - 20) * 75? Wait sign:
         #   short CE: (fill - close) * qty = (50 - 0) * 75 = +3750
         #   long  CE: (close - fill) * qty = (0 - 20) * 75 = -1500
-        #   net gross ₹2,250 (= net_credit_actual, makes sense at expiry)
+        #   gross ₹2,250 (= net_credit_actual at expiry)
         kwargs = close.call_args.kwargs
         assert kwargs["gross"] == pytest.approx(2250.0)
-        assert kwargs["charges"] == pytest.approx(60.0)
-        assert kwargs["net"] == pytest.approx(2190.0)
-        # update_leg_exit must be called twice (one per filled leg).
+        assert kwargs["charges"] == pytest.approx(expected_charges)
+        assert kwargs["net"] == pytest.approx(2250.0 - expected_charges)
         assert update_leg.call_count == 2
+        status_args = update_status.call_args[0]
+        assert status_args[1] == "CLOSED"
+        assert status_args[2] == "AUTO_SETTLED"
 
     def test_expire_emits_critical_notification(self, mock_db, mocker):
         self._expire_setup(mocker, mock_db)
         mocker.patch.object(orch.TradeRepo, "close_trade")
         mocker.patch.object(orch.TradeRepo, "update_leg_exit")
         mocker.patch.object(orch.TradeRepo, "update_status")
+        mocker.patch.object(orch, "_zerodha_charges_for_trade_orders", return_value=None)
         insert = mocker.patch.object(orch.NotificationRepo, "insert")
         orch.run_exit_engine(mock_db, date(2026, 5, 14))
         kinds = [c.args[0].notif_type for c in insert.call_args_list]
