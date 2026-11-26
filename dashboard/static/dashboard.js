@@ -11949,7 +11949,7 @@ function _renderDayPnlAmountChart(host, byDay) {
   const used = rows.map(r => Number(r.amount_used) || 0);
   const canvas = _mountChartCanvas(host, {
     title: 'Day-wise net P&L vs amount used',
-    subtitle: 'Bars by close date. Amount used = Zerodha Final held that day (sum if several closes).',
+    subtitle: 'By close date (not entry). Amount used = Zerodha Final for each trade closed that day; max loss if Final was never stored.',
   });
   const dark = _chartDarkDefaults();
   _histChartInstances.dayPnl = new Chart(canvas.getContext('2d'), {
@@ -12000,10 +12000,23 @@ function _renderDayPnlAmountChart(host, byDay) {
               if (!row) return [];
               const u = Number(row.amount_used) || 0;
               const n = Number(row.net_pnl) || 0;
-              if (!(u > 0)) return ['Return on amount used: —'];
+              const fin = Number(row.amount_used_final) || 0;
+              const ml = Number(row.amount_used_max_loss) || 0;
+              const lines = [];
+              if (fin > 0 || ml > 0) {
+                lines.push(
+                  `Of amount used: Final ${_inrTip(fin).replace(/^[+−]/, '')}`
+                  + (ml > 0 ? ` · max-loss fallback ${_inrTip(ml).replace(/^[+−]/, '')}` : ''),
+                );
+              }
+              if (!(u > 0)) {
+                lines.push('Return on amount used: —');
+                return lines;
+              }
               const pct = (n / u) * 100;
               const sign = pct >= 0 ? '+' : '';
-              return [`Return on amount used: ${sign}${pct.toFixed(1)}%`];
+              lines.push(`Return on amount used: ${sign}${pct.toFixed(1)}%`);
+              return lines;
             },
           },
         },

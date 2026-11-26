@@ -124,6 +124,7 @@ class TestHistoryAndStatsRoutes:
                 "net_credit_actual": 200.0,
                 "actual_max_loss": 1000.0,
                 "zerodha_margin_final": 5000.0,
+                "ust_zerodha_margin_final": None,
                 "strategy": "BULL_PUT_SPREAD",
                 "underlying": "NIFTY",
             },
@@ -137,15 +138,33 @@ class TestHistoryAndStatsRoutes:
                 "total_charges": 10.0,
                 "net_credit_actual": 150.0,
                 "actual_max_loss": 800.0,
-                "zerodha_margin_final": 3000.0,
+                "zerodha_margin_final": None,
+                "ust_zerodha_margin_final": 3000.0,
                 "strategy": "BEAR_CALL_SPREAD",
                 "underlying": "BANKNIFTY",
+            },
+            {
+                # No Final anywhere — fall back to max loss on close day.
+                "trade_id": "TRD-3",
+                "trade_name": "C",
+                "closed_on": datetime(2026, 8, 11, 10, 0),
+                "executed_on": datetime(2026, 8, 3),
+                "net_pnl": 50.0,
+                "gross_pnl": 60.0,
+                "total_charges": 10.0,
+                "net_credit_actual": 100.0,
+                "actual_max_loss": 2500.0,
+                "zerodha_margin_final": None,
+                "ust_zerodha_margin_final": None,
+                "strategy": "IRON_FLY",
+                "underlying": "NIFTY",
             },
         ]
         conn.fetch_all.side_effect = [trades, [], []]
         mocker.patch("dashboard.server._trade_premiums_from_legs", return_value={
             "TRD-1": (200.0, "received"),
             "TRD-2": (150.0, "received"),
+            "TRD-3": (100.0, "received"),
         })
         mocker.patch(
             "database.execution_reversal_repo.ExecutionReversalRepo",
@@ -154,14 +173,26 @@ class TestHistoryAndStatsRoutes:
         resp = client.get("/api/stats/pnl-timeline")
         assert resp.status_code == 200
         body = resp.get_json()
-        assert body["total_pnl"] == 60.0
-        assert body["total_amount_used"] == 8000.0
-        assert body["by_day"] == [{
-            "date": "2026-08-10",
-            "net_pnl": 60.0,
-            "amount_used": 8000.0,
-            "trades": 2,
-        }]
+        assert body["total_pnl"] == 110.0
+        assert body["total_amount_used"] == 10500.0
+        assert body["by_day"] == [
+            {
+                "date": "2026-08-10",
+                "net_pnl": 60.0,
+                "amount_used": 8000.0,
+                "amount_used_final": 8000.0,
+                "amount_used_max_loss": 0.0,
+                "trades": 2,
+            },
+            {
+                "date": "2026-08-11",
+                "net_pnl": 50.0,
+                "amount_used": 2500.0,
+                "amount_used_final": 0.0,
+                "amount_used_max_loss": 2500.0,
+                "trades": 1,
+            },
+        ]
 
     def test_strategy_performance_channel_in_response(self, client_with_db, mocker):
         client, conn = client_with_db

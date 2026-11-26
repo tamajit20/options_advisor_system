@@ -4766,14 +4766,21 @@ def create_app() -> Flask:
             rev_rows = []
 
         where = " AND ".join(filters)
+        # Amount used is attributed to closed_on (not executed_on). Prefer the
+        # trade-row Zerodha Final, then this owner's suggestion_user_state quote,
+        # then actual_max_loss so days with P&L are not stuck at ₹0 used.
         rows = db.fetch_all(
             f"SELECT t.trade_id, t.trade_name, t.closed_on, t.executed_on, "
             f"       t.net_pnl, t.gross_pnl, t.total_charges, t.net_credit_actual, "
             f"       t.actual_max_loss, t.zerodha_margin_final, "
+            f"       ust.zerodha_margin_final AS ust_zerodha_margin_final, "
             f"       COALESCE(s.strategy, 'UNKNOWN') AS strategy, "
             f"       COALESCE(s.underlying, '') AS underlying "
             f"FROM options_trades t "
             f"LEFT JOIN options_suggestions s ON s.suggestion_id = t.suggestion_id "
+            f"LEFT JOIN options_suggestion_user_state ust "
+            f"  ON ust.suggestion_id = t.suggestion_id "
+            f" AND ust.user_id = t.owner_user_id "
             f"WHERE {where} "
             f"ORDER BY t.closed_on ASC",
             params,
@@ -4781,12 +4788,24 @@ def create_app() -> Flask:
 
         zids = _zerodha_trade_id_set(db, [r["trade_id"] for r in rows]) if channel_f else set()
 
-        def _amount_used(row) -> float:
-            try:
-                v = float(row.get("zerodha_margin_final") or 0)
-            except (TypeError, ValueError):
-                return 0.0
-            return v if v > 0 else 0.0
+        def _positive(row, *keys) -> float:
+            for key in keys:
+                try:
+                    v = float(row.get(key) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if v > 0:
+                    return v
+            return 0.0
+
+        def _amount_used(row) -> tuple[float, str]:
+            final = _positive(row, "zerodha_margin_final", "ust_zerodha_margin_final")
+            if final > 0:
+                return final, "final"
+            ml = _positive(row, "actual_max_loss")
+            if ml > 0:
+                return ml, "max_loss"
+            return 0.0, "none"
 
         def _close_day(value) -> Optional[str]:
             if value is None:
@@ -4802,6 +4821,7 @@ def create_app() -> Flask:
         for r in rows:
             if channel_f and _channel_for_trade_id(r["trade_id"], zids) != channel_f:
                 continue
+            used_rs, used_src = _amount_used(r)
             events.append({
                 "trade_id":          r["trade_id"],
                 "trade_name":        r["trade_name"],
@@ -4814,7 +4834,8 @@ def create_app() -> Flask:
                 "total_charges":     float(r["total_charges"] or 0),
                 "net_credit_actual": float(r["net_credit_actual"] or 0),
                 "actual_max_loss":   float(r.get("actual_max_loss") or 0),
-                "amount_used":       _amount_used(r),
+                "amount_used":       used_rs,
+                "amount_used_source": used_src,
                 "is_reversal":       False,
             })
         # Reversals are Zerodha-broker artifacts — include only for all/zerodha.
@@ -4833,6 +4854,7 @@ def create_app() -> Flask:
                     "net_credit_actual": 0.0,
                     "actual_max_loss":   0.0,
                     "amount_used":       0.0,
+                    "amount_used_source": "none",
                     "is_reversal":       True,
                 })
         events.sort(key=lambda e: e["closed_on"] or "")
@@ -4854,6 +4876,7 @@ def create_app() -> Flask:
             pnl = e["net_pnl"]
             strat = e["strategy"]
             amount_used = float(e.get("amount_used") or 0)
+            used_src = e.get("amount_used_source") or "none"
             if e["is_reversal"]:
                 prem_rs, prem_kind = 0.0, "paid"
             else:
@@ -4869,17 +4892,24 @@ def create_app() -> Flask:
             if amount_used > 0:
                 total_amount_used += amount_used
             total_charges += e["total_charges"]
+            # Day key = close calendar day only (never entry / executed_on).
             day = _close_day(e["closed_on"])
             if day:
                 bucket = by_day_map.setdefault(day, {
                     "date": day,
                     "net_pnl": 0.0,
                     "amount_used": 0.0,
+                    "amount_used_final": 0.0,
+                    "amount_used_max_loss": 0.0,
                     "trades": 0,
                 })
                 bucket["net_pnl"] += pnl
                 if amount_used > 0:
                     bucket["amount_used"] += amount_used
+                    if used_src == "final":
+                        bucket["amount_used_final"] += amount_used
+                    elif used_src == "max_loss":
+                        bucket["amount_used_max_loss"] += amount_used
                 bucket["trades"] += 1
             rr = {
                 "closed_on": e["closed_on"],
@@ -4899,6 +4929,7 @@ def create_app() -> Flask:
                 "premium_rs":        round(prem_rs, 2),
                 "premium_kind":      prem_kind,
                 "amount_used":       round(amount_used, 2),
+                "amount_used_source": used_src,
                 "is_reversal":       e["is_reversal"],
                 "cum_pnl_overall":   round(cum_overall, 2),
                 "cum_pnl_strategy":  round(cum_by_strategy[strat], 2),
@@ -4908,6 +4939,8 @@ def create_app() -> Flask:
             "date": d["date"],
             "net_pnl": round(d["net_pnl"], 2),
             "amount_used": round(d["amount_used"], 2),
+            "amount_used_final": round(d["amount_used_final"], 2),
+            "amount_used_max_loss": round(d["amount_used_max_loss"], 2),
             "trades": int(d["trades"]),
         } for d in sorted(by_day_map.values(), key=lambda x: x["date"])]
 
