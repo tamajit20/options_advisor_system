@@ -3069,7 +3069,26 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
   cursor: pointer;
 }
 .band-day-back:hover { background: rgba(14, 165, 233, .16); }
-.band-day-title { display: flex; flex-direction: column; gap: .15rem; }
+.band-day-title { display: flex; flex-direction: column; gap: .15rem; flex: 1 1 auto; }
+.band-day-view-toggle {
+  display: inline-flex;
+  border: 1px solid rgba(148, 163, 184, .35);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.band-day-view-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted, #94a3b8);
+  padding: .35rem .75rem;
+  font-size: .78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.band-day-view-btn.is-active {
+  background: rgba(14, 165, 233, .18);
+  color: #7dd3fc;
+}
 .band-day-plain { font-size: .85rem; color: var(--text, #e2e8f0); margin: 0 0 .65rem; }
 .band-day-plain em { font-style: normal; font-weight: 700; color: #38bdf8; }
 .band-day-readout {
@@ -3080,35 +3099,44 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
   background: rgba(14, 165, 233, .08);
   font-size: .92rem;
 }
+.band-day-table-wrap { width: 100%; max-height: min(52vh, 420px); overflow: auto; }
 .band-day-chart-wrap {
   width: 100%;
-  height: min(38vh, 300px);
+  height: min(42vh, 320px);
   min-height: 200px;
   border: 1px solid rgba(148, 163, 184, .3);
   border-radius: 8px;
-  background: #fff;
+  background: #0b1220;
   padding: .35rem;
   cursor: crosshair;
 }
+.band-day-chart-wrap[hidden],
+.band-day-table-wrap[hidden] { display: none !important; }
 .band-day-chart { width: 100%; height: 100%; display: block; }
 .band-day-sample-table {
   width: 100%;
-  margin-top: .75rem;
+  margin: 0;
   border-collapse: collapse;
-  font-size: .82rem;
+  font-size: .88rem;
   font-variant-numeric: tabular-nums;
 }
 .band-day-sample-table th {
   text-align: left;
   font-size: .72rem;
   color: var(--muted, #94a3b8);
-  padding: 4px 8px;
+  padding: 6px 10px;
+  position: sticky;
+  top: 0;
+  background: #0d1f2d;
+  z-index: 1;
 }
 .band-day-sample-table td {
-  padding: 5px 8px;
+  padding: 7px 10px;
   border-top: 1px solid rgba(148, 163, 184, .22);
 }
 .band-day-sample-table tr.is-marked td { background: rgba(14, 165, 233, .12); font-weight: 700; }
+.band-day-sample-table tr.is-now td { background: rgba(248, 113, 113, .12); }
+.band-day-sample-table tr.is-entry td { background: rgba(148, 163, 184, .1); }
 .band-sample-tag {
   margin-left: .35rem;
   font-size: .65rem;
@@ -3116,6 +3144,8 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
   letter-spacing: .03em;
   color: #0384c7;
 }
+.band-sample-tag.is-live { color: #f87171; }
+.band-sample-src { font-size: .72rem; }
 .band-cal-table th {
   text-align: left;
   font-weight: 600;
