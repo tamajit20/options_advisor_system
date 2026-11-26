@@ -2448,10 +2448,13 @@ details.collapsible-card.hist-card[open] > .collapsible-summary .hist-card-facts
 }
 .hist-amount-used-wrap,
 .hist-prem-paid { white-space: nowrap; }
-/* Reserve space so Zerodha Final fill does not shove neighbouring meta items. */
+.hist-amount-used-wrap,
+.hist-prem-paid {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .35rem;
+}
 .hist-amount-used {
-  display: inline-block;
-  min-width: 22ch;
   font-variant-numeric: tabular-nums;
 }
 .hist-strip-amount-used {
