@@ -3070,33 +3070,51 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 }
 .band-day-back:hover { background: rgba(14, 165, 233, .16); }
 .band-day-title { display: flex; flex-direction: column; gap: .15rem; }
-.band-day-kpis {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: .5rem;
-  margin: 0 0 .75rem;
-}
-.band-day-kpi {
-  border: 1px solid rgba(148, 163, 184, .35);
+.band-day-plain { font-size: .85rem; color: var(--text, #e2e8f0); margin: 0 0 .65rem; }
+.band-day-plain em { font-style: normal; font-weight: 700; color: #38bdf8; }
+.band-day-readout {
+  margin: 0 0 .65rem;
+  padding: .55rem .75rem;
   border-radius: 8px;
-  padding: .45rem .6rem;
-  display: flex;
-  flex-direction: column;
-  gap: .15rem;
+  border: 1px solid rgba(14, 165, 233, .35);
+  background: rgba(14, 165, 233, .08);
+  font-size: .92rem;
 }
-.band-day-kpi strong { font-size: .95rem; }
 .band-day-chart-wrap {
   width: 100%;
-  height: min(42vh, 320px);
-  min-height: 220px;
+  height: min(38vh, 300px);
+  min-height: 200px;
   border: 1px solid rgba(148, 163, 184, .3);
   border-radius: 8px;
   background: #fff;
   padding: .35rem;
+  cursor: crosshair;
 }
 .band-day-chart { width: 100%; height: 100%; display: block; }
-@media (max-width: 640px) {
-  .band-day-kpis { grid-template-columns: 1fr; }
+.band-day-sample-table {
+  width: 100%;
+  margin-top: .75rem;
+  border-collapse: collapse;
+  font-size: .82rem;
+  font-variant-numeric: tabular-nums;
+}
+.band-day-sample-table th {
+  text-align: left;
+  font-size: .72rem;
+  color: var(--muted, #94a3b8);
+  padding: 4px 8px;
+}
+.band-day-sample-table td {
+  padding: 5px 8px;
+  border-top: 1px solid rgba(148, 163, 184, .22);
+}
+.band-day-sample-table tr.is-marked td { background: rgba(14, 165, 233, .12); font-weight: 700; }
+.band-sample-tag {
+  margin-left: .35rem;
+  font-size: .65rem;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: #0384c7;
 }
 .band-cal-table th {
   text-align: left;

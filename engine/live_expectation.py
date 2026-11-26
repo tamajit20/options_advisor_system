@@ -1303,13 +1303,15 @@ def today_mark_bands(
     atm_iv: Optional[float],
     strategy: Optional[str] = None,
     include_curve: bool = False,
+    charges_rs: Optional[float] = None,
 ) -> dict:
     """Spot bands where today's mark is in profit, and near its best.
 
     Full profit is where mark-to-market is within 3% of the best spot for the
-    time still left. In profit is where that mark is above zero. At zero DTE
-    these collapse to the expiry short-strike band and the breakevens.
-    One-sided strategies keep an open side (above / below) from the strategy.
+    time still left. **In profit** is where **net** mark (gross − est. charges)
+    is above zero — so the printed gate matches a non-negative Net line.
+    At zero DTE these collapse to the expiry short-strike band and the
+    breakevens. One-sided strategies keep an open side (above / below).
 
     When *include_curve* is True, also returns ``curve_spots`` / ``curve_gross``
     for the P&L-vs-index day chart (same sweep used for the bands).
@@ -1329,6 +1331,12 @@ def today_mark_bands(
         "full_pnl_rs": None, "in_pnl_rs": None,
         "in_loss_pnl_rs": None, "loss_pnl_rs": None,
     }
+    try:
+        charges = max(0.0, float(charges_rs or 0.0))
+    except (TypeError, ValueError):
+        charges = 0.0
+    # Gross must clear charges (+ ₹1 slack) before the zone counts as in-profit.
+    in_profit_gross_floor = charges + 1.0
     rows = []
     for leg in legs or []:
         strike = _as_float(getattr(leg, "strike", None))
@@ -1472,9 +1480,9 @@ def today_mark_bands(
             return edge, None, "above"
         return lo_v, hi_v, None
 
-    in_lo, in_hi = _span(lambda pnl: pnl > 1.0)
+    in_lo, in_hi = _span(lambda pnl: pnl > in_profit_gross_floor)
     full_lo = full_hi = None
-    if peak > 1.0:
+    if peak > in_profit_gross_floor:
         full_lo, full_hi = _span(lambda pnl: pnl >= peak * 0.97)
     in_lo, in_hi, in_side = _open_side(in_lo, in_hi)
     full_lo, full_hi, full_side = _open_side(full_lo, full_hi)
@@ -1543,11 +1551,19 @@ def today_mark_bands(
             return a
         return round((a + b) / 2.0, 2)
 
-    full_pnl_rs = _edge_pnl(full_side, full_lo, full_hi) if peak > 1.0 else None
-    if full_pnl_rs is None and peak > 1.0:
+    full_pnl_rs = (
+        _edge_pnl(full_side, full_lo, full_hi)
+        if peak > in_profit_gross_floor else None
+    )
+    if full_pnl_rs is None and peak > in_profit_gross_floor:
         full_pnl_rs = round(peak, 2)
 
-    in_pnl_rs = _edge_pnl(in_side, in_lo, in_hi)
+    # In-profit / in-loss print the net-zero gate. Grid step can overshoot, so
+    # stamp gross ≈ charges and let _apply_net_pnls show Net ~0 (never −charges).
+    if in_lo is not None or in_hi is not None:
+        in_pnl_rs = round(charges, 2)
+    else:
+        in_pnl_rs = None
 
     if loss_below is not None and loss_above is not None:
         a = _pnl_at(loss_below)
@@ -1561,12 +1577,8 @@ def today_mark_bands(
     else:
         loss_pnl_rs = round(trough, 2) if trough < -1.0 else None
 
-    if in_loss_below is not None and in_loss_above is not None:
-        in_loss_pnl_rs = _edge_pnl(None, in_loss_below, in_loss_above)
-    elif in_loss_below is not None:
-        in_loss_pnl_rs = _pnl_at(in_loss_below)
-    elif in_loss_above is not None:
-        in_loss_pnl_rs = _pnl_at(in_loss_above)
+    if in_loss_below is not None or in_loss_above is not None:
+        in_loss_pnl_rs = round(charges, 2)
     else:
         in_loss_pnl_rs = None
 
@@ -1628,6 +1640,7 @@ def day_mark_pnl_curve(
         atm_iv=atm_iv,
         strategy=strategy,
         include_curve=True,
+        charges_rs=charges_rs,
     )
     spots = bands.pop("curve_spots", None)
     gross = bands.pop("curve_gross", None)
@@ -1682,11 +1695,12 @@ def _stamp_expiry_zone_pnls(
     *,
     max_profit_rs: Optional[float],
     max_loss_rs: Optional[float],
+    charges_rs: Optional[float] = None,
 ) -> dict:
     """Gross P&L at expiry zone edges (matches the printed levels).
 
-    Full / full-loss use max profit / max loss. In-profit and in-loss print
-    the breakeven line(s), so edge mark is ~0 there.
+    Full / full-loss use max profit / max loss. In-profit / in-loss print the
+    breakeven line(s); stamp gross ≈ charges so Net after costs is ~0.
     """
     try:
         mp = float(max_profit_rs) if max_profit_rs is not None else None
@@ -1696,15 +1710,19 @@ def _stamp_expiry_zone_pnls(
         ml = abs(float(max_loss_rs)) if max_loss_rs is not None else None
     except (TypeError, ValueError):
         ml = None
+    try:
+        ch = max(0.0, float(charges_rs or 0.0))
+    except (TypeError, ValueError):
+        ch = 0.0
     if mp is not None and mp > 0:
         row["full_pnl_rs"] = round(mp, 2)
-        row["in_pnl_rs"] = 0.0
+        row["in_pnl_rs"] = round(ch, 2)
     else:
         row["full_pnl_rs"] = None
         row["in_pnl_rs"] = None
     if ml is not None and ml > 0:
         row["loss_pnl_rs"] = round(-ml, 2)
-        row["in_loss_pnl_rs"] = 0.0
+        row["in_loss_pnl_rs"] = round(ch, 2)
     else:
         row["loss_pnl_rs"] = None
         row["in_loss_pnl_rs"] = None
@@ -1719,6 +1737,7 @@ def expiry_structural_bands(
     upper_be: Optional[float],
     max_profit_rs: Optional[float] = None,
     max_loss_rs: Optional[float] = None,
+    charges_rs: Optional[float] = None,
 ) -> dict:
     """Expiry ranges that match the trade page: sold strikes, then breakevens."""
     short_put = _leg_strike(legs, "SELL", "PE")
@@ -1753,7 +1772,10 @@ def expiry_structural_bands(
             r["in_loss_below"] = r.get("in_lo")
             r["in_loss_above"] = r.get("in_hi")
         return _stamp_expiry_zone_pnls(
-            r, max_profit_rs=max_profit_rs, max_loss_rs=max_loss_rs,
+            r,
+            max_profit_rs=max_profit_rs,
+            max_loss_rs=max_loss_rs,
+            charges_rs=charges_rs,
         )
 
     credit_range = (
@@ -1927,6 +1949,7 @@ def mark_band_calendar(
                 upper_be=_as_float(upper_be),
                 max_profit_rs=max_profit_rs,
                 max_loss_rs=max_loss_rs,
+                charges_rs=charges_rs,
             )
         else:
             bands = today_mark_bands(
@@ -1934,6 +1957,7 @@ def mark_band_calendar(
                 dte=(expiry_d - day).days,
                 atm_iv=iv,
                 strategy=strategy,
+                charges_rs=charges_rs,
             )
             row = {
                 "full_lo": bands.get("full_lo"),
@@ -2116,6 +2140,7 @@ def live_trade_outlook(
             dte=dte_i,
             atm_iv=iv,
             strategy=strategy,
+            charges_rs=est_charges,
         )
         if include_today_bands
         else {

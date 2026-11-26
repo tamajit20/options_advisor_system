@@ -700,6 +700,38 @@ class TestTodayMarkBands:
             assert mid["full_pnl_rs"] > mid["in_pnl_rs"]
             assert mid["full_pnl_rs"] > credit * 0.5
 
+    def test_in_profit_band_requires_net_after_charges(self):
+        exp = date(2026, 11, 23)
+        legs = [
+            {"action": "SELL", "strike": 55400, "option_type": "CE", "fill_price": 462.7,
+             "lots": 1, "lot_size": 30, "expiry_date": exp},
+            {"action": "BUY", "strike": 56200, "option_type": "CE", "fill_price": 247.6,
+             "lots": 1, "lot_size": 30, "expiry_date": exp},
+        ]
+        filled = legs_from_fills(legs, underlying="BANKNIFTY", expiry=exp)
+        free = today_mark_bands(
+            legs=filled, dte=20, atm_iv=0.148, strategy="BEAR_CALL_SPREAD",
+            charges_rs=0,
+        )
+        taxed = today_mark_bands(
+            legs=filled, dte=20, atm_iv=0.148, strategy="BEAR_CALL_SPREAD",
+            charges_rs=250,
+        )
+        assert free["in_hi"] is not None and taxed["in_hi"] is not None
+        # Bear-call profit is below the gate — charges push the gate lower (stricter).
+        assert taxed["in_hi"] <= free["in_hi"]
+        assert taxed["in_pnl_rs"] == pytest.approx(250.0)
+        # After apply_net, in-profit Net is ~0 (not −charges).
+        from engine.live_expectation import _apply_net_pnls
+        row = {
+            "in_pnl_rs": taxed["in_pnl_rs"],
+            "full_pnl_rs": taxed.get("full_pnl_rs"),
+            "in_loss_pnl_rs": taxed.get("in_loss_pnl_rs"),
+            "loss_pnl_rs": taxed.get("loss_pnl_rs"),
+        }
+        _apply_net_pnls(row, 250)
+        assert row["in_net_rs"] == pytest.approx(0.0, abs=0.01)
+
     def test_day_mark_pnl_curve_returns_net_vs_spot(self):
         exp = date(2026, 11, 23)
         legs = [
