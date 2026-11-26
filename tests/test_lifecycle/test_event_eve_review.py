@@ -145,7 +145,22 @@ class TestPreEventBanner:
         mocker.patch.object(
             eer.EventCalendarRepo, "high_impact_events", return_value=[],
         )
+        assert eer.build_pre_event_exit_banner(
+            mock_db, today=_TODAY, owner_user_id=1,
+        ) is None
+
+    def test_banner_none_without_owner(self, mock_db, mocker):
+        mocker.patch.object(
+            eer.EventCalendarRepo, "high_impact_events",
+            return_value=[{
+                "event_date": _TOMORROW,
+                "event_type": "US_FOMC",
+                "description": "Fed rate decision",
+            }],
+        )
+        open_mock = mocker.patch.object(eer.TradeRepo, "open_trades", return_value=[])
         assert eer.build_pre_event_exit_banner(mock_db, today=_TODAY) is None
+        open_mock.assert_not_called()
 
     def test_banner_one_item_per_event(self, mock_db, mocker):
         mocker.patch.object(
@@ -163,7 +178,7 @@ class TestPreEventBanner:
                 },
             ],
         )
-        mocker.patch.object(
+        open_mock = mocker.patch.object(
             eer.TradeRepo, "open_trades",
             return_value=[{
                 "trade_id": "T-1",
@@ -177,7 +192,9 @@ class TestPreEventBanner:
             eer.SuggestionRepo, "get",
             return_value={"strategy": "IRON_CONDOR", "strategy_type": "WRITING"},
         )
-        banner = eer.build_pre_event_exit_banner(mock_db, today=_TODAY)
+        banner = eer.build_pre_event_exit_banner(
+            mock_db, today=_TODAY, owner_user_id=42,
+        )
         assert banner is not None
         assert banner["active"] is True
         assert len(banner["items"]) == 2
@@ -186,3 +203,4 @@ class TestPreEventBanner:
         assert all(it["when"] == "tomorrow" for it in banner["items"])
         assert "NIFTY-IC" in banner["items"][0]["trade_names"]
         assert "PRE-EVENT EXIT" in banner["items"][0]["message"]
+        open_mock.assert_called_with(owner_user_id=42)

@@ -1292,6 +1292,24 @@ class TestApiSystemStatus:
         assert resp.status_code == 200
         assert resp.get_json()["trade_signals"] == []
 
+    def test_trade_signals_scope_to_signed_in_user_even_for_admin(
+        self, client, mocker, mock_dashboard_admin,
+    ):
+        """Header hexagons must not aggregate every user's open book."""
+        mocker.patch(
+            "database.runtime_flags.RuntimeFlagsRepo.get_bool",
+            return_value=False,
+        )
+        mocker.patch("dashboard.server._live_mtm_by_trade", return_value={})
+        open_mock = mocker.patch(
+            "dashboard.server.TradeRepo.open_trades",
+            return_value=[],
+        )
+        resp = client.get("/api/system-status")
+        assert resp.status_code == 200
+        open_mock.assert_called_with(owner_user_id=int(mock_dashboard_admin["id"]))
+        assert open_mock.call_args.kwargs.get("admin_all") is not True
+
     def test_fail_open_when_runtime_flags_raise(self, client, mocker):
         mocker.patch(
             "database.runtime_flags.RuntimeFlagsRepo.get_bool",

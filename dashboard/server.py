@@ -2464,15 +2464,13 @@ def _active_trade_signals(db: SQLServerConnection) -> List[Dict[str, Any]]:
     alert read must not hide a trade that is still in SL_HIT.
     """
     try:
-        from dashboard.auth import current_user, current_user_id
-        u = current_user()
+        # Personal signal rail (header hexagons) — always the signed-in book,
+        # even for admins. Matches /api/trades/open; do not use admin_all.
+        from dashboard.auth import current_user_id
         uid = current_user_id()
-        if u and u.get("is_admin"):
-            rows = TradeRepo(db).open_trades(admin_all=True) or []
-        elif uid is not None:
-            rows = TradeRepo(db).open_trades(owner_user_id=int(uid)) or []
-        else:
+        if uid is None:
             return []
+        rows = TradeRepo(db).open_trades(owner_user_id=int(uid)) or []
         if not isinstance(rows, (list, tuple)):
             return []
     except Exception:
@@ -2652,8 +2650,13 @@ def _build_system_status_payload(db: SQLServerConnection) -> Dict[str, Any]:
         logger.debug("system-status: scheduler probe failed", exc_info=True)
     pre_event = None
     try:
+        from dashboard.auth import current_user_id
         from lifecycle.event_eve_review import build_pre_event_exit_banner
-        pre_event = build_pre_event_exit_banner(db)
+        uid = current_user_id()
+        if uid is not None:
+            pre_event = build_pre_event_exit_banner(
+                db, owner_user_id=int(uid),
+            )
     except Exception:
         logger.debug("system-status: pre_event_exit banner skipped", exc_info=True)
     return {

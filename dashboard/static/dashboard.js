@@ -148,9 +148,16 @@ let _zerodhaExecutionRuntimeEnabled = false;
 let _zerodhaExecutionEnabled = false;
 let _zerodhaExecutionReady = false;
 let _lastMtmByTrade = {};  // tradeId → { mtm, as_of, receivedAt } — open trades only
+// null until My Trades loads; then only this user's open trade ids (SSE is global).
+let _ownedOpenTradeIds = null;
+
+function _setOwnedOpenTradeIds(ids) {
+  _ownedOpenTradeIds = new Set((ids || []).map(id => String(id)));
+}
 
 function _pruneMtmCache(openIds) {
-  const keep = new Set((openIds || []).map(id => String(id)));
+  _setOwnedOpenTradeIds(openIds);
+  const keep = _ownedOpenTradeIds;
   let dropped = false;
   Object.keys(_lastMtmByTrade).forEach(tid => {
     if (keep.has(tid)) return;
@@ -2146,19 +2153,15 @@ function _paintFillAmountUsed(container, net) {
   const tid = container.id && container.id.startsWith('fill-pnl-')
     ? container.id.slice('fill-pnl-'.length) : '';
   const header = _headerAmountUsed(tid);
-  if (header) {
-    el.textContent = header.text;
-    el.className = (el.className || '').replace(/pnl-pos|pnl-neg/g, '').trim();
-    if (pctEl) {
-      pctEl.textContent = header.pct;
-      pctEl.className = 'pnl-pct-bracket'
-        + (header.pos ? ' pnl-pos' : '')
-        + (header.neg ? ' pnl-neg' : '');
-    }
-    return;
-  }
   const margin = _tradeMarginFinal(tid);
-  if (net == null || isNaN(net) || !(margin > 0)) {
+  // Rupee amount may mirror the live header Final; the percent must follow
+  // this section's fill net (not the header's live MTM %), or editing exit
+  // prices updates Net/Gross while Amount used % stays stuck.
+  if (header && header.text) {
+    el.textContent = header.text;
+  } else if (margin > 0) {
+    el.textContent = `\u20b9${fmt(margin)}`;
+  } else {
     el.textContent = '\u2014';
     el.className = (el.className || '').replace(/pnl-pos|pnl-neg/g, '').trim();
     if (pctEl) {
@@ -2167,12 +2170,16 @@ function _paintFillAmountUsed(container, net) {
     }
     return;
   }
-  el.textContent = `\u20b9${fmt(margin)}`;
   el.className = (el.className || '').replace(/pnl-pos|pnl-neg/g, '').trim();
-  if (pctEl) {
-    pctEl.textContent = pnlPctTextCompact(net, { rs: margin });
-    pctEl.className = 'pnl-pct-bracket' + (net > 0 ? ' pnl-pos' : (net < 0 ? ' pnl-neg' : ''));
+  if (!pctEl) return;
+  if (net == null || isNaN(net) || !(margin > 0)) {
+    pctEl.textContent = '';
+    pctEl.className = 'pnl-pct-bracket';
+    return;
   }
+  pctEl.textContent = pnlPctTextCompact(net, { rs: margin });
+  pctEl.className = 'pnl-pct-bracket'
+    + (net > 0 ? ' pnl-pos' : (net < 0 ? ' pnl-neg' : ''));
 }
 
 function _snapshotClosePnl(panel, tradeId) {
@@ -3619,8 +3626,12 @@ function _mergePnlRailSignals(actionSignals) {
     if (!_SIGNAL_STATUS_KINDS.has(s.kind) || !s.trade_id || actionIds.has(String(s.trade_id))) return;
     byId[String(s.trade_id)] = s;
   });
+  // Live MTM SSE is process-wide; never invent hexagon counts for other users.
+  const owned = _ownedOpenTradeIds
+    || new Set((actionSignals || []).map(s => String(s.trade_id || '')).filter(Boolean));
   Object.entries(_lastMtmByTrade).forEach(([tid, rec]) => {
     if (!tid || actionIds.has(tid)) return;
+    if (!owned.has(tid)) return;
     if (rec.lossHit || rec.targetHit || rec.profitMilestoneHit || rec.milestoneHit) return;
     const kind = _pnlStatusFromMtm(
       (rec && rec.liveNet != null) ? rec.liveNet : (rec && rec.mtm),
@@ -13045,6 +13056,11 @@ function _qualityBadge(storedScore, prefix = '', detail = null) {
 let _liveMTMSource = null;
 
 function _applyMtmEvent(m) {
+  if (m && m.trade_id && _ownedOpenTradeIds
+      && !_ownedOpenTradeIds.has(String(m.trade_id))) {
+    // Global live feed includes every open book — ignore others for this session.
+    return;
+  }
   if (m && m.closed && m.trade_id) {
     // Trade left the live book — keep last known header P&L (do not wipe).
     if (_lastMtmByTrade[m.trade_id]) {

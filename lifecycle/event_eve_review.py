@@ -100,10 +100,21 @@ def _already_sent_today(
 
 def active_short_premium_trades(
     db: SQLServerConnection,
+    *,
+    owner_user_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """ACTIVE trades that are short/credit premium (enriched with strategy)."""
+    """ACTIVE trades that are short/credit premium (enriched with strategy).
+
+    Pass *owner_user_id* for the personal dashboard marquee. Omit it only for
+    system-wide scans (``admin_all``).
+    """
+    trd = TradeRepo(db)
+    if owner_user_id is not None:
+        rows = trd.open_trades(owner_user_id=int(owner_user_id)) or []
+    else:
+        rows = trd.open_trades(admin_all=True) or []
     out: List[Dict[str, Any]] = []
-    for trade in TradeRepo(db).open_trades(admin_all=True):
+    for trade in rows:
         if str(trade.get("status") or "").upper() != "ACTIVE":
             continue
         sug = _strategy_for_trade(db, trade)
@@ -183,11 +194,13 @@ def build_pre_event_exit_banner(
     db: SQLServerConnection,
     *,
     today: Optional[date] = None,
+    owner_user_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Live banner payload: one dismissible item per HIGH event (today/tomorrow).
 
-    Requires at least one ACTIVE short/credit trade. Independent of unread
-    notifications. Client shows items one-at-a-time on a single line.
+    Requires at least one ACTIVE short/credit trade for *owner_user_id*
+    (personal marquee). Independent of unread notifications. Client shows
+    items one-at-a-time on a single line.
     """
     today = today or today_ist()
     tomorrow = today + timedelta(days=1)
@@ -196,7 +209,10 @@ def build_pre_event_exit_banner(
     if not events:
         return None
 
-    shorts = active_short_premium_trades(db)
+    # Dashboard marquee is per signed-in book — never list another user's shorts.
+    if owner_user_id is None:
+        return None
+    shorts = active_short_premium_trades(db, owner_user_id=int(owner_user_id))
     if not shorts:
         return None
 
