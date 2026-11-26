@@ -37,8 +37,11 @@ class TestHistoryAndStatsRoutes:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["trades"] == []
+        assert data["by_day"] == []
+        assert data["total_amount_used"] == 0
         sql, params = conn.fetch_all.call_args[0]
         assert "CONVERT(date" not in sql
+        assert "zerodha_margin_final" in sql
         # Logged-in user scopes private books via owner_user_id.
         assert params == [1]
 
@@ -88,13 +91,15 @@ class TestHistoryAndStatsRoutes:
             "gross_pnl": 12.0,
             "total_charges": 2.0,
             "net_credit_actual": 100.0,
+            "actual_max_loss": 500.0,
+            "zerodha_margin_final": 1000.0,
             "strategy": "BULL_PUT_SPREAD",
             "underlying": "NIFTY",
         }
         # First fetch_all = trades; later calls may be premium / broker batch.
         conn.fetch_all.side_effect = [[trade], [], []]
         mocker.patch("dashboard.server._zerodha_trade_id_set", return_value=set())
-        mocker.patch("dashboard.server._trade_premium_from_legs", return_value=(100.0, "paid"))
+        mocker.patch("dashboard.server._trade_premiums_from_legs", return_value={})
         mocker.patch(
             "database.execution_reversal_repo.ExecutionReversalRepo",
             return_value=MagicMock(list_between=MagicMock(return_value=[])),
@@ -104,6 +109,59 @@ class TestHistoryAndStatsRoutes:
         body = resp.get_json()
         assert body["trades"] == []
         assert body["channel"] == "zerodha"
+
+    def test_pnl_timeline_by_day_aggregates_amount_used(self, client_with_db, mocker):
+        client, conn = client_with_db
+        trades = [
+            {
+                "trade_id": "TRD-1",
+                "trade_name": "A",
+                "closed_on": datetime(2026, 8, 10, 12, 0),
+                "executed_on": datetime(2026, 8, 1),
+                "net_pnl": 100.0,
+                "gross_pnl": 120.0,
+                "total_charges": 20.0,
+                "net_credit_actual": 200.0,
+                "actual_max_loss": 1000.0,
+                "zerodha_margin_final": 5000.0,
+                "strategy": "BULL_PUT_SPREAD",
+                "underlying": "NIFTY",
+            },
+            {
+                "trade_id": "TRD-2",
+                "trade_name": "B",
+                "closed_on": datetime(2026, 8, 10, 15, 0),
+                "executed_on": datetime(2026, 8, 2),
+                "net_pnl": -40.0,
+                "gross_pnl": -30.0,
+                "total_charges": 10.0,
+                "net_credit_actual": 150.0,
+                "actual_max_loss": 800.0,
+                "zerodha_margin_final": 3000.0,
+                "strategy": "BEAR_CALL_SPREAD",
+                "underlying": "BANKNIFTY",
+            },
+        ]
+        conn.fetch_all.side_effect = [trades, [], []]
+        mocker.patch("dashboard.server._trade_premiums_from_legs", return_value={
+            "TRD-1": (200.0, "received"),
+            "TRD-2": (150.0, "received"),
+        })
+        mocker.patch(
+            "database.execution_reversal_repo.ExecutionReversalRepo",
+            return_value=MagicMock(list_between=MagicMock(return_value=[])),
+        )
+        resp = client.get("/api/stats/pnl-timeline")
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["total_pnl"] == 60.0
+        assert body["total_amount_used"] == 8000.0
+        assert body["by_day"] == [{
+            "date": "2026-08-10",
+            "net_pnl": 60.0,
+            "amount_used": 8000.0,
+            "trades": 2,
+        }]
 
     def test_strategy_performance_channel_in_response(self, client_with_db, mocker):
         client, conn = client_with_db

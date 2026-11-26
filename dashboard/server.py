@@ -4769,7 +4769,7 @@ def create_app() -> Flask:
         rows = db.fetch_all(
             f"SELECT t.trade_id, t.trade_name, t.closed_on, t.executed_on, "
             f"       t.net_pnl, t.gross_pnl, t.total_charges, t.net_credit_actual, "
-            f"       t.actual_max_loss, "
+            f"       t.actual_max_loss, t.zerodha_margin_final, "
             f"       COALESCE(s.strategy, 'UNKNOWN') AS strategy, "
             f"       COALESCE(s.underlying, '') AS underlying "
             f"FROM options_trades t "
@@ -4780,6 +4780,23 @@ def create_app() -> Flask:
         )
 
         zids = _zerodha_trade_id_set(db, [r["trade_id"] for r in rows]) if channel_f else set()
+
+        def _amount_used(row) -> float:
+            try:
+                v = float(row.get("zerodha_margin_final") or 0)
+            except (TypeError, ValueError):
+                return 0.0
+            return v if v > 0 else 0.0
+
+        def _close_day(value) -> Optional[str]:
+            if value is None:
+                return None
+            if isinstance(value, datetime):
+                return value.date().isoformat()
+            if isinstance(value, date):
+                return value.isoformat()
+            text = str(value).strip()
+            return text[:10] if len(text) >= 10 else None
 
         events = []
         for r in rows:
@@ -4796,7 +4813,8 @@ def create_app() -> Flask:
                 "gross_pnl":         float(r["gross_pnl"] or 0),
                 "total_charges":     float(r["total_charges"] or 0),
                 "net_credit_actual": float(r["net_credit_actual"] or 0),
-                "actual_max_loss":   float(r["actual_max_loss"] or 0),
+                "actual_max_loss":   float(r.get("actual_max_loss") or 0),
+                "amount_used":       _amount_used(r),
                 "is_reversal":       False,
             })
         # Reversals are Zerodha-broker artifacts — include only for all/zerodha.
@@ -4814,6 +4832,7 @@ def create_app() -> Flask:
                     "total_charges":     float(r.get("total_charges") or 0),
                     "net_credit_actual": 0.0,
                     "actual_max_loss":   0.0,
+                    "amount_used":       0.0,
                     "is_reversal":       True,
                 })
         events.sort(key=lambda e: e["closed_on"] or "")
@@ -4823,7 +4842,9 @@ def create_app() -> Flask:
         cum_by_strategy: dict = {}
         total_invested = 0.0
         total_amount_invested = 0.0
+        total_amount_used = 0.0
         total_charges = 0.0
+        by_day_map: dict = {}
 
         prem_by_tid = _trade_premiums_from_legs(
             db, [e["trade_id"] for e in events if not e.get("is_reversal")],
@@ -4832,6 +4853,7 @@ def create_app() -> Flask:
         for e in events:
             pnl = e["net_pnl"]
             strat = e["strategy"]
+            amount_used = float(e.get("amount_used") or 0)
             if e["is_reversal"]:
                 prem_rs, prem_kind = 0.0, "paid"
             else:
@@ -4844,7 +4866,21 @@ def create_app() -> Flask:
             ml = float(e.get("actual_max_loss") or 0)
             if ml > 0:
                 total_amount_invested += ml
+            if amount_used > 0:
+                total_amount_used += amount_used
             total_charges += e["total_charges"]
+            day = _close_day(e["closed_on"])
+            if day:
+                bucket = by_day_map.setdefault(day, {
+                    "date": day,
+                    "net_pnl": 0.0,
+                    "amount_used": 0.0,
+                    "trades": 0,
+                })
+                bucket["net_pnl"] += pnl
+                if amount_used > 0:
+                    bucket["amount_used"] += amount_used
+                bucket["trades"] += 1
             rr = {
                 "closed_on": e["closed_on"],
                 "executed_on": e["executed_on"],
@@ -4862,18 +4898,28 @@ def create_app() -> Flask:
                 "net_credit_actual": round(e["net_credit_actual"], 2),
                 "premium_rs":        round(prem_rs, 2),
                 "premium_kind":      prem_kind,
+                "amount_used":       round(amount_used, 2),
                 "is_reversal":       e["is_reversal"],
                 "cum_pnl_overall":   round(cum_overall, 2),
                 "cum_pnl_strategy":  round(cum_by_strategy[strat], 2),
             })
 
+        by_day = [{
+            "date": d["date"],
+            "net_pnl": round(d["net_pnl"], 2),
+            "amount_used": round(d["amount_used"], 2),
+            "trades": int(d["trades"]),
+        } for d in sorted(by_day_map.values(), key=lambda x: x["date"])]
+
         strategies = sorted(cum_by_strategy.keys())
         return jsonify({
             "trades":          trades,
             "strategies":      strategies,
+            "by_day":          by_day,
             "total_pnl":       round(cum_overall, 2),
             "total_invested":  round(total_invested, 2),
             "total_amount_invested": round(total_amount_invested, 2),
+            "total_amount_used": round(total_amount_used, 2),
             "total_charges":   round(total_charges, 2),
             "channel":         channel_f or "all",
         })

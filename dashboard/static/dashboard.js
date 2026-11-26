@@ -11617,7 +11617,17 @@ function _paintClosedTradeSummary(data, gen) {
   if (gen != null && gen !== _closedSummaryGen) return;
   const host = $('#chart-summary-row');
   if (host) host.innerHTML = _closedTradeSummaryHtml(data);
-  _paintClosedAmountUsedFromCards();
+  const apiUsed = Number(data && data.total_amount_used);
+  const usedEl = document.querySelector('[data-hist-total-amount-used]');
+  if (usedEl && Number.isFinite(apiUsed) && apiUsed > 0) {
+    const pnl = Number(data && data.total_pnl) || 0;
+    const pct = pnlPctTextCompact(pnl, { rs: apiUsed });
+    const cls = pnl > 0 ? 'pnl-pos' : (pnl < 0 ? 'pnl-neg' : '');
+    usedEl.className = `hist-strip-amount-used ${cls}`;
+    usedEl.innerHTML = `\u20b9${fmt(apiUsed)}<span class="${cls}">${pct}</span>`;
+  } else {
+    _paintClosedAmountUsedFromCards();
+  }
 }
 
 async function refreshClosedTradeSummary() {
@@ -11915,6 +11925,104 @@ function _renderPnlLineChart(host, trades, strategies) {
   });
 }
 
+function _renderDayPnlAmountChart(host, byDay) {
+  _destroyHistChart('dayPnl');
+  const rows = Array.isArray(byDay) ? byDay : [];
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">No closed days in selected period.</div>';
+    return;
+  }
+  if (!_chartJsReady()) {
+    host.innerHTML = '<div class="empty">Chart.js failed to load. Check network / CDN access.</div>';
+    return;
+  }
+  const labels = rows.map(r => {
+    try {
+      return new Date(`${r.date}T00:00:00`).toLocaleDateString('en-IN', {
+        day: '2-digit', month: 'short',
+      });
+    } catch (_) {
+      return r.date;
+    }
+  });
+  const pnl = rows.map(r => Number(r.net_pnl) || 0);
+  const used = rows.map(r => Number(r.amount_used) || 0);
+  const canvas = _mountChartCanvas(host, {
+    title: 'Day-wise net P&L vs amount used',
+    subtitle: 'Bars by close date. Amount used = Zerodha Final held that day (sum if several closes).',
+  });
+  const dark = _chartDarkDefaults();
+  _histChartInstances.dayPnl = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Net P&L',
+          data: pnl,
+          backgroundColor: pnl.map(v => (v >= 0 ? 'rgba(134,239,172,.8)' : 'rgba(252,165,165,.8)')),
+          borderRadius: 3,
+          maxBarThickness: 36,
+          order: 1,
+        },
+        {
+          label: 'Amount used',
+          data: used,
+          backgroundColor: 'rgba(56,189,248,.45)',
+          borderRadius: 3,
+          maxBarThickness: 36,
+          order: 2,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        ...dark.plugins,
+        tooltip: {
+          ...dark.plugins.tooltip,
+          callbacks: {
+            title(items) {
+              const i = items[0] && items[0].dataIndex;
+              const row = rows[i];
+              if (!row) return '';
+              const n = row.trades != null ? ` · ${row.trades} trade${row.trades === 1 ? '' : 's'}` : '';
+              return `${row.date}${n}`;
+            },
+            label(item) {
+              return `${item.dataset.label}: ${_inrTip(item.parsed.y)}`;
+            },
+            afterBody(items) {
+              const i = items[0] && items[0].dataIndex;
+              const row = rows[i];
+              if (!row) return [];
+              const u = Number(row.amount_used) || 0;
+              const n = Number(row.net_pnl) || 0;
+              if (!(u > 0)) return ['Return on amount used: —'];
+              const pct = (n / u) * 100;
+              const sign = pct >= 0 ? '+' : '';
+              return [`Return on amount used: ${sign}${pct.toFixed(1)}%`];
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { ...dark.scales.x.ticks, maxTicksLimit: 14 },
+          grid: { display: false },
+        },
+        y: {
+          ticks: dark.scales.y.ticks,
+          grid: dark.scales.y.grid,
+          title: { display: true, text: '₹', color: 'rgba(148,163,184,.9)' },
+        },
+      },
+    },
+  });
+}
+
 function _renderPnlBarChart(host, trades, strategies) {
   _destroyHistChart('pnlBar');
   if (!_chartJsReady() || !(strategies || []).length) {
@@ -12161,14 +12269,17 @@ function _applySharedHistRange() {
 }
 
 async function loadPnlCharts() {
+  const dayEl  = $('#chart-day-pnl');
   const cumEl  = $('#chart-cumulative');
   const barEl  = $('#chart-strategy-bar');
   if (!cumEl) return;
   const summaryGen = ++_closedSummaryGen;
+  _destroyHistChart('dayPnl');
   _destroyHistChart('pnlLine');
   _destroyHistChart('pnlBar');
+  if (dayEl) { dayEl.className = 'chart-wrap loading'; dayEl.textContent = 'Loading…'; }
   cumEl.className = 'chart-wrap loading'; cumEl.textContent = 'Loading…';
-  barEl.className = 'chart-wrap loading'; barEl.textContent = '';
+  if (barEl) { barEl.className = 'chart-wrap loading'; barEl.textContent = ''; }
 
   const qs = _sharedHistRangeQuery();
   _histChannelParam(qs);
@@ -12177,17 +12288,32 @@ async function loadPnlCharts() {
     const data = await API('/api/stats/pnl-timeline?' + qs);
     _paintClosedTradeSummary(data, summaryGen);
     if (!data.trades.length) {
+      if (dayEl) {
+        dayEl.className = 'chart-wrap';
+        dayEl.innerHTML = '<div class="empty">No closed trades in selected period.</div>';
+      }
       cumEl.className = 'chart-wrap'; cumEl.innerHTML = '<div class="empty">No closed trades in selected period.</div>';
-      barEl.className = 'chart-wrap'; barEl.innerHTML = '';
+      if (barEl) { barEl.className = 'chart-wrap'; barEl.innerHTML = ''; }
       return;
+    }
+
+    if (dayEl) {
+      dayEl.className = 'chart-wrap';
+      _renderDayPnlAmountChart(dayEl, data.by_day || []);
     }
 
     cumEl.className = 'chart-wrap';
     _renderPnlLineChart(cumEl, data.trades, data.strategies);
 
-    barEl.className = 'chart-wrap';
-    _renderPnlBarChart(barEl, data.trades, data.strategies);
+    if (barEl) {
+      barEl.className = 'chart-wrap';
+      _renderPnlBarChart(barEl, data.trades, data.strategies);
+    }
   } catch (err) {
+    if (dayEl) {
+      dayEl.className = 'chart-wrap';
+      dayEl.innerHTML = `<div class="empty">Error: ${escapeHtml(err.message)}</div>`;
+    }
     cumEl.className = 'chart-wrap'; cumEl.innerHTML = `<div class="empty">Error: ${escapeHtml(err.message)}</div>`;
   }
 }
