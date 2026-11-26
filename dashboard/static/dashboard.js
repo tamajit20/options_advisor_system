@@ -11569,15 +11569,16 @@ function _closedTradeSummaryHtml(data) {
   const charges = Number(data && data.total_charges) || 0;
   const n = (data && data.trades) ? data.trades.length : 0;
   const pnlCls = pnl > 0 ? 'pnl-pos' : (pnl < 0 ? 'pnl-neg' : '');
-  const ret = invested > 0 ? (pnl / invested * 100).toFixed(1) + '%' : '—';
+  const premPct = invested > 0
+    ? `<span class="${pnlCls}">${pnlPctTextCompact(pnl, { rs: invested })}</span>`
+    : '';
   const amtInvestedPct = amountInvested > 0
     ? `<span class="${pnlCls}">${pnlPctTextCompact(pnl, { rs: amountInvested })}</span>`
     : '';
   // Total amount used fills from hydrated History cards / API (Zerodha Final).
   return `
       <div class="chart-kv"><span>Total net P&amp;L</span><strong class="${pnlCls}">${pnl > 0 ? '+' : (pnl < 0 ? '\u2212' : '')}\u20b9${fmt(Math.abs(pnl))}</strong></div>
-      <div class="chart-kv"><span>Total premium deployed</span><strong>\u20b9${fmt(invested)}</strong></div>
-      <div class="chart-kv"><span>Return on premium</span><strong class="${pnlCls}">${ret}</strong></div>
+      <div class="chart-kv" title="Sum of premium received/paid across closed trades; percent = total net \u00f7 that sum."><span>Total premium deployed</span><strong class="${pnlCls}">\u20b9${fmt(invested)}${premPct}</strong></div>
       <div class="chart-kv" title="Sum of Zerodha Final for closed trades in view; percent = total net \u00f7 that sum."><span>Total amount used</span><strong class="hist-strip-amount-used" data-hist-total-amount-used="1">\u2014</strong></div>
       <div class="chart-kv" title="Sum of each closed trade's max loss (same capital idea as Total invested on My Trades); percent = total net \u00f7 that sum."><span>Total amount invested</span><strong class="${pnlCls}">\u20b9${fmt(amountInvested)}${amtInvestedPct}</strong></div>
       <div class="chart-kv"><span>Total charges paid</span><strong>\u20b9${fmt(charges)}</strong></div>
