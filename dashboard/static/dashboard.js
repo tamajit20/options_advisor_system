@@ -2413,15 +2413,15 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
   });
   // Blank fill boxes track live MTM — paint Net/Gross and % together every tick.
   _syncFillPnlFromLiveMtm(tradeId, displayMtm);
-  // Day-detail NOW row tracks the same live Net (not the model curve mark).
+  // Day-detail NOW: patch in place (never remount — that resets scroll).
   if (_bandCalState && _bandCalState.view === 'day' && _bandCalState.tradeId === tradeId
       && _bandCalState.dayPayload) {
     const liveNet = _liveNetFromGross(tradeId, displayMtm);
     if (liveNet != null && !isNaN(liveNet)) {
       const prev = _bandCalState.dayPayload.live_net;
       if (prev == null || Math.abs(Number(prev) - liveNet) >= 0.5) {
-        _bandCalState.dayPayload = Object.assign({}, _bandCalState.dayPayload, { live_net: liveNet });
-        _mountBandDayView(document.getElementById('band-calendar-body'), _bandCalState.dayPayload);
+        _bandCalState.dayPayload.live_net = liveNet;
+        _patchBandDayLive({ liveNet });
       }
     }
   }
@@ -6042,7 +6042,7 @@ function _paintBandCalendar(payload, live) {
   const chgNote = payload && payload.est_charges_rs != null
     ? ` In profit / in loss use net after ~\u20b9${fmt(payload.est_charges_rs)} est. charges; Net at those lines is ~0. Full profit / full loss Net is mark at the printed level minus the same charges.`
     : ' In profit / in loss use net after est. charges (Net at those lines is ~0). Full profit / full loss Net is mark at the printed level minus charges.';
-  const tickNote = ' Tap a date for that day\u2019s index \u2192 net table (optional graph; Back returns). NOW uses live Net when opened from a trade. Now / % room follow the live index while open.';
+  const tickNote = ' Tap a date for that day\u2019s index \u2192 P&amp;L table (optional simple graph; Back returns). NOW follows live Net when opened from a trade.';
   return `
     <div class="band-cal-head">${nowHtml}</div>
     <p class="muted band-cal-note">${escapeHtml(noteMain)}</p>
@@ -6092,27 +6092,20 @@ function _bandIndexNetSamples(curve, {
   const net = (curve && curve.net) || [];
   if (spots.length < 2 || spots.length !== net.length) return [];
   const rows = [];
-  const push = (s, n, tag, source) => {
+  const push = (s, n, tag) => {
     if (s == null || isNaN(Number(s)) || n == null || isNaN(Number(n))) return;
-    rows.push({
-      spot: Number(s),
-      net: Number(n),
-      tag: tag || '',
-      source: source || 'model',
-    });
+    rows.push({ spot: Number(s), net: Number(n), tag: tag || '' });
   };
   const n = spots.length;
   const step = Math.max(1, Math.floor((n - 1) / Math.max(maxRows - 1, 1)));
-  for (let i = 0; i < n; i += step) push(spots[i], net[i], '', 'model');
-  if ((n - 1) % step !== 0) push(spots[n - 1], net[n - 1], '', 'model');
-  if (entry != null) push(entry, _bandNetAtSpot(curve, entry), 'entry', 'model');
+  for (let i = 0; i < n; i += step) push(spots[i], net[i], '');
+  if ((n - 1) % step !== 0) push(spots[n - 1], net[n - 1], '');
+  if (entry != null) push(entry, _bandNetAtSpot(curve, entry), 'entry');
   if (spot != null) {
-    // Prefer live Net from the trade card — the curve mark at "now" was
-    // misleading (model IV/time ≠ fill LTP MTM).
     const nowNet = (liveNet != null && !isNaN(Number(liveNet)))
       ? Number(liveNet)
       : _bandNetAtSpot(curve, spot);
-    push(spot, nowNet, 'now', (liveNet != null && !isNaN(Number(liveNet))) ? 'live' : 'model');
+    push(spot, nowNet, 'now');
   }
   rows.sort((a, b) => a.spot - b.spot);
   const out = [];
@@ -6124,10 +6117,7 @@ function _bandIndexNetSamples(curve, {
       const prev = out.find(x => Math.round(x.spot) === key);
       if (prev) {
         prev.tag = prev.tag && prev.tag !== r.tag ? `${prev.tag}+${r.tag}` : (prev.tag || r.tag);
-        if (r.tag === 'now' || r.source === 'live') {
-          prev.net = r.net;
-          prev.source = r.source;
-        }
+        if (r.tag === 'now') prev.net = r.net;
       }
       return;
     }
@@ -6137,12 +6127,8 @@ function _bandIndexNetSamples(curve, {
   return out;
 }
 
-function _drawBandDayChart(canvas, curve, {
-  spot = null,
-  entry = null,
-  liveNet = null,
-  hoverIdx = null,
-} = {}) {
+/** Plain P&L-vs-index line. Hover point → readout only (no entry/now markers). */
+function _drawBandDayChart(canvas, curve, { hoverIdx = null } = {}) {
   if (!canvas || !canvas.getContext || !curve) return null;
   const spots = curve.spots || [];
   const net = curve.net || [];
@@ -6150,18 +6136,17 @@ function _drawBandDayChart(canvas, curve, {
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 640;
-  const cssH = canvas.clientHeight || 280;
+  const cssH = canvas.clientHeight || 220;
   canvas.width = Math.round(cssW * dpr);
   canvas.height = Math.round(cssH * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const pad = { l: 58, r: 14, t: 18, b: 40 };
+  const pad = { l: 52, r: 12, t: 12, b: 28 };
   const w = cssW - pad.l - pad.r;
   const h = cssH - pad.t - pad.b;
   const xMin = Math.min(...spots);
   const xMax = Math.max(...spots);
-  const liveY = (liveNet != null && !isNaN(Number(liveNet))) ? Number(liveNet) : null;
-  let yMin = Math.min(...net, 0, liveY != null ? liveY : 0);
-  let yMax = Math.max(...net, 0, liveY != null ? liveY : 0);
+  let yMin = Math.min(...net, 0);
+  let yMax = Math.max(...net, 0);
   const yPad = Math.max((yMax - yMin) * 0.08, 50);
   yMin -= yPad;
   yMax += yPad;
@@ -6172,19 +6157,14 @@ function _drawBandDayChart(canvas, curve, {
 
   ctx.clearRect(0, 0, cssW, cssH);
   ctx.fillStyle = '#0b1220';
-  ctx.fillRect(pad.l, pad.t, w, h);
+  ctx.fillRect(0, 0, cssW, cssH);
 
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
   ctx.lineWidth = 1;
-  ctx.setLineDash([4, 4]);
   ctx.beginPath();
   ctx.moveTo(pad.l, yOf(0));
   ctx.lineTo(pad.l + w, yOf(0));
   ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
-  ctx.font = '11px system-ui, sans-serif';
-  ctx.fillText('Net = 0', pad.l + 6, yOf(0) - 4);
 
   ctx.beginPath();
   spots.forEach((s, i) => {
@@ -6193,85 +6173,38 @@ function _drawBandDayChart(canvas, curve, {
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = 'rgba(56, 189, 248, 0.9)';
+  ctx.strokeStyle = 'rgba(56, 189, 248, 0.95)';
   ctx.lineWidth = 2;
   ctx.stroke();
-
-  const drawV = (level, color, label) => {
-    if (level == null || isNaN(Number(level))) return null;
-    const v = Number(level);
-    if (v < xMin || v > xMax) return null;
-    const x = xOf(v);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(x, pad.t);
-    ctx.lineTo(x, pad.t + h);
-    ctx.stroke();
-    ctx.fillStyle = color;
-    ctx.font = '11px system-ui, sans-serif';
-    ctx.fillText(label, Math.min(x + 4, pad.l + w - 40), pad.t + 12);
-    return x;
-  };
-  drawV(entry, 'rgba(148, 163, 184, 0.95)', 'Entry');
-  const nowX = drawV(spot, 'rgba(248, 113, 113, 0.95)', 'Now');
-  if (nowX != null && liveY != null) {
-    ctx.fillStyle = '#f87171';
-    ctx.beginPath();
-    ctx.arc(nowX, yOf(liveY), 5, 0, Math.PI * 2);
-    ctx.fill();
-  }
 
   if (hoverIdx != null && hoverIdx >= 0 && hoverIdx < spots.length) {
     const hx = xOf(spots[hoverIdx]);
     const hy = yOf(net[hoverIdx]);
-    ctx.strokeStyle = 'rgba(226, 232, 240, 0.35)';
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath();
-    ctx.moveTo(hx, pad.t);
-    ctx.lineTo(hx, pad.t + h);
-    ctx.stroke();
-    ctx.setLineDash([]);
     ctx.fillStyle = '#38bdf8';
     ctx.beginPath();
     ctx.arc(hx, hy, 4, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  ctx.fillStyle = 'rgba(148, 163, 184, 0.95)';
+  ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
   ctx.font = '11px system-ui, sans-serif';
-  ctx.fillText('Index \u2192', pad.l, cssH - 12);
-  ctx.fillText(`\u20b9${fmt(xMin)}`, pad.l + 48, cssH - 12);
+  ctx.fillText(`\u20b9${fmt(xMin)}`, pad.l, cssH - 8);
   const maxLabel = `\u20b9${fmt(xMax)}`;
-  ctx.fillText(maxLabel, pad.l + w - ctx.measureText(maxLabel).width, cssH - 12);
-  ctx.fillText('Net', 8, pad.t + 10);
-  ctx.fillText(_fmtBandChartNet(yMax), 4, pad.t + 24);
-  ctx.fillText(_fmtBandChartNet(0), 4, yOf(0) + 4);
-  ctx.fillText(_fmtBandChartNet(yMin), 4, pad.t + h);
+  ctx.fillText(maxLabel, pad.l + w - ctx.measureText(maxLabel).width, cssH - 8);
 
-  return { pad, xMin, xMax, xOf, spots, net, cssW, liveNet: liveY };
+  return { pad, xMin, xMax, xOf, spots, net, cssW };
 }
 
-function _bandDayNowReadoutHtml(spot, netNow, { live = false } = {}) {
-  if (spot == null || netNow == null || isNaN(Number(netNow))) {
-    return '<span class="muted">Pick a row in the table, or open Graph and move on the curve.</span>';
+function _bandDayPointHtml(spot, pnl) {
+  if (spot == null || pnl == null || isNaN(Number(pnl))) {
+    return '<span class="muted">Move on the line to see index and P&amp;L</span>';
   }
-  const cls = Number(netNow) > 0 ? 'pnl-profit' : (Number(netNow) < 0 ? 'pnl-loss' : '');
-  const src = live
-    ? '<span class="muted">live Net (same as trade card)</span>'
-    : '<span class="muted">model estimate for this day</span>';
-  return `Now: index <strong>\u20b9${fmt(spot)}</strong> \u2192 net <strong class="${cls}">${_fmtBandChartNet(netNow)}</strong> ${src}`;
+  const cls = Number(pnl) > 0 ? 'pnl-profit' : (Number(pnl) < 0 ? 'pnl-loss' : '');
+  return `Index <strong>\u20b9${fmt(spot)}</strong>, P&amp;L <strong class="${cls}">${_fmtBandChartNet(pnl)}</strong>`;
 }
 
 function _bindBandDayChartHover(canvas, curve, meta, readoutEl) {
   if (!canvas || !meta || !curve) return;
-  const liveNet = () => {
-    if (!_bandCalState) return null;
-    if (_bandCalState.dayPayload && _bandCalState.dayPayload.live_net != null) {
-      return Number(_bandCalState.dayPayload.live_net);
-    }
-    return _bandDayLiveNet(_bandCalState.tradeId);
-  };
   const nearest = clientX => {
     const rect = canvas.getBoundingClientRect();
     const x = clientX - rect.left;
@@ -6287,38 +6220,78 @@ function _bindBandDayChartHover(canvas, curve, meta, readoutEl) {
     return best;
   };
   const paint = (idx) => {
-    const ln = liveNet();
-    const drawn = _drawBandDayChart(canvas, curve, {
-      spot: _bandCalState && _bandCalState.dayPayload
-        ? _bandCalState.dayPayload.spot : null,
-      entry: _bandCalState && _bandCalState.dayPayload
-        ? _bandCalState.dayPayload.entry_spot : null,
-      liveNet: ln,
-      hoverIdx: idx,
-    });
+    const drawn = _drawBandDayChart(canvas, curve, { hoverIdx: idx });
     if (drawn) Object.assign(meta, drawn);
-    if (readoutEl && idx != null) {
-      const s = meta.spots[idx];
-      const n = meta.net[idx];
-      const cls = n > 0 ? 'pnl-profit' : (n < 0 ? 'pnl-loss' : '');
-      readoutEl.innerHTML = `Index <strong>\u20b9${fmt(s)}</strong> \u2192 model net <strong class="${cls}">${_fmtBandChartNet(n)}</strong>`;
+    if (!readoutEl) return;
+    if (idx != null) {
+      readoutEl.innerHTML = _bandDayPointHtml(meta.spots[idx], meta.net[idx]);
+      return;
     }
+    const spot = _bandCalState && _bandCalState.dayPayload
+      ? _bandCalState.dayPayload.spot : null;
+    const live = _bandCalState && _bandCalState.dayPayload
+      ? _bandCalState.dayPayload.live_net : null;
+    const pnl = (live != null && !isNaN(Number(live)))
+      ? Number(live)
+      : _bandNetAtSpot(curve, spot);
+    readoutEl.innerHTML = spot != null && pnl != null
+      ? _bandDayPointHtml(spot, pnl)
+      : '<span class="muted">Move on the line to see index and P&amp;L</span>';
   };
   canvas.onmousemove = (ev) => {
     const idx = nearest(ev.clientX);
     if (idx == null) return;
     paint(idx);
   };
-  canvas.onmouseleave = () => {
-    paint(null);
-    if (readoutEl) {
-      const spot = _bandCalState && _bandCalState.dayPayload
-        ? _bandCalState.dayPayload.spot : null;
-      const ln = liveNet();
-      const netNow = (ln != null && !isNaN(ln)) ? ln : _bandNetAtSpot(curve, spot);
-      readoutEl.innerHTML = _bandDayNowReadoutHtml(spot, netNow, { live: ln != null && !isNaN(ln) });
+  canvas.onmouseleave = () => paint(null);
+}
+
+/** Update NOW cells / readout without remounting (keeps scroll position). */
+function _patchBandDayLive({ spot = undefined, liveNet = undefined } = {}) {
+  if (!_bandCalState || _bandCalState.view !== 'day' || !_bandCalState.dayPayload) return;
+  const payload = _bandCalState.dayPayload;
+  if (spot !== undefined && spot != null && !isNaN(Number(spot))) {
+    payload.spot = Number(spot);
+    payload.net_at_spot = _bandNetAtSpot(payload.curve, payload.spot);
+  }
+  if (liveNet !== undefined && liveNet != null && !isNaN(Number(liveNet))) {
+    payload.live_net = Number(liveNet);
+  }
+  const host = document.getElementById('band-calendar-body');
+  if (!host) return;
+  const curSpot = payload.spot;
+  const curNet = (payload.live_net != null && !isNaN(Number(payload.live_net)))
+    ? Number(payload.live_net)
+    : payload.net_at_spot;
+  const netCls = n => (n > 0 ? 'pnl-profit' : (n < 0 ? 'pnl-loss' : 'muted'));
+  const nowRow = host.querySelector('tr.band-day-now');
+  if (nowRow && curSpot != null) {
+    const spotTd = nowRow.querySelector('[data-band-now-spot]');
+    const pnlTd = nowRow.querySelector('[data-band-now-pnl]');
+    if (spotTd) {
+      spotTd.innerHTML = `\u20b9${fmt(curSpot)} <span class="band-sample-tag is-live">now</span>`;
     }
-  };
+    if (pnlTd && curNet != null && !isNaN(Number(curNet))) {
+      pnlTd.className = netCls(curNet);
+      pnlTd.textContent = _fmtBandChartNet(curNet);
+    }
+  }
+  const readout = host.querySelector('#band-day-readout');
+  const mode = _bandCalState.dayViewMode || 'table';
+  if (readout && mode === 'table' && curSpot != null && curNet != null) {
+    readout.innerHTML = _bandDayPointHtml(curSpot, curNet);
+  }
+  // Graph: leave hover alone; redraw only if not hovering (no hoverIdx stored).
+  if (mode === 'graph') {
+    const canvas = host.querySelector('.band-day-chart');
+    if (canvas && !_bandCalState._dayHovering) {
+      const meta = _drawBandDayChart(canvas, payload.curve);
+      if (meta) _bandCalState._dayChartMeta = meta;
+      if (readout && curSpot != null && curNet != null) {
+        readout.innerHTML = _bandDayPointHtml(curSpot, curNet);
+      }
+    }
+  }
 }
 
 function _mountBandDayView(host, dayPayload) {
@@ -6328,12 +6301,12 @@ function _mountBandDayView(host, dayPayload) {
   const canvas = host.querySelector('.band-day-chart');
   const readout = host.querySelector('#band-day-readout');
   if (mode === 'graph' && canvas) {
-    const meta = _drawBandDayChart(canvas, dayPayload.curve, {
-      spot: dayPayload.spot,
-      entry: dayPayload.entry_spot,
-      liveNet: dayPayload.live_net,
-    });
+    const meta = _drawBandDayChart(canvas, dayPayload.curve);
+    _bandCalState._dayChartMeta = meta;
+    _bandCalState._dayHovering = false;
     _bindBandDayChartHover(canvas, dayPayload.curve, meta || {}, readout);
+    canvas.addEventListener('mousemove', () => { if (_bandCalState) _bandCalState._dayHovering = true; });
+    canvas.addEventListener('mouseleave', () => { if (_bandCalState) _bandCalState._dayHovering = false; });
   }
 }
 
@@ -6358,33 +6331,29 @@ function _paintBandDayDetail(dayPayload, mode) {
   });
   const sampleRows = samples.map(r => {
     let tag = '';
-    if (r.tag === 'now') {
-      tag = r.source === 'live'
-        ? ' <span class="band-sample-tag is-live">now \u00b7 live</span>'
-        : ' <span class="band-sample-tag">now</span>';
-    } else if (r.tag === 'entry') {
-      tag = ' <span class="band-sample-tag">entry</span>';
-    } else if (r.tag) {
-      tag = ` <span class="band-sample-tag">${escapeHtml(r.tag)}</span>`;
-    }
-    const src = r.source === 'live'
-      ? '<span class="muted band-sample-src">live</span>'
-      : '<span class="muted band-sample-src">model</span>';
-    return `<tr class="${r.tag ? 'is-marked' : ''}${r.tag === 'now' ? ' is-now' : ''}${r.tag === 'entry' ? ' is-entry' : ''}">
-      <td>\u20b9${fmt(r.spot)}${tag}</td>
-      <td class="${netCls(r.net)}">${_fmtBandChartNet(r.net)}</td>
-      <td>${src}</td>
+    if (r.tag === 'now') tag = ' <span class="band-sample-tag is-live">now</span>';
+    else if (r.tag === 'entry') tag = ' <span class="band-sample-tag">entry</span>';
+    const rowCls = [
+      r.tag ? 'is-marked' : '',
+      r.tag === 'now' ? 'is-now band-day-now' : '',
+      r.tag === 'entry' ? 'is-entry' : '',
+    ].filter(Boolean).join(' ');
+    const spotAttr = r.tag === 'now' ? ' data-band-now-spot' : '';
+    const pnlAttr = r.tag === 'now' ? ' data-band-now-pnl' : '';
+    return `<tr class="${rowCls}">
+      <td${spotAttr}>\u20b9${fmt(r.spot)}${tag}</td>
+      <td class="${netCls(r.net)}"${pnlAttr}>${_fmtBandChartNet(r.net)}</td>
     </tr>`;
   }).join('');
-  const nowLine = _bandDayNowReadoutHtml(spot, netNow, { live: liveNet != null });
-  const note = liveNet != null
-    ? 'Table below: <em>NOW</em> is your live Net from the trade card (same as header / fill P&amp;L). Other rows are model estimates \u2014 \u201cif the index sits here on this day\u201d after est. charges \u2014 not live LTP.'
-    : 'Each row is a model estimate for this calendar day: if the index sits at that level, estimated net after charges. Open from a live trade to pin NOW to your real Net.';
+  const nowLine = (spot != null && netNow != null)
+    ? _bandDayPointHtml(spot, netNow)
+    : '<span class="muted">Index levels for this day with estimated P&amp;L</span>';
+  const note = 'If the index sits at a level on this day, estimated P&amp;L is the value next to it. <em>NOW</em> follows your live trade Net when available.';
   return `
     <div class="band-day-toolbar">
       <button type="button" class="band-day-back" data-band-back="1">\u2190 Back to day ranges</button>
       <div class="band-day-title">
-        <strong>${escapeHtml(label)} \u2014 index \u2192 net P&amp;L</strong>
+        <strong>${escapeHtml(label)} \u2014 index \u2192 P&amp;L</strong>
         <span class="muted">This day only</span>
       </div>
       <div class="band-day-view-toggle" role="group" aria-label="Table or graph">
@@ -6396,12 +6365,12 @@ function _paintBandDayDetail(dayPayload, mode) {
     <div class="band-day-readout" id="band-day-readout">${nowLine}</div>
     <div class="band-day-table-wrap"${viewMode === 'graph' ? ' hidden' : ''}>
       <table class="band-day-sample-table">
-        <thead><tr><th>Index</th><th>Net P&amp;L</th><th>Source</th></tr></thead>
-        <tbody>${sampleRows || '<tr><td colspan="3">No points</td></tr>'}</tbody>
+        <thead><tr><th>Index</th><th>P&amp;L</th></tr></thead>
+        <tbody>${sampleRows || '<tr><td colspan="2">No points</td></tr>'}</tbody>
       </table>
     </div>
     <div class="band-day-chart-wrap"${viewMode === 'table' ? ' hidden' : ''}>
-      <canvas class="band-day-chart" width="640" height="280" aria-label="Index to net P&amp;L for ${escapeHtml(label)}"></canvas>
+      <canvas class="band-day-chart" width="640" height="220" aria-label="Index to P&amp;L for ${escapeHtml(label)}"></canvas>
     </div>`;
 }
 
@@ -6455,16 +6424,11 @@ async function _showBandDayChart(iso) {
 
 function _refreshOpenBandDayChartSpot(spot) {
   if (!_bandCalState || _bandCalState.view !== 'day' || !_bandCalState.dayPayload) return;
-  const host = document.getElementById('band-calendar-body');
-  if (!host) return;
   const liveNet = _bandDayLiveNet(_bandCalState.tradeId);
-  const dayPayload = Object.assign({}, _bandCalState.dayPayload, {
+  _patchBandDayLive({
     spot,
-    net_at_spot: _bandNetAtSpot(_bandCalState.dayPayload.curve, spot),
-    live_net: (liveNet != null && !isNaN(liveNet)) ? liveNet : null,
+    liveNet: (liveNet != null && !isNaN(liveNet)) ? liveNet : undefined,
   });
-  _bandCalState.dayPayload = dayPayload;
-  _mountBandDayView(host, dayPayload);
 }
 
 async function _openBandCalendar(btn) {

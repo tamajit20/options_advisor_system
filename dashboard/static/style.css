@@ -3145,7 +3145,6 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
   color: #0384c7;
 }
 .band-sample-tag.is-live { color: #f87171; }
-.band-sample-src { font-size: .72rem; }
 .band-cal-table th {
   text-align: left;
   font-weight: 600;
