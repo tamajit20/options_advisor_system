@@ -11570,17 +11570,16 @@ function _closedTradeSummaryHtml(data) {
   const n = (data && data.trades) ? data.trades.length : 0;
   const pnlCls = pnl > 0 ? 'pnl-pos' : (pnl < 0 ? 'pnl-neg' : '');
   const ret = invested > 0 ? (pnl / invested * 100).toFixed(1) + '%' : '—';
-  const retOnAmt = amountInvested > 0
-    ? (pnl / amountInvested * 100).toFixed(1) + '%'
-    : '—';
-  // Total amount used fills from hydrated History cards (Zerodha Final); reserved so the strip does not jump.
+  const amtInvestedPct = amountInvested > 0
+    ? `<span class="${pnlCls}">${pnlPctTextCompact(pnl, { rs: amountInvested })}</span>`
+    : '';
+  // Total amount used fills from hydrated History cards / API (Zerodha Final).
   return `
       <div class="chart-kv"><span>Total net P&amp;L</span><strong class="${pnlCls}">${pnl > 0 ? '+' : (pnl < 0 ? '\u2212' : '')}\u20b9${fmt(Math.abs(pnl))}</strong></div>
       <div class="chart-kv"><span>Total premium deployed</span><strong>\u20b9${fmt(invested)}</strong></div>
       <div class="chart-kv"><span>Return on premium</span><strong class="${pnlCls}">${ret}</strong></div>
       <div class="chart-kv" title="Sum of Zerodha Final for closed trades in view; percent = total net \u00f7 that sum."><span>Total amount used</span><strong class="hist-strip-amount-used" data-hist-total-amount-used="1">\u2014</strong></div>
-      <div class="chart-kv" title="Sum of each closed trade's max loss (same capital idea as Total invested on My Trades)."><span>Total amount invested</span><strong>\u20b9${fmt(amountInvested)}</strong></div>
-      <div class="chart-kv" title="Net P&amp;L \u00f7 total amount invested."><span>Return on amount invested</span><strong class="${pnlCls}">${retOnAmt}</strong></div>
+      <div class="chart-kv" title="Sum of each closed trade's max loss (same capital idea as Total invested on My Trades); percent = total net \u00f7 that sum."><span>Total amount invested</span><strong class="${pnlCls}">\u20b9${fmt(amountInvested)}${amtInvestedPct}</strong></div>
       <div class="chart-kv"><span>Total charges paid</span><strong>\u20b9${fmt(charges)}</strong></div>
       <div class="chart-kv"><span>Trades</span><strong>${n}</strong></div>`;
 }
@@ -13001,8 +13000,8 @@ function renderHistoryTrade(t) {
         ${expiryMeta ? `<span>${expiryMeta.replace(/^&nbsp;·&nbsp;/, '')}</span>` : ''}
       </div>
       <div class="hist-card-facts-right">
-        ${amountUsedMeta}
         ${premMeta}
+        ${amountUsedMeta}
       </div>
     </div>`, `
     <div class="hcmp-grid">
