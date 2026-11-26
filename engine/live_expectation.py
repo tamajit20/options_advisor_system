@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from datetime import date, datetime, timedelta
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, List, Mapping, Optional, Sequence
 
 from contracts import SuggestionLeg
 from engine.em_calibration import band_dte, compute_calibration_warning
@@ -1302,6 +1302,7 @@ def today_mark_bands(
     dte: int,
     atm_iv: Optional[float],
     strategy: Optional[str] = None,
+    include_curve: bool = False,
 ) -> dict:
     """Spot bands where today's mark is in profit, and near its best.
 
@@ -1309,6 +1310,9 @@ def today_mark_bands(
     time still left. In profit is where that mark is above zero. At zero DTE
     these collapse to the expiry short-strike band and the breakevens.
     One-sided strategies keep an open side (above / below) from the strategy.
+
+    When *include_curve* is True, also returns ``curve_spots`` / ``curve_gross``
+    for the P&L-vs-index day chart (same sweep used for the bands).
     """
     import math
 
@@ -1510,26 +1514,63 @@ def today_mark_bands(
     else:
         in_loss_below, in_loss_above = in_lo, in_hi
 
-    # Representative gross P&L for each zone (day-range popup Net line).
-    full_pnl_rs = round(peak, 2) if peak > 1.0 else None
-    loss_pnl_rs = round(trough, 2) if trough < -1.0 else None
-    in_only = [p for p in pnls if 1.0 < p < (peak * 0.97 if peak > 1.0 else 1.0)]
-    if in_only:
-        in_pnl_rs = round(float(sorted(in_only)[len(in_only) // 2]), 2)
-    elif peak > 1.0:
-        in_pnl_rs = round(peak * 0.5, 2)
+    # Gross mark at the printed zone edge(s) for that DTE — what you get if
+    # spot sits on the line shown in the day-range cell (not zone peak/mid).
+    def _pnl_at(level: Optional[float]) -> Optional[float]:
+        if level is None or not spots:
+            return None
+        try:
+            target = float(level)
+        except (TypeError, ValueError):
+            return None
+        best_i = min(range(len(spots)), key=lambda i: abs(spots[i] - target))
+        return round(float(pnls[best_i]), 2)
+
+    def _edge_pnl(
+        side: Optional[str],
+        lo_v: Optional[float],
+        hi_v: Optional[float],
+    ) -> Optional[float]:
+        if side == "above":
+            return _pnl_at(lo_v)
+        if side == "below":
+            return _pnl_at(hi_v)
+        a = _pnl_at(lo_v)
+        b = _pnl_at(hi_v)
+        if a is None:
+            return b
+        if b is None:
+            return a
+        return round((a + b) / 2.0, 2)
+
+    full_pnl_rs = _edge_pnl(full_side, full_lo, full_hi) if peak > 1.0 else None
+    if full_pnl_rs is None and peak > 1.0:
+        full_pnl_rs = round(peak, 2)
+
+    in_pnl_rs = _edge_pnl(in_side, in_lo, in_hi)
+
+    if loss_below is not None and loss_above is not None:
+        a = _pnl_at(loss_below)
+        b = _pnl_at(loss_above)
+        vals = [v for v in (a, b) if v is not None]
+        loss_pnl_rs = round(min(vals), 2) if vals else None
+    elif loss_below is not None:
+        loss_pnl_rs = _pnl_at(loss_below)
+    elif loss_above is not None:
+        loss_pnl_rs = _pnl_at(loss_above)
     else:
-        in_pnl_rs = None
-    loss_thresh = trough * 0.97 if trough < -1.0 else -1.0
-    in_loss_only = [p for p in pnls if p <= 1.0 and p > loss_thresh]
-    if in_loss_only:
-        in_loss_pnl_rs = round(float(sorted(in_loss_only)[len(in_loss_only) // 2]), 2)
-    elif trough < -1.0:
-        in_loss_pnl_rs = round(trough * 0.5, 2)
+        loss_pnl_rs = round(trough, 2) if trough < -1.0 else None
+
+    if in_loss_below is not None and in_loss_above is not None:
+        in_loss_pnl_rs = _edge_pnl(None, in_loss_below, in_loss_above)
+    elif in_loss_below is not None:
+        in_loss_pnl_rs = _pnl_at(in_loss_below)
+    elif in_loss_above is not None:
+        in_loss_pnl_rs = _pnl_at(in_loss_above)
     else:
         in_loss_pnl_rs = None
 
-    return {
+    out = {
         "full_lo": full_lo,
         "full_hi": full_hi,
         "in_lo": in_lo,
@@ -1544,6 +1585,68 @@ def today_mark_bands(
         "in_pnl_rs": in_pnl_rs,
         "in_loss_pnl_rs": in_loss_pnl_rs,
         "loss_pnl_rs": loss_pnl_rs,
+    }
+    if include_curve and spots and pnls and len(spots) == len(pnls):
+        out["curve_spots"] = [round(float(s), 1) for s in spots]
+        out["curve_gross"] = [round(float(p), 2) for p in pnls]
+    return out
+
+
+def _downsample_curve(
+    spots: List[float],
+    gross: List[float],
+    *,
+    max_points: int = 160,
+) -> tuple[List[float], List[float]]:
+    n = len(spots)
+    if n <= max_points or max_points < 8:
+        return spots, gross
+    # Keep ends + evenly spaced interior (chart stays smooth, payload small).
+    keep = {0, n - 1}
+    for i in range(1, max_points - 1):
+        keep.add(int(round(i * (n - 1) / (max_points - 1))))
+    idxs = sorted(keep)
+    return [spots[i] for i in idxs], [gross[i] for i in idxs]
+
+
+def day_mark_pnl_curve(
+    *,
+    legs: Sequence[Any],
+    dte: int,
+    atm_iv: Optional[float],
+    strategy: Optional[str] = None,
+    charges_rs: Optional[float] = None,
+    max_points: int = 160,
+) -> Optional[dict]:
+    """P&L vs index curve for one calendar day (remaining *dte*).
+
+    Net = gross mark − est. round-trip charges. Used by the Day Ranges chart.
+    """
+    bands = today_mark_bands(
+        legs=legs,
+        dte=dte,
+        atm_iv=atm_iv,
+        strategy=strategy,
+        include_curve=True,
+    )
+    spots = bands.pop("curve_spots", None)
+    gross = bands.pop("curve_gross", None)
+    if not spots or not gross or len(spots) != len(gross):
+        return None
+    spots, gross = _downsample_curve(spots, gross, max_points=max_points)
+    try:
+        ch = max(0.0, float(charges_rs or 0.0))
+    except (TypeError, ValueError):
+        ch = 0.0
+    net = [round(float(g) - ch, 2) for g in gross]
+    _apply_net_pnls(bands, ch)
+    return {
+        "dte": max(int(dte or 0), 0),
+        "spots": spots,
+        "gross": [round(float(g), 2) for g in gross],
+        "net": net,
+        "est_charges_rs": round(ch, 2) if ch else 0.0,
+        "bands": bands,
     }
 
 
@@ -1580,7 +1683,11 @@ def _stamp_expiry_zone_pnls(
     max_profit_rs: Optional[float],
     max_loss_rs: Optional[float],
 ) -> dict:
-    """Attach representative gross P&Ls for expiry structural zones."""
+    """Gross P&L at expiry zone edges (matches the printed levels).
+
+    Full / full-loss use max profit / max loss. In-profit and in-loss print
+    the breakeven line(s), so edge mark is ~0 there.
+    """
     try:
         mp = float(max_profit_rs) if max_profit_rs is not None else None
     except (TypeError, ValueError):
@@ -1591,13 +1698,13 @@ def _stamp_expiry_zone_pnls(
         ml = None
     if mp is not None and mp > 0:
         row["full_pnl_rs"] = round(mp, 2)
-        row["in_pnl_rs"] = round(mp * 0.5, 2)
+        row["in_pnl_rs"] = 0.0
     else:
         row["full_pnl_rs"] = None
         row["in_pnl_rs"] = None
     if ml is not None and ml > 0:
         row["loss_pnl_rs"] = round(-ml, 2)
-        row["in_loss_pnl_rs"] = round(-ml * 0.5, 2)
+        row["in_loss_pnl_rs"] = 0.0
     else:
         row["loss_pnl_rs"] = None
         row["in_loss_pnl_rs"] = None

@@ -3520,6 +3520,7 @@ def create_app() -> Flask:
         return jsonify({
             "suggestion_id": sid,
             "trade_id": trade_id or None,
+            "underlying": str(row.get("underlying") or ""),
             "entry_spot": entry_f,
             "spot": spot,
             "fresh": fresh,
@@ -3529,6 +3530,141 @@ def create_app() -> Flask:
             "premium_kind": premium_kind,
             "est_charges_rs": (cal or {}).get("est_charges_rs"),
             "calendar": cal,
+        })
+
+    @app.route("/api/suggestion/<sid>/mark-bands/day")
+    @_with_db
+    def api_suggestion_mark_bands_day(db: SQLServerConnection, sid: str):
+        """P&L vs index curve for one calendar day (Day Ranges chart view)."""
+        from database.models import AtmIvTimeseriesRepo
+        from engine.live_expectation import (
+            _band_legs_charges_rs,
+            day_mark_pnl_curve,
+            legs_from_fills,
+        )
+
+        day_raw = (request.args.get("date") or "").strip()[:10]
+        try:
+            day = date.fromisoformat(day_raw)
+        except ValueError:
+            return jsonify({"error": "date=YYYY-MM-DD required"}), 400
+
+        repo = SuggestionRepo(db)
+        row = repo.get(sid)
+        if not row:
+            return jsonify({"error": "Not found"}), 404
+
+        expiry = row.get("expiry_date")
+        if isinstance(expiry, datetime):
+            expiry = expiry.date()
+        elif isinstance(expiry, str):
+            try:
+                expiry = date.fromisoformat(expiry[:10])
+            except ValueError:
+                expiry = None
+        if not isinstance(expiry, date):
+            return jsonify({"error": "Suggestion has no expiry"}), 400
+        if day > expiry:
+            return jsonify({"error": "date is after expiry"}), 400
+
+        fresh = (request.args.get("fresh") or "").strip().lower() in ("1", "true", "yes")
+        trade_id = (request.args.get("trade_id") or "").strip()
+        legs = repo.legs(sid)
+        entry = row.get("spot_at_generation")
+        if fresh and trade_id:
+            trade = TradeRepo(db).get(trade_id)
+            if trade and str(trade.get("suggestion_id") or "") == str(sid):
+                legs = TradeRepo(db).legs_with_suggestion_info(trade_id) or legs
+                if trade.get("spot_at_execution") is not None:
+                    entry = trade.get("spot_at_execution")
+
+        underlying = str(row.get("underlying") or "")
+        band_legs = legs
+        if legs and isinstance(legs[0], dict):
+            band_legs = legs_from_fills(legs, underlying=underlying or "IDX", expiry=expiry)
+
+        latest_iv = None
+        if underlying:
+            latest_iv = AtmIvTimeseriesRepo(db).latest_atm_iv(underlying, expiry)
+        stored_iv = None
+        raw = row.get("mark_band_calendar")
+        if raw:
+            try:
+                stored = json.loads(raw) if isinstance(raw, str) else raw
+                if isinstance(stored, dict):
+                    stored_iv = stored.get("iv")
+            except (TypeError, ValueError):
+                stored_iv = None
+        iv = latest_iv if latest_iv is not None else stored_iv
+        dte = max((expiry - day).days, 0)
+        if dte > 0 and iv is None:
+            return jsonify({"error": "No ATM IV available for this curve"}), 404
+
+        charges = _band_legs_charges_rs(band_legs)
+        curve = day_mark_pnl_curve(
+            legs=band_legs,
+            dte=dte,
+            atm_iv=iv,
+            strategy=str(row.get("strategy") or ""),
+            charges_rs=charges,
+        )
+        if not curve:
+            return jsonify({"error": "Could not build P&L curve for this day"}), 404
+
+        spot = None
+        if underlying:
+            snap = AtmIvTimeseriesRepo(db).latest_snapshot(underlying, expiry)
+            if snap and snap.get("spot") is not None:
+                try:
+                    spot = float(snap["spot"])
+                except (TypeError, ValueError):
+                    spot = None
+        try:
+            entry_f = float(entry) if entry is not None else None
+        except (TypeError, ValueError):
+            entry_f = None
+
+        premium_rs = None
+        premium_kind = None
+        try:
+            if trade_id:
+                premium_rs, premium_kind = _trade_premium_from_legs(db, trade_id)
+            if premium_rs is None or premium_rs <= 0:
+                credit = row.get("net_credit_suggested")
+                if credit is not None:
+                    c = float(credit)
+                    premium_rs = abs(c)
+                    premium_kind = "received" if c >= 0 else "paid"
+        except (TypeError, ValueError):
+            premium_rs = None
+            premium_kind = None
+
+        # Net at live / entry spot on this day's curve (nearest grid point).
+        def _net_at(level):
+            if level is None:
+                return None
+            spots_c = curve.get("spots") or []
+            net_c = curve.get("net") or []
+            if not spots_c or len(spots_c) != len(net_c):
+                return None
+            best = min(range(len(spots_c)), key=lambda i: abs(spots_c[i] - float(level)))
+            return net_c[best]
+
+        return jsonify({
+            "suggestion_id": sid,
+            "trade_id": trade_id or None,
+            "underlying": underlying,
+            "date": day.isoformat(),
+            "expiry": expiry.isoformat(),
+            "dte": dte,
+            "spot": spot,
+            "entry_spot": entry_f,
+            "net_at_spot": _net_at(spot),
+            "net_at_entry": _net_at(entry_f),
+            "premium_rs": premium_rs,
+            "premium_kind": premium_kind,
+            "iv": round(float(iv), 4) if iv is not None else None,
+            "curve": curve,
         })
 
     @app.route("/api/suggestion/live-ltp/snapshot")

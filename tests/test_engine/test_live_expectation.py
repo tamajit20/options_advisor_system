@@ -12,6 +12,7 @@ from contracts import SuggestionLeg
 from engine.live_expectation import (
     mark_band_calendar,
     assess_direction_fit,
+    day_mark_pnl_curve,
     enrich_trade_outlook,
     expiry_ev_note,
     hold_vs_close_advice,
@@ -676,6 +677,51 @@ class TestTodayMarkBands:
             legs=legs, start=date(2026, 11, 2), expiry=exp, atm_iv=None,
             strategy="IRON_CONDOR", lower_be=22389.1, upper_be=23560.9,
         ) is None
+
+    def test_zone_net_is_at_printed_edge_not_mid_peak(self):
+        """In-profit / in-loss Net must sit near the printed breakeven, not mid-zone."""
+        exp = date(2026, 11, 23)
+        legs = [
+            {"action": "SELL", "strike": 55400, "option_type": "CE", "fill_price": 462.7,
+             "lots": 1, "lot_size": 30, "expiry_date": exp},
+            {"action": "BUY", "strike": 56200, "option_type": "CE", "fill_price": 247.6,
+             "lots": 1, "lot_size": 30, "expiry_date": exp},
+        ]
+        filled = legs_from_fills(legs, underlying="BANKNIFTY", expiry=exp)
+        mid = today_mark_bands(
+            legs=filled, dte=20, atm_iv=0.148, strategy="BEAR_CALL_SPREAD",
+        )
+        assert mid["in_hi"] is not None
+        assert mid["in_pnl_rs"] is not None
+        # At the in-profit gate, mark is just crossing zero — not half of max credit.
+        credit = (462.7 - 247.6) * 30
+        assert abs(mid["in_pnl_rs"]) < credit * 0.15
+        if mid.get("full_hi") is not None and mid.get("full_pnl_rs") is not None:
+            assert mid["full_pnl_rs"] > mid["in_pnl_rs"]
+            assert mid["full_pnl_rs"] > credit * 0.5
+
+    def test_day_mark_pnl_curve_returns_net_vs_spot(self):
+        exp = date(2026, 11, 23)
+        legs = [
+            {"action": "SELL", "strike": 55400, "option_type": "CE", "fill_price": 462.7,
+             "lots": 1, "lot_size": 30, "expiry_date": exp},
+            {"action": "BUY", "strike": 56200, "option_type": "CE", "fill_price": 247.6,
+             "lots": 1, "lot_size": 30, "expiry_date": exp},
+        ]
+        filled = legs_from_fills(legs, underlying="BANKNIFTY", expiry=exp)
+        curve = day_mark_pnl_curve(
+            legs=filled, dte=10, atm_iv=0.148, strategy="BEAR_CALL_SPREAD",
+            charges_rs=100.0, max_points=40,
+        )
+        assert curve is not None
+        assert curve["dte"] == 10
+        assert len(curve["spots"]) == len(curve["net"]) >= 8
+        assert len(curve["spots"]) <= 40
+        assert curve["est_charges_rs"] == 100.0
+        # Net is gross minus charges at every point.
+        for g, n in zip(curve["gross"], curve["net"]):
+            assert n == pytest.approx(g - 100.0, abs=0.02)
+        assert "in_hi" in (curve.get("bands") or {})
 
     def test_bear_call_keeps_open_sided_bands_with_time_left(self):
         exp = date(2026, 11, 23)
