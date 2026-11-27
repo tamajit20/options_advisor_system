@@ -216,16 +216,15 @@ class TestRunSuggestionEngine:
         assert {n.underlying for n in nss} == {"NIFTY", "BANKNIFTY", "FINNIFTY"}
         assert all("Evaluation failed" in n.reason for n in nss)
 
-    def test_persists_one_suggestion_when_eval_returns_one(self, mock_db, mocker):
+    def test_persists_each_underlying_independently(self, mock_db, mocker):
         mocker.patch("lifecycle.suggestion_engine.now_ist",
                      return_value=datetime(2026, 4, 30, 18, 0))
 
-        # Build a minimal Suggestion dataclass
-        from contracts import (Suggestion, SuggestionLeg, SuggestionEconomics,
-                               ConfidenceResult, ChargeBreakdown)
+        from contracts import Suggestion, SuggestionEconomics, ConfidenceResult, ChargeBreakdown
+        from dataclasses import replace
         conf = ConfidenceResult(checks=[], failed_reasons=[], score=7, total=7,
                                 all_passed=True)
-        sug = Suggestion(
+        base = Suggestion(
             suggestion_id="SUG-1",
             trade_name="N1",
             generated_on=datetime(2026, 4, 30, 18, 0),
@@ -251,8 +250,12 @@ class TestRunSuggestionEngine:
             plain_english="x",
         )
 
+        def _eval(_db, symbol, *_a, **_k):
+            return ([replace(base, suggestion_id=f"SUG-{symbol}",
+                             trade_name=symbol[:1], underlying=symbol)], [])
+
         mocker.patch("lifecycle.suggestion_engine._evaluate_underlying",
-                     return_value=([sug], []))
+                     side_effect=_eval)
         mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.expire_stale_pending",
                      return_value=0)
         mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.has_suggestion_for",
@@ -260,9 +263,9 @@ class TestRunSuggestionEngine:
         mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.insert")
         mocker.patch("lifecycle.suggestion_engine.SuggestionRepo.insert_legs")
         mocker.patch("lifecycle.suggestion_engine.NotificationRepo.insert")
-        # 3 underlyings → eval returns same suggestion 3 times → dedup keeps best (first equal)
+        # No cross-index drop — NIFTY + BANKNIFTY + FINNIFTY each persist.
         n = se.run_suggestion_engine(mock_db, trade_date=date(2026, 4, 30))
-        assert n == 1
+        assert n == 3
         mock_db.commit.assert_called()
 
     def test_skips_when_already_persisted(self, mock_db, mocker):

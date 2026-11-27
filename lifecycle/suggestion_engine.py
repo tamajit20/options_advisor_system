@@ -13,7 +13,8 @@ For each underlying:
     5. Persist (Suggestion + legs OR NoSuggestion)
     6. Emit notification
 
-Generates one suggestion per underlying per day via ``select_strategy``.
+Generates one suggestion per underlying per day via ``select_strategy``
+(NIFTY / BANKNIFTY / FINNIFTY independently — no cross-index suppression).
 Sideways markets get a single pick (calendar / condor / straddle, etc.) —
 not a range+breakout pair.
 """
@@ -1263,8 +1264,11 @@ def _persist_and_notify(
     trigger_type: str = "EOD_RUN",
     force_replace: bool = False,
 ) -> int:
-    """Dedup candidates cross-underlying, persist accepted suggestions and
-    NoSuggestion records, fire notifications.
+    """Persist accepted suggestions and NoSuggestion records; fire notifications.
+
+    Each underlying that passes its own gates is kept — NIFTY / BANKNIFTY /
+    FINNIFTY are not dropped because another index scored higher. Operators
+    choose which books to place; correlated risk is not silently suppressed.
 
     force_replace: when True (live mode), expire ALL PENDING suggestions for
     the same underlying+expiry_type+strategy slot — including those with
@@ -1273,102 +1277,8 @@ def _persist_and_notify(
     sug_repo = SuggestionRepo(db)
     notif_repo = NotificationRepo(db)
 
-    # ── Cross-underlying dedup ─────────────────────────────────────────────
-    # Same-strategy candidates across underlyings: keep the one with higher
-    # confidence score; on a tie, fall back to higher edge_score (issue #10).
-    # This is strictly within one (expiry_type, strategy) bucket so it cannot
-    # bias one strategy class against another (strategy isolation).
-    best_by_expiry_type: dict[str, Suggestion] = {}
-    for sug in all_candidates:
-        key = f"{sug.expiry_type}:{sug.strategy}"
-        existing = best_by_expiry_type.get(key)
-        if existing is None:
-            best_by_expiry_type[key] = sug
-            continue
-        new_es = getattr(sug.economics, "edge_score", 0.0) or 0.0
-        old_es = getattr(existing.economics, "edge_score", 0.0) or 0.0
-        is_better = (
-            sug.confidence.score > existing.confidence.score
-            or (sug.confidence.score == existing.confidence.score and new_es > old_es)
-        )
-        if is_better:
-            logger.info(
-                "Cross-underlying dedup: dropping %s (%s, score=%d, edge=%.1f) "
-                "in favour of %s (%s, score=%d, edge=%.1f)",
-                existing.underlying, key, existing.confidence.score, old_es,
-                sug.underlying, key, sug.confidence.score, new_es,
-            )
-            no_suggestions.append(NoSuggestion(
-                generated_on=now_ist(),
-                underlying=existing.underlying,
-                confidence=existing.confidence,
-                reason=(
-                    f"[{key}] Dropped — correlation dedup: "
-                    f"{sug.underlying} has higher score/edge "
-                    f"({sug.confidence.score}/{new_es:.1f} vs "
-                    f"{existing.confidence.score}/{old_es:.1f})"
-                ),
-            ))
-            best_by_expiry_type[key] = sug
-
-    # C4: Same-direction concentration cap.
-    # After (expiry_type, strategy) dedup, enforce a max of 1 bullish and 1 bearish
-    # suggestion across all underlyings. NIFTY + BANKNIFTY BULL_PUT_SPREAD = 2×
-    # correlated bullish exposure that doubles drawdown when the market falls.
-    # Neutral strategies (IC, IB, STRADDLE, STRANGLE, CALENDAR) are not capped.
-    _BULLISH_STRATS = frozenset({
-        "BULL_PUT_SPREAD", "BULL_CALL_SPREAD", "JADE_LIZARD", "LONG_CALL",
-    })
-    _BEARISH_STRATS = frozenset({
-        "BEAR_CALL_SPREAD", "BEAR_PUT_SPREAD", "LONG_PUT",
-    })
-
-    def _direction(s: Suggestion) -> str:
-        if s.strategy in _BULLISH_STRATS:
-            return "BULLISH"
-        if s.strategy in _BEARISH_STRATS:
-            return "BEARISH"
-        return "NEUTRAL"
-
-    survivors: list[Suggestion] = list(best_by_expiry_type.values())
-    bull_kept: Optional[Suggestion] = None
-    bear_kept: Optional[Suggestion] = None
-    concentration_dropped: list[Suggestion] = []
-    for s in sorted(survivors,
-                    key=lambda x: (x.confidence.score,
-                                   getattr(x.economics, "edge_score", 0.0) or 0.0),
-                    reverse=True):
-        d = _direction(s)
-        if d == "BULLISH":
-            if bull_kept is None:
-                bull_kept = s
-            else:
-                concentration_dropped.append(s)
-        elif d == "BEARISH":
-            if bear_kept is None:
-                bear_kept = s
-            else:
-                concentration_dropped.append(s)
-
-    for dropped in concentration_dropped:
-        logger.info(
-            "Concentration cap: dropping %s %s (direction=%s) — already have a "
-            "stronger %s suggestion",
-            dropped.underlying, dropped.strategy, _direction(dropped), _direction(dropped),
-        )
-        no_suggestions.append(NoSuggestion(
-            generated_on=now_ist(),
-            underlying=dropped.underlying,
-            confidence=dropped.confidence,
-            reason=(
-                f"[{dropped.expiry_type}:{dropped.strategy}] Concentration cap: "
-                f"already have a {_direction(dropped)} suggestion with higher edge. "
-                f"NIFTY/BANKNIFTY are highly correlated — holding two {_direction(dropped)} "
-                f"positions doubles directional risk."
-            ),
-        ))
-
-    persist_queue = [s for s in survivors if s not in concentration_dropped]
+    # One card (plus IC/IB companions) per underlying — no cross-index drop.
+    persist_queue = list(all_candidates)
 
     persisted: List[Suggestion] = []
 
@@ -1486,8 +1396,9 @@ def run_suggestion_engine(
     trade_date: date | None = None,
 ) -> int:
     """Evaluate all configured underlyings and persist every one that passes
-    all confidence checks (one suggestion per underlying per day). Underlyings
-    that already have a suggestion for today are skipped so re-runs are safe.
+    its own gates (one primary suggestion per underlying per day; indexes are
+    independent). Underlyings that already have a suggestion for today are
+    skipped so re-runs are safe.
 
     trade_date: the NSE bhav date to use for all data lookups.  When omitted
     the engine auto-detects the latest date for which both FO bhav AND IV
@@ -1521,8 +1432,7 @@ def run_suggestion_engine(
         entry_day = _next_trading_day(max(trade_date, _today))
     exec_window = _execution_window(entry_day, now_ist())
 
-    # Collect all candidates across all underlyings first, then apply
-    # cross-underlying dedup before persisting.
+    # Collect candidates from every underlying; each keeps its own card.
     all_candidates: List[Suggestion] = []
     no_suggestions: List[NoSuggestion] = []
 

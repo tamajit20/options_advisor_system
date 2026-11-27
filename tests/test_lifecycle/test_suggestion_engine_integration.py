@@ -3,8 +3,8 @@ C1 — Suggestion engine integration tests.
 
 These tests mock the database layer but exercise the full pipeline from
 indicators → strategy_selector → leg_builder → suggestion row. They verify
-that the orchestration glue (IVrank routing, StrategyVeto propagation, dedup,
-concentration cap) behaves correctly end-to-end without a real DB connection.
+that the orchestration glue (IVrank routing, StrategyVeto propagation)
+behaves correctly end-to-end without a real DB connection.
 """
 from __future__ import annotations
 

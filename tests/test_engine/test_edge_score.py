@@ -166,22 +166,15 @@ class TestStrategyIsolation:
         assert c_call["iv_alignment"] >= c_strad["iv_alignment"]
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Future-scope stub — issue #8 same-direction concentration
-# ──────────────────────────────────────────────────────────────────────────
+def test_directional_strategies_still_registered():
+    """Bullish/bearish strategy names stay in the selector registries.
 
-def test_same_direction_concentration_config_exists():
-    """C4: Concentration cap logic exists in lifecycle/suggestion_engine._persist_and_notify.
-
-    Verify the bullish/bearish strategy classification sets are correctly defined
-    so the cap fires consistently.
+    Cross-index concentration dropping was removed — each underlying keeps its
+    own card — but the strategy sets must remain known to the selector.
     """
-    # These are defined inside _persist_and_notify; we test the strategy routing
-    # via the engine.strategy_selector registries instead.
     from engine.strategy_selector import _CREDIT_STRATEGIES, _DEBIT_STRATEGIES
     BULLISH_STRATS = {"BULL_PUT_SPREAD", "BULL_CALL_SPREAD", "JADE_LIZARD", "LONG_CALL"}
     BEARISH_STRATS = {"BEAR_CALL_SPREAD", "BEAR_PUT_SPREAD", "LONG_PUT"}
-    # All defined strategies are accounted for by direction
     all_known = _CREDIT_STRATEGIES | _DEBIT_STRATEGIES
     for s in BULLISH_STRATS | BEARISH_STRATS:
         assert s in all_known, f"{s} not in any strategy registry"
