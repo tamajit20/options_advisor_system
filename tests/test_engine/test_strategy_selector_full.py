@@ -109,9 +109,11 @@ def _failing_confidence():
 
 
 def _pass_warn_confidence():
-    checks = [ConfidenceCheck(label=f"c{i}", status="PASS", detail="") for i in range(8)]
-    checks.append(ConfidenceCheck(label="c8", status="PASS_WARN", detail="missing"))
-    return ConfidenceResult(checks=checks, failed_reasons=[], score=8, total=9,
+    # Soft bar is 8 gates; put PASS_WARN inside that window so it does not
+    # count toward LONG_CALL's required 8/8 strict PASS total.
+    checks = [ConfidenceCheck(label=f"c{i}", status="PASS", detail="") for i in range(7)]
+    checks.append(ConfidenceCheck(label="c7", status="PASS_WARN", detail="missing"))
+    return ConfidenceResult(checks=checks, failed_reasons=[], score=7, total=8,
                             all_passed=True)
 
 
@@ -202,7 +204,7 @@ class TestAssembleSuggestion:
 
     def test_long_call_pass_warn_does_not_count_as_soft_pass(self, sample_chain):
         ind = _make_indicators(trend="BULLISH", pcr=0.40, iv_premium=0.85)
-        with pytest.raises(StrategyVeto, match="requires 9/9"):
+        with pytest.raises(StrategyVeto, match="requires 8/8"):
             ss.assemble_suggestion(
                 suggestion_id="S-LC-WARN", underlying="NIFTY",
                 expiry=date(2026, 5, 14), expiry_type="Weekly", dte=14,
