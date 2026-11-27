@@ -3156,7 +3156,7 @@ window.toast = toast;
 const TABS = ['suggestion', 'trades', 'history', 'notifications', 'config', 'learn', 'account', 'users', 'jobs', 'logs', 'wsmon'];
 window.TABS = TABS;
 // Advisor chrome (header subtabs / mobile Advisor mode) — daily workflow tabs.
-const OPTIONS_TABS = ['suggestion', 'trades', 'history', 'config', 'learn'];
+const OPTIONS_TABS = ['suggestion', 'trades', 'history', 'config', 'learn', 'info'];
 const SYSTEM_TABS = ['users', 'jobs', 'logs', 'wsmon'];
 const ADMIN_TABS = new Set(['config', ...SYSTEM_TABS]);
 const TAB_LOADERS = {};
@@ -3232,6 +3232,7 @@ function switchTab(name) {
   if (name === 'learn') {
     if (typeof window.renderLearningPage === 'function') window.renderLearningPage();
   }
+  if (name === 'info')          loadInfoEvents();
   if (name === 'history')       loadHistory();
   if (name === 'account')       _resetAccountForm();
   if (name === 'users')         loadUsersPane();
@@ -3914,6 +3915,7 @@ function _paintPreEventMarquee() {
     _preEventCurrentKey = '';
     host.hidden = true;
     if (btn) btn.onclick = null;
+    host.onclick = null;
     return;
   }
   // One event at a time on a single line; after dismiss, the next appears.
@@ -3923,8 +3925,9 @@ function _paintPreEventMarquee() {
   const more = visible.length > 1 ? `  (${visible.length} event warnings)` : '';
   track.textContent = `${msg}${more}   ···   ${msg}${more}`;
   host.hidden = false;
-  host.title = msg;
+  host.title = msg + ' — click for full calendar';
   host.dataset.eventKey = cur.event_key;
+  host.onclick = () => { if (typeof switchTab === 'function') switchTab('info'); };
   if (btn) {
     btn.onclick = (ev) => {
       ev.preventDefault();
@@ -3933,6 +3936,73 @@ function _paintPreEventMarquee() {
     };
   }
 }
+
+/** Information tab — full events calendar (survives marquee dismiss). */
+async function loadInfoEvents() {
+  const box = document.getElementById('info-events');
+  const summary = document.getElementById('info-summary');
+  if (!box) return;
+  const impactSel = document.getElementById('info-impact');
+  const impact = (impactSel && impactSel.value) || '';
+  box.classList.add('loading');
+  box.textContent = 'Loading…';
+  if (summary) summary.textContent = '';
+  try {
+    const q = impact ? `?impact=${encodeURIComponent(impact)}` : '';
+    const data = await API(`/api/events/calendar${q}`);
+    const events = Array.isArray(data.events) ? data.events : [];
+    if (summary) {
+      const upcoming = events.filter((e) => !e.is_past).length;
+      const past = events.length - upcoming;
+      summary.textContent =
+        `${events.length} event${events.length === 1 ? '' : 's'}` +
+        ` (${upcoming} upcoming / ${past} recent)` +
+        ` · ${data.from || ''} → ${data.to || ''}`;
+    }
+    if (!events.length) {
+      box.classList.remove('loading');
+      box.innerHTML = '<p class="muted">No events in this window.</p>';
+      return;
+    }
+    const byDate = new Map();
+    events.forEach((e) => {
+      const d = e.event_date || '';
+      if (!byDate.has(d)) byDate.set(d, []);
+      byDate.get(d).push(e);
+    });
+    const parts = [];
+    byDate.forEach((list, d) => {
+      const first = list[0] || {};
+      const dayCls = first.is_today ? ' info-day--today' : (first.is_past ? ' info-day--past' : '');
+      const dayLabel = first.is_today ? `${d} · today` : d;
+      parts.push(`<section class="info-day${dayCls}"><h3 class="info-day-title">${escapeHtml(dayLabel)}</h3><ul class="info-day-list">`);
+      list.forEach((e) => {
+        const imp = String(e.impact || 'MEDIUM').toUpperCase();
+        parts.push(
+          `<li class="info-event info-event--${escapeHtml(imp.toLowerCase())}">` +
+          `<span class="info-impact" data-impact="${escapeHtml(imp)}">${escapeHtml(imp)}</span>` +
+          `<span class="info-type">${escapeHtml(e.event_type || '')}</span>` +
+          `<span class="info-desc">${escapeHtml(e.description || '')}</span>` +
+          `</li>`
+        );
+      });
+      parts.push('</ul></section>');
+    });
+    box.classList.remove('loading');
+    box.innerHTML = parts.join('');
+  } catch (err) {
+    box.classList.remove('loading');
+    box.innerHTML = `<p class="error">Could not load events: ${escapeHtml(err.message || String(err))}</p>`;
+  }
+}
+window.loadInfoEvents = loadInfoEvents;
+
+(() => {
+  const impact = document.getElementById('info-impact');
+  if (impact) impact.addEventListener('change', () => loadInfoEvents());
+  const refresh = document.getElementById('info-refresh');
+  if (refresh) refresh.addEventListener('click', () => loadInfoEvents());
+})();
 
 function _renderPreEventMarquee(st) {
   const pe = st && st.pre_event_exit;

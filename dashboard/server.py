@@ -6595,6 +6595,60 @@ def create_app() -> Flask:
                         "service": "options_advisor_dashboard",
                         "port": DASHBOARD_CONFIG["port"]})
 
+    # ---------- Events calendar (Information tab — all signed-in users) ----
+    @app.route("/api/events/calendar")
+    @_with_db
+    def api_events_calendar(db: SQLServerConnection):
+        """Upcoming / recent market events from ``options_events_calendar``.
+
+        Always available after login (not admin-only). Survives marquee dismiss.
+        Query: ``from`` / ``to`` (YYYY-MM-DD), optional ``impact`` (HIGH|MEDIUM|LOW).
+        Default window: 14 days back → 60 days ahead.
+        """
+        from database.models import EventCalendarRepo
+
+        today = today_ist()
+        raw_from = (request.args.get("from") or "").strip()[:10]
+        raw_to = (request.args.get("to") or "").strip()[:10]
+        try:
+            start = date.fromisoformat(raw_from) if raw_from else today - timedelta(days=14)
+        except ValueError:
+            start = today - timedelta(days=14)
+        try:
+            end = date.fromisoformat(raw_to) if raw_to else today + timedelta(days=60)
+        except ValueError:
+            end = today + timedelta(days=60)
+        if end < start:
+            start, end = end, start
+
+        impact = (request.args.get("impact") or "").strip().upper()
+        rows = EventCalendarRepo(db).in_range(start, end) or []
+        events = []
+        for r in rows:
+            imp = str(r.get("impact") or "").upper() or "MEDIUM"
+            if impact and imp != impact:
+                continue
+            ed = r.get("event_date")
+            if isinstance(ed, datetime):
+                ed = ed.date()
+            iso = ed.isoformat() if isinstance(ed, date) else str(ed or "")[:10]
+            events.append({
+                "event_date": iso,
+                "event_type": r.get("event_type") or "",
+                "description": r.get("description") or "",
+                "impact": imp,
+                "is_past": bool(iso and iso < today.isoformat()),
+                "is_today": iso == today.isoformat(),
+            })
+        return jsonify({
+            "as_of": _ist_iso(now_ist()),
+            "from": start.isoformat(),
+            "to": end.isoformat(),
+            "today": today.isoformat(),
+            "count": len(events),
+            "events": events,
+        })
+
     # ---------- System status (read-only summary used by the UI banner) ----
     @app.route("/api/system-status")
     @_with_db

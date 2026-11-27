@@ -1325,6 +1325,45 @@ class TestApiSystemStatus:
 
 
 # ---------------------------------------------------------------------------
+# /api/events/calendar (Information tab — all signed-in users)
+# ---------------------------------------------------------------------------
+class TestEventsCalendarEndpoint:
+    def test_lists_events_and_filters_impact(self, client, mocker):
+        mocker.patch("dashboard.server.today_ist", return_value=date(2026, 11, 27))
+        mocker.patch(
+            "database.models.EventCalendarRepo.in_range",
+            return_value=[
+                {
+                    "event_date": date(2026, 11, 28),
+                    "event_type": "RBI",
+                    "description": "Policy decision",
+                    "impact": "HIGH",
+                },
+                {
+                    "event_date": date(2026, 12, 1),
+                    "event_type": "CPI",
+                    "description": "Inflation print",
+                    "impact": "MEDIUM",
+                },
+            ],
+        )
+        all_resp = client.get("/api/events/calendar")
+        assert all_resp.status_code == 200
+        all_body = all_resp.get_json()
+        assert all_body["count"] == 2
+        assert all_body["today"] == "2026-11-27"
+        assert [e["impact"] for e in all_body["events"]] == ["HIGH", "MEDIUM"]
+
+        high = client.get("/api/events/calendar?impact=HIGH")
+        assert high.status_code == 200
+        high_body = high.get_json()
+        assert high_body["count"] == 1
+        assert high_body["events"][0]["event_type"] == "RBI"
+        assert high_body["events"][0]["is_today"] is False
+        assert high_body["events"][0]["is_past"] is False
+
+
+# ---------------------------------------------------------------------------
 # /api/ws/monitor
 # ---------------------------------------------------------------------------
 class TestWsMonitorEndpoint:
