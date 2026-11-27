@@ -929,14 +929,18 @@ class TestJobsList:
         assert "20:35" in fo["next_run"] or "20:35" in fo["schedule"]
         assert fo["manual_enabled"] is True
 
-    def test_weekly_cleanup_manual_trigger_disabled(self, client, mocker):
+    def test_retired_jobs_hidden_from_jobs_tab(self, client, mocker):
         mocker.patch("dashboard.server.JobLogRepo.latest_status_per_job",
                      return_value=[])
         import scheduler.scheduler as sched
         mocker.patch.object(sched, "_SCHEDULER", None)
         resp = client.get("/api/jobs/list")
-        job = next(j for j in resp.get_json()["jobs"] if j["job_name"] == "weekly_cleanup")
-        assert job["manual_enabled"] is False
+        names = {j["job_name"] for j in resp.get_json()["jobs"]}
+        assert "weekly_cleanup" not in names
+        assert "eod_nightly_pipeline" not in names
+        assert "suggestion_engine" not in names
+        assert "live_suggestion_engine" in names
+        assert "morning_eod_catchup" in names
 
     def test_morning_pipeline_steps_not_manual_only(self, client, mocker):
         from datetime import datetime
@@ -968,9 +972,9 @@ class TestJobsList:
         assert fo["pipeline_parent"] == "morning_eod_catchup"
         assert fo["enabled"] is True
         assert "09:00" in fo["schedule"] or "Morning EOD" in fo["schedule"]
-        nightly = next(j for j in data["jobs"] if j["job_name"] == "eod_nightly_pipeline")
-        assert nightly["via_pipeline"] is False
-        assert nightly["enabled"] is False
+        names = {j["job_name"] for j in data["jobs"]}
+        assert "eod_nightly_pipeline" not in names
+        assert "suggestion_engine" not in names
 
     def test_jobs_sorted_chronologically_with_groups(self, client, mocker):
         mocker.patch("dashboard.server.JobLogRepo.latest_status_per_job",

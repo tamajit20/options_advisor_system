@@ -623,6 +623,14 @@ def job_weekly_cleanup():
 # Jobs that remain in JOB_FUNCS (history/UI) but must never Run now.
 BLOCKED_MANUAL_JOBS = frozenset({"weekly_cleanup"})
 
+# Retired / replaced jobs — keep handlers for tests & rare API triggers,
+# but omit from the Jobs tab grid so the UI stays focused on live work.
+JOBS_HIDDEN_FROM_UI = frozenset({
+    "weekly_cleanup",          # permanently blocked; use archive + log cleanup
+    "eod_nightly_pipeline",    # replaced by morning_eod_catchup
+    "suggestion_engine",       # EOD bhav cards; live_suggestion_engine owns cards
+})
+
 JOB_FUNCS = {
     "fo_bhav_download":   job_fo_bhav,
     "spot_bhav_download": job_spot_bhav,

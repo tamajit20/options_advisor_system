@@ -2718,8 +2718,9 @@ def _build_jobs_list_payload(db: SQLServerConnection) -> Dict[str, Any]:
     from scheduler.scheduler import (
         JOB_FUNCS as _JOB_FUNCS,
         BLOCKED_MANUAL_JOBS as _BLOCKED_MANUAL,
-        _EOD_PIPELINE_STEPS,
+        JOBS_HIDDEN_FROM_UI as _JOBS_HIDDEN,
         _LAST_STATUS as _LAST,
+        active_eod_pipeline_steps,
         _eod_pipeline_enabled,
         _morning_eod_catchup_enabled,
         get_scheduler,
@@ -2755,14 +2756,17 @@ def _build_jobs_list_payload(db: SQLServerConnection) -> Dict[str, Any]:
         else None
     )
 
+    active_steps = frozenset(active_eod_pipeline_steps())
     out = []
     for name in _JOB_FUNCS.keys():
+        if name in _JOBS_HIDDEN:
+            continue
         cfg = cfg_jobs.get(name, {}) or {}
         meta = _JOB_META.get(name, {})
         cron_enabled = bool(cfg.get("enabled", True))
-        via_pipeline = bool(
-            pipeline_parent and name in _EOD_PIPELINE_STEPS
-        )
+        # Only active pipeline steps inherit the parent tile (skipped steps
+        # like suggestion_engine stay out of the Jobs grid via JOBS_HIDDEN).
+        via_pipeline = bool(pipeline_parent and name in active_steps)
 
         next_run = None
         if sch_running:

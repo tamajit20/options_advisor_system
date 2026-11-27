@@ -221,8 +221,8 @@ Enable flags / handlers live in `SCHEDULER_CONFIG["jobs"]` and `JOB_FUNCS` in `s
 | `zerodha_capital_snapshot`                                               | On every 5m     | Per logged-in trader: store that user's idle/utilised when margins change (History → Capital) |
 | `event_eve_review` / `events_seed`                                       | On @ 09:05 / Mon | Eve-of HIGH + seed           |
 | `weekly_archive` / `weekly_log_cleanup` / `archive_export` / `db_backup` | Fri             | Archive path                  |
-| Solo `fo_bhav_*` … `suggestion_engine`                                   | Usually off     | Available for manual Jobs tab |
-| `weekly_cleanup`                                                         | Blocked         | Legacy                        |
+| Solo EOD steps (`fo_bhav_*` …)                                           | Via morning     | Shown as Morning Catchup steps; Run now still works |
+| `weekly_cleanup` / `eod_nightly_pipeline` / EOD `suggestion_engine`       | Hidden          | Retired — omitted from Jobs tab |
 
 
 ---

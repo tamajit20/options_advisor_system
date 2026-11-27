@@ -80,13 +80,13 @@ SCHEDULER_CONFIG = {
     # fill any missing weekdays in this calendar-day window (plus refresh today).
     "data_backfill_lookback_days": 30,
     # Morning-only EOD: prior-session bhav @ 09:00 (VM boot 08:55). Evening pipeline
-    # disabled — no 20:30 VM window. Individual EOD crons stay off (manual re-run only).
-    # When eod_nightly_pipeline is enabled, individual EOD crons below are not scheduled
-    # (enabled: False) but still appear in Jobs for manual step re-runs.
+    # disabled — no 20:30 VM window. Individual EOD crons stay off (manual re-run only
+    # from Jobs as morning-pipeline steps). Retired tiles (weekly_cleanup,
+    # eod_nightly_pipeline, suggestion_engine) are omitted from the Jobs tab via
+    # JOBS_HIDDEN_FROM_UI — handlers remain for tests / rare API use.
     #
-    # Steps skipped inside morning_eod_catchup / eod_nightly_pipeline (still runnable
-    # manually from Jobs). Use live_suggestion_engine during market hours instead of
-    # EOD bhav-based suggestions.
+    # Steps skipped inside morning_eod_catchup / eod_nightly_pipeline.
+    # Use live_suggestion_engine during market hours instead of EOD bhav cards.
     "eod_pipeline_skip_steps": ["suggestion_engine"],
     "jobs": {
         # --- EOD chain (scheduled via eod_nightly_pipeline @ 20:35 Mon–Fri) ---
