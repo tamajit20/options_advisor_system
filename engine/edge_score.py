@@ -134,7 +134,7 @@ def _confidence_score(strategy: str, confidence: ConfidenceResult) -> float:
     """0–1 score from soft-pass count above the strategy's required minimum."""
     overrides = STRATEGY_CONFIG.get("strategy_min_soft_pass", {}) or {}
     required = int(overrides.get(strategy, STRATEGY_CONFIG.get("soft_gate_min_pass", 6)))
-    soft_total = int(STRATEGY_CONFIG.get("soft_gate_total", 9))
+    soft_total = int(STRATEGY_CONFIG.get("soft_gate_total", 8))
     soft_passed = sum(
         1 for c in list(confidence.checks)[:soft_total]
         if c.status == "PASS"

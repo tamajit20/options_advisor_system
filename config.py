@@ -304,21 +304,22 @@ STRATEGY_CONFIG = {
     "dte_max": 21,
 
     # Confidence — tiered gating
-    # Soft gates (9): IV Rank, VIX, PCR, OI walls, Trend, IV premium, FII,
-    #   OI change, DTE. Trade proceeds if ≥ soft_gate_min_pass of 9 pass.
-    # Event / traj / IV-alignment: advisory only. ATM spread: hard fail.
+    # Soft gates (8): IV Rank, VIX, PCR, OI walls, Trend, IV premium, FII,
+    #   OI change. Trade proceeds if ≥ soft_gate_min_pass of 8 pass.
+    # DTE is preferred at expiry pick only (advisory on the card — never a soft
+    # miss or block). Event / traj / IV-alignment: advisory. ATM spread: hard fail.
     "confidence_min_pass_count": 7,     # legacy — no longer used by engine
-    "soft_gate_min_pass": 6,            # need ≥6 of 9 soft gates to pass
-    "soft_gate_total":    9,
+    "soft_gate_min_pass": 6,            # need ≥6 of 8 soft gates to pass
+    "soft_gate_total":    8,
 
     # Phase 3: per-strategy soft-gate minimum (of soft_gate_total).
-    # Naked longs require all 9. Long-vol / jade allow one miss.
+    # Naked longs require all soft gates. Long-vol / jade allow one miss.
     "strategy_min_soft_pass": {
-        "LONG_CALL":      9,
-        "LONG_PUT":       9,
-        "LONG_STRADDLE":  8,
-        "LONG_STRANGLE":  8,
-        "JADE_LIZARD":    8,
+        "LONG_CALL":      8,
+        "LONG_PUT":       8,
+        "LONG_STRADDLE":  7,
+        "LONG_STRANGLE":  7,
+        "JADE_LIZARD":    7,
     },
 
     # IV premium vs realised volatility (HV-20) thresholds — REGIME-WIDE GATE

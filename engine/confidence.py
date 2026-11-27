@@ -7,13 +7,14 @@ engine/confidence.py
 Gate tiers
 ----------
   HARD gate  (must PASS):        ATM spread quality
-  SOFT gates (need ≥ soft_gate_min_pass of 9):
-      IV Rank | VIX | PCR | OI walls | Trend | IV premium | FII | OI change | DTE
-  WARNING gate (never blocks):   High-impact event this week → SOFT_FAIL shown
-                                 but suggestion always proceeds
+  SOFT gates (need ≥ soft_gate_min_pass of 8):
+      IV Rank | VIX | PCR | OI walls | Trend | IV premium | FII | OI change
+  ADVISORY (never blocks / never counted): DTE vs preferred band, events,
+      trajectory, IV alignment, tape/OI wall, …
 
 Soft gate failure uses SOFT_FAIL (not FAIL) so the suggestion still proceeds
 when only one soft gate misses, but the dashboard surfaces it as a visible note.
+DTE is preferred when picking expiry; it is advisory only and never a soft miss.
 
 Data-unavailability statuses
 -----------------------------
@@ -292,25 +293,26 @@ def evaluate(
 
     checks.append(_gate("OI change conviction aligned with trend", _oi_change_gate, kind="SOFT"))
 
-    # 9. DTE in band — counted soft gate. Nearest listed expiry outside 7–21
-    # is evaluated (not skipped) and spends one of the allowed soft misses.
-    dte_min = STRATEGY_CONFIG["dte_min"]
-    dte_max = STRATEGY_CONFIG["dte_max"]
-
-    def _dte_gate():
-        dte_ok = dte_min <= dte <= dte_max
-        return (
-            _PASS if dte_ok else _SOFT_FAIL,
-            f"DTE {dte} (need {dte_min}–{dte_max})",
-        )
-
-    checks.append(_gate("DTE within target band", _dte_gate, kind="SOFT"))
-
     # ══════════════════════════════════════════════════════════════
     # HARD / ADVISORY GATES
     # ══════════════════════════════════════════════════════════════
 
-    # 10. High-impact event this week — WARNING only, never blocks suggestion
+    # DTE — advisory only. Expiry pick prefers [dte_min, dte_max]; outside the
+    # band is allowed (nearest to band) and must not spend a soft miss or block.
+    dte_min = STRATEGY_CONFIG["dte_min"]
+    dte_max = STRATEGY_CONFIG["dte_max"]
+
+    def _dte_gate():
+        if dte_min <= dte <= dte_max:
+            return _PASS, f"DTE {dte} (preferred {dte_min}–{dte_max})"
+        return (
+            _PASS_WARN,
+            f"DTE {dte} outside preferred {dte_min}–{dte_max} — nearest to band; not a block",
+        )
+
+    checks.append(_gate("DTE vs preferred band", _dte_gate, kind="ADVISORY"))
+
+    # High-impact event this week — WARNING only, never blocks suggestion
     def _event_gate():
         if events_calendar_row_count == 0:
             return (
@@ -487,10 +489,10 @@ def evaluate(
     # ══════════════════════════════════════════════════════════════
     # Score + all_passed
     # ══════════════════════════════════════════════════════════════
-    # Soft gates: checks[0..8] = 9 (original 8 + DTE). Need ≥ soft_gate_min_pass.
-    # Event warning + traj/alignment: advisory. Spread quality: hard FAIL.
+    # Soft gates: first soft_gate_total checks (DTE is advisory, not in this cut).
+    # Event / traj / DTE / alignment: advisory. Spread quality: hard FAIL.
     soft_min   = int(STRATEGY_CONFIG.get("soft_gate_min_pass", 6))
-    soft_total = int(STRATEGY_CONFIG.get("soft_gate_total", 9))
+    soft_total = int(STRATEGY_CONFIG.get("soft_gate_total", 8))
 
     hard_failed = sum(1 for c in checks if c.status == _FAIL)
     soft_failed = sum(1 for c in checks[:soft_total] if c.status == _SOFT_FAIL)

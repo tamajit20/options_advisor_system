@@ -485,7 +485,7 @@ def _pick_expiries_in_band(
       return only that date tagged as 'Monthly'.
     - Otherwise return nearest monthly + nearest weekly (both, if different dates).
     - If nothing is in-band, pick the single future expiry closest to the band
-      (DTE is then a soft gate, not a sit-out).
+      (DTE stays advisory only — never a soft miss or sit-out).
 
     DTE is measured from the ENTRY day (next trading day after generation),
     not the generation day.  Mon-Thu: entry is next calendar day (+1).
@@ -1160,7 +1160,7 @@ def _evaluate_underlying(
                     if use_iv_rank is not None:
                         iv_rank = use_iv_rank
 
-        # Soft / advisory confidence misses (DTE, news, PCR, FII, …) still get a
+        # Soft / advisory confidence misses (news, PCR, FII, DTE note, …) still get a
         # card — only a HARD FAIL (ATM liquidity) hides the suggestion entirely.
         if not use_confidence.all_passed and _confidence_hard_blocked(use_confidence):
             no_suggestions.append(NoSuggestion(

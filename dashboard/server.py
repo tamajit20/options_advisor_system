@@ -1421,21 +1421,39 @@ def _latest_exit_signals(db: SQLServerConnection, trade_ids: list) -> dict:
 
 _INDEX_LABELS: Dict[str, str] = {
     "NIFTY": "Nifty",
+    "GIFTNIFTY": "Gift Nifty",
     "BANKNIFTY": "Bank Nifty",
     "FINNIFTY": "Fin Nifty",
     "VIX": "India VIX",
 }
 
+# Live-only header companion (NSEIX) — not a trade underlying / no EOD spot table.
+_HEADER_ONLY_INDEXES = ("GIFTNIFTY",)
+
 
 def _index_ticker_symbols() -> list[str]:
-    """All index symbols shown in the header strip (underlyings + VIX)."""
+    """Header strip order: Nifty, Gift Nifty, then other underlyings, then VIX."""
     seen: set[str] = set()
     out: list[str] = []
-    for sym in list(STRATEGY_CONFIG.get("underlyings") or []) + ["VIX"]:
+
+    def _add(sym: str) -> None:
         key = str(sym).strip().upper()
         if key and key not in seen:
             seen.add(key)
             out.append(key)
+
+    underlyings = [str(s).strip().upper() for s in (STRATEGY_CONFIG.get("underlyings") or [])]
+    if "NIFTY" in underlyings:
+        _add("NIFTY")
+        _add("GIFTNIFTY")
+        for sym in underlyings:
+            if sym != "NIFTY":
+                _add(sym)
+    else:
+        for sym in underlyings:
+            _add(sym)
+        _add("GIFTNIFTY")
+    _add("VIX")
     return out
 
 
@@ -3401,7 +3419,7 @@ def create_app() -> Flask:
                     STRATEGY_CONFIG.get("soft_gate_min_pass") or 6
                 ),
                 "soft_gate_total": int(
-                    STRATEGY_CONFIG.get("soft_gate_total") or 9
+                    STRATEGY_CONFIG.get("soft_gate_total") or 8
                 ),
                 "strategy_min_soft_pass": dict(
                     STRATEGY_CONFIG.get("strategy_min_soft_pass") or {}
@@ -6410,6 +6428,18 @@ def create_app() -> Flask:
                         "as_of": None,
                         "trade_date": None,
                     }))
+                continue
+
+            # Gift Nifty is live WS only (NSEIX) — no options_spot_eod row.
+            if sym in _HEADER_ONLY_INDEXES:
+                indices.append(_enrich_index_item_change(db, {
+                    "symbol": sym,
+                    "label": label,
+                    "price": None,
+                    "source": "unavailable",
+                    "as_of": None,
+                    "trade_date": None,
+                }))
                 continue
 
             row = spot_repo.latest(sym)

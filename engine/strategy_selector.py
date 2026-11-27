@@ -711,7 +711,7 @@ def assemble_suggestion(
     strat_overrides = STRATEGY_CONFIG.get("strategy_min_soft_pass", {}) or {}
     required = strat_overrides.get(strategy)
     if required is not None:
-        soft_total = int(STRATEGY_CONFIG.get("soft_gate_total", 9))
+        soft_total = int(STRATEGY_CONFIG.get("soft_gate_total", 8))
         soft_checks = list(confidence.checks)[:soft_total]
         soft_pass_count = sum(1 for c in soft_checks if c.status == "PASS")
         if soft_pass_count < required:

@@ -73,9 +73,9 @@ class IndexSpec:
     """Static description of an index/spot we want to stream.
 
     `tradingsymbol` matches the entry in Kite's instrument master under
-    exchange `NSE` (or `MCX`/`BSE` if extended later). `internal_symbol`
-    is the canonical name we use in the rest of the system (DB tables,
-    LiveQuote.symbol, cache keys).
+    exchange `NSE` / `NSEIX` (or `MCX`/`BSE` if extended later).
+    `internal_symbol` is the canonical name we use in the rest of the system
+    (DB tables, LiveQuote.symbol, cache keys, header strip).
     """
     internal_symbol: str
     exchange: str
@@ -86,12 +86,13 @@ IndexLoader = Callable[[], Iterable[IndexSpec]]
 
 
 # Default indexes streamed for opportunity regeneration. Tied to
-# `STRATEGY_CONFIG["underlyings"]` plus INDIA VIX.
+# `STRATEGY_CONFIG["underlyings"]` plus INDIA VIX and Gift Nifty (header only).
 DEFAULT_INDEX_SPECS: Tuple[IndexSpec, ...] = (
-    IndexSpec("NIFTY",     "NSE", "NIFTY 50"),
-    IndexSpec("BANKNIFTY", "NSE", "NIFTY BANK"),
-    IndexSpec("FINNIFTY",  "NSE", "NIFTY FIN SERVICE"),
-    IndexSpec("VIX",       "NSE", "INDIA VIX"),
+    IndexSpec("NIFTY",     "NSE",   "NIFTY 50"),
+    IndexSpec("GIFTNIFTY", "NSEIX", "GIFT NIFTY"),  # live header beside Nifty
+    IndexSpec("BANKNIFTY", "NSE",   "NIFTY BANK"),
+    IndexSpec("FINNIFTY",  "NSE",   "NIFTY FIN SERVICE"),
+    IndexSpec("VIX",       "NSE",   "INDIA VIX"),
 )
 
 

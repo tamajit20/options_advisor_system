@@ -106,13 +106,20 @@ _NIFTY_50 = {
 _NIFTY_BANK = {**_NIFTY_50, "instrument_token": 260105, "tradingsymbol": "NIFTY BANK"}
 _NIFTY_FIN = {**_NIFTY_50, "instrument_token": 257801, "tradingsymbol": "NIFTY FIN SERVICE"}
 _INDIA_VIX = {**_NIFTY_50, "instrument_token": 264969, "tradingsymbol": "INDIA VIX"}
+_GIFT_NIFTY = {
+    **_NIFTY_50,
+    "instrument_token": 291849,
+    "tradingsymbol": "GIFT NIFTY",
+    "exchange": "NSEIX",
+    "segment": "NSEIX-INDICES",
+}
 
 
 @pytest.fixture
 def master():
     rows = [
         _NIFTY_22000_CE, _NIFTY_22000_PE, _BANKNIFTY_50000_CE,
-        _NIFTY_50, _NIFTY_BANK, _NIFTY_FIN, _INDIA_VIX,
+        _NIFTY_50, _GIFT_NIFTY, _NIFTY_BANK, _NIFTY_FIN, _INDIA_VIX,
     ]
     m = InstrumentMaster(loader=lambda: rows, ttl_seconds=3600)
     m.refresh()
@@ -146,13 +153,14 @@ def test_default_indexes_resolved_and_subscribed(master, runner):
         leg_loader=lambda: [],  # no legs
     )
     tokens = mgr.reconcile_once()
-    assert tokens == {256265, 260105, 257801, 264969}
+    assert tokens == {256265, 291849, 260105, 257801, 264969}
     # Each is tagged is_index=True with the canonical internal symbol
     assert runner.token_meta[256265] == TokenMeta(symbol="NIFTY", is_index=True, product="options_index")
+    assert runner.token_meta[291849] == TokenMeta(symbol="GIFTNIFTY", is_index=True, product="options_index")
     assert runner.token_meta[260105] == TokenMeta(symbol="BANKNIFTY", is_index=True, product="options_index")
     assert runner.token_meta[257801] == TokenMeta(symbol="FINNIFTY", is_index=True, product="options_index")
     assert runner.token_meta[264969] == TokenMeta(symbol="VIX", is_index=True, product="options_index")
-    assert runner.replace_calls == [{256265, 260105, 257801, 264969}]
+    assert runner.replace_calls == [{256265, 291849, 260105, 257801, 264969}]
 
 
 def test_unresolved_index_increments_counter(master, runner):
@@ -386,7 +394,13 @@ def test_make_static_leg_loader_snapshots():
 # ---------------------------------------------------------------------------
 def test_default_index_specs_cover_all_underlyings_and_vix():
     syms = {s.internal_symbol for s in DEFAULT_INDEX_SPECS}
-    assert {"NIFTY", "BANKNIFTY", "FINNIFTY", "VIX"} <= syms
+    assert {"NIFTY", "GIFTNIFTY", "BANKNIFTY", "FINNIFTY", "VIX"} <= syms
+    gift = next(s for s in DEFAULT_INDEX_SPECS if s.internal_symbol == "GIFTNIFTY")
+    assert gift.exchange == "NSEIX"
+    assert gift.tradingsymbol == "GIFT NIFTY"
+    # Gift sits immediately after Nifty in the header strip.
+    order = [s.internal_symbol for s in DEFAULT_INDEX_SPECS]
+    assert order.index("NIFTY") + 1 == order.index("GIFTNIFTY")
 
 
 # ---------------------------------------------------------------------------

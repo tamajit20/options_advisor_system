@@ -1,4 +1,4 @@
-"""Unit tests for engine.confidence — 8-soft-gate + DTE soft-warning evaluator."""
+"""Unit tests for engine.confidence — 8 soft gates + DTE advisory."""
 from __future__ import annotations
 
 from datetime import date
@@ -20,13 +20,14 @@ class TestEvaluate:
             events_calendar_row_count=10,
         )
         assert result.all_passed is True
-        # 9 soft (incl. DTE) + event + 3 trajectory + IV-Rank/IV-HV alignment
+        # 8 soft + DTE advisory + event + 3 trajectory + IV alignment
         # + today's tape & OI wall = 15 total.
-        # Soft gate 8 = OI change conviction (S6).
-        # Trajectory gates are PASS_WARN when indicator fields are None
-        # (default sample_indicators has no live trajectory).
         assert result.total == 15
         assert result.score >= 9
+        soft = [c for c in result.checks if c.kind == "SOFT"]
+        assert len(soft) == 8
+        dte = next(c for c in result.checks if c.label == "DTE vs preferred band")
+        assert dte.kind == "ADVISORY"
         tape = next(c for c in result.checks if c.label == "Today's tape & nearby OI wall")
         assert tape.kind == "ADVISORY"
 
@@ -49,20 +50,22 @@ class TestEvaluate:
         assert trend_check.status == "PASS"
         assert "MIXED" in trend_check.detail
 
-    def test_dte_below_band_soft_fails_without_sit_out(self, sample_indicators):
+    def test_dte_outside_band_is_advisory_not_soft_fail(self, sample_indicators):
         result = evaluate(
             iv_rank=60.0,
             indicators=sample_indicators,
-            dte=3,  # below 7
+            dte=3,  # below preferred 7–21
             has_high_impact_event_this_week=False,
             events_calendar_row_count=10,
         )
         assert result.all_passed is True
-        dte_check = next(c for c in result.checks if c.label == "DTE within target band")
-        assert dte_check.status == "SOFT_FAIL"
-        assert dte_check.kind == "SOFT"
+        dte_check = next(c for c in result.checks if c.label == "DTE vs preferred band")
+        assert dte_check.status == "PASS_WARN"
+        assert dte_check.kind == "ADVISORY"
+        assert dte_check.passed is True
+        assert "DTE 3" not in (result.failed_reasons or [])
 
-    def test_dte_above_band_soft_fails_without_sit_out(self, sample_indicators):
+    def test_dte_above_band_is_advisory_not_soft_fail(self, sample_indicators):
         result = evaluate(
             iv_rank=60.0,
             indicators=sample_indicators,
@@ -71,8 +74,10 @@ class TestEvaluate:
             events_calendar_row_count=10,
         )
         assert result.all_passed is True
-        dte_check = next(c for c in result.checks if c.label == "DTE within target band")
-        assert dte_check.status == "SOFT_FAIL"
+        dte_check = next(c for c in result.checks if c.label == "DTE vs preferred band")
+        assert dte_check.status == "PASS_WARN"
+        assert dte_check.kind == "ADVISORY"
+        assert "need 7" not in " ".join(result.failed_reasons or []).lower()
 
     def test_four_counted_soft_fails_sits_out(self, sample_indicators):
         from dataclasses import replace
@@ -80,14 +85,17 @@ class TestEvaluate:
         result = evaluate(
             iv_rank=40.0,
             indicators=ind,
-            dte=3,
+            dte=3,  # advisory only — must not count toward soft misses
             has_high_impact_event_this_week=False,
             events_calendar_row_count=10,
         )
-        labels = [c.label for c in result.checks[:9]]
-        assert "DTE within target band" in labels
-        counted_soft_fails = sum(1 for c in result.checks[:9] if c.status == "SOFT_FAIL")
-        assert counted_soft_fails >= 4
+        soft_labels = [c.label for c in result.checks if c.kind == "SOFT"]
+        assert "DTE vs preferred band" not in soft_labels
+        counted_soft_fails = sum(
+            1 for c in result.checks if c.kind == "SOFT" and c.status == "SOFT_FAIL"
+        )
+        # IV dead zone + rising VIX + PCR (DTE no longer counted) → >2 soft misses
+        assert counted_soft_fails >= 3
         assert result.all_passed is False
 
     def test_iv_rank_in_dead_zone_soft_fails(self, sample_indicators):

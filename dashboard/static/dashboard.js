@@ -323,7 +323,7 @@ let _maxLotsCap = 0;
 // Soft/hard gate legend from /api/suggestion/today (matches config.py).
 let _gateRules = {
   soft_gate_min_pass: 6,
-  soft_gate_total: 9,
+  soft_gate_total: 8,
   strategy_min_soft_pass: {},
 };
 
@@ -334,7 +334,7 @@ function softMinForStrategy(strategy) {
 }
 
 function softTotalGates() {
-  return parseInt(_gateRules.soft_gate_total, 10) || 9;
+  return parseInt(_gateRules.soft_gate_total, 10) || 8;
 }
 
 /** Shared order size (lots) for a suggestion card — governs both exec paths.
@@ -3307,7 +3307,7 @@ async function refreshNotifBadge() {
 function _fmtIndexPrice(sym, price) {
   if (price == null || isNaN(price)) return '—';
   if (sym === 'VIX') return Number(price).toFixed(2);
-  // Whole points — keeps 4 chips (incl. VIX) on one header row.
+  // Whole points — compact chips on one header row.
   return Math.round(Number(price)).toLocaleString('en-IN');
 }
 
@@ -3315,6 +3315,7 @@ function _indexChipLabel(item) {
   const sym = String(item?.symbol || '').toUpperCase();
   if (sym === 'BANKNIFTY') return 'BN';
   if (sym === 'FINNIFTY') return 'FN';
+  if (sym === 'GIFTNIFTY') return 'Gift';
   if (sym === 'VIX') return 'VIX';
   if (sym === 'NIFTY') return 'Nifty';
   return item?.label || item?.symbol || '';
@@ -3324,6 +3325,7 @@ function _underlyingDisplayName(sym) {
   const s = String(sym || '').toUpperCase();
   if (s === 'BANKNIFTY') return 'Bank Nifty';
   if (s === 'FINNIFTY') return 'Fin Nifty';
+  if (s === 'GIFTNIFTY') return 'Gift Nifty';
   if (s === 'NIFTY') return 'Nifty';
   return s || 'Index';
 }
@@ -4139,7 +4141,7 @@ async function loadSuggestion() {
     if (data.gate_rules && typeof data.gate_rules === 'object') {
       _gateRules = {
         soft_gate_min_pass: parseInt(data.gate_rules.soft_gate_min_pass, 10) || 6,
-        soft_gate_total: parseInt(data.gate_rules.soft_gate_total, 10) || 9,
+        soft_gate_total: parseInt(data.gate_rules.soft_gate_total, 10) || 8,
         strategy_min_soft_pass: data.gate_rules.strategy_min_soft_pass || {},
       };
     }
@@ -7684,7 +7686,8 @@ const GATE_RESULT_TIP = {
 
 /** Hover help for each condition label (substring match, first wins). */
 const GATE_CONDITION_TIPS = [
-  ['dte within', 'Preferred 7–21 DTE. Outside the band still evaluates the nearest expiry and spends one of the 6-of-9 soft misses.'],
+  ['dte vs preferred', 'Preferred 7–21 DTE when picking expiry. Outside the band still uses the nearest expiry — advisory only, never a soft miss or block.'],
+  ['dte within', 'Preferred 7–21 DTE when picking expiry. Outside the band still uses the nearest expiry — advisory only, never a soft miss or block.'],
   ['atm strikes liquid', 'ATM option bid-ask must be tight enough to enter without paying a wide spread.'],
   ['iv rank in actionable', 'IV Rank must be in a writing zone (high) or buying zone (low) — mid-rank is weak edge.'],
   ['vix stable', 'India VIX should be stable or falling so premium decay is not fighting a vol spike.'],
