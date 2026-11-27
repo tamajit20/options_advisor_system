@@ -2413,16 +2413,43 @@ function _updateCurrentPnlBadge(tradeId, mtm, asOf, liveTick = false) {
   });
   // Blank fill boxes track live MTM — paint Net/Gross and % together every tick.
   _syncFillPnlFromLiveMtm(tradeId, displayMtm);
-  // Day-detail NOW: patch in place (never remount — that resets scroll).
-  if (_bandCalState && _bandCalState.view === 'day' && _bandCalState.tradeId === tradeId
-      && _bandCalState.dayPayload) {
+  // Day Ranges + At-today strip: status from live Net (not index-in-zone).
+  {
     const liveNet = _liveNetFromGross(tradeId, displayMtm);
     if (liveNet != null && !isNaN(liveNet)) {
-      const prev = _bandCalState.dayPayload.live_net;
-      if (prev == null || Math.abs(Number(prev) - liveNet) >= 0.5) {
-        _bandCalState.dayPayload.live_net = liveNet;
-        _patchBandDayLive({ liveNet });
+      if (_bandCalState && _bandCalState.tradeId === tradeId) {
+        if (_bandCalState.view === 'day' && _bandCalState.dayPayload) {
+          const prev = _bandCalState.dayPayload.live_net;
+          if (prev == null || Math.abs(Number(prev) - liveNet) >= 0.5) {
+            _bandCalState.dayPayload.live_net = liveNet;
+            _patchBandDayLive({ liveNet });
+          }
+        } else if (_bandCalState.view === 'list' && _bandCalState.payload) {
+          _patchBandCalendarNetHeader(liveNet);
+        }
       }
+      const st = _netPnlStatus(liveNet);
+      document.querySelectorAll(
+        `.live-outlook[data-trade-id="${CSS.escape(tradeId)}"]`,
+      ).forEach(el => {
+        const todayWhere = el.querySelector('.lo-today-where');
+        const todayChg = el.querySelector('.lo-today-chg');
+        const line = el.querySelector('.lo-today-nowline');
+        if (todayWhere && st.text) {
+          todayWhere.textContent = st.text;
+          todayWhere.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part', 'muted');
+          if (st.cls) todayWhere.classList.add(st.cls);
+        }
+        if (todayChg) {
+          todayChg.textContent = _fmtNetChg(liveNet);
+          todayChg.classList.remove('pnl-profit', 'pnl-loss', 'muted');
+          if (st.cls) todayChg.classList.add(st.cls);
+        }
+        if (line) {
+          line.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part', 'muted');
+          if (st.cls) line.classList.add(st.cls);
+        }
+      });
     }
   }
   _updateFeedTag(tradeId);
@@ -5878,14 +5905,78 @@ function _bandStatus(row, spot) {
   }
   if (inside(row.full_lo, row.full_hi)) return { text: 'Full profit', cls: 'pnl-profit' };
   if (row.in_side === 'above' && row.in_lo != null && spot >= Number(row.in_lo)) {
-    return { text: 'In profit', cls: 'pnl-profit' };
+    return { text: 'In profit zone', cls: 'pnl-profit' };
   }
   if (row.in_side === 'below' && row.in_hi != null && spot <= Number(row.in_hi)) {
-    return { text: 'In profit', cls: 'pnl-profit' };
+    return { text: 'In profit zone', cls: 'pnl-profit' };
   }
-  if (inside(row.in_lo, row.in_hi)) return { text: 'Part profit', cls: 'lo-fit-part' };
-  if (row.in_lo != null || row.in_hi != null || row.in_side) return { text: 'Loss', cls: 'pnl-loss' };
+  if (inside(row.in_lo, row.in_hi)) return { text: 'Part profit zone', cls: 'lo-fit-part' };
+  if (row.in_lo != null || row.in_hi != null || row.in_side) return { text: 'Loss zone', cls: 'pnl-loss' };
   return { text: '', cls: '' };
+}
+
+/** Status from live Net (gross MTM − est. charges) — not index-in-zone. */
+function _netPnlStatus(net) {
+  if (net == null || isNaN(Number(net))) return { text: '', cls: '' };
+  const n = Number(net);
+  if (n < -_MTM_FLAT_RS) return { text: 'Net loss', cls: 'pnl-loss' };
+  if (n > _MTM_FLAT_RS) return { text: 'Net profit', cls: 'pnl-profit' };
+  return { text: 'Flat', cls: 'muted' };
+}
+
+function _fmtNetChg(net) {
+  if (net == null || isNaN(Number(net))) return '';
+  const n = Number(net);
+  const sign = n > 0 ? '+' : (n < 0 ? '\u2212' : '');
+  return `Net ${sign}\u20b9${fmt(Math.abs(n))}`;
+}
+
+/** Day Ranges / At-today header: prefer live Net; never treat index Δ as P&L. */
+function _bandCalendarLive(payload, spotOverride) {
+  const entry = payload && payload.entry_spot != null ? Number(payload.entry_spot) : null;
+  let spot = spotOverride != null ? Number(spotOverride) : null;
+  if (spot == null || isNaN(spot)) {
+    spot = payload && payload.spot != null ? Number(payload.spot) : entry;
+  }
+  const indexChg = (spot != null && !isNaN(spot) && entry != null && !isNaN(entry))
+    ? spot - entry : null;
+  const tradeId = (_bandCalState && _bandCalState.tradeId)
+    || (payload && payload.trade_id)
+    || '';
+  let liveNet = tradeId ? _bandDayLiveNet(tradeId) : null;
+  if ((liveNet == null || isNaN(liveNet)) && payload && payload.live_net != null) {
+    liveNet = Number(payload.live_net);
+  }
+  let st;
+  let chgTxt = '';
+  let chgCls = 'muted';
+  if (liveNet != null && !isNaN(liveNet)) {
+    st = _netPnlStatus(liveNet);
+    chgTxt = _fmtNetChg(liveNet);
+    chgCls = st.cls || 'muted';
+  } else {
+    const today = _todayIso();
+    const rows = (((payload && payload.calendar && payload.calendar.rows) || [])).map(_withInLossGates);
+    const todayRow = rows.find(r => String(r.date).slice(0, 10) === today) || null;
+    st = _bandStatus(todayRow, spot);
+    if (indexChg != null) {
+      chgTxt = `index ${indexChg > 0 ? '+' : ''}${fmt(indexChg)}`;
+    }
+  }
+  const entryParts = [];
+  if (entry != null && !isNaN(entry)) entryParts.push(`Entry \u20b9${fmt(entry)}`);
+  if (liveNet != null && !isNaN(liveNet) && indexChg != null) {
+    entryParts.push(`index ${indexChg > 0 ? '+' : ''}${fmt(indexChg)}`);
+  }
+  return {
+    now: (spot != null && !isNaN(spot)) ? `\u20b9${fmt(spot)}` : '\u2014',
+    where: (st && st.text) || '',
+    whereCls: (st && st.cls) || '',
+    chg: chgTxt,
+    chgCls,
+    entry: entryParts.join(' \u00b7 '),
+    cls: (st && st.cls) || '',
+  };
 }
 
 // Open Day-ranges modal state — spot/reach can follow live ticks.
@@ -5933,24 +6024,27 @@ function _refreshOpenBandCalendarSpot(sym, price) {
   if (!host || !_bandCalState.payload) return;
   const payload = Object.assign({}, _bandCalState.payload, { spot });
   _bandCalState.payload = payload;
-  const entry = payload.entry_spot != null ? Number(payload.entry_spot) : null;
-  const chg = (entry != null && !isNaN(entry)) ? spot - entry : null;
-  const chgTxt = chg == null ? '' : `${chg > 0 ? '+' : ''}${fmt(chg)} vs entry`;
-  const today = _todayIso();
-  const rows = ((payload.calendar && payload.calendar.rows) || []).map(_withInLossGates);
-  const todayRow = rows.find(r => String(r.date).slice(0, 10) === today) || null;
-  const st = _bandStatus(todayRow, spot);
-  const live = {
-    now: `\u20b9${fmt(spot)}`,
-    where: st.text || '',
-    whereCls: st.cls || '',
-    chg: chgTxt,
-    chgCls: chg > 0 ? 'pnl-profit' : (chg < 0 ? 'pnl-loss' : 'muted'),
-    entry: entry != null && !isNaN(entry) ? `Entry \u20b9${fmt(entry)}` : '',
-    cls: st.cls || '',
-  };
+  const live = _bandCalendarLive(payload, spot);
   _bandCalState.live = live;
   host.innerHTML = _paintBandCalendar(payload, live);
+}
+
+function _patchBandCalendarNetHeader(liveNet) {
+  if (!_bandCalState || _bandCalState.view !== 'list' || !_bandCalState.payload) return;
+  const head = document.querySelector('#band-calendar-body .lo-nowline');
+  if (!head) return;
+  if (liveNet != null && !isNaN(Number(liveNet))) {
+    _bandCalState.payload.live_net = Number(liveNet);
+  }
+  const live = _bandCalendarLive(_bandCalState.payload, _bandCalState.lastSpot);
+  _bandCalState.live = live;
+  head.className = `lo-nowline ${live.cls || ''}`;
+  head.innerHTML = `
+      <span class="lo-stop-k">Now</span>
+      <strong>${escapeHtml(live.now)}</strong>
+      <span class="${escapeHtml(live.whereCls || '')}">${escapeHtml(live.where || '')}</span>
+      <span class="${escapeHtml(live.chgCls || '')}">${escapeHtml(live.chg || '')}</span>
+      <span class="muted">${escapeHtml(live.entry || '')}</span>`;
 }
 
 function _withInLossGates(row) {
@@ -5970,33 +6064,20 @@ function _paintBandCalendar(payload, live) {
   const cal = payload && payload.calendar;
   const rows = ((cal && cal.rows) || []).map(_withInLossGates);
   const today = _todayIso();
-  const todayRow = rows.find(r => String(r.date).slice(0, 10) === today) || null;
   const entry = payload.entry_spot != null ? Number(payload.entry_spot) : null;
   let spot = payload.spot != null ? Number(payload.spot) : entry;
-  let nowHtml = '';
-  if (live && live.now) {
-    const liveSpot = parseFloat(String(live.now).replace(/[^\d.-]/g, ''));
-    if (!isNaN(liveSpot)) spot = liveSpot;
-    nowHtml = `<div class="lo-nowline ${live.cls || ''}">
+  const hdr = (live && live.now)
+    ? live
+    : _bandCalendarLive(payload, spot);
+  const liveSpot = parseFloat(String(hdr.now || '').replace(/[^\d.-]/g, ''));
+  if (!isNaN(liveSpot)) spot = liveSpot;
+  const nowHtml = `<div class="lo-nowline ${hdr.cls || ''}">
       <span class="lo-stop-k">Now</span>
-      <strong>${escapeHtml(live.now)}</strong>
-      <span class="${escapeHtml(live.whereCls || '')}">${escapeHtml(live.where || '')}</span>
-      <span class="${escapeHtml(live.chgCls || '')}">${escapeHtml(live.chg || '')}</span>
-      <span class="muted">${escapeHtml(live.entry || '')}</span>
+      <strong>${escapeHtml(hdr.now || '\u2014')}</strong>
+      <span class="${escapeHtml(hdr.whereCls || '')}">${escapeHtml(hdr.where || '')}</span>
+      <span class="${escapeHtml(hdr.chgCls || '')}">${escapeHtml(hdr.chg || '')}</span>
+      <span class="muted">${escapeHtml(hdr.entry || '')}</span>
     </div>`;
-  } else {
-    const chg = (spot != null && entry != null) ? spot - entry : null;
-    const st = _bandStatus(todayRow, spot);
-    const chgTxt = chg == null ? '' : `${chg > 0 ? '+' : ''}${fmt(chg)} vs entry`;
-    const chgCls = chg > 0 ? 'pnl-profit' : (chg < 0 ? 'pnl-loss' : 'muted');
-    nowHtml = `<div class="lo-nowline ${st.cls}">
-      <span class="lo-stop-k">Now</span>
-      <strong class="${st.cls}">${spot != null && !isNaN(spot) ? '\u20b9' + fmt(spot) : '\u2014'}</strong>
-      <span class="${st.cls}">${escapeHtml(st.text)}</span>
-      <span class="${chgCls}">${escapeHtml(chgTxt)}</span>
-      <span class="muted">${entry != null && !isNaN(entry) ? `Entry \u20b9${fmt(entry)}` : ''}</span>
-    </div>`;
-  }
   const body = rows.map(r => {
     const iso = String(r.date || '').slice(0, 10);
     const mark = iso === today ? ' is-today' : '';
@@ -6012,8 +6093,8 @@ function _paintBandCalendar(payload, live) {
     ? 'Rebuilt just now from current volatility and your fill (or suggested) prices. Each row is that calendar day\u2019s remaining time \u2014 not today if spot only hits that level early. The expiry row stays fixed.'
     : 'Saved when this suggestion was created. Each row uses that volatility and the suggested prices for that calendar day\u2019s remaining time.';
   const chgNote = payload && payload.est_charges_rs != null
-    ? ` In profit / in loss gates use net after ~\u20b9${fmt(payload.est_charges_rs)} est. charges.`
-    : ' In profit / in loss gates use net after est. charges.';
+    ? ` Now line uses live Net (gross MTM \u2212 ~\u20b9${fmt(payload.est_charges_rs)} est. charges). Table In profit / in loss gates are index levels for that same net-zero.`
+    : ' Now line uses live Net (gross MTM \u2212 est. charges). Table In profit / in loss gates are index levels for that same net-zero.';
   const tickNote = ' Tap a date for that day\u2019s index \u2192 P&amp;L graph (Net and % live there; Back returns).';
   return `
     <div class="band-cal-head">${nowHtml}</div>
@@ -6248,11 +6329,11 @@ function _showBandCalendarList() {
   if (!_bandCalState || !_bandCalState.payload || !host) return;
   _bandCalState.view = 'list';
   _bandCalState.dayPayload = null;
-  host.innerHTML = _paintBandCalendar(
-    _bandCalState.payload,
-    _bandCalState.live && _bandCalState.live.now && _bandCalState.live.now !== '\u2014'
-      ? _bandCalState.live : null,
-  );
+  const liveNet = _bandDayLiveNet(_bandCalState.tradeId);
+  if (liveNet != null && !isNaN(liveNet)) _bandCalState.payload.live_net = liveNet;
+  const live = _bandCalendarLive(_bandCalState.payload, _bandCalState.lastSpot);
+  _bandCalState.live = live;
+  host.innerHTML = _paintBandCalendar(_bandCalState.payload, live);
 }
 
 async function _showBandDayChart(iso) {
@@ -6301,15 +6382,6 @@ async function _openBandCalendar(btn) {
   const sid = btn && btn.dataset ? btn.dataset.sugId : '';
   if (!sid) return;
   const outlook = btn.closest('.live-outlook');
-  const live = outlook ? {
-    now: (outlook.querySelector('.lo-today-now') || {}).textContent || '',
-    where: (outlook.querySelector('.lo-today-where') || {}).textContent || '',
-    whereCls: (outlook.querySelector('.lo-today-where') || {}).className || '',
-    chg: (outlook.querySelector('.lo-today-chg') || {}).textContent || '',
-    chgCls: (outlook.querySelector('.lo-today-chg') || {}).className || '',
-    entry: (outlook.querySelector('.lo-today-entry') || {}).textContent || '',
-    cls: (outlook.querySelector('.lo-today-nowline') || {}).className || '',
-  } : null;
   const modal = _ensureBandCalendarModal();
   const host = document.getElementById('band-calendar-body');
   const title = document.getElementById('band-calendar-title');
@@ -6325,6 +6397,9 @@ async function _openBandCalendar(btn) {
       qs = `?fresh=1${tid ? `&trade_id=${encodeURIComponent(tid)}` : ''}`;
     }
     const payload = await API(`/api/suggestion/${encodeURIComponent(sid)}/mark-bands${qs}`);
+    const liveNet = tid ? _bandDayLiveNet(tid) : null;
+    if (liveNet != null && !isNaN(liveNet)) payload.live_net = liveNet;
+    const live = _bandCalendarLive(payload, payload.spot);
     _bandCalState = {
       sid,
       tradeId: tid,
@@ -6336,7 +6411,7 @@ async function _openBandCalendar(btn) {
       underlying: String((payload && payload.underlying) || '').toUpperCase(),
       lastSpot: payload && payload.spot != null ? Number(payload.spot) : null,
     };
-    if (host) host.innerHTML = _paintBandCalendar(payload, live && live.now && live.now !== '\u2014' ? live : null);
+    if (host) host.innerHTML = _paintBandCalendar(payload, live);
     ensureIndexSpotStream();
   } catch (err) {
     _bandCalState = null;
@@ -6459,14 +6534,12 @@ function _renderLoSpotStrip(el, payload) {
   }
   if (chgEl) {
     if (chg != null && !isNaN(chg) && entry != null && !isNaN(entry)) {
-      const sign = chg > 0 ? '+' : '';
-      chgEl.textContent = `${sign}${fmt(chg)} vs entry`;
+      chgEl.textContent = `index ${chg > 0 ? '+' : ''}${fmt(chg)}`;
       chgEl.classList.remove('pnl-profit', 'pnl-loss');
-      if (chg > 0) chgEl.classList.add('pnl-profit');
-      else if (chg < 0) chgEl.classList.add('pnl-loss');
+      chgEl.classList.add('muted');
     } else {
       chgEl.textContent = '';
-      chgEl.classList.remove('pnl-profit', 'pnl-loss');
+      chgEl.classList.remove('pnl-profit', 'pnl-loss', 'muted');
     }
   }
   if (entryNote && entry != null && !isNaN(entry)) {
@@ -6492,20 +6565,10 @@ function _renderLoSpotStrip(el, payload) {
   if (todayNow) {
     todayNow.textContent = (spot != null && !isNaN(spot)) ? `\u20b9${fmt(spot)}` : '\u2014';
   }
-  if (todayChg) {
-    if (chg != null && !isNaN(chg) && entry != null && !isNaN(entry)) {
-      const sign = chg > 0 ? '+' : '';
-      todayChg.textContent = `${sign}${fmt(chg)} vs entry`;
-      todayChg.classList.remove('pnl-profit', 'pnl-loss');
-      if (chg > 0) todayChg.classList.add('pnl-profit');
-      else if (chg < 0) todayChg.classList.add('pnl-loss');
-    } else {
-      todayChg.textContent = '';
-      todayChg.classList.remove('pnl-profit', 'pnl-loss');
-    }
-  }
   if (todayEntry && entry != null && !isNaN(entry)) {
-    todayEntry.textContent = `Entry \u20b9${fmt(entry)}`;
+    const idxNote = (chg != null && !isNaN(chg))
+      ? ` \u00b7 index ${chg > 0 ? '+' : ''}${fmt(chg)}` : '';
+    todayEntry.textContent = `Entry \u20b9${fmt(entry)}${idxNote}`;
   }
   const todayBand = {
     full_lo: payload.today_full_lo, full_hi: payload.today_full_hi,
@@ -6514,15 +6577,32 @@ function _renderLoSpotStrip(el, payload) {
   };
   if (todayFull) todayFull.textContent = _bandRangeText(todayBand, 'full');
   if (todayIn) todayIn.textContent = _bandRangeText(todayBand, 'in');
+  const tid = el.dataset.tradeId || '';
+  const liveNet = tid ? _bandDayLiveNet(tid) : null;
   if (todayWhere) {
-    const st = _bandStatus(todayBand, spot);
+    const st = (liveNet != null && !isNaN(liveNet))
+      ? _netPnlStatus(liveNet)
+      : _bandStatus(todayBand, spot);
     todayWhere.textContent = st.text || '';
-    todayWhere.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part');
+    todayWhere.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part', 'muted');
     if (st.cls) todayWhere.classList.add(st.cls);
     const line = el.querySelector('.lo-today-nowline');
     if (line) {
-      line.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part');
+      line.classList.remove('pnl-profit', 'pnl-loss', 'lo-fit-part', 'muted');
       if (st.cls) line.classList.add(st.cls);
+    }
+  }
+  if (todayChg) {
+    todayChg.classList.remove('pnl-profit', 'pnl-loss', 'muted');
+    if (liveNet != null && !isNaN(liveNet)) {
+      todayChg.textContent = _fmtNetChg(liveNet);
+      const st = _netPnlStatus(liveNet);
+      if (st.cls) todayChg.classList.add(st.cls);
+    } else if (chg != null && !isNaN(chg) && entry != null && !isNaN(entry)) {
+      todayChg.textContent = `index ${chg > 0 ? '+' : ''}${fmt(chg)}`;
+      todayChg.classList.add('muted');
+    } else {
+      todayChg.textContent = '';
     }
   }
 }
