@@ -371,6 +371,8 @@ a { color: var(--accent); text-decoration: none; }
 }
 .signal-tile.is-on .signal-shape { animation: signal-pulse 1.15s ease-in-out infinite; }
 .signal-tile--status .signal-shape { animation: signal-pulse-soft 2.4s ease-in-out infinite; }
+/* Card badges stay static; pulse is only for the header signal rail. */
+.signal-tile--card .signal-shape { animation: none; }
 .signal-mark {
   display: block;
   width: 14px;
@@ -3119,13 +3121,6 @@ details.orig-sug-details[open] > .orig-sug-summary::before { content: '▼ '; }
 .band-reach-safe { color: var(--ok, #22c55e); }
 .band-reach-bad { color: var(--err, #ef4444); }
 .band-reach-need { color: #e8b86d; }
-.band-net {
-  display: block;
-  margin-top: 2px;
-  font-size: .72rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
 .lo-fit-range strong {
   font-size: .84rem;
   font-variant-numeric: tabular-nums;

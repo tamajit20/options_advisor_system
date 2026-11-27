@@ -1,6 +1,6 @@
 # Options Advisor - Complete Guide
 
-**Last updated:** 2026-11-22
+**Last updated:** 2026-11-27
 
 **Single document** for install, day-to-day ops, and architecture.  
 Do not recreate `readmefirst.txt`, handbooks, or separate OPERATIONS/SETUP markdown files.
@@ -182,7 +182,7 @@ No suggestions, trades, or demo cards are inserted. Lot size uses `config.py` `d
  09:15  Laptop archive task (retry every 15m until ACK or ~15:45; needs readable VM ``*-latest.bak``)
  09:30  Fri: weekly_archive
  09:35  Fri: weekly_log_cleanup | daily: intraday_validator
-  10:00–14:00 hourly     live_suggestion_engine
+  10:00–14:00 every 15m  live_suggestion_engine
  15:35  intraday_close_snapshot
  15:36  Fri: archive_export
  15:38  Fri: db_backup
@@ -213,7 +213,7 @@ Enable flags / handlers live in `SCHEDULER_CONFIG["jobs"]` and `JOB_FUNCS` in `s
 | Job name                                                                 | Typical         | Notes                         |
 | ------------------------------------------------------------------------ | --------------- | ----------------------------- |
 | `morning_eod_catchup`                                                    | On @ 09:00      | Runs EOD chain                |
-| `live_suggestion_engine`                                                 | On multi-window | Live cards                    |
+| `live_suggestion_engine`                                                 | On every 15m 10–14 | Live cards                 |
 | `intraday_validator`                                                     | On @ 09:35      | Reprice PENDING               |
 | `intraday_close_snapshot`                                                | On @ 15:35      | LTP capture                   |
 | `intraday_sl_fallback`                                                   | On every 3m     | If WS stale                   |
@@ -635,7 +635,7 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 **Amount needed Final/Peak:** suggestion **Amount needed** is Zerodha **Final** (margin once every leg is on). The first successful Kite quote for that user+lots is stored on `options_suggestion_user_state` (`zerodha_margin_*`) and on the trade when executed — never the shared suggestion row. Later loads for the same lots read the DB and **do not re-call Kite** unless Final is still NULL. Changing the order-size box re-quotes that size (including values above `max_lots_cap`); **Place** still rejects sizes above the cap. Peak / Avail, and an insufficient-funds note when funds cannot cover Peak, sit on the line underneath. That line is only on the suggestion page, where the trade is not yet placed. The funds gate uses Kite equity **net** (same as the broker’s “Margin available” reject text), not cash alone, and shows **Add ₹X more** with Place disabled when short. After a hedge buy fills, the short is held for up to 20s (`OPT_ZERODHA_HEDGE_MARGIN_WAIT_SEC`) until Kite live sell-margin includes that long; if it never does, the filled buy is flattened instead of sending a short Zerodha still prices as naked. Engine estimate only until Kite responds. On an open trade (the collapsed premium line), in History → Trades, and on **Close in Zerodha**, that same Final is labeled **Amount used** (already held) with no Peak, available cash, or insufficient-funds line. Wherever Net and Gross P&L are shown, **Amount used** is that Final in rupees, with net profit or loss as a percent in brackets. Quotes once per suggestion+lots per browser session (tab reloads reuse cache); **Place orders in Zerodha** always fetches a live preview. Requires valid session (`zerodha_execution.enabled` + login) — place-orders toggle not required.
 
-**Day Ranges** (Live outlook → All dates): Full profit, In profit, In loss, and Full loss per day. **In profit / in loss** gates use **net** mark (gross − est. round-trip charges), so those lines are not “in profit” while Net is still negative. Each zone cell also shows **Net** at the **printed level for that calendar day** (with % of premium) — in-profit/in-loss Net is ~0; full-profit / full-loss use the gate shown. Hitting a later day’s level *today* does not earn that day’s Net (more time premium is still left). Tap a **date row** for that day’s plain **index → P&L** graph (hover a point for index + P&L; **Back** returns) — `/api/suggestion/<id>/mark-bands/day`. Live Net updates the readout in place (no remount). While open, list **Now** / % room follow the index; zone Net rebuilds when you reopen (`fresh=1` on trades). Suggestion calendars stay as saved at generation (rebuilt once if older rows lack Net). Mark-band sweeps are vectorized and capped so one-sided Bank Nifty structures cannot explode the grid.
+**Day Ranges** (Live outlook → All dates): Full profit, In profit, In loss, and Full loss **levels** per day (reach badges only — Net / % live on the day graph). **In profit / in loss** gates still use **net** mark (gross − est. round-trip charges), so those lines are not “in profit” while Net is still negative. Hitting a later day’s level *today* does not earn that day’s Net (more time premium is still left). Tap a **date row** for that day’s plain **index → P&L** graph (hover a point for index + P&L / %; **Back** returns) — `/api/suggestion/<id>/mark-bands/day`. Live Net updates the graph readout in place (no remount). While open, list **Now** / % room follow the index; calendars rebuild when you reopen (`fresh=1` on trades). Suggestion calendars stay as saved at generation (rebuilt once if older rows lack Net). Mark-band sweeps are vectorized and capped so one-sided Bank Nifty structures cannot explode the grid.
 
 **My Trades load:** `/api/trades/open` returns a light outlook first (win chance / EV / expiry fit). Today mark bands and scenario chips hydrate **one trade at a time** after paint via `/api/trades/<id>/outlook` (parallel hydrates starved the VM). Open/History list APIs batch legs, risk alerts, channel stamps, and premium lookups. **Amount used / Amount needed** is on that same payload (`zerodha_margin_final`) — no separate preview call when stored; only NULL legacy rows get one Kite backfill. Close forms load when a card is expanded, not for every trade up front.
 
@@ -643,7 +643,7 @@ Notifications -> `options_notifications` (+ optional email via `alerts/`). Sit-o
 
 Sit-out banners (`engine/market_regime.py`) say **IV rank** (vs own history), not raw “cheap IV”. When rank is low but **IV/HV > 1**, the title is “options still rich vs HV” so it does not contradict the expensive-vs-realised soft-fail.
 
-**Suggestions tab — Run live engine:** visible to every signed-in user (not admin-only). Same shared `live_suggestion_engine` job as the hourly 10–14 IST scheduler / Jobs tab. POSTs `/api/jobs/live_suggestion_engine/trigger` (login required; other job triggers stay admin-only; no weekday-backfill confirm). A manual run is allowed on Saturday and Sunday; the hourly windows stay Monday–Friday and still skip weekends. Jobs SSE stays connected on every tab and reloads Suggestions (and the Jobs grid for admins) when the run finishes — no browser refresh.
+**Suggestions tab — Run live engine:** visible to every signed-in user (not admin-only). Same shared `live_suggestion_engine` job as the every-15-minute 10–14 IST scheduler / Jobs tab. POSTs `/api/jobs/live_suggestion_engine/trigger` (login required; other job triggers stay admin-only; no weekday-backfill confirm). A manual run is allowed on Saturday and Sunday; the clock windows stay Monday–Friday and still skip weekends. Jobs SSE stays connected on every tab and reloads Suggestions (and the Jobs grid for admins) when the run finishes — no browser refresh.
 
 **Before you place** (above Place orders) is the single review surface: (1) **Blocks placing**, (2) **Zerodha & funds**, (3) expandable **Gates** (failed-label preview on the header; **Show only failed** default on; full table then collapsed “How gating works”). Includes advisory **Today's tape & nearby OI wall** (directional sit-out context). Only **HARD FAIL** hides a card. Demo: `python scripts/seed_gates_review_suggestion.py` → `SUG-GATES-REVIEW`.
 
@@ -861,7 +861,7 @@ flowchart LR
        --> iv_orchestrator
        --> drift_verifier, simulation_update, exit_engine, trade_greeks_update
        --> suggestion_engine step SKIPPED (live windows own cards)
-  10:00+ live_suggestion_engine hourly through 14:00
+  10:00+ live_suggestion_engine every 15 min through 14:00
 ```
 
 Full wall-clock: [A5](#a5-clock-and-jobs).

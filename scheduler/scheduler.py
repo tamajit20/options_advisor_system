@@ -439,7 +439,7 @@ def _live_suggestion_window_job(window_suffix: str):
 def job_live_suggestion() -> None:
     """Manual / default run (no window suffix).
 
-    Weekend is allowed here only. Hourly windows still call
+    Weekend is allowed here only. Clock windows still call
     ``run_live_suggestion_engine`` with the default weekday gate.
     """
 

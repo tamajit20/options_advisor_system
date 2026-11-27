@@ -5856,39 +5856,15 @@ function _bandReachFromSpot(spot, row, kind) {
   );
 }
 
-function _bandZoneNetKey(kind) {
-  if (kind === 'full') return 'full_net_rs';
-  if (kind === 'in') return 'in_net_rs';
-  if (kind === 'in_loss') return 'in_loss_net_rs';
-  if (kind === 'loss') return 'loss_net_rs';
-  return null;
-}
-
-/** Compact "Net 220 (0.3%)" for day-range zone cells. */
-function _bandNetHtml(netRs, premiumInfo) {
-  if (netRs == null || isNaN(Number(netRs))) return '';
-  const n = Math.round(Number(netRs));
-  const signed = (n >= 0 ? '' : '\u2212') + String(Math.abs(n));
-  let pct = '';
-  if (premiumInfo && premiumInfo.rs > 0) {
-    const p = (Number(netRs) / premiumInfo.rs) * 100;
-    const sign = p >= 0 ? '' : '\u2212';
-    pct = ` (${sign}${Math.abs(p).toFixed(1)}%)`;
-  }
-  const cls = n > 0 ? 'pnl-profit' : (n < 0 ? 'pnl-loss' : 'muted');
-  return `<div class="band-net ${cls}" title="Estimated net mark on that calendar day if the index sits at the printed level (gross minus est. round-trip charges). Not today's live P&amp;L.">Net ${signed}${pct}</div>`;
-}
-
-function _bandCellHtml(row, kind, spot, premiumInfo) {
+function _bandCellHtml(row, kind, spot) {
   const label = _bandRangeText(row, kind);
   if (!label || label === '\u2014') return '\u2014';
   const reach = _bandReachFromSpot(spot, row, kind);
   const reachHtml = reach
     ? ` <span class="band-reach ${escapeHtml(reach.cls)}" title="${escapeHtml(reach.title || '')}">${escapeHtml(reach.text)}</span>`
     : '';
-  const netKey = _bandZoneNetKey(kind);
-  const netHtml = netKey ? _bandNetHtml(row[netKey], premiumInfo) : '';
-  return `${escapeHtml(label)}${reachHtml}${netHtml}`;
+  // Net / % live only on the per-day graph — keep calendar cells to levels + reach.
+  return `${escapeHtml(label)}${reachHtml}`;
 }
 
 function _bandStatus(row, spot) {
@@ -5912,7 +5888,7 @@ function _bandStatus(row, spot) {
   return { text: '', cls: '' };
 }
 
-// Open Day-ranges modal state — spot/reach can follow live ticks; Net stays fixed.
+// Open Day-ranges modal state — spot/reach can follow live ticks.
 let _bandCalState = null;
 
 function _ensureBandCalendarModal() {
@@ -6021,28 +5997,24 @@ function _paintBandCalendar(payload, live) {
       <span class="muted">${entry != null && !isNaN(entry) ? `Entry \u20b9${fmt(entry)}` : ''}</span>
     </div>`;
   }
-  const premRs = payload && payload.premium_rs != null ? Number(payload.premium_rs) : NaN;
-  const premiumInfo = (!isNaN(premRs) && premRs > 0)
-    ? { rs: premRs, kind: (payload && payload.premium_kind) || 'paid' }
-    : null;
   const body = rows.map(r => {
     const iso = String(r.date || '').slice(0, 10);
     const mark = iso === today ? ' is-today' : '';
     return `<tr class="band-cal-row${mark}" data-band-day="${escapeHtml(iso)}" tabindex="0" role="button" title="Open index \u2192 P&amp;L graph for this day">
       <td class="band-cal-day">${escapeHtml(_fitDayLabel(iso) || iso)}<span class="band-cal-day-hint">index\u2192P&amp;L</span></td>
-      <td>${_bandCellHtml(r, 'full', spot, premiumInfo)}</td>
-      <td>${_bandCellHtml(r, 'in', spot, premiumInfo)}</td>
-      <td>${_bandCellHtml(r, 'in_loss', spot, premiumInfo)}</td>
-      <td>${_bandCellHtml(r, 'loss', spot, premiumInfo)}</td>
+      <td>${_bandCellHtml(r, 'full', spot)}</td>
+      <td>${_bandCellHtml(r, 'in', spot)}</td>
+      <td>${_bandCellHtml(r, 'in_loss', spot)}</td>
+      <td>${_bandCellHtml(r, 'loss', spot)}</td>
     </tr>`;
   }).join('');
   const noteMain = payload && payload.fresh
     ? 'Rebuilt just now from current volatility and your fill (or suggested) prices. Each row is that calendar day\u2019s remaining time \u2014 not today if spot only hits that level early. The expiry row stays fixed.'
     : 'Saved when this suggestion was created. Each row uses that volatility and the suggested prices for that calendar day\u2019s remaining time.';
   const chgNote = payload && payload.est_charges_rs != null
-    ? ` In profit / in loss use net after ~\u20b9${fmt(payload.est_charges_rs)} est. charges; Net at those lines is ~0. Full profit / full loss Net is mark at the printed level minus the same charges.`
-    : ' In profit / in loss use net after est. charges (Net at those lines is ~0). Full profit / full loss Net is mark at the printed level minus charges.';
-  const tickNote = ' Tap a date for that day\u2019s index \u2192 P&amp;L graph (hover a point; Back returns).';
+    ? ` In profit / in loss gates use net after ~\u20b9${fmt(payload.est_charges_rs)} est. charges.`
+    : ' In profit / in loss gates use net after est. charges.';
+  const tickNote = ' Tap a date for that day\u2019s index \u2192 P&amp;L graph (Net and % live there; Back returns).';
   return `
     <div class="band-cal-head">${nowHtml}</div>
     <p class="muted band-cal-note">${escapeHtml(noteMain)}</p>

@@ -1836,7 +1836,7 @@ _JOB_META: Dict[str, Dict[str, str]] = {
     "suggestion_engine":  {"icon": "💡", "name": "Suggestion Engine",
                             "description": "Generates today's options trade suggestion across all enabled strategies."},
     "live_suggestion_engine": {"icon": "💡", "name": "Live Suggestion Engine",
-                            "description": "Re-runs the suggestion engine against the live Zerodha chain hourly from 10:00–14:00 IST (Mon–Fri)."},
+                            "description": "Re-runs the suggestion engine against the live Zerodha chain every 15 minutes from 10:00–14:00 IST (Mon–Fri)."},
     "simulation_update":  {"icon": "🎯", "name": "Simulation Update",
                             "description": "Updates daily P/L simulation for past suggestions."},
     "exit_engine":        {"icon": "🚪", "name": "Exit Engine",
@@ -2012,10 +2012,25 @@ def _summarize_cron(cfg: Dict[str, Any]) -> str:
         ]
         if not slots:
             return "—"
+        # Compress dense equal-step windows (e.g. live_suggestion every 15 min).
+        dows = {str(s.get("day_of_week") or "").strip().lower() for s in slots}
+        mins = sorted(int(s["hour"]) * 60 + int(s["minute"]) for s in slots)
+        if len(mins) >= 3 and len(dows) == 1 and dows != {""}:
+            steps = [b - a for a, b in zip(mins, mins[1:])]
+            if steps and all(d == steps[0] for d in steps) and steps[0] > 0:
+                raw = next(iter(dows))
+                days = ", ".join(
+                    _DOW_LABELS.get(d.strip().lower(), d) for d in raw.split(",")
+                )
+                h0, m0 = divmod(mins[0], 60)
+                h1, m1 = divmod(mins[-1], 60)
+                return (
+                    f"{days} every {steps[0]} min "
+                    f"{h0:02d}:{m0:02d}\u2013{h1:02d}:{m1:02d} IST"
+                )
         times = ", ".join(
             f"{int(s['hour']):02d}:{int(s['minute']):02d}" for s in slots
         )
-        dows = {str(s.get("day_of_week") or "").strip().lower() for s in slots}
         if len(dows) == 1 and dows != {""}:
             raw = next(iter(dows))
             days = ", ".join(
