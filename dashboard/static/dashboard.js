@@ -3153,7 +3153,7 @@ const toast = (msg, kind='info') => {
 window.toast = toast;
 
 // ---------------- Tab switching ----------------
-const TABS = ['suggestion', 'trades', 'history', 'notifications', 'config', 'learn', 'account', 'users', 'jobs', 'logs', 'wsmon'];
+const TABS = ['suggestion', 'trades', 'history', 'notifications', 'config', 'learn', 'info', 'account', 'users', 'jobs', 'logs', 'wsmon'];
 window.TABS = TABS;
 // Advisor chrome (header subtabs / mobile Advisor mode) — daily workflow tabs.
 const OPTIONS_TABS = ['suggestion', 'trades', 'history', 'config', 'learn', 'info'];
